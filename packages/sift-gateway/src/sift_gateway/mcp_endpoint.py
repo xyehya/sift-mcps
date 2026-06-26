@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -154,14 +153,17 @@ def log_rate_limit_violation(gateway: Any, key: str, client_ip: str, identity: A
 
 
 class SiftTokenVerifier(TokenVerifier):
-    """FastMCP token verifier — Supabase JWT first, PR02 hash-token fallback.
+    """FastMCP token verifier — Supabase JWT is the sole credential authority.
 
     PR03A (D30): a Supabase-issued JWT is validated through the shared
-    :class:`SupabaseIdentityResolver` and mapped to a SIFT app principal. The
-    legacy PR02 hash-token registry and ``gateway.yaml`` api_keys are accepted
-    only when ``legacy_fallback_enabled`` is true. Identity resolution happens
-    HERE (not in the raw ASGI guard), closing B-14: the normal ``/mcp`` path does
-    exactly one token lookup.
+    :class:`SupabaseIdentityResolver` and mapped to a SIFT app principal.
+
+    SEC-6 (DSS-CAN-015): the legacy PR02 hash-token registry and
+    ``gateway.yaml`` api-key fallback have been removed entirely — a legacy
+    token never authenticates on ``/mcp`` and is never granted the ``mcp:*``
+    wildcard. Identity resolution happens HERE (not in the raw ASGI guard),
+    closing B-14: the normal ``/mcp`` path does exactly one token lookup. A
+    Supabase outage fails closed (the token is denied; there is no fallback).
     """
 
     def __init__(
@@ -171,19 +173,17 @@ class SiftTokenVerifier(TokenVerifier):
         token_registry: Any | None = None,
         base_url: str | None = None,
         resolver: Any | None = None,
-        legacy_fallback_enabled: bool = True,
     ) -> None:
         super().__init__(base_url=base_url, required_scopes=None)
         self.api_keys = api_keys or {}
         self.token_registry = token_registry
         self.resolver = resolver
-        self.legacy_fallback_enabled = legacy_fallback_enabled
 
     async def verify_token(self, token: str) -> AccessToken | None:
         identity = None
-        legacy = False
 
-        # 1) Supabase JWT first.
+        # Supabase JWT is the SOLE credential authority (SEC-6). No legacy PR02 /
+        # api-key fallback: an outage or a bad token both deny.
         if self.resolver is not None:
             from sift_gateway.supabase_auth import (
                 SupabaseAuthError,
@@ -193,11 +193,11 @@ class SiftTokenVerifier(TokenVerifier):
             try:
                 identity = await self.resolver.resolve(token, auth_surface="mcp")
             except SupabaseUnavailableError:
-                # B9(a): distinguish an auth-backend outage from a bad token. No
-                # token material in the log. We fall through to legacy/deny.
+                # An auth-backend outage is not a valid token. With no legacy
+                # fallback we FAIL CLOSED (deny). No token material in the log.
                 logger.warning(
                     "MCP verify_token: Supabase auth backend unavailable; "
-                    "falling back to legacy (if enabled) or denying"
+                    "failing closed (deny)"
                 )
                 identity = None
             except SupabaseAuthError:
@@ -207,40 +207,16 @@ class SiftTokenVerifier(TokenVerifier):
                 logger.warning("MCP verify_token: unexpected resolver error; denying")
                 identity = None
 
-        # 2) PR02 / legacy fallback only behind the explicit flag.
-        if identity is None and self.legacy_fallback_enabled:
-            from sift_gateway.identity import resolve_identity
-
-            identity = await asyncio.to_thread(
-                resolve_identity,
-                token,
-                self.api_keys,
-                None,
-                "mcp",
-                self.token_registry,
-            )
-            legacy = identity is not None
-
         if identity is None:
             return None
 
-        # Readonly principals may not call MCP tools (parity with legacy guard).
+        # Readonly principals may not call MCP tools.
         if getattr(identity, "role", None) == "readonly":
             return None
 
-        # B-10: a target principal with no active tool scope grants nothing.
-        # Legacy PR02/api_key tokens keep their mcp:* compatibility default only
-        # while the legacy fallback flag is enabled. The default is stamped onto
-        # the identity itself so the SIFT-owned ToolAuthorizationMiddleware (which
-        # reads identity.tool_scopes from the claims) honors it consistently —
-        # AccessToken.scopes alone is a hint, not the policy authority.
-        if not identity.tool_scopes and legacy and self.legacy_fallback_enabled:
-            from dataclasses import replace
-
-            from sift_gateway.supabase_auth import legacy_default_scopes
-
-            identity = replace(identity, tool_scopes=legacy_default_scopes())
-
+        # B-10: a principal with no active tool scope grants nothing. SEC-6: there
+        # is no longer an mcp:* compatibility default — scopes come solely from the
+        # DB-backed principal_tool_scopes carried on the resolved identity.
         scopes = sorted(identity.tool_scopes) if identity.tool_scopes else []
 
         return AccessToken(

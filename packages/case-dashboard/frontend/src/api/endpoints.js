@@ -74,11 +74,9 @@ export const postResponseGuardOverride = (body = {}) => apiPost('/api/response-g
 export const postResponseGuardOverrideCancel = () => apiPost('/api/response-guard/override/cancel', {})
 
 // --- Agent tokens ---
-export const getTokens = () => apiFetch('/api/tokens')
-export const postToken = (body) => apiPost('/api/tokens', body)
-export const deleteToken = (id) => apiDelete(`/api/tokens/${id}`)
-export const postRotateToken = (id) => apiPost(`/api/tokens/${id}/rotate`, {})
-export const postReactivateToken = (id) => apiPost(`/api/tokens/${id}/reactivate`, {})
+// SEC-6: the legacy PR02 /api/tokens/* lifecycle was removed. Agent/service
+// credentials are issued through the Supabase principal API (getPrincipals /
+// postPrincipal / deletePrincipal above).
 
 // --- Reports ---
 export const getReports = () => apiFetch('/api/reports')

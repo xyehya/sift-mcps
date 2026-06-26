@@ -1,10 +1,12 @@
 """PR03A / Batch A — Supabase JWT auth for REST and FastMCP /mcp.
 
 All Supabase HTTP is mocked and the principal repository is faked; no live
-network or DB. Verifies the shared resolver, REST AuthMiddleware Supabase-first
-behavior with explicit legacy flags, the FastMCP TokenVerifier, the B-14 raw
-ASGI no-duplicate-lookup guarantee, and that raw token material never reaches
-logs or audit.
+network or DB. Verifies the shared resolver, REST AuthMiddleware with Supabase
+as the SOLE credential authority (SEC-6: legacy PR02/api-key fallback removed —
+a Supabase outage fails closed, a legacy token never authenticates, and no
+``mcp:*`` wildcard is stamped onto a scope-less principal), the FastMCP
+TokenVerifier, the B-14 raw ASGI no-duplicate-lookup guarantee, and that raw
+token material never reaches logs or audit.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from sift_gateway.supabase_auth import (
 
 _OPERATOR_TOKEN = "supabase.jwt.operator"
 _AGENT_TOKEN = "supabase.jwt.agent"
+_AGENT_NOSCOPE_TOKEN = "supabase.jwt.agent.noscope"
 _DISABLED_TOKEN = "supabase.jwt.disabled"
 _UNMAPPED_TOKEN = "supabase.jwt.unmapped"
 _INVALID_TOKEN = "supabase.jwt.invalid"
@@ -50,6 +53,7 @@ _INVALID_TOKEN = "supabase.jwt.invalid"
 _USER_BY_TOKEN = {
     _OPERATOR_TOKEN: {"id": "auth-operator"},
     _AGENT_TOKEN: {"id": "auth-agent"},
+    _AGENT_NOSCOPE_TOKEN: {"id": "auth-agent-noscope"},
     _DISABLED_TOKEN: {"id": "auth-disabled"},
     _UNMAPPED_TOKEN: {"id": "auth-unmapped"},
 }
@@ -67,6 +71,13 @@ _RECORDS = {
         display_name="Hermes", email=None, status="active", system_role="ai",
         default_case_id="case-1", case_memberships=(),
         tool_scopes=("mcp:*",),
+    ),
+    # SEC-6 fixture: an active agent whose DB grant carries NO tool scope. The
+    # verifier must NOT back-fill an mcp:* wildcard (the deleted legacy default).
+    "auth-agent-noscope": PrincipalRecord(
+        principal_type="agent", principal_id="ag-3", auth_user_id="auth-agent-noscope",
+        display_name="ScopelessBot", email=None, status="active", system_role="ai",
+        default_case_id="case-1", case_memberships=(), tool_scopes=(),
     ),
     "auth-disabled": PrincipalRecord(
         principal_type="agent", principal_id="ag-2", auth_user_id="auth-disabled",
@@ -219,30 +230,25 @@ def test_rest_disabled_principal_is_403():
     assert resp.status_code == 403
 
 
-def test_rest_invalid_jwt_is_403_when_no_fallback():
-    app = _rest_app(resolver=_resolver(),
-                    auth_config=_config(legacy_token_fallback_enabled=False))
+def test_rest_invalid_jwt_is_401():
+    # SEC-6: an invalid/unknown token is a 401 (no legacy fallthrough that used
+    # to turn it into a 403 "Invalid API key").
+    app = _rest_app(resolver=_resolver(), auth_config=_config())
     resp = TestClient(app).get("/api/v1/protected",
                                headers={"Authorization": f"Bearer {_INVALID_TOKEN}"})
-    assert resp.status_code == 403
+    assert resp.status_code == 401
 
 
-def test_rest_pr02_fallback_only_when_legacy_flag_enabled():
+def test_rest_legacy_api_key_always_rejected():
+    # SEC-6 (DSS-CAN-015): the legacy gateway.yaml api-key fallback is removed —
+    # a legacy api-key is NEVER honored on REST even when api_keys are wired and
+    # Supabase is the active authority. It resolves as an unknown Supabase token.
     api_keys = {"legacy-key": {"examiner": "bob", "role": "examiner", "token_id": "t-bob"}}
-    # Fallback ENABLED → legacy key works.
-    app_on = _rest_app(resolver=_resolver(),
-                       auth_config=_config(legacy_token_fallback_enabled=True),
-                       api_keys=api_keys)
-    resp = TestClient(app_on).get("/api/v1/protected",
-                                  headers={"Authorization": "Bearer legacy-key"})
-    assert resp.status_code == 200
-    # Fallback DISABLED → legacy key rejected.
-    app_off = _rest_app(resolver=_resolver(),
-                        auth_config=_config(legacy_token_fallback_enabled=False),
-                        api_keys=api_keys)
-    resp = TestClient(app_off).get("/api/v1/protected",
-                                   headers={"Authorization": "Bearer legacy-key"})
-    assert resp.status_code == 403
+    app = _rest_app(resolver=_resolver(), auth_config=_config(), api_keys=api_keys)
+    resp = TestClient(app).get("/api/v1/protected",
+                               headers={"Authorization": "Bearer legacy-key"})
+    assert resp.status_code == 401
+    assert resp.json().get("principal_id") is None
 
 
 def test_rest_anonymous_examiner_only_when_explicitly_enabled():
@@ -276,28 +282,44 @@ def test_rest_no_token_material_in_logs(caplog):
 
 
 async def test_verifier_accepts_agent_jwt():
-    verifier = SiftTokenVerifier(resolver=_resolver(), legacy_fallback_enabled=False)
+    verifier = SiftTokenVerifier(resolver=_resolver())
     token = await verifier.verify_token(_AGENT_TOKEN)
     assert token is not None
     assert token.client_id == "ag-1"
-    assert token.scopes == ["mcp:*"]
+    assert token.scopes == ["mcp:*"]  # mcp:* here is a DB-granted scope, not a default
     assert token.claims["sift_identity"]["principal_type"] == "agent"
     # Raw token round-trips as AccessToken.token (FastMCP contract) but the SIFT
     # identity claims never carry it.
     assert _AGENT_TOKEN not in str(token.claims)
 
 
+async def test_verifier_scopeless_agent_gets_no_mcp_wildcard():
+    # SEC-6 (DSS-CAN-015): the deleted legacy default no longer back-fills mcp:*.
+    # An active agent whose DB grant carries no tool scope authenticates but is
+    # handed an EMPTY scope set — never the mcp:* superuser wildcard.
+    verifier = SiftTokenVerifier(resolver=_resolver())
+    token = await verifier.verify_token(_AGENT_NOSCOPE_TOKEN)
+    assert token is not None
+    assert token.client_id == "ag-3"
+    assert token.scopes == []
+    assert "mcp:*" not in token.scopes
+    assert token.claims["sift_identity"]["tool_scopes"] == []
+
+
 async def test_verifier_rejects_invalid_jwt():
-    verifier = SiftTokenVerifier(resolver=_resolver(), legacy_fallback_enabled=False)
+    verifier = SiftTokenVerifier(resolver=_resolver())
     assert await verifier.verify_token(_INVALID_TOKEN) is None
 
 
 async def test_verifier_rejects_disabled_principal():
-    verifier = SiftTokenVerifier(resolver=_resolver(), legacy_fallback_enabled=False)
+    verifier = SiftTokenVerifier(resolver=_resolver())
     assert await verifier.verify_token(_DISABLED_TOKEN) is None
 
 
-async def test_verifier_pr02_fallback_gated_by_flag():
+async def test_verifier_rejects_legacy_registry_token():
+    # SEC-6: the PR02 token-registry fallback is removed — a registry/api-key
+    # token is NEVER accepted on /mcp, even when a registry is wired. The only
+    # credential authority is the Supabase resolver.
     from datetime import datetime, timedelta, timezone
 
     from sift_gateway.token_gen import token_fingerprint
@@ -313,17 +335,19 @@ async def test_verifier_pr02_fallback_gated_by_flag():
     )
 
     class _Reg:
+        def __init__(self):
+            self.lookups = 0
+
         def lookup_token(self, t):
+            self.lookups += 1
             return record if t == raw else None
 
-    # Fallback OFF → registry token rejected.
-    off = SiftTokenVerifier(resolver=_resolver(), token_registry=_Reg(),
-                            legacy_fallback_enabled=False)
-    assert await off.verify_token(raw) is None
-    # Fallback ON → registry token accepted.
-    on = SiftTokenVerifier(resolver=_resolver(), token_registry=_Reg(),
-                           legacy_fallback_enabled=True)
-    assert (await on.verify_token(raw)) is not None
+    reg = _Reg()
+    verifier = SiftTokenVerifier(resolver=_resolver(), token_registry=reg)
+    # The legacy registry token is rejected, and the registry is never consulted
+    # (no second, legacy lookup path remains).
+    assert await verifier.verify_token(raw) is None
+    assert reg.lookups == 0
 
 
 # ---------------------------------------------------------------------------
@@ -414,8 +438,7 @@ async def test_b2_ambiguous_principal_denied_403():
 
 
 def test_b2_ambiguous_principal_rest_is_403():
-    app = _rest_app(resolver=_ambiguous_resolver(),
-                    auth_config=_config(legacy_token_fallback_enabled=False))
+    app = _rest_app(resolver=_ambiguous_resolver(), auth_config=_config())
     resp = TestClient(app).get("/api/v1/protected",
                                headers={"Authorization": f"Bearer {_OPERATOR_TOKEN}"})
     assert resp.status_code == 403
@@ -530,7 +553,10 @@ async def test_b8_cache_uses_full_digest_key():
 
 
 # ---------------------------------------------------------------------------
-# Remediation: B9 — outage vs invalid; legacy-disabled + 5xx => 503
+# SEC-6 / B9 — a Supabase outage (5xx) FAILS CLOSED on every surface. There is
+# no legacy bridge to fall through to, so an outage can never authenticate a
+# request (no fail-open), and a legacy token presented during the outage is
+# still rejected.
 # ---------------------------------------------------------------------------
 
 
@@ -544,27 +570,26 @@ def _outage_resolver():
     return SupabaseIdentityResolver(cfg, client=_OutageClient(), repository=_FakeRepo())
 
 
-def test_b9b_legacy_disabled_supabase_5xx_is_503():
-    app = _rest_app(resolver=_outage_resolver(),
-                    auth_config=_config(legacy_token_fallback_enabled=False))
+def test_supabase_5xx_is_503_fail_closed():
+    app = _rest_app(resolver=_outage_resolver(), auth_config=_config())
     resp = TestClient(app).get("/api/v1/protected",
                                headers={"Authorization": f"Bearer {_OPERATOR_TOKEN}"})
     assert resp.status_code == 503
 
 
-def test_b9b_legacy_enabled_supabase_5xx_falls_through_to_bridge():
+def test_supabase_5xx_does_not_fall_through_to_legacy_key():
+    # Even with a legacy api-key wired, a Supabase outage must NOT authenticate
+    # the legacy credential — it fails closed (503), never 200.
     api_keys = {"legacy-key": {"examiner": "bob", "role": "examiner", "token_id": "t-bob"}}
-    app = _rest_app(resolver=_outage_resolver(),
-                    auth_config=_config(legacy_token_fallback_enabled=True),
-                    api_keys=api_keys)
-    # Supabase is down, but legacy fallback is enabled → the bridge authenticates.
+    app = _rest_app(resolver=_outage_resolver(), auth_config=_config(), api_keys=api_keys)
     resp = TestClient(app).get("/api/v1/protected",
                                headers={"Authorization": "Bearer legacy-key"})
-    assert resp.status_code == 200
+    assert resp.status_code == 503
+    assert resp.json().get("principal_id") is None
 
 
 async def test_b9a_verifier_logs_outage_distinctly(caplog):
-    verifier = SiftTokenVerifier(resolver=_outage_resolver(), legacy_fallback_enabled=False)
+    verifier = SiftTokenVerifier(resolver=_outage_resolver())
     with caplog.at_level(logging.WARNING):
         result = await verifier.verify_token(_OPERATOR_TOKEN)
     assert result is None  # no fallback, outage => deny

@@ -31,21 +31,43 @@ from sift_gateway.auth import (
 )
 from sift_gateway.identity import Identity
 from sift_gateway.rest import rest_routes
+from sift_gateway.supabase_auth import SupabaseAuthConfig
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.testclient import TestClient
 
 # --- identities -------------------------------------------------------------
+# SEC-6: the legacy api-key fallback is gone, so identities resolve through the
+# Supabase resolver (the sole credential authority). A minimal fake maps the
+# three test tokens to operator / agent / readonly principals.
 
 _EXAMINER_KEY = "sift_gw_" + secrets.token_hex(24)
 _AGENT_KEY = "sift_svc_" + secrets.token_hex(24)
 _READONLY_KEY = "sift_gw_" + secrets.token_hex(24)
 
-_API_KEYS = {
-    _EXAMINER_KEY: {"examiner": "alice", "role": "examiner", "token_id": "ex-1"},
-    _AGENT_KEY: {"examiner": "hermes", "role": "agent", "agent_id": "ag-1", "token_id": "ag-1"},
-    _READONLY_KEY: {"examiner": "reader", "role": "readonly", "token_id": "ro-1"},
+_IDENTITIES = {
+    _EXAMINER_KEY: Identity("alice", "user", "ex-1", None, None, "examiner", None, "rest"),
+    _AGENT_KEY: Identity("hermes", "agent", "ag-1", "ag-1", None, "agent", None, "rest"),
+    _READONLY_KEY: Identity("reader", "user", "ro-1", None, None, "readonly", None, "rest"),
 }
+
+
+class _FakeResolver:
+    """Resolves the test bearer tokens to fixed principals; rejects others 401."""
+
+    async def resolve(self, token, *, source_ip=None, auth_surface="rest"):
+        from dataclasses import replace
+
+        from sift_gateway.supabase_auth import InvalidTokenError
+
+        ident = _IDENTITIES.get(token)
+        if ident is None:
+            raise InvalidTokenError("unknown token")
+        return replace(ident, source_ip=source_ip, auth_surface=auth_surface)
+
+
+def _auth_config() -> SupabaseAuthConfig:
+    return SupabaseAuthConfig(enabled=True, url="http://supabase.local", anon_key="anon")
 
 # Mutation HTTP methods that the control-plane authority gate must cover.
 _MUTATION_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -72,7 +94,9 @@ def _stub_gateway() -> SimpleNamespace:
 def _make_app() -> Starlette:
     app = Starlette(
         routes=rest_routes(),
-        middleware=[Middleware(AuthMiddleware, api_keys=_API_KEYS)],
+        middleware=[Middleware(
+            AuthMiddleware, resolver=_FakeResolver(), auth_config=_auth_config(),
+        )],
     )
     app.state.gateway = _stub_gateway()
     return app

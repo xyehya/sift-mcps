@@ -47,11 +47,29 @@ _EXAMINER_KEY = "sift_gw_" + secrets.token_hex(24)
 _AGENT_KEY = "sift_svc_" + secrets.token_hex(24)
 _SERVICE_KEY = "sift_svc_" + secrets.token_hex(24)
 
-_API_KEYS = {
-    _EXAMINER_KEY: {"examiner": "alice", "role": "examiner"},
-    _AGENT_KEY: {"examiner": "hermes", "role": "agent", "agent_id": "hermes"},
-    _SERVICE_KEY: {"examiner": "svc", "role": "service"},
+# SEC-6: identities resolve through the Supabase resolver (the sole credential
+# authority) — the legacy api-key fallback that used to authenticate these
+# tokens has been removed.
+from sift_gateway.identity import Identity  # noqa: E402
+from sift_gateway.supabase_auth import SupabaseAuthConfig  # noqa: E402
+
+_IDENTITIES = {
+    _EXAMINER_KEY: Identity("alice", "user", "ex", None, None, "examiner", None, "rest"),
+    _AGENT_KEY: Identity("hermes", "agent", "ag", "hermes", None, "agent", None, "rest"),
+    _SERVICE_KEY: Identity("svc", "service", "sv", None, None, "service", None, "rest"),
 }
+
+
+class _FakeResolver:
+    async def resolve(self, token, *, source_ip=None, auth_surface="rest"):
+        from dataclasses import replace
+
+        from sift_gateway.supabase_auth import InvalidTokenError
+
+        ident = _IDENTITIES.get(token)
+        if ident is None:
+            raise InvalidTokenError("unknown token")
+        return replace(ident, source_ip=source_ip, auth_surface=auth_surface)
 
 
 def _rest_app():
@@ -68,7 +86,13 @@ def _rest_app():
     gateway.call_tool = call_tool
     app = Starlette(
         routes=rest_routes(),
-        middleware=[Middleware(AuthMiddleware, api_keys=_API_KEYS)],
+        middleware=[Middleware(
+            AuthMiddleware,
+            resolver=_FakeResolver(),
+            auth_config=SupabaseAuthConfig(
+                enabled=True, url="http://supabase.local", anon_key="anon"
+            ),
+        )],
     )
     app.state.gateway = gateway
     return app
