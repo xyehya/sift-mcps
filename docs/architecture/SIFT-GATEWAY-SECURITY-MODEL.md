@@ -10,9 +10,16 @@
 > **This is the DESIGN model. Where it disagrees with the code, the CODE wins — and
 > flag the drift.** Known drift as of 2026-06-26: VP-3 stage A still mentions a
 > "PR02 hash / api_key fallback"; **SEC-6 removed that — Supabase JWT is now the SOLE
-> auth authority and an outage fails closed (503), with no legacy fallback and no
-> `mcp:*` default scope.** The live opensearch-mcp wiring is mapped in
-> `docs/drafts/architecture/OPENSEARCH-INTEGRATION-SPEC.md`.
+> auth authority and an outage fails closed (503), with no legacy fallback.** Nuance:
+> the `mcp:*` superuser *scope* still exists and grants all tools when explicitly
+> assigned (`supabase_auth.py::is_tool_allowed`); SEC-6 removed only its legacy
+> *default-grant* to fallback tokens — minting still must not default to it.
+> The live opensearch-mcp wiring is mapped, code-verified, in
+> `docs/drafts/architecture/OPENSEARCH-INTEGRATION-SPEC.md` (this doc's opensearch annex).
+> **Runtime note:** these 9 design gates map to 1 catalog middleware (`mcp_server.py`)
+> + the policy chain, which also carries 2 code-only objects not drawn here —
+> `ControlPlaneRequiredMiddleware` (outermost: no DSN ⇒ refuse all) and
+> `OpenSearchIngestStatusAugmentMiddleware` (merges durable-job rows into ingest-status).
 
 ## The model in one paragraph
 The **Gateway is the single policy boundary**: every REST call, every MCP tool call,
