@@ -122,6 +122,12 @@
             },
             "uniqueItems": true
           },
+          "case_bound_argument_names": {
+            "description": "SEC-2: free-form, agent-settable argument names (e.g. the OpenSearch 'index' pattern) the Gateway must VALIDATE stay within the DB active-case prefix before dispatch. Unlike safe_case_argument_names these are validated, NOT overwritten: the agent may narrow to an artifact family within its OWN case but a value naming another case (case-*, another case's pattern, or an exact other-case index) is rejected. Absent/empty means no such constraint.",
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
           "scope_enforcement": {
             "description": "OS5: how required_scopes are enforced for a mutating tool (e.g. 'gateway_primary_env_fallback').",
             "type": "string"

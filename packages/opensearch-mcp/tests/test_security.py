@@ -208,17 +208,27 @@ class TestDocIdSecurity:
 
 
 # ---------------------------------------------------------------------------
-# _validate_index — system index access prevention (S1)
+# _validate_index — system-index prevention (S1) + active-case binding (SEC-2)
 # ---------------------------------------------------------------------------
 
 
-class TestValidateIndex:
+class TestValidateIndexNoActiveCase:
+    """Fallback path: with NO resolvable active case, _validate_index keeps the
+    legacy system-index guard (case- prefix). Active-case binding for these
+    contexts is enforced at the Gateway boundary (see the gateway test suite)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_active_case(self, monkeypatch):
+        from opensearch_mcp import server
+
+        monkeypatch.setattr(server, "_get_active_case", lambda: None)
+
     def test_case_prefix_passes(self):
         from opensearch_mcp.server import _validate_index
 
         assert _validate_index("case-inc001-evtx-ws05") is None
 
-    def test_case_wildcard_passes(self):
+    def test_case_wildcard_passes_without_active_case(self):
         from opensearch_mcp.server import _validate_index
 
         assert _validate_index("case-*") is None
@@ -252,6 +262,73 @@ class TestValidateIndex:
         from opensearch_mcp.server import _validate_index
 
         assert _validate_index("*") is not None
+
+
+class TestValidateIndexActiveCaseBinding:
+    """SEC-2 / DSS-CAN-010: under an active case, every index segment MUST stay
+    within that case. Cross-case patterns and exact other-case names are denied;
+    intra-case narrowing and the active pattern are allowed."""
+
+    ACTIVE = "case-a-1234"  # active case key (directory basename)
+
+    @pytest.fixture(autouse=True)
+    def _active_case_a(self, monkeypatch):
+        from opensearch_mcp import server
+
+        monkeypatch.setattr(server, "_get_active_case", lambda: self.ACTIVE)
+
+    # ---- denied (the cross-case read primitive) --------------------------
+    def test_case_wildcard_denied_under_active_case(self):
+        """FLIPPED from test_case_wildcard_passes: case-* (ALL cases) is now a
+        cross-case read and MUST be denied while a case is active."""
+        from opensearch_mcp.server import _validate_index
+
+        assert _validate_index("case-*") is not None
+
+    def test_other_case_pattern_denied(self):
+        from opensearch_mcp.server import _validate_index
+
+        assert _validate_index("case-b-9999-*") is not None
+
+    def test_exact_other_case_index_denied(self):
+        from opensearch_mcp.server import _validate_index
+
+        assert _validate_index("case-b-9999-evtx-host") is not None
+
+    def test_prefix_confusion_other_case_denied(self):
+        """A case key that shares a leading substring must NOT pass: the trailing
+        '-' in the active prefix prevents case-a-12345 matching case-a-1234."""
+        from opensearch_mcp.server import _validate_index
+
+        assert _validate_index("case-a-12345-evtx-*") is not None
+
+    def test_mixed_segments_one_other_case_denied(self):
+        from opensearch_mcp.server import _validate_index
+
+        assert _validate_index("case-a-1234-evtx-*,case-b-9999-*") is not None
+
+    # ---- allowed (intra-case narrowing) ----------------------------------
+    def test_active_case_full_pattern_allowed(self):
+        from opensearch_mcp.server import _validate_index
+
+        assert _validate_index("case-a-1234-*") is None
+
+    def test_active_case_artifact_family_allowed(self):
+        from opensearch_mcp.server import _validate_index
+
+        assert _validate_index("case-a-1234-evtx-*") is None
+
+    def test_active_case_exact_index_allowed(self):
+        from opensearch_mcp.server import _validate_index
+
+        assert _validate_index("case-a-1234-evtx-host") is None
+
+    def test_empty_still_rejected(self):
+        from opensearch_mcp.server import _validate_index
+
+        # Handlers _resolve_index to the active pattern before validating; an
+        # empty index reaching the validator is still an error.
+        assert _validate_index("") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -302,3 +379,85 @@ class TestSanitizeIndexComponent:
         assert "/" not in result
         # Dots preserved (safe in index names), slashes stripped
         assert result == "..-..-etc-passwd"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_index — empty resolves to active pattern; supplied passes through to
+# _validate_index (SEC-2)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveIndexActiveCase:
+    @pytest.fixture(autouse=True)
+    def _active_case_a(self, monkeypatch):
+        from opensearch_mcp import server
+
+        monkeypatch.setattr(server, "_get_active_case", lambda: "case-a-1234")
+
+    def test_empty_resolves_to_active_pattern(self):
+        from opensearch_mcp.server import _resolve_index
+
+        assert _resolve_index("", "") == "case-a-1234-*"
+
+    def test_supplied_intra_case_index_passes_through(self):
+        from opensearch_mcp.server import _resolve_index
+
+        assert _resolve_index("case-a-1234-evtx-*", "") == "case-a-1234-evtx-*"
+
+    def test_supplied_other_case_index_returned_then_denied_by_validate(self):
+        """_resolve_index returns the supplied value (intra-case narrowing relies
+        on this), but _validate_index — which every handler runs next — binds it
+        to the active case and denies a cross-case value."""
+        from opensearch_mcp.server import _resolve_index, _validate_index
+
+        resolved = _resolve_index("case-b-9999-*", "")
+        assert resolved == "case-b-9999-*"
+        assert _validate_index(resolved) is not None
+
+
+# ---------------------------------------------------------------------------
+# SEC-2 fail-on-revert SURFACE test: the cross-case denial must be VISIBLE in
+# the registry result_public (structured_content) envelope for every case-scoped
+# query tool — not just produced deep in the impl. Drives the REAL run_* (no
+# _impl_server mock) so a revert of _validate_index binding fails this test.
+# ---------------------------------------------------------------------------
+
+
+class TestCrossCaseDenialSurfaces:
+    ACTIVE = "case-a-1234"
+    OTHER_PATTERN = "case-b-9999-*"
+    OTHER_EXACT = "case-b-9999-evtx-host"
+
+    @pytest.fixture(autouse=True)
+    def _active_case_a(self, monkeypatch):
+        from opensearch_mcp import server
+
+        monkeypatch.setattr(server, "_get_active_case", lambda: self.ACTIVE)
+
+    def _cases(self):
+        from opensearch_mcp import registry as reg
+
+        # get_event requires an EXACT index (no wildcard); the rest take patterns.
+        pat = self.OTHER_PATTERN
+        return [
+            (reg.run_opensearch_search, reg.SearchIn(query="*", index=pat)),
+            (reg.run_opensearch_count, reg.CountIn(query="*", index=pat)),
+            (reg.run_opensearch_aggregate, reg.AggregateIn(field="event.code", index=pat)),
+            (reg.run_opensearch_timeline, reg.TimelineIn(query="*", index=pat)),
+            (reg.run_opensearch_get_event, reg.GetEventIn(event_id="e1", index=self.OTHER_EXACT)),
+        ]
+
+    def test_cross_case_denial_surfaces_in_result_public(self):
+        import asyncio
+
+        for run_fn, params in self._cases():
+            result = asyncio.run(run_fn(params))
+            sc = result.structured_content
+            assert result.is_error, (
+                f"{run_fn.__name__}: a cross-case index must produce an error result"
+            )
+            assert isinstance(sc, dict), f"{run_fn.__name__}: structured_content missing"
+            message = str(sc.get("message", ""))
+            assert "outside the active case" in message, (
+                f"{run_fn.__name__}: cross-case denial not surfaced in result_public: {sc}"
+            )

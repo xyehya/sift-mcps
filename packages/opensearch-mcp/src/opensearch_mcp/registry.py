@@ -75,8 +75,11 @@ class CaseScopedQueryBase(BaseModel):
     index: str = Field(
         "",
         description=(
-            "Index pattern; every segment MUST start with 'case-'. Overrides case_id "
-            "when set. Leave empty to derive from case_id/active case."
+            "Index pattern to narrow WITHIN the active case (e.g. "
+            "'case-<key>-evtx-*'). Every segment must stay inside the active "
+            "case; a cross-case value (case-*, another case's pattern, or an "
+            "exact other-case index) is rejected. Leave empty to query the whole "
+            "active case."
         ),
     )
     case_id: str = Field(
