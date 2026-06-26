@@ -160,11 +160,24 @@ SIFT_OPENSEARCH_WORKERS="${SIFT_OPENSEARCH_WORKERS:-2}"
 # live VM. Verdicts and provenance live in docs/operator/reference-data-provenance.md
 # (the D1-D8 ledger).
 #
-# uv (D1): the versioned install script itself pins APP_VERSION internally; we
-# pin the script URL by version and SHA-256-verify the downloaded x86_64 tarball
-# out of band so the pipe-to-shell is no longer "latest + unauthenticated".
+# uv (D1): we download the per-arch uv release tarball from GitHub and
+# SHA-256-verify it against a pinned hash BEFORE installing. There is no
+# pipe-to-shell fallback on any arch — an arch without a pinned, verified hash
+# fails CLOSED (supply-chain guard: fail-closed beats fail-open).
+#
+# Provenance of the pinned hashes: the values below are the upstream-published
+# checksums from each release's `<triple>.tar.gz.sha256` asset at
+# https://github.com/astral-sh/uv/releases/download/<ver>/<triple>.tar.gz.sha256
+# (NOT locally recomputed). Refresh together on a version bump: bump
+# SIFT_UV_VERSION, then for each supported triple set the ledger var to the
+# value from that release's published `.sha256` asset, and re-verify on a live VM.
 SIFT_UV_VERSION="${SIFT_UV_VERSION:-0.11.21}"
+# x86_64 (primary; SIFT VM is x86_64). Published 0.11.21 .sha256:
 SIFT_UV_TARBALL_SHA256="${SIFT_UV_TARBALL_SHA256:-8c88519b0ef0af9801fcdee419bbb12116bd9e6b18e162ae093c932d8b264050}"
+# aarch64 (secondary). Published 0.11.21 uv-aarch64-unknown-linux-gnu.tar.gz.sha256.
+# Empty default ⇒ that arch dies fail-closed with an actionable message; set this
+# (or override) to install on aarch64.
+SIFT_UV_TARBALL_SHA256_AARCH64="${SIFT_UV_TARBALL_SHA256_AARCH64:-88e800834007cc5efd4675f166eb2a51e7e3ad19876d85fa8805a6fb5c922397}"
 # Hayabusa (D2): pinned release tag + SHA-256 of the lin-x64-gnu zip (upstream
 # ships no checksum file, so the hash is pinned here like the Supabase CLI).
 SIFT_HAYABUSA_TAG="${SIFT_HAYABUSA_TAG:-v3.9.0}"
@@ -312,43 +325,59 @@ install_uv_if_needed() {
       "pre-install uv via your OS package manager or place the uv binary on PATH (e.g. ~/.local/bin/uv) before re-running ./install.sh"
   fi
   require_cmd curl
-  # B-MVP-004 (D1): pin uv to a specific version and SHA-256-verify the tarball.
-  # The versioned install script (astral.sh/uv/<ver>/install.sh) pins APP_VERSION
-  # internally, so we no longer pipe an unpinned "latest" script to the shell.
-  # We additionally download the x86_64 tarball ourselves and SHA-256-verify it
-  # against the pinned hash; on match we install from the verified tarball, and
-  # only fall back to the (still version-pinned) script if the arch is not x86_64.
-  log "Installing uv ${SIFT_UV_VERSION} (pinned)."
-  local tmpd tarball arch
-  tmpd="$(mktemp -d)"
+  # B-MVP-004 (D1) / #17: pin uv to a specific version and SHA-256-verify the
+  # per-arch release tarball BEFORE installing. Every install path is hash-gated;
+  # there is NO pipe-to-shell fallback on any arch. An arch without a pinned,
+  # verified hash fails CLOSED (supply-chain guard — fail-closed beats fail-open).
+  log "Installing uv ${SIFT_UV_VERSION} (pinned, SHA-256-verified)."
+
+  # Resolve this arch to its uv release triple + the ledger var holding the
+  # pinned, upstream-published SHA-256 for that triple. Unsupported arch dies.
+  local arch triple expected_sha
   arch="$(uname -m 2>/dev/null || echo unknown)"
-  if [[ "$arch" == "x86_64" || "$arch" == "amd64" ]]; then
-    tarball="$tmpd/uv-x86_64-unknown-linux-gnu.tar.gz"
-    if curl -fsSL -o "$tarball" \
-        "https://github.com/astral-sh/uv/releases/download/${SIFT_UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"; then
-      if verify_sha256 "$tarball" "$SIFT_UV_TARBALL_SHA256"; then
-        log "  uv tarball SHA-256 verified."
-        mkdir -p "$HOME/.local/bin"
-        tar -xzf "$tarball" -C "$tmpd"
-        local uv_extracted
-        uv_extracted="$(find "$tmpd" -type f -name uv | head -1)"
-        if [[ -n "$uv_extracted" ]]; then
-          install -m 755 "$uv_extracted" "$HOME/.local/bin/uv"
-        fi
-      else
-        rm -rf "$tmpd"
-        die "uv ${SIFT_UV_VERSION} tarball failed SHA-256 verification — refusing to install (supply-chain guard). Set SIFT_UV_TARBALL_SHA256 if you intentionally bumped the pin."
-      fi
-    fi
+  case "$arch" in
+    x86_64 | amd64)
+      triple="uv-x86_64-unknown-linux-gnu"
+      expected_sha="$SIFT_UV_TARBALL_SHA256"
+      ;;
+    aarch64 | arm64)
+      triple="uv-aarch64-unknown-linux-gnu"
+      expected_sha="$SIFT_UV_TARBALL_SHA256_AARCH64"
+      ;;
+    *)
+      die "uv: unsupported CPU architecture '${arch}'. No SHA-256-pinned uv tarball is configured for it, and unhashed installs are refused (supply-chain guard). Pre-install uv via your OS package manager / place the uv binary on PATH (e.g. ~/.local/bin/uv), or set SIFT_UV_TARBALL_SHA256_$(printf '%s' "$arch" | tr '[:lower:]' '[:upper:]') to the upstream-published checksum for '${triple:-uv-${arch}-unknown-linux-gnu}' and re-run ./install.sh."
+      ;;
+  esac
+
+  # Refuse to fetch when the ledger var for this arch is empty — fail closed
+  # rather than download something we cannot verify.
+  if [[ -z "$expected_sha" ]]; then
+    die "uv: no pinned SHA-256 for arch '${arch}' (${triple}). Refusing to fetch an unverifiable tarball (supply-chain guard). Set SIFT_UV_TARBALL_SHA256_$(printf '%s' "$arch" | tr '[:lower:]' '[:upper:]') to the upstream-published checksum and re-run ./install.sh."
+  fi
+
+  local tmpd tarball
+  tmpd="$(mktemp -d)"
+  tarball="$tmpd/${triple}.tar.gz"
+  if ! curl -fsSL -o "$tarball" \
+      "https://github.com/astral-sh/uv/releases/download/${SIFT_UV_VERSION}/${triple}.tar.gz"; then
+    rm -rf "$tmpd"
+    die "uv: failed to download ${triple}.tar.gz for ${SIFT_UV_VERSION}. Check network connectivity or pre-install uv on PATH."
+  fi
+  if ! verify_sha256 "$tarball" "$expected_sha"; then
+    rm -rf "$tmpd"
+    die "uv ${SIFT_UV_VERSION} (${triple}) tarball failed SHA-256 verification — refusing to install (supply-chain guard). If you intentionally bumped the pin, set the matching SIFT_UV_TARBALL_SHA256[_<ARCH>] to the upstream-published checksum."
+  fi
+  log "  uv tarball SHA-256 verified (${triple})."
+  mkdir -p "$HOME/.local/bin"
+  tar -xzf "$tarball" -C "$tmpd"
+  local uv_extracted
+  uv_extracted="$(find "$tmpd" -type f -name uv | head -1)"
+  if [[ -n "$uv_extracted" ]]; then
+    install -m 755 "$uv_extracted" "$HOME/.local/bin/uv"
   fi
   rm -rf "$tmpd"
+
   uv_bin="$(resolve_uv)"
-  if [[ -z "$uv_bin" ]]; then
-    # Arch fallback: the version-pinned install script (NOT the unpinned latest).
-    log "  Falling back to the version-pinned uv install script for arch '$arch'."
-    curl -LsSf "https://astral.sh/uv/${SIFT_UV_VERSION}/install.sh" | sh
-    uv_bin="$(resolve_uv)"
-  fi
   [[ -n "$uv_bin" ]] || die "uv install completed but uv binary not found."
   UV_BIN="$uv_bin"
 }
@@ -1069,48 +1098,87 @@ report_hayabusa_status() {
   fi
 }
 
-install_zimmerman_symlinks() {
-  # Zimmerman EZ Tools are installed at /opt/zimmermantools by SIFT.
-  # Symlink each tool into /usr/local/bin so they are on PATH for run_command.
-  # Idempotent: re-linking an existing symlink is a no-op.
-  local zimmerman_dir="/opt/zimmermantools"
-  if ! sudo_if_needed test -d "$zimmerman_dir"; then
-    log "Zimmerman tools not found at $zimmerman_dir — skipping symlinks."
+# Emit one dotnet wrapper for a single EZ Tool .dll into $bindir/<Tool>.
+# $1 = the .dll path (e.g. /opt/zimmermantools/MFTECmd.dll), $2 = target bin dir.
+# Idempotent: if $bindir/<Tool> already exists (the SANS image ships its own
+# wrappers), this is a no-op. Echoes "created" / "exists" / "" (skipped) so the
+# caller can count. Never fatal.
+_zimmerman_emit_wrapper() {
+  local dll="$1" bindir="$2"
+  local base tool wrapper tmp
+  base="$(basename "$dll")"        # e.g. MFTECmd.dll
+  tool="${base%.dll}"              # e.g. MFTECmd
+  [[ -n "$tool" ]] || { echo ""; return 0; }
+  wrapper="$bindir/$tool"
+  # Idempotent: a pre-existing entry (SANS-image wrapper or a prior run) wins.
+  if sudo_if_needed test -e "$wrapper"; then
+    echo "exists"
     return 0
   fi
-  local linked=0
-  # Known EZ Tools — link each if the binary exists under /opt/zimmermantools.
-  local tools=(
-    EvtxECmd MFTECmd RECmd PECmd AmcacheParser AppCompatCacheParser
-    JLECmd LECmd SBECmd RBCmd SrumECmd SQLECmd WxTCmd bstrings
-  )
-  for tool in "${tools[@]}"; do
-    # Link the real executable, not a directory. `test -x` is true for
-    # directories, so the old check symlinked subdir-layout tools (RECmd,
-    # SQLECmd live at /opt/zimmermantools/<Tool>/<Tool>) to the DIRECTORY,
-    # producing a broken link. Prefer a regular file at the top level; else
-    # fall back to the per-tool subdir layout; else skip. Idempotent.
-    local target=""
-    if sudo_if_needed test -f "$zimmerman_dir/$tool"; then
-      target="$zimmerman_dir/$tool"
-    elif sudo_if_needed test -f "$zimmerman_dir/$tool/$tool"; then
-      target="$zimmerman_dir/$tool/$tool"
-    fi
-    if [[ -n "$target" ]]; then
-      # -n (--no-dereference): if /usr/local/bin/$tool is already a symlink to a
-      # directory (the exact broken state the old `test -x` bug left behind),
-      # plain `ln -sf` would follow it and create a NESTED link inside the target
-      # dir instead of repointing — and could clobber the real binary. -sfn
-      # repoints the link atomically, keeping the upgrade-over-broken-state path
-      # idempotent.
-      sudo_if_needed ln -sfn "$target" "/usr/local/bin/$tool" 2>/dev/null || true
-      linked=$((linked + 1))
-    fi
-  done
-  if [[ "$linked" -gt 0 ]]; then
-    log "Zimmerman EZ Tools: linked $linked tool(s) from $zimmerman_dir into /usr/local/bin."
+  # The EZ Tools are .NET assemblies; the canonical SANS wrapper is a tiny
+  # bash shim that execs `dotnet <Tool>.dll "$@"`. We mirror that exactly so a
+  # bare install (no SANS wrappers) still gets <Tool> on PATH for run_command.
+  # Build in an operator-owned temp, then install atomically as root mode 0755.
+  tmp="$(mktemp)"
+  {
+    printf '#!/bin/bash\n'
+    # SC2016: the single-quoted string is a printf FORMAT spec, not a value to
+    # expand — `%q` shell-quotes "$dll" into it, and "${@}" is literal text we
+    # want written verbatim into the generated wrapper. Single quotes are correct.
+    # shellcheck disable=SC2016
+    printf 'exec dotnet %q "${@}"\n' "$dll"
+  } > "$tmp"
+  if sudo_if_needed install -m 0755 "$tmp" "$wrapper" 2>/dev/null; then
+    rm -f "$tmp"
+    echo "created"
   else
-    log "Zimmerman tools dir exists but no known EZ Tool binaries found inside — skipping."
+    rm -f "$tmp"
+    echo ""
+  fi
+}
+
+install_zimmerman_symlinks() {
+  # Zimmerman EZ Tools are installed at /opt/zimmermantools by the SANS image as
+  # .NET assemblies: <Tool>.dll + <Tool>.exe + <Tool>.runtimeconfig.json. The
+  # working /usr/local/bin/<Tool> entries are bash wrappers that `dotnet`-run the
+  # .dll. On the OFFICIAL SANS image those wrappers already exist; on a BARE
+  # install they may be absent. We make each <Tool> available on PATH for
+  # run_command by emitting the dotnet wrapper for every *.dll that lacks one.
+  # Idempotent: a tool that already has a /usr/local/bin entry is skipped, so a
+  # re-run (or the SANS-provided wrappers) is a clean no-op.
+  #
+  # (Rewrite, not removal: the old body linked /opt/zimmermantools/<Tool> as if
+  # the tools were native ELF binaries — they are not, so it matched nothing and
+  # logged "no known EZ Tool binaries found." This is the bare-SIFT install
+  # track where the SANS wrappers can be missing, so emitting wrappers is real
+  # work, not dead code.)
+  local zimmerman_dir="/opt/zimmermantools"
+  local bindir="/usr/local/bin"
+  if ! sudo_if_needed test -d "$zimmerman_dir"; then
+    log "Zimmerman tools not found at $zimmerman_dir — skipping EZ Tool wrappers."
+    return 0
+  fi
+  if ! command -v dotnet >/dev/null 2>&1; then
+    warn "Zimmerman EZ Tools present at $zimmerman_dir but 'dotnet' is not on PATH —"
+    warn "  cannot create runnable wrappers. Install the .NET runtime, then re-run ./install.sh."
+    return 0
+  fi
+  local created=0 existing=0 dll result
+  # Discover .dll assemblies at the top level of /opt/zimmermantools (the SANS
+  # layout). NUL-delimited so spaces in names are safe; sudo because the dir may
+  # not be operator-readable.
+  while IFS= read -r -d '' dll; do
+    result="$(_zimmerman_emit_wrapper "$dll" "$bindir")"
+    case "$result" in
+      created) created=$((created + 1)) ;;
+      exists)  existing=$((existing + 1)) ;;
+    esac
+  done < <(sudo_if_needed find "$zimmerman_dir" -maxdepth 1 -type f -name '*.dll' -print0 2>/dev/null)
+
+  if [[ "$created" -gt 0 || "$existing" -gt 0 ]]; then
+    log "Zimmerman EZ Tools: $created wrapper(s) created, $existing already present under $bindir (from $zimmerman_dir/*.dll)."
+  else
+    log "Zimmerman tools dir exists but contains no *.dll EZ Tool assemblies — nothing to wrap."
   fi
 
   # Best-effort: repair a dangling /usr/local/bin/hayabusa symlink left by a
@@ -1128,46 +1196,77 @@ install_zimmerman_symlinks() {
 # image ships only as libraries (no CLI). Each add is independently guarded:
 # a failure only warns and continues. The default install MUST still succeed if
 # every one of these fails — never `die` here.
+# Helper: emit the actionable "still missing" advisory for a complementary CLI
+# that we could not (or did not) install, so a skip is NEVER a silent success.
+# $1 = package/command name, $2 = reason fragment.
+_complementary_missing_advisory() {
+  local pkg="$1" reason="$2"
+  warn "  $pkg NOT installed ($reason) — the agent will run WITHOUT it."
+  warn "    Add it later with: sudo apt-get install -y $pkg"
+}
+
 install_complementary_tools() {
-  if ! command -v apt-get >/dev/null 2>&1; then
-    warn "Complementary forensic tools: apt-get unavailable — skipping (yara, tshark, binwalk)."
-    return 0
-  fi
-  log "Installing complementary forensic CLIs (best-effort): yara, tshark, binwalk."
+  # Verify/repair the complementary forensic CLIs that the stock SANS SIFT image
+  # ships only as libraries (no CLI): yara, tshark, binwalk. Idempotent — a tool
+  # already on PATH is left untouched. Best-effort: a failure or a skip (offline,
+  # apt unavailable, apt failure) only WARNS with an actionable advisory and
+  # continues; the default install MUST still succeed. Never `die` here.
+  local pkgs=(yara tshark binwalk)
   local pkg
-  local to_install=()
-  for pkg in yara tshark binwalk; do
+  local missing=()
+  for pkg in "${pkgs[@]}"; do
     if command -v "$pkg" >/dev/null 2>&1; then
       log "  $pkg already present — skipping."
-      continue
+    else
+      missing+=("$pkg")
     fi
-    # tshark pulls in wireshark-common, whose postinst opens an interactive
-    # debconf prompt ("allow non-superusers to capture?") that hangs a
-    # non-interactive install. Pre-seed the answer (false = no setuid dumpcap;
-    # the forensic agent reads PCAPs, it does not live-capture). Best-effort.
-    if [[ "$pkg" == "tshark" ]]; then
-      echo "wireshark-common wireshark-common/install-setuid boolean false" \
-        | sudo_if_needed debconf-set-selections 2>/dev/null || true
-    fi
-    to_install+=("$pkg")
   done
-  if [[ "${#to_install[@]}" -gt 0 ]]; then
-    # Refresh indexes ONCE (not once per package), best-effort: a failing
-    # third-party apt source must not abort the run; fall back to existing
-    # indexes. Then install per-package so one unavailable package does not
-    # block the others (`apt-get install -y a b c` is all-or-nothing).
-    if ! sudo_if_needed apt-get update; then
-      warn "  apt-get update failed (likely an unrelated third-party source) — continuing with existing indexes."
-    fi
-    for pkg in "${to_install[@]}"; do
-      if sudo_if_needed env DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg"; then
-        log "  installed $pkg."
-      else
-        warn "  could not install $pkg (best-effort) — the agent will run without it; install later with: sudo apt-get install -y $pkg"
+
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    log "Complementary forensic CLIs all present (yara, tshark, binwalk) — nothing to do."
+  else
+    # Offline: never reach the network. Emit a clear, actionable advisory naming
+    # exactly what is missing and how to add it, then continue (non-fatal).
+    if is_offline; then
+      warn "Complementary forensic tools: SIFT_OFFLINE=1 — NOT installing ${missing[*]}."
+      for pkg in "${missing[@]}"; do
+        _complementary_missing_advisory "$pkg" "offline mode"
+      done
+    elif ! command -v apt-get >/dev/null 2>&1; then
+      warn "Complementary forensic tools: apt-get unavailable — cannot install ${missing[*]}."
+      for pkg in "${missing[@]}"; do
+        _complementary_missing_advisory "$pkg" "apt-get unavailable"
+      done
+    else
+      log "Installing complementary forensic CLIs (best-effort): ${missing[*]}."
+      # tshark pulls in wireshark-common, whose postinst opens an interactive
+      # debconf prompt ("allow non-superusers to capture?") that hangs a
+      # non-interactive install. Pre-seed the answer (false = no setuid dumpcap;
+      # the forensic agent reads PCAPs, it does not live-capture). Best-effort.
+      for pkg in "${missing[@]}"; do
+        if [[ "$pkg" == "tshark" ]]; then
+          echo "wireshark-common wireshark-common/install-setuid boolean false" \
+            | sudo_if_needed debconf-set-selections 2>/dev/null || true
+        fi
+      done
+      # Refresh indexes ONCE (not once per package), best-effort: a failing
+      # third-party apt source must not abort the run; fall back to existing
+      # indexes. Then install per-package so one unavailable package does not
+      # block the others (`apt-get install -y a b c` is all-or-nothing).
+      if ! sudo_if_needed apt-get update; then
+        warn "  apt-get update failed (likely an unrelated third-party source) — continuing with existing indexes."
       fi
-    done
+      for pkg in "${missing[@]}"; do
+        if sudo_if_needed env DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg"; then
+          log "  installed $pkg."
+        else
+          _complementary_missing_advisory "$pkg" "best-effort apt install failed"
+        fi
+      done
+    fi
   fi
-  # zeek has no apt candidate on the stock SIFT image — warn-only, never fail.
+
+  # zeek has no apt candidate on the stock SIFT image — advisory-only, never fail.
   if ! command -v zeek >/dev/null 2>&1; then
     warn "  zeek not present and has no default apt candidate — skipping (install from the Zeek repo if needed)."
   fi
