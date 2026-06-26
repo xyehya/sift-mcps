@@ -85,8 +85,17 @@ def generate_join_code() -> str:
     return "".join(chars[:4]) + "-" + "".join(chars[4:])
 
 
-def store_join_code(code: str, expires_hours: int = 2) -> None:
-    """Hash and store a join code with expiry."""
+def store_join_code(
+    code: str, expires_hours: int = 2, *, bound_host: str | None = None
+) -> None:
+    """Hash and store a join code with expiry.
+
+    DSS-CAN-019: ``bound_host`` (when set) is the operator-declared expected host
+    identity a wintools backend may be registered from. It is stored alongside
+    the code hash and enforced at redemption (a wintools join whose
+    ``wintools_url`` host does not match is rejected). Codes minted without a
+    bound host cannot register a wintools backend (fail-closed).
+    """
     state = _load_state()
     # bcrypt hash of the code
     code_bytes = code.encode("utf-8")
@@ -97,6 +106,7 @@ def store_join_code(code: str, expires_hours: int = 2) -> None:
         "created": datetime.now(timezone.utc).isoformat(),
         "expires_ts": expires_ts,
         "used": False,
+        "bound_host": bound_host.strip().lower() if bound_host else None,
     }
     _save_state(state)
 
@@ -115,6 +125,29 @@ def validate_join_code(code: str) -> str | None:
         try:
             if bcrypt.checkpw(code_bytes, hashed.encode("utf-8")):
                 return hashed
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def get_join_code_info(code: str) -> dict | None:
+    """Return a copy of the stored metadata for a valid, unused, unexpired code.
+
+    Includes the DSS-CAN-019 ``bound_host`` field. Returns None when no live code
+    matches.
+    """
+    state = _load_state()
+    code_bytes = code.encode("utf-8")
+    now = time.time()
+
+    for hashed, info in state["codes"].items():
+        if info.get("used", False):
+            continue
+        if now > info.get("expires_ts", 0):
+            continue
+        try:
+            if bcrypt.checkpw(code_bytes, hashed.encode("utf-8")):
+                return dict(info)
         except (ValueError, TypeError):
             continue
     return None
@@ -139,8 +172,11 @@ def mark_code_used(code: str) -> None:
 _join_code_lock = asyncio.Lock()
 
 
-async def validate_and_consume_join_code(code: str) -> str | None:
+async def validate_and_consume_join_code(code: str) -> dict | None:
     """Atomically validate and mark a join code as used.
+
+    Returns the stored code metadata dict (including the DSS-CAN-019
+    ``bound_host``) on success, or None when the code is invalid/expired/used.
 
     Uses asyncio.Lock (not threading.Lock) to avoid blocking the event
     loop during bcrypt comparisons. The CPU-bound bcrypt work runs in a
@@ -148,10 +184,10 @@ async def validate_and_consume_join_code(code: str) -> str | None:
     """
     loop = asyncio.get_running_loop()
     async with _join_code_lock:
-        matched_hash = await loop.run_in_executor(None, validate_join_code, code)
-        if matched_hash:
+        info = await loop.run_in_executor(None, get_join_code_info, code)
+        if info is not None:
             await loop.run_in_executor(None, mark_code_used, code)
-        return matched_hash
+        return info
 
 
 _join_failures: dict[str, list[float]] = {}
