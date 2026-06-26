@@ -2496,6 +2496,8 @@ def opensearch_ingest(
         containers_found = []
         try:
             for f in sorted(evidence_path.iterdir()):
+                if f.is_symlink():
+                    continue
                 if f.is_file():
                     ctype = detect_container(f)
                     if ctype in ("ewf", "raw", "nbd", "archive"):

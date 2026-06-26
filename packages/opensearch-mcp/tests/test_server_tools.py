@@ -1122,6 +1122,27 @@ class TestIdxIngestContainerDetection:
         assert "error" in resp
         assert "No Windows artifacts found" in resp["error"]
 
+    def test_directory_container_detection_ignores_symlinks(
+        self, mock_client, tmp_path, monkeypatch
+    ):
+        """Directory auto-detection must not follow symlinks to container files."""
+        active_case_dir = tmp_path / "active-case"
+        evidence_dir = active_case_dir / "evidence"
+        evidence_dir.mkdir(parents=True)
+        other_case_dir = tmp_path / "other-case"
+        other_evidence_dir = other_case_dir / "evidence"
+        other_evidence_dir.mkdir(parents=True)
+        target = other_evidence_dir / "disk.e01"
+        target.write_bytes(b"EVF" + b"\x00" * 100)
+        (evidence_dir / "other-case.e01").symlink_to(target)
+        monkeypatch.setenv("SIFT_CASE_DIR", str(active_case_dir))
+
+        with patch("opensearch_mcp.ingest.discover", return_value=[]):
+            resp = opensearch_ingest(path="evidence", dry_run=True)
+
+        assert "error" in resp
+        assert resp.get("status") != "containers_detected"
+
     def test_idx_ingest_directory_auto_launches_containers(
         self, mock_client, tmp_path, monkeypatch
     ):
