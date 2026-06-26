@@ -23,7 +23,6 @@ install_systemd_service() {
   SIFT_PORTAL_SESSION_SECRET=""
   SIFT_MCPS_ROOT="$REPO_DIR"
   PYTHON_BIN="$SYSTEM_PYTHON"
-  SIFT_EXAMINER="$SIFT_EXAMINER"
   export SIFT_MCPS_ROOT UV_BIN PYTHON_BIN SIFT_CONFIG SIFT_EXAMINER
   export SIFT_GATEWAY_SERVICE_USER SIFT_VOL_SYMBOLS
 
@@ -99,12 +98,12 @@ poll_gateway() {
 
   # Parse JSON body: verify status=ok and surface any degraded subsystems.
   local gw_status supabase_status
-  gw_status="$("$SYSTEM_PYTHON" -c \
-    'import json,sys; d=json.loads(sys.argv[1]); print(d.get("status","unknown"))' \
-    "$body" 2>/dev/null || echo "parse_error")"
-  supabase_status="$("$SYSTEM_PYTHON" -c \
-    'import json,sys; d=json.loads(sys.argv[1]); print((d.get("supabase") or d.get("db") or {}).get("status","unknown"))' \
-    "$body" 2>/dev/null || echo "unknown")"
+  gw_status="$(printf '%s' "$body" | "$SYSTEM_PYTHON" -c \
+    'import json,sys; d=json.load(sys.stdin); print(d.get("status","unknown"))' \
+    2>/dev/null || echo "parse_error")"
+  supabase_status="$(printf '%s' "$body" | "$SYSTEM_PYTHON" -c \
+    'import json,sys; d=json.load(sys.stdin); print((d.get("supabase") or d.get("db") or {}).get("status","unknown"))' \
+    2>/dev/null || echo "unknown")"
 
   if [[ "$gw_status" == "ok" ]]; then
     log "Gateway health OK [${label}]: status=$gw_status supabase=$supabase_status"
@@ -113,9 +112,9 @@ poll_gateway() {
     warn "  $body"
     # Surface the specific failing subsystem if we can parse it.
     local reason
-    reason="$("$SYSTEM_PYTHON" -c \
-      'import json,sys; d=json.loads(sys.argv[1]); print(d.get("reason") or d.get("error") or "")' \
-      "$body" 2>/dev/null || true)"
+    reason="$(printf '%s' "$body" | "$SYSTEM_PYTHON" -c \
+      'import json,sys; d=json.load(sys.stdin); print(d.get("reason") or d.get("error") or "")' \
+      2>/dev/null || true)"
     [[ -n "$reason" ]] && warn "  Reason: $reason"
     if [[ "${SIFT_CORE_ONLY:-0}" != "1" && "$supabase_status" != "ok" && "$supabase_status" != "unknown" ]]; then
       warn "  Supabase connection is not OK ($supabase_status)."

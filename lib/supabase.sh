@@ -90,6 +90,7 @@ write_supabase_env() {
   # is created by install_state_dirs (owned sift-service 0700).
   local tmp
   tmp="$(mktemp)"
+  trap 'rm -f "${tmp:-}"; trap - EXIT' EXIT
   {
     printf '# Supabase environment — managed by sift-mcps install.sh\n'
     printf '# Secrets are stored here, not in gateway.yaml.\n'
@@ -99,6 +100,7 @@ write_supabase_env() {
   } > "$tmp"
   svc_install_file "$tmp" "$supabase_env_file" 600
   rm -f "$tmp"
+  trap - EXIT
 }
 
 # =============================================================================
@@ -242,6 +244,7 @@ write_control_plane_env() {
   # Operator-owned temp -> sift-service-owned 0600 (see write_supabase_env).
   local tmp
   tmp="$(mktemp)"
+  trap 'rm -f "${tmp:-}"; trap - EXIT' EXIT
   {
     printf '# SIFT control-plane environment — managed by sift-mcps install.sh\n'
     printf '# Secrets are stored here, not in gateway.yaml.\n'
@@ -258,6 +261,7 @@ write_control_plane_env() {
   } > "$tmp"
   svc_install_file "$tmp" "$control_env_file" 600
   rm -f "$tmp"
+  trap - EXIT
   [[ -n "$cp_dsn" ]] && export SIFT_CONTROL_PLANE_DSN="$cp_dsn"
   [[ -n "$token_pepper" ]] && export SIFT_TOKEN_PEPPER="$token_pepper"
   [[ -n "$session_secret" ]] && export SIFT_PORTAL_SESSION_SECRET="$session_secret"

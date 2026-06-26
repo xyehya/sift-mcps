@@ -258,7 +258,7 @@ install_hayabusa() {
 install_hayabusa_system_links() {
   local binary="$SIFT_HOME/bin/hayabusa"
   sudo_if_needed test -x "$binary" || return 0
-  sudo_if_needed ln -sf "$binary" /usr/local/bin/hayabusa 2>/dev/null || true
+  sudo_if_needed ln -sfn "$binary" /usr/local/bin/hayabusa 2>/dev/null || true
 }
 
 report_hayabusa_status() {

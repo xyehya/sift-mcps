@@ -1,7 +1,8 @@
 # LSP Agent Workflow
 
 > Covers: Pyright, Ruff, TypeScript language server, Codex, Claude Code
-> Class: developer-agent workflow
+> Class: live-reference
+> Last validated: 4ebe6de (2026-06-26)
 
 Status: repo baseline for using Language Server Protocol tooling with human
 editors and coding agents.

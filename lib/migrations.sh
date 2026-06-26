@@ -48,7 +48,7 @@ apply_db_migrations() {
   export MIGRATION_FILES_LIST="$files_joined"
 
   local result
-  result=$("$VENV_DIR/bin/python" - <<'PY'
+  result=$("$VENV_DIR/bin/python" - 2>&1 <<'PY'
 import os, sys
 from pathlib import Path
 
@@ -60,7 +60,7 @@ try:
     import psycopg
 except ImportError as exc:
     print(f"skip:psycopg_unavailable:{exc}", file=sys.stderr)
-    sys.exit(0)
+    sys.exit(1)
 
 
 def _migration_version(name):
@@ -114,7 +114,7 @@ for fpath in files:
         print(f"warn:{p.name}:{short}", file=sys.stderr)
     first_file = False
 PY
-  2>&1) || {
+  ) || {
     warn "apply_db_migrations: foundational migration failed (DB unreachable?)."
     warn "  $result"
     die "Cannot continue — DB migrations required.  Fix SIFT_CONTROL_PLANE_DSN and re-run."
@@ -285,17 +285,9 @@ PY
 
   local tmp
   tmp="$(mktemp)"
-  # The temp file transiently holds the scoped DSN — ensure it is removed on EVERY
-  # exit path from here (incl. a fail-soft early return below), so under
-  # `set -Eeuo pipefail` a failed svc_install_file never leaves a 0600 temp file
-  # containing the secret on disk.
-  #
-  # bash RETURN traps are GLOBAL, not function-local — so the handler self-clears
-  # (`trap - RETURN`) to fire EXACTLY ONCE on this function's own return and never
-  # again (otherwise it would re-fire on main()'s return where $tmp is unset and,
-  # under set -u, abort with "tmp: unbound variable"). `${tmp:-}` keeps the
-  # handler set -u-safe even if it ever runs with tmp unset.
-  trap 'rm -f "${tmp:-}"; trap - RETURN' RETURN
+  # The temp file transiently holds the scoped DSN. EXIT cleanup covers `set -e`
+  # aborts; normal and fail-soft paths clear the trap immediately after cleanup.
+  trap 'rm -f "${tmp:-}"; trap - EXIT' EXIT
   # Copy existing keys EXCEPT any prior SIFT_AUDIT_WRITER_DSN line, then append
   # the fresh one. svc_read uses sudo to read the sift-service-owned 0600 file.
   svc_read "$control_env_file" | grep -v '^SIFT_AUDIT_WRITER_DSN=' > "$tmp" || true
@@ -303,13 +295,16 @@ PY
   # Fail-soft: per this function's contract least-privilege is an enhancement, not
   # a hard dependency — a write failure must NOT abort the whole install. Warn
   # (no secret) and continue; forward-writes fall back to the full control-plane DSN.
-  svc_install_file "$tmp" "$control_env_file" 600 || {
+  if ! svc_install_file "$tmp" "$control_env_file" 600; then
     warn "provision_audit_writer: audit-writer DSN write failed — least-privilege role inactive (forward-writes use the full control-plane DSN); continuing."
+    rm -f "$tmp"
+    trap - EXIT
     return 0
-  }
+  fi
 
   export SIFT_AUDIT_WRITER_DSN="$writer_dsn"
   unset writer_dsn
   log "provision_audit_writer: scoped DSN written to control-plane.env (least-privilege active)."
+  rm -f "$tmp"
+  trap - EXIT
 }
-

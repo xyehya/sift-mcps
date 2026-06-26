@@ -41,9 +41,11 @@ _migrate_gateway_config() {
   local cfg_src cfg_out
   cfg_src="$(mktemp)"
   cfg_out="$(mktemp)"
+  trap 'rm -f "${cfg_src:-}" "${cfg_out:-}"; trap - EXIT' EXIT
   if ! sudo_if_needed cat "$SIFT_CONFIG" > "$cfg_src" 2>/dev/null; then
     warn "_migrate_gateway_config: could not read $SIFT_CONFIG — skipping migration."
     rm -f "$cfg_src" "$cfg_out"
+    trap - EXIT
     return 0
   fi
   export SIFT_CONFIG_SRC="$cfg_src" SIFT_CONFIG_OUT="$cfg_out"
@@ -164,6 +166,7 @@ PY
     svc_install_file "$cfg_out" "$SIFT_CONFIG" 600
   fi
   rm -f "$cfg_src" "$cfg_out"
+  trap - EXIT
 }
 
 write_opensearch_config() {

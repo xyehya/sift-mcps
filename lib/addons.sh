@@ -19,14 +19,16 @@ prepare_opencti_secrets() {
   # them via sudo and (re)create them owned sift-service. _svc_write_secret_line
   # writes a single value to an operator temp and installs it owned sift-service.
   local tmp
+  tmp="$(mktemp)"
+  trap 'rm -f "${tmp:-}"; trap - EXIT' EXIT
   if [[ -z "${OPENCTI_TOKEN:-}" ]]; then
     if svc_test_f "$SIFT_HOME/opencti-token"; then
       OPENCTI_TOKEN="$(svc_read "$SIFT_HOME/opencti-token")"
       log "OpenCTI admin token already exists."
     else
       OPENCTI_TOKEN=$("$SYSTEM_PYTHON" -c "import uuid; print(uuid.uuid4())")
-      tmp="$(mktemp)"; printf '%s\n' "$OPENCTI_TOKEN" > "$tmp"
-      svc_install_file "$tmp" "$SIFT_HOME/opencti-token" 600; rm -f "$tmp"
+      printf '%s\n' "$OPENCTI_TOKEN" > "$tmp"
+      svc_install_file "$tmp" "$SIFT_HOME/opencti-token" 600
       log "OpenCTI admin token saved."
     fi
   fi
@@ -35,20 +37,22 @@ prepare_opencti_secrets() {
     OPENCTI_ENCRYPTION_KEY="$(svc_read "$SIFT_HOME/opencti-encryption-key")"
   else
     OPENCTI_ENCRYPTION_KEY="$(openssl rand -base64 32)"
-    tmp="$(mktemp)"; printf '%s\n' "$OPENCTI_ENCRYPTION_KEY" > "$tmp"
-    svc_install_file "$tmp" "$SIFT_HOME/opencti-encryption-key" 600; rm -f "$tmp"
+    printf '%s\n' "$OPENCTI_ENCRYPTION_KEY" > "$tmp"
+    svc_install_file "$tmp" "$SIFT_HOME/opencti-encryption-key" 600
   fi
 
   if svc_test_f "$SIFT_HOME/opencti-health-key"; then
     OPENCTI_HEALTH_ACCESS_KEY="$(svc_read "$SIFT_HOME/opencti-health-key")"
   else
     OPENCTI_HEALTH_ACCESS_KEY=$("$SYSTEM_PYTHON" -c "import uuid; print(uuid.uuid4())")
-    tmp="$(mktemp)"; printf '%s\n' "$OPENCTI_HEALTH_ACCESS_KEY" > "$tmp"
-    svc_install_file "$tmp" "$SIFT_HOME/opencti-health-key" 600; rm -f "$tmp"
+    printf '%s\n' "$OPENCTI_HEALTH_ACCESS_KEY" > "$tmp"
+    svc_install_file "$tmp" "$SIFT_HOME/opencti-health-key" 600
   fi
 
   export OPENCTI_TOKEN OPENCTI_ENCRYPTION_KEY OPENCTI_HEALTH_ACCESS_KEY
   export OPENCTI_URL="http://127.0.0.1:8080"
+  rm -f "$tmp"
+  trap - EXIT
 }
 
 install_opencti() {
@@ -76,13 +80,15 @@ install_opencti_feeds() {
   # Connector id files under SIFT_HOME (sift-service-owned 0700): read via sudo,
   # (re)create owned sift-service.
   local id_file tmp
+  tmp="$(mktemp)"
+  trap 'rm -f "${tmp:-}"; trap - EXIT' EXIT
   id_file="$SIFT_HOME/opencti-connector-mitre-id"
   if svc_test_f "$id_file"; then
     OPENCTI_CONNECTOR_MITRE_ID="$(svc_read "$id_file")"
   else
     OPENCTI_CONNECTOR_MITRE_ID=$("$SYSTEM_PYTHON" -c "import uuid; print(uuid.uuid4())")
-    tmp="$(mktemp)"; printf '%s\n' "$OPENCTI_CONNECTOR_MITRE_ID" > "$tmp"
-    svc_install_file "$tmp" "$id_file" 600; rm -f "$tmp"
+    printf '%s\n' "$OPENCTI_CONNECTOR_MITRE_ID" > "$tmp"
+    svc_install_file "$tmp" "$id_file" 600
   fi
 
   id_file="$SIFT_HOME/opencti-connector-cisa-kev-id"
@@ -90,8 +96,8 @@ install_opencti_feeds() {
     OPENCTI_CONNECTOR_CISA_KEV_ID="$(svc_read "$id_file")"
   else
     OPENCTI_CONNECTOR_CISA_KEV_ID=$("$SYSTEM_PYTHON" -c "import uuid; print(uuid.uuid4())")
-    tmp="$(mktemp)"; printf '%s\n' "$OPENCTI_CONNECTOR_CISA_KEV_ID" > "$tmp"
-    svc_install_file "$tmp" "$id_file" 600; rm -f "$tmp"
+    printf '%s\n' "$OPENCTI_CONNECTOR_CISA_KEV_ID" > "$tmp"
+    svc_install_file "$tmp" "$id_file" 600
   fi
 
   export OPENCTI_CONNECTOR_MITRE_ID OPENCTI_CONNECTOR_CISA_KEV_ID
@@ -100,5 +106,6 @@ install_opencti_feeds() {
   OPENCTI_CONNECTOR_MITRE_ID="$OPENCTI_CONNECTOR_MITRE_ID" \
   OPENCTI_CONNECTOR_CISA_KEV_ID="$OPENCTI_CONNECTOR_CISA_KEV_ID" \
     docker compose -f "$REPO_DIR/docker-compose.opencti-connectors.yml" up -d
+  rm -f "$tmp"
+  trap - EXIT
 }
-
