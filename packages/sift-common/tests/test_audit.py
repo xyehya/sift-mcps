@@ -891,3 +891,217 @@ class TestAuditWriterAdversarial:
         aid = w.log("t1", {"field": synthetic_sensitive}, "ok")
         assert aid is not None
         assert synthetic_sensitive not in aid
+
+
+# ---------------------------------------------------------------------------
+# AuditWriter — durability/concurrency hardening (#27)
+#
+#   1. Atomic .seq sidecar write (temp + fsync + os.replace) — no torn sidecar.
+#   2. Cross-process flock — two processes sharing one audit_dir must never
+#      resume the same seq and mint DUPLICATE audit IDs.
+# ---------------------------------------------------------------------------
+
+import multiprocessing as _mp
+
+import pytest
+
+
+def _xproc_mint_worker(audit_dir: str, mcp: str, n: int, out_q) -> None:
+    """Top-level (picklable) worker: mint N audit IDs and push them to a queue.
+
+    Runs in a separate PROCESS (multiprocessing) sharing one audit_dir with a
+    sibling worker. Each returned non-None ID is the audit_id of a JSONL entry
+    that was durably written, so the union across both processes must be
+    duplicate-free if the cross-process flock holds.
+    """
+    w = AuditWriter(mcp, audit_dir=audit_dir)
+    ids = []
+    for _i in range(n):
+        aid = w.log("t", {}, "ok", examiner_override="analyst")
+        if aid is not None:
+            ids.append(aid)
+    w.close()
+    out_q.put(ids)
+
+
+# fork is required so the child inherits this module's definitions cleanly and
+# flock semantics are exercised on a shared FS. Guard for platforms without it.
+_HAS_FORK = hasattr(os, "fork") and "fork" in _mp.get_all_start_methods()
+
+from sift_common import audit as _audit_mod
+
+_HAS_FLOCK = _audit_mod.fcntl is not None
+
+
+class TestAuditWriterCrossProcessLock:
+    """#27: cross-process duplicate-ID prevention via fcntl.flock."""
+
+    @pytest.mark.skipif(
+        not (_HAS_FORK and _HAS_FLOCK),
+        reason="requires POSIX fork + fcntl.flock (cross-process advisory lock)",
+    )
+    def test_two_processes_concurrent_mint_no_duplicate_ids(self, tmp_path):
+        """Two processes minting concurrently on ONE audit_dir must yield 2N
+        unique IDs (zero duplicates).
+
+        This is the substantive #27 bug: without the flock, both processes
+        independently resume the same on-disk sequence and mint colliding audit
+        IDs — a forensic chain-of-custody failure. Removing the flock from
+        _next_audit_id makes this test FAIL (observed duplicates); with the
+        flock it PASSES.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+        n = 50
+
+        ctx = _mp.get_context("fork")
+        q = ctx.Queue()
+        procs = [
+            ctx.Process(target=_xproc_mint_worker, args=(str(audit_dir), mcp, n, q))
+            for _ in range(2)
+        ]
+        for p in procs:
+            p.start()
+        collected: list[str] = []
+        for _ in procs:
+            collected.extend(q.get(timeout=60))
+        for p in procs:
+            p.join(timeout=60)
+            assert p.exitcode == 0, f"child exited {p.exitcode}"
+
+        # Every returned ID corresponds to a durably-written JSONL entry.
+        assert len(collected) == 2 * n, (
+            f"Expected {2 * n} minted IDs, got {len(collected)}"
+        )
+        dupes = sorted({x for x in collected if collected.count(x) > 1})
+        assert not dupes, f"Duplicate audit IDs across processes: {dupes}"
+
+        # Cross-check against what actually landed in the JSONL ledger.
+        log_file = audit_dir / f"{mcp}.jsonl"
+        persisted = [
+            json.loads(line)["audit_id"]
+            for line in log_file.read_text().splitlines()
+            if line.strip()
+        ]
+        assert len(persisted) == 2 * n
+        assert len(set(persisted)) == 2 * n, (
+            "Duplicate audit IDs found in persisted JSONL ledger"
+        )
+
+    def test_flock_unavailable_degrades_to_threading_only(self, tmp_path, monkeypatch):
+        """When fcntl is unavailable (non-POSIX), the cross-process lock is a
+        graceful no-op — minting still works and never blocks/raises.
+        """
+        monkeypatch.setattr(_audit_mod, "fcntl", None)
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        w = AuditWriter("probe-mcp", audit_dir=str(audit_dir))
+        # _get_lock_fd returns None, _acquire/_release are no-ops; minting works.
+        assert w._acquire_xproc_lock() is None
+        w._release_xproc_lock(None)  # must not raise
+        aid1 = w.log("t1", {}, "ok")
+        aid2 = w.log("t2", {}, "ok")
+        assert aid1 and aid2 and aid1 != aid2
+
+
+class TestAuditWriterAtomicSidecar:
+    """#27: atomic .seq sidecar write (temp + fsync + os.replace)."""
+
+    def test_sidecar_written_via_os_replace(self, tmp_path):
+        """The sidecar must be persisted via os.replace (atomic rename), not a
+        plain in-place write — observed by spying on os.replace.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+        seq_target = audit_dir / f"{mcp}.seq"
+
+        real_replace = os.replace
+        calls: list[tuple[str, str]] = []
+
+        def spy_replace(src, dst):
+            calls.append((str(src), str(dst)))
+            return real_replace(src, dst)
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+        with mock.patch("sift_common.audit.os.replace", side_effect=spy_replace):
+            aid = w.log("t1", {}, "ok")
+        assert aid is not None
+        # os.replace was called targeting the sidecar.
+        assert any(dst == str(seq_target) for _src, dst in calls), (
+            f"os.replace never targeted the sidecar; calls={calls}"
+        )
+        # The source was a temp path in the SAME directory.
+        for src, dst in calls:
+            if dst == str(seq_target):
+                assert Path(src).parent == seq_target.parent
+                assert ".tmp." in Path(src).name
+
+    def test_no_tmp_residue_after_successful_write(self, tmp_path):
+        """After successful sidecar writes, no .seq.tmp.* residue may remain."""
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+        for i in range(5):
+            assert w.log(f"t{i}", {}, "ok") is not None
+        residue = list(audit_dir.glob(f"{mcp}.seq.tmp.*"))
+        assert not residue, f"Temp sidecar residue left behind: {residue}"
+        # The real sidecar exists and is valid JSON with the latest seq.
+        data = json.loads((audit_dir / f"{mcp}.seq").read_text())
+        assert data["seq"] == 5
+
+    def test_replace_failure_cleans_up_temp_and_does_not_crash(self, tmp_path):
+        """If os.replace fails (e.g. simulated rename error), the temp file is
+        cleaned up and the call is a graceful no-op (no crash, no residue).
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        with mock.patch(
+            "sift_common.audit.os.replace", side_effect=OSError("rename failed")
+        ):
+            # log() still returns the id (JSONL append succeeded); only the
+            # sidecar persist degrades. The sidecar write is best-effort.
+            aid = w.log("t1", {}, "ok")
+        assert aid is not None
+        residue = list(audit_dir.glob(f"{mcp}.seq.tmp.*"))
+        assert not residue, f"Temp residue after failed replace: {residue}"
+
+    def test_crash_between_jsonl_and_sidecar_recovers_without_duplicate(self, tmp_path):
+        """Simulate a crash AFTER the JSONL append but BEFORE the sidecar is
+        durably renamed: a fresh AuditWriter must resume from the JSONL scan and
+        NOT re-mint the same seq (no duplicate).
+
+        This extends the existing crash-window coverage with the atomic-write
+        path: even when os.replace never lands, the recoverable order
+        (JSONL-append-then-sidecar) guarantees no duplicate on restart.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        # First writer: JSONL append succeeds, but the sidecar rename is forced
+        # to fail (crash window). The JSONL entry with seq=1 is durable.
+        w1 = AuditWriter(mcp, audit_dir=str(audit_dir))
+        with mock.patch(
+            "sift_common.audit.os.replace", side_effect=OSError("crash before rename")
+        ):
+            aid1 = w1.log("t1", {}, "ok", examiner_override="analyst")
+        assert aid1 is not None
+        seq1 = int(aid1.rsplit("-", 1)[-1])
+        assert seq1 == 1
+        # Sidecar must be absent/stale (rename failed) — prove no residue.
+        assert not list(audit_dir.glob(f"{mcp}.seq.tmp.*"))
+
+        # Fresh writer (simulated restart): must resume from JSONL (seq=1) and
+        # mint seq=2 — never duplicate seq=1.
+        w2 = AuditWriter(mcp, audit_dir=str(audit_dir))
+        aid2 = w2.log("t2", {}, "ok", examiner_override="analyst")
+        assert aid2 is not None
+        assert aid2 != aid1
+        seq2 = int(aid2.rsplit("-", 1)[-1])
+        assert seq2 == 2, f"Expected seq=2 after crash-window resume, got {seq2}"
