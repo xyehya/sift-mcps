@@ -1253,3 +1253,55 @@ class TestThreadSafety:
             f"temp sidecar path missing per-thread suffix {expected_suffix!r}; "
             f"captured opens: {captured!r}"
         )
+
+
+class TestAuditWriterThreadSafety:
+    """Same-process, multi-thread hardening (Gemini PR #28 review).
+
+    Guards two intra-process races that the cross-process flock does NOT cover
+    (flock on a single shared fd gives no thread mutual exclusion):
+    - ``_get_lock_fd`` lazy init must be race-free (no fd leak / stray flock fd).
+    - ``_write_seq_sidecar_locked`` temp path must be per-thread (same pid) so
+      concurrent sidecar writes don't collide on ``os.replace``.
+    """
+
+    def test_many_threads_one_writer_unique_ids_no_tmp_residue(self, tmp_path):
+        import concurrent.futures as cf
+
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        w = AuditWriter("opensearch-mcp", str(audit_dir))
+
+        THREADS = 8
+        PER = 40
+        errors: list[str] = []
+
+        def mint(_):
+            out = []
+            try:
+                for i in range(PER):
+                    out.append(
+                        w.log("t", {"i": i}, "ok", examiner_override="x")
+                    )
+            except Exception as e:  # noqa: BLE001 - surface any race crash
+                errors.append(repr(e))
+            return out
+
+        all_ids: list[str] = []
+        with cf.ThreadPoolExecutor(max_workers=THREADS) as ex:
+            for chunk in ex.map(mint, range(THREADS)):
+                all_ids.extend(chunk)
+
+        assert not errors, f"thread raised during concurrent mint: {errors[:3]}"
+        all_ids = [a for a in all_ids if a]
+        assert len(all_ids) == THREADS * PER
+        assert len(set(all_ids)) == len(all_ids), "duplicate audit IDs across threads"
+
+        # Comment-2 guard: no leftover per-thread temp sidecar files.
+        residue = list(audit_dir.glob(f"{w.mcp_name}.seq.tmp.*"))
+        assert not residue, f"temp sidecar residue left behind: {residue}"
+
+        # Comment-1 guard: a single cached lock fd + the lockfile present.
+        assert isinstance(w._lock_fd, int)
+        assert (audit_dir / f"{w.mcp_name}.lock").exists()
+        w.close()
