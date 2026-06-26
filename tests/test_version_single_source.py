@@ -24,9 +24,16 @@ Why this test asserts "resolves AND is not a stale literal" rather than
 from __future__ import annotations
 
 import importlib
+import re
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 import pytest
+
+# Repo root = parent of this tests/ directory. Used by the env-INDEPENDENT static
+# guards below, which hold even when optional add-on dists are not pip-installed.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_PACKAGES_DIR = _REPO_ROOT / "packages"
 
 # The 9 installable workspace MEMBER distributions. The build/version machinery
 # (hatch-vcs) must resolve a version for each from installed metadata.
@@ -71,11 +78,16 @@ MODULE_TO_DIST = (
 def test_dist_version_resolves_and_is_not_a_stale_literal(dist: str) -> None:
     try:
         resolved = version(dist)
-    except PackageNotFoundError:  # pragma: no cover - defensive
-        pytest.fail(
-            f"distribution {dist!r} did not resolve via importlib.metadata; "
-            "version single-sourcing (hatch-vcs) is broken or the dist is "
-            "not installed into the workspace env"
+    except PackageNotFoundError:
+        # opencti-mcp / windows-triage-mcp are OPTIONAL add-ons not included in
+        # the `full` extra, so they are absent from the standard `--extra full
+        # --extra dev` CI/test env. Their single-sourcing is still enforced
+        # env-independently by test_pyproject_is_single_sourced /
+        # test_no_module_version_literals below; skip the runtime check rather
+        # than hard-fail on an intentionally-uninstalled dist.
+        pytest.skip(
+            f"{dist!r} not installed in this env (optional add-on; needs its "
+            "own extra) — static no-literal gates still cover single-sourcing"
         )
 
     assert resolved, f"{dist!r} resolved to an empty version string"
@@ -89,7 +101,16 @@ def test_dist_version_resolves_and_is_not_a_stale_literal(dist: str) -> None:
 
 @pytest.mark.parametrize("module_name,dist", MODULE_TO_DIST)
 def test_module_version_matches_dist_metadata(module_name: str, dist: str) -> None:
-    mod = importlib.import_module(module_name)
+    try:
+        mod = importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        # Same rationale as above: optional add-on not installed in this env.
+        # The static guard test_no_module_version_literals still proves this
+        # module carries no hand-edited literal.
+        pytest.skip(
+            f"{module_name!r} not importable in this env (optional add-on); "
+            "static no-literal gate still covers it"
+        )
     mod_version = getattr(mod, "__version__", None)
     assert mod_version is not None, f"{module_name}.__version__ is missing"
     assert mod_version == version(dist), (
@@ -99,4 +120,51 @@ def test_module_version_matches_dist_metadata(module_name: str, dist: str) -> No
     )
     assert mod_version not in STALE_LITERALS, (
         f"{module_name}.__version__ is the stale literal {mod_version!r}"
+    )
+
+
+# --- Env-INDEPENDENT static guards ------------------------------------------
+# These read source on disk, so they enforce single-sourcing for ALL 9 members
+# (including the optional add-ons that the runtime tests skip when uninstalled)
+# and in any environment, including a `--extra full` CI run.
+
+_MEMBER_PYPROJECTS = sorted(_PACKAGES_DIR.glob("*/pyproject.toml"))
+# `[project]`-level static version literal, e.g. `version = "0.6.1"`. The TOML
+# key sits at column 0 inside [project]; `[tool.hatch.version]` lives under a
+# different table and never uses a bare `version =` literal.
+_STATIC_PROJECT_VERSION = re.compile(r'^version\s*=\s*["\']', re.MULTILINE)
+_MODULE_VERSION_LITERAL = re.compile(r'^__version__\s*=\s*["\']', re.MULTILINE)
+
+
+def test_member_pyprojects_discovered() -> None:
+    # Guards against the glob silently matching nothing (which would make the
+    # parametrized static tests vacuously pass).
+    assert len(_MEMBER_PYPROJECTS) == 9, (
+        f"expected 9 member pyprojects, found {len(_MEMBER_PYPROJECTS)}: "
+        f"{[str(p.relative_to(_REPO_ROOT)) for p in _MEMBER_PYPROJECTS]}"
+    )
+
+
+@pytest.mark.parametrize("pyproject", _MEMBER_PYPROJECTS, ids=lambda p: p.parent.name)
+def test_pyproject_is_single_sourced(pyproject: Path) -> None:
+    text = pyproject.read_text(encoding="utf-8")
+    assert 'dynamic = ["version"]' in text, (
+        f"{pyproject.relative_to(_REPO_ROOT)} does not declare "
+        '`dynamic = ["version"]` — version is not hatch-vcs single-sourced'
+    )
+    assert not _STATIC_PROJECT_VERSION.search(text), (
+        f"{pyproject.relative_to(_REPO_ROOT)} reintroduced a static "
+        "`version = \"...\"` literal — version is no longer single-sourced"
+    )
+
+
+def test_no_module_version_literals() -> None:
+    offenders = [
+        str(init.relative_to(_REPO_ROOT))
+        for init in _PACKAGES_DIR.glob("*/src/**/__init__.py")
+        if _MODULE_VERSION_LITERAL.search(init.read_text(encoding="utf-8"))
+    ]
+    assert not offenders, (
+        "module __version__ literal(s) reintroduced (must read "
+        f"importlib.metadata.version instead): {offenders}"
     )
