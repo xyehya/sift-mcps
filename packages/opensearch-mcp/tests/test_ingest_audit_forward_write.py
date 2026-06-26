@@ -59,16 +59,18 @@ class _FakeConn:
 
 
 def _install_fake_psycopg(monkeypatch, store, *, raise_on_connect=False):
-    """Inject a fake ``psycopg`` (with ``.types.json.Jsonb``) into sys.modules."""
-    mod = types.ModuleType("psycopg")
+    """Inject a fake ``psycopg`` (with ``.types.json.Jsonb``) into sys.modules.
 
-    def connect(dsn):
-        store["dsn"] = dsn
-        if raise_on_connect:
-            raise RuntimeError("boom: unreachable db")
-        return _FakeConn(store)
+    Also patches ``sift_core.investigation_store.borrow_audit_write_connection``
+    and ``evict_audit_write_connection`` so the ingest helper's lazy import of
+    those symbols resolves to the fake connection, matching the real code path
+    (which calls ``borrow_audit_write_connection(dsn)`` rather than
+    ``psycopg.connect(dsn)`` directly).
+    """
+    import sift_core.investigation_store as _store_mod
 
-    mod.connect = connect
+    # Fake Jsonb must be available via the lazy ``from psycopg.types.json import
+    # Jsonb`` inside _persist_ingest_audit_event.
     types_mod = types.ModuleType("psycopg.types")
     json_mod = types.ModuleType("psycopg.types.json")
 
@@ -78,9 +80,22 @@ def _install_fake_psycopg(monkeypatch, store, *, raise_on_connect=False):
 
     json_mod.Jsonb = Jsonb
     types_mod.json = json_mod
-    monkeypatch.setitem(sys.modules, "psycopg", mod)
     monkeypatch.setitem(sys.modules, "psycopg.types", types_mod)
     monkeypatch.setitem(sys.modules, "psycopg.types.json", json_mod)
+
+    # Patch the connection-cache helpers the real code uses instead of
+    # psycopg.connect directly.
+    def fake_borrow(dsn):
+        store["dsn"] = dsn
+        if raise_on_connect:
+            raise RuntimeError("boom: unreachable db")
+        return _FakeConn(store)
+
+    def fake_evict(dsn):
+        store["evicted"] = True
+
+    monkeypatch.setattr(_store_mod, "borrow_audit_write_connection", fake_borrow)
+    monkeypatch.setattr(_store_mod, "evict_audit_write_connection", fake_evict)
 
 
 def test_writes_row_with_backend_audit_id_and_case_uuid(monkeypatch):

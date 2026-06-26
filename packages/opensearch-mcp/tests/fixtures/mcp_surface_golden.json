@@ -2291,6 +2291,19 @@
         "anyOf": [
           {
             "properties": {
+              "advisory": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Set when an empty result is due to the field being absent from the index mapping (i.e. 'field not mapped', not 'no values'); names available fields.",
+                "title": "Advisory"
+              },
               "field": {
                 "description": "Field enumerated.",
                 "title": "Field",
