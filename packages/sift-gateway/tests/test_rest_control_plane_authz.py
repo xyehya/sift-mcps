@@ -205,14 +205,31 @@ async def test_stepup_fail_closed_when_reverify_unwired():
     assert resp is not None and resp.status_code == 503
 
 
-async def test_stepup_requires_password_and_email():
-    req = _reauth_req(supabase_enabled=True, reverify=lambda *a, **k: None)
-    assert (await require_recent_reauth(req, {})).status_code == 401
-    assert (await require_recent_reauth(req, {"email": "a@b"})).status_code == 401
+def _op_identity(*, email="alice@operators.sift.local", auth_user_id="auth-uuid-123"):
+    """An authenticated Supabase operator identity carrying email + auth_user_id."""
+    return Identity(
+        "alice", "user", "t", None, None, "examiner", "127.0.0.1", "rest",
+        auth_user_id=auth_user_id, email=email,
+    )
+
+
+async def test_stepup_missing_password_is_400():
+    # Identity supplies the email; only the password comes from the body.
+    req = _reauth_req(
+        supabase_enabled=True, reverify=lambda *a, **k: None, identity=_op_identity()
+    )
+    assert (await require_recent_reauth(req, {})).status_code == 400
+
+
+async def test_stepup_identity_without_email_is_401():
+    # A bearer identity that carries no operator email fails closed (mirrors
+    # _supabase_reverify's no-session-email branch).
+    ident = _op_identity(email=None)
+    req = _reauth_req(supabase_enabled=True, reverify=lambda *a, **k: None, identity=ident)
     assert (await require_recent_reauth(req, {"password": "pw"})).status_code == 401
 
 
-async def test_stepup_success_binds_to_bearer_principal():
+async def test_stepup_success_password_only_binds_to_bearer_principal():
     calls = {}
 
     async def fake_reverify(email, password, source_ip, *, expected_auth_user_id=None):
@@ -222,33 +239,38 @@ async def test_stepup_success_binds_to_bearer_principal():
         )
         return {"ok": True}
 
-    ident = Identity(
-        "alice", "user", "t", None, None, "examiner", "127.0.0.1", "rest",
-        auth_user_id="auth-uuid-123",
-    )
+    ident = _op_identity(email="alice@ops", auth_user_id="auth-uuid-123")
     req = _reauth_req(supabase_enabled=True, reverify=fake_reverify, identity=ident)
-    result = await require_recent_reauth(req, {"password": "pw", "email": "a@b"})
+    # Body carries ONLY the password.
+    result = await require_recent_reauth(req, {"password": "pw"})
     assert result is None
-    # Bound to the bearer token's own auth_user_id (anti-credential-swap).
+    # Email + binding come from the authenticated identity, not the body.
+    assert calls["email"] == "alice@ops"
     assert calls["expected_auth_user_id"] == "auth-uuid-123"
-    assert calls["email"] == "a@b" and calls["password"] == "pw"
+    assert calls["password"] == "pw"
+
+
+async def test_stepup_email_sourced_from_identity_not_body():
+    # A body-supplied email must be IGNORED — the identity's email is used.
+    seen = {}
+
+    async def fake_reverify(email, password, source_ip, *, expected_auth_user_id=None):
+        seen["email"] = email
+        return {"ok": True}
+
+    ident = _op_identity(email="real@ops")
+    req = _reauth_req(supabase_enabled=True, reverify=fake_reverify, identity=ident)
+    out = await require_recent_reauth(
+        req, {"password": "pw", "email": "attacker@evil", "reauth_email": "attacker@evil"}
+    )
+    assert out is None
+    assert seen["email"] == "real@ops"
 
 
 async def test_stepup_fail_closed_on_wrong_password():
     async def fake_reverify(*a, **k):
         raise RuntimeError("bad password")
 
-    req = _reauth_req(supabase_enabled=True, reverify=fake_reverify)
-    resp = await require_recent_reauth(req, {"password": "pw", "email": "a@b"})
+    req = _reauth_req(supabase_enabled=True, reverify=fake_reverify, identity=_op_identity())
+    resp = await require_recent_reauth(req, {"password": "pw"})
     assert resp is not None and resp.status_code == 401
-
-
-async def test_reauth_email_alias_accepted():
-    # Body may carry the operator email as `reauth_email` OR `email`.
-    async def fake_reverify(email, password, source_ip, *, expected_auth_user_id=None):
-        assert email == "alias@b"
-        return {"ok": True}
-
-    req = _reauth_req(supabase_enabled=True, reverify=fake_reverify)
-    out = await require_recent_reauth(req, {"password": "pw", "reauth_email": "alias@b"})
-    assert out is None

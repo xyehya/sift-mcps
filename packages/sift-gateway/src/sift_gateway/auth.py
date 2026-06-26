@@ -379,26 +379,35 @@ async def require_recent_reauth(request: Request, body: dict) -> JSONResponse | 
     """Step-up re-auth gate for the highest-impact control-plane mutations.
 
     Applied to *register-a-new-backend* and *mint-join-code* (decision: examiner
-    + step-up). Returns ``None`` when the step-up requirement is satisfied (or
-    not applicable), or a fail-closed denial :class:`JSONResponse` otherwise.
+    + step-up). This is **password re-entry only**, mirroring the canonical
+    portal primitive ``case_dashboard.routes._supabase_reverify``: the operator
+    email is sourced from the AUTHENTICATED bearer identity (never the request
+    body), and only the password is read from the body. Returns ``None`` when
+    the step-up requirement is satisfied (or not applicable), or a fail-closed
+    denial :class:`JSONResponse` otherwise.
 
     Behavior:
       - **No-op when Supabase is not the active authority** (``request.state.
         supabase_enabled`` is false) — pure legacy / single-user deployments
-        have no re-auth plane, so step-up cannot apply. This preserves
-        pre-Supabase behavior.
-      - **When Supabase is enabled**, require the operator to re-supply their
-        credentials in the request body (``password`` + ``email``/
-        ``reauth_email``) and re-verify them against Supabase via the shared
-        portal re-verify primitive (``app.state.supabase_reverify`` ->
-        ``SupabaseAuthCallbacks.reverify_password``). The grant is bound to the
-        bearer token's own ``auth_user_id`` (``expected_auth_user_id``) so a
-        stolen bearer token cannot be step-upped with a different operator's
-        password. The grant's session tokens are discarded by the primitive.
+        have no re-auth plane, so step-up cannot apply. Preserves pre-Supabase
+        behavior.
+      - **When Supabase is enabled**, re-verify the operator's submitted
+        password against Supabase via the shared portal primitive
+        (``app.state.supabase_reverify`` -> ``SupabaseAuthCallbacks.
+        reverify_password``), using the bearer identity's own ``email`` +
+        ``auth_user_id`` (``expected_auth_user_id``) so the grant's subject must
+        match this token's principal — a stolen bearer token cannot be
+        step-upped with a different operator's password. The grant's session
+        tokens are discarded by the primitive.
 
-    Fails CLOSED on every uncertain path (missing primitive, missing
-    credentials, wrong password, identity mismatch, control plane unreachable):
-    never returns ``None`` except on a verified re-auth or the no-op case.
+    Fail-closed denials mirror ``_supabase_reverify`` exactly:
+      - no re-verify primitive wired                       -> 503
+      - bearer identity carries no operator email          -> 401
+      - missing password in body                           -> 400
+      - wrong password / identity mismatch / non-operator /
+        control plane unreachable                          -> per reverify_password
+                                                               (401 / 403 / 503)
+    Never returns ``None`` except on a verified re-auth or the no-op case.
     """
     if not getattr(request.state, "supabase_enabled", False):
         return None  # no re-auth plane on legacy/single-user deployments
@@ -416,22 +425,26 @@ async def require_recent_reauth(request: Request, body: dict) -> JSONResponse | 
             status_code=503,
         )
 
+    # Email comes from the AUTHENTICATED bearer identity, never the body — the
+    # password is the only operator-supplied secret (mirrors _supabase_reverify).
+    identity = getattr(request.state, "identity", None)
+    email = getattr(identity, "email", None)
+    if not isinstance(email, str) or not email.strip():
+        return JSONResponse(
+            {"error": "Re-auth unavailable: token carries no operator email."},
+            status_code=401,
+        )
+    email = email.strip()
+
     if not isinstance(body, dict):
         body = {}
     password = body.get("password")
     if not isinstance(password, str) or not password:
         return JSONResponse(
             {"error": "Re-auth required: confirm your password."},
-            status_code=401,
-        )
-    email = body.get("reauth_email") or body.get("email")
-    if not isinstance(email, str) or not email:
-        return JSONResponse(
-            {"error": "Re-auth required: operator email."},
-            status_code=401,
+            status_code=400,
         )
 
-    identity = getattr(request.state, "identity", None)
     expected_auth_user_id = getattr(identity, "auth_user_id", None)
     source_ip = getattr(request.state, "source_ip", None)
     try:

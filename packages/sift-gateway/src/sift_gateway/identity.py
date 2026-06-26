@@ -30,6 +30,11 @@ class Identity:
     principal_id: str | None = None
     system_role: str | None = None
     case_memberships: tuple[CaseMembership, ...] = ()
+    # Operator email from the app principal record. Carried so a control-plane
+    # step-up (require_recent_reauth) sources the re-auth email from the
+    # authenticated bearer identity, never the request body — mirroring the
+    # portal's _supabase_reverify, which uses the session's own email.
+    email: str | None = None
 
 def _hash_token(token: str) -> str:
     """Return a safe token fingerprint (first 16 hex chars of SHA-256). Never stores raw token."""
