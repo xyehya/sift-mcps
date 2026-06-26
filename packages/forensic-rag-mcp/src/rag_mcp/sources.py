@@ -582,7 +582,10 @@ def _fetch_url_once(
 
                 if status in _REDIRECT_CODES:
                     location = response.getheader("Location")
-                    response.read()  # drain so the socket can be released
+                    # SEC-14: bound the drain — the connection is closed in the
+                    # finally below, so we never need the full body, and an
+                    # allowlisted-but-hostile host must not exhaust memory here.
+                    response.read(MAX_DISCARD_BYTES)
                     if not location:
                         raise ValueError(
                             f"Redirect with no Location header from {hostname}"
@@ -593,7 +596,8 @@ def _fetch_url_once(
 
                 if status >= 400:
                     # Surface as HTTPError so fetch_url's retry policy applies.
-                    response.read()
+                    # SEC-14: bound the error-body read (memory-DoS guard).
+                    response.read(MAX_DISCARD_BYTES)
                     raise HTTPError(
                         current_url, status, response.reason, response.msg, None
                     )
@@ -807,6 +811,11 @@ HTTPS_ONLY = os.environ.get("RAG_ALLOW_HTTP", "").lower() not in ("1", "true", "
 
 # Security: cap redirect hops; each hop is re-validated + re-pinned (SEC-14)
 MAX_REDIRECT_HOPS = int(os.environ.get("RAG_MAX_REDIRECT_HOPS", 5))
+
+# Security: bound non-2xx body reads (redirect drains + >=400 error bodies) so an
+# allowlisted-but-hostile host cannot exhaust memory on a path the size cap that
+# guards 2xx downloads does not cover (SEC-14).
+MAX_DISCARD_BYTES = int(os.environ.get("RAG_MAX_DISCARD_BYTES", 64 * 1024))
 
 # Retry configuration for transient failures
 FETCH_MAX_RETRIES = int(os.environ.get("RAG_FETCH_MAX_RETRIES", 3))
