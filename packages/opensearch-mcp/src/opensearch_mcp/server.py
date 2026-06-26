@@ -1508,37 +1508,73 @@ def _hayabusa_health() -> dict:
     }
 
 
-def opensearch_status() -> dict:
-    """Show OpenSearch cluster health, case index doc counts, and Hayabusa health.
+def _resolve_active_prefix(case_id: str, case_dir: str) -> str | None:
+    """Resolve the authoritative active-case index prefix for a status call.
 
-    Use to verify the cluster is reachable and see what cases have indexed data.
+    SEC-7: ``opensearch_status``/``opensearch_shard_status`` bind their per-case
+    catalog to the DB-active case so an agent cannot enumerate other cases'
+    indices. The Gateway injects ``case_dir`` (DB authority) and ``case_id`` for
+    these tools (manifest ``safe_case_argument_names``); this resolves the same
+    way :func:`opensearch_case_summary` does. Returns ``case-{key}-`` or None when
+    no active case is resolvable in this call's context.
+    """
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
+    # A caller/Gateway-supplied UUID-shaped case_id is the opaque DB id and would
+    # build a ``case-<uuid>-`` prefix that matches nothing, so the authoritative
+    # active-case directory takes precedence (mirrors case_summary's cid logic).
+    cid = ""
+    if case_id and not _UUID_RE.match(case_id.strip()):
+        cid = case_id.strip()
+    if not cid:
+        cid = _get_active_case() or ""
+    return build_index_pattern(cid, tail="") if cid else None
+
+
+def opensearch_status(case_id: str = "", case_dir: str = "") -> dict:
+    """Show OpenSearch cluster health, ACTIVE-case index doc counts, and Hayabusa health.
+
+    Use to verify the cluster is reachable and see the active case's indexed data.
     Use opensearch_case_summary for per-case artifact breakdown and coverage state.
+
+    SEC-7: the index catalog is bound to the DB-active case — only the active
+    case's ``case-{key}-*`` indices are returned, never the cluster-wide ``case-*``
+    set (which is a cross-case targeting map). ``cluster_status`` and ``hayabusa``
+    are cluster/engine health, not case data, so they stay unscoped. When no active
+    case resolves (e.g. a standalone health probe), the index list is EMPTY rather
+    than falling back to enumerating every case.
 
     Returns: {cluster_status, indices: [{index, docs, size, status}], total_indices,
       hayabusa: {binary, rules_dir, rules_count}}. hayabusa.binary is null when the
       detection engine is NOT installed — evtx ingest will skip Sigma detection.
     """
+    active_prefix = _resolve_active_prefix(case_id, case_dir)
+
     client = _get_os()
-
-    indices = _os_call(client.cat.indices, format="json")
-    case_indices = [
-        {
-            "index": idx["index"],
-            "docs": int(idx.get("docs.count", 0)),
-            "size": idx.get("store.size", "0"),
-            "status": idx.get("status", "unknown"),
-        }
-        for idx in indices
-        if idx["index"].startswith("case-")
-    ]
-
-    case_indices.sort(key=lambda x: x["index"])
 
     health = _os_call(client.cluster.health)
     cluster_status = health.get("status")
     nodes = health.get("number_of_nodes", 0)
     if cluster_status == "yellow" and nodes <= 1:
         cluster_status = "yellow (normal for single-node deployment)"
+
+    # SEC-7: enumerate ONLY the active case's indices. With no active case the
+    # list is empty (never the cluster-wide case-* enumeration), so the cross-case
+    # targeting map stays closed while the health/probe path still works. The
+    # active prefix starts with ``case-`` so system/`.`-indices remain excluded.
+    case_indices: list[dict] = []
+    if active_prefix:
+        indices = _os_call(client.cat.indices, format="json")
+        case_indices = [
+            {
+                "index": idx["index"],
+                "docs": int(idx.get("docs.count", 0)),
+                "size": idx.get("store.size", "0"),
+                "status": idx.get("status", "unknown"),
+            }
+            for idx in indices
+            if idx["index"].startswith(active_prefix)
+        ]
+        case_indices.sort(key=lambda x: x["index"])
 
     resp = {
         "cluster_status": cluster_status,
@@ -1548,25 +1584,36 @@ def opensearch_status() -> dict:
     }
     aid = audit.log(
         tool="opensearch_status",
-        params={},
-        result_summary=f"{len(case_indices)} indices",
+        params={"case_scope": active_prefix or "(no active case)"},
+        result_summary=(
+            f"{len(case_indices)} indices for {active_prefix or '(no active case)'}"
+        ),
     )
     if aid:
         resp["audit_id"] = aid
     return resp
 
 
-def opensearch_shard_status() -> dict:
+def opensearch_shard_status(case_id: str = "", case_dir: str = "") -> dict:
     """Report OpenSearch shard usage and capacity headroom.
 
     Use before large ingests to check whether the cluster can accept new indices.
     A full disk image ingest can add 40+ shards. status=warning at <10% headroom;
     status=critical at <2%.
 
+    SEC-7: cluster capacity (current_shards, max_shards_per_node, data_nodes,
+    max_total, headroom_pct, status) is cluster-wide operational signal — not case
+    data — so it stays unscoped (the agent legitimately needs headroom before
+    ingest). The ``top_indices_by_shard_count`` catalog, which would otherwise leak
+    other cases' index names and doc counts, is bound to the DB-active case; with
+    no active case it is empty.
+
     Returns: {current_shards, max_shards_per_node, data_nodes, max_total,
       headroom_pct, status: ok|warning|critical, top_indices_by_shard_count}
     """
     from opensearch_mcp.shard_capacity import _resolve_setting
+
+    active_prefix = _resolve_active_prefix(case_id, case_dir)
 
     client = _get_os()
     try:
@@ -1596,33 +1643,39 @@ def opensearch_shard_status() -> dict:
     max_total = max_per_node * int(data_nodes)
     headroom_pct = round(((max_total - current) / max_total) * 100, 1) if max_total else 0.0
 
-    # Top 10 indices by shard count for capacity diagnosis.
-    # Exclude system/hidden indices (.opendistro_security, .tasks, etc.)
-    # so the top-10 reflects case data, not cluster housekeeping.
-    try:
-        indices_info = client.cat.indices(format="json", request_timeout=10) or []
-    except Exception:
-        indices_info = []
-    visible = [i for i in indices_info if not (i.get("index") or "").startswith(".")]
-    top_indices = sorted(
-        visible,
-        key=lambda i: int(i.get("pri", 0) or 0) + int(i.get("rep", 0) or 0),
-        reverse=True,
-    )[:10]
-    top = [
-        {
-            "index": i.get("index"),
-            "primary_shards": int(i.get("pri", 0) or 0),
-            "replica_shards": int(i.get("rep", 0) or 0),
-            "doc_count": int(i.get("docs.count", 0) or 0),
-            "size": i.get("store.size"),
-        }
-        for i in top_indices
-    ]
+    # Top 10 indices by shard count for capacity diagnosis, SCOPED to the active
+    # case (SEC-7): other cases' index names + doc counts are a cross-case leak.
+    # Filtering to the active-case prefix ``case-{key}-`` also inherently drops
+    # system/hidden ``.``-indices. No active case ⇒ empty top list; the
+    # cluster-wide capacity figures above are sufficient for a pre-ingest check.
+    top: list[dict] = []
+    if active_prefix:
+        try:
+            indices_info = client.cat.indices(format="json", request_timeout=10) or []
+        except Exception:
+            indices_info = []
+        visible = [
+            i for i in indices_info if (i.get("index") or "").startswith(active_prefix)
+        ]
+        top_indices = sorted(
+            visible,
+            key=lambda i: int(i.get("pri", 0) or 0) + int(i.get("rep", 0) or 0),
+            reverse=True,
+        )[:10]
+        top = [
+            {
+                "index": i.get("index"),
+                "primary_shards": int(i.get("pri", 0) or 0),
+                "replica_shards": int(i.get("rep", 0) or 0),
+                "doc_count": int(i.get("docs.count", 0) or 0),
+                "size": i.get("store.size"),
+            }
+            for i in top_indices
+        ]
 
     aid = audit.log(
         tool="opensearch_shard_status",
-        params={},
+        params={"case_scope": active_prefix or "(no active case)"},
         result_summary=(f"{current}/{max_total} shards ({headroom_pct}% headroom)"),
     )
     resp = {

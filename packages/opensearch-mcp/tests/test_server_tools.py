@@ -687,28 +687,85 @@ class TestIdxFieldValues:
 
 
 class TestIdxStatus:
-    def test_filters_to_case_indices_only(self, mock_client):
-        mock_client.cat.indices.return_value = [
-            {
-                "index": "case-test-evtx-host1",
-                "docs.count": "1000",
-                "store.size": "5mb",
-                "status": "open",
-            },
-            {"index": ".kibana_1", "docs.count": "10", "store.size": "1mb", "status": "open"},
-            {
-                "index": "case-inc2-amcache-host2",
-                "docs.count": "50",
-                "store.size": "100kb",
-                "status": "open",
-            },
-        ]
+    # SEC-7: the multi-case fixture below is the recon corpus a malicious agent
+    # would try to enumerate. The active case is ``case-aaa`` (key ``aaa`` →
+    # prefix ``case-aaa-``); ``case-bbb-*`` is another case, ``case-aaab-evtx`` is
+    # a sibling whose name shares the ``case-aaa`` text but NOT the ``case-aaa-``
+    # boundary, and ``.kibana_1`` is a system index.
+    _MULTI_CASE_INDICES = [
+        {
+            "index": "case-aaa-evtx-host1",
+            "docs.count": "1000",
+            "store.size": "5mb",
+            "status": "open",
+        },
+        {
+            "index": "case-aaa-prefetch",
+            "docs.count": "20",
+            "store.size": "1mb",
+            "status": "open",
+        },
+        {
+            "index": "case-bbb-evtx-host1",
+            "docs.count": "50",
+            "store.size": "100kb",
+            "status": "open",
+        },
+        # Prefix-boundary decoy: ``case-aaab-evtx``.startswith("case-aaa")
+        # is True, but startswith("case-aaa-") is False (the trailing dash
+        # stops ``case-aaa`` from matching the longer ``case-aaab`` key).
+        {
+            "index": "case-aaab-evtx",
+            "docs.count": "7",
+            "store.size": "50kb",
+            "status": "open",
+        },
+        {"index": ".kibana_1", "docs.count": "10", "store.size": "1mb", "status": "open"},
+    ]
+
+    def test_scopes_index_catalog_to_active_case(self, mock_client):
+        # SEC-7 fail-on-revert: with case A active, opensearch_status must
+        # return ONLY case A's indices — never the cluster-wide ``case-*`` set,
+        # which is a cross-case targeting map. Reverting the filter to
+        # ``.startswith("case-")`` re-admits ``case-bbb-*`` and breaks this.
+        mock_client.cat.indices.return_value = list(self._MULTI_CASE_INDICES)
+        mock_client.cluster.health.return_value = {"status": "green"}
+        # The Gateway injects the opaque DB UUID into case_id and the
+        # authoritative case directory into case_dir; the dir basename
+        # (``case-aaa``) is the case key the indices are named from.
+        resp = opensearch_status(
+            case_id="674425ae-78ea-4c9c-9a14-3c9d0b6f900c",
+            case_dir="/cases/case-aaa",
+        )
+        index_names = [i["index"] for i in resp["indices"]]
+        assert index_names == ["case-aaa-evtx-host1", "case-aaa-prefetch"]
+        assert resp["total_indices"] == 2
+        # Other case + boundary decoy + system index are all excluded.
+        assert "case-bbb-evtx-host1" not in index_names
+        assert "case-aaab-evtx" not in index_names
+        assert ".kibana_1" not in index_names
+
+    def test_prefix_boundary_excludes_sibling_case(self, mock_client):
+        # SEC-7: the trailing-dash boundary is load-bearing — a missing dash
+        # would let active case ``aaa`` leak the sibling ``case-aaab-*``.
+        mock_client.cat.indices.return_value = list(self._MULTI_CASE_INDICES)
+        mock_client.cluster.health.return_value = {"status": "green"}
+        resp = opensearch_status(case_dir="/cases/case-aaa")
+        index_names = [i["index"] for i in resp["indices"]]
+        assert "case-aaab-evtx" not in index_names
+
+    def test_no_active_case_returns_empty_catalog(self, mock_client, monkeypatch):
+        # SEC-7: with no resolvable active case the index catalog is EMPTY
+        # (never the cluster-wide ``case-*`` enumeration), but cluster health
+        # still reports — the standalone health-probe path must not error and
+        # must not leak the cross-case index list.
+        monkeypatch.setattr(srv, "_get_active_case", lambda: None)
+        mock_client.cat.indices.return_value = list(self._MULTI_CASE_INDICES)
         mock_client.cluster.health.return_value = {"status": "green"}
         resp = opensearch_status()
-        assert resp["total_indices"] == 2
-        index_names = [i["index"] for i in resp["indices"]]
-        assert ".kibana_1" not in index_names
-        assert "case-test-evtx-host1" in index_names
+        assert resp["cluster_status"] == "green"
+        assert resp["indices"] == []
+        assert resp["total_indices"] == 0
 
     def test_includes_cluster_status(self, mock_client):
         mock_client.cat.indices.return_value = []
@@ -1578,6 +1635,58 @@ class TestCaseDirArgInjectionInvariant:
             "schema — the Gateway's FastMCP proxy (_forward) rejects the injected "
             "case_dir kwarg before it reaches the backend (B-MVP-036). The impl "
             "function accepting case_dir is NOT sufficient."
+        )
+
+
+class TestSEC7StatusCaseScopeSurface:
+    """SEC-7 fail-on-revert surface: bind status/shard_status to the active case.
+
+    The recon half of SEC-2: ``opensearch_status`` and ``opensearch_shard_status``
+    scope their per-case index catalogs (``indices[]`` /
+    ``top_indices_by_shard_count``) to the DB-active case so an agent cannot
+    enumerate other cases' indices. For the Gateway's gate-⑥ injection to reach
+    the backend, three surfaces must agree (the MCP-fix-surfacing lesson):
+      1. the manifest declares ``case_id``/``case_dir`` in
+         ``safe_case_argument_names`` (so the gateway injects them), and
+      2. the served ``*In`` model advertises both fields (so the FastMCP proxy
+         does not drop the injected kwargs), and
+      3. the impl forwards them.
+    Reverting the manifest's ``safe_case_argument_names`` back to ``[]`` (which
+    would silently re-open the cross-case catalog) fails (1); reverting the
+    registry ``*In`` model fails (2)/(3).
+    """
+
+    _SEC7_TOOLS = ("opensearch_status", "opensearch_shard_status")
+
+    @pytest.mark.parametrize("tool_name", _SEC7_TOOLS)
+    def test_manifest_declares_both_case_args(self, tool_name):
+        manifest = _json.loads(_MANIFEST_PATH.read_text())
+        entry = next((t for t in manifest["tools"] if t["name"] == tool_name), None)
+        assert entry is not None, f"{tool_name} missing from manifest"
+        names = entry.get("safe_case_argument_names", [])
+        # Both must be present so the gateway injects the DB-active case; a revert
+        # to [] re-opens the cluster-wide enumeration (SEC-7 regression).
+        assert "case_id" in names and "case_dir" in names, (
+            f"{tool_name} must declare case_id AND case_dir in "
+            f"safe_case_argument_names (SEC-7); got {names!r}"
+        )
+
+    @pytest.mark.parametrize("tool_name", _SEC7_TOOLS)
+    def test_in_model_and_served_schema_expose_both_case_args(self, tool_name):
+        from opensearch_mcp.registry import REGISTRY
+
+        tool_def = next((td for td in REGISTRY if td.name == tool_name), None)
+        assert tool_def is not None, f"{tool_name} not in REGISTRY"
+        fields = tool_def.in_model.model_fields
+        assert "case_id" in fields and "case_dir" in fields, (
+            f"{tool_name}'s served *In model must expose case_id AND case_dir "
+            f"(SEC-7); got {sorted(fields)!r}"
+        )
+        props = _SERVED_TOOL_SCHEMAS[tool_name].get("properties", {})
+        assert "case_id" in props and "case_dir" in props, (
+            f"{tool_name} does not ADVERTISE both case args in its served input "
+            "schema — the gateway's FastMCP proxy would drop the injected kwargs "
+            "and the backend would resolve no active case (empty catalog)."
         )
 
 

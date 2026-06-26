@@ -484,16 +484,84 @@ class TestIdxShardStatus:
         # Must use request_timeout=int, not timeout=string.
         assert isinstance(gs_kwargs.get("request_timeout"), int)
 
+    def _mock_client_multicase(self, shards=100, nodes=1, max_per_node=1000):
+        """Mock whose cat.indices spans two cases + a sibling + a system index.
+
+        SEC-7: ``opensearch_shard_status`` must scope ``top_indices_by_shard_count``
+        to the active case. Active case is ``case-inc`` (prefix ``case-inc-``);
+        ``case-other-*`` is a different case, ``case-incident-evtx`` is a sibling
+        whose name shares the ``case-inc`` text but not the ``case-inc-`` boundary,
+        and ``.opendistro_security`` is a system index.
+        """
+        client = self._mock_client_ok(shards, nodes, max_per_node)
+        client.cat.indices.return_value = [
+            {"index": "case-inc-evtx-host01", "pri": "3", "rep": "0",
+             "docs.count": "1000", "store.size": "5mb"},
+            {"index": "case-inc-amcache-host01", "pri": "1", "rep": "0",
+             "docs.count": "10", "store.size": "1mb"},
+            {"index": "case-other-evtx-host01", "pri": "9", "rep": "0",
+             "docs.count": "9000", "store.size": "50mb"},
+            {"index": "case-incident-evtx", "pri": "5", "rep": "0",
+             "docs.count": "7", "store.size": "50kb"},
+            {"index": ".opendistro_security", "pri": "1", "rep": "1",
+             "docs.count": "50", "store.size": "100kb"},
+        ]
+        return client
+
     def test_system_indices_filtered_from_top(self, monkeypatch):
+        # SEC-7: scoping to the active-case prefix ``case-{key}-`` inherently
+        # drops system/hidden ``.``-indices from the top list.
         from opensearch_mcp import server as srv
 
         client = self._mock_client_ok()
         monkeypatch.setattr(srv, "_get_os", lambda: client)
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "case-inc")
         monkeypatch.setattr(srv.audit, "log", lambda **kw: None)
         resp = srv.opensearch_shard_status()
         top_names = [i["index"] for i in resp["top_indices_by_shard_count"]]
         assert ".opendistro_security" not in top_names
         assert "case-inc-evtx-host01" in top_names
+
+    def test_top_indices_scoped_to_active_case(self, monkeypatch):
+        # SEC-7 fail-on-revert: top_indices_by_shard_count must list ONLY the
+        # active case's indices. Reverting the filter to ``not startswith(".")``
+        # re-admits ``case-other-*`` (the larger, 9-shard index) and breaks this.
+        from opensearch_mcp import server as srv
+
+        client = self._mock_client_multicase()
+        monkeypatch.setattr(srv, "_get_os", lambda: client)
+        monkeypatch.setattr(srv.audit, "log", lambda **kw: None)
+        # Gateway injects the opaque DB UUID + the authoritative case dir; the
+        # dir basename ``case-inc`` is the case key (prefix ``case-inc-``).
+        resp = srv.opensearch_shard_status(
+            case_id="674425ae-78ea-4c9c-9a14-3c9d0b6f900c",
+            case_dir="/cases/case-inc",
+        )
+        top_names = [i["index"] for i in resp["top_indices_by_shard_count"]]
+        assert top_names == ["case-inc-evtx-host01", "case-inc-amcache-host01"]
+        # Other case, sibling-boundary decoy, and system index excluded.
+        assert "case-other-evtx-host01" not in top_names
+        assert "case-incident-evtx" not in top_names  # boundary: case-inc- vs case-incident
+        assert ".opendistro_security" not in top_names
+        # Cluster capacity fields stay cluster-wide (unscoped).
+        assert resp["current_shards"] == 100
+        assert resp["max_total"] == 1000
+
+    def test_no_active_case_empty_top_but_capacity_reported(self, monkeypatch):
+        # SEC-7: with no active case the top list is empty (no cross-case leak),
+        # but the cluster-wide capacity figures still report so a pre-ingest
+        # readiness check works.
+        from opensearch_mcp import server as srv
+
+        client = self._mock_client_multicase()
+        monkeypatch.setattr(srv, "_get_os", lambda: client)
+        monkeypatch.setattr(srv, "_get_active_case", lambda: None)
+        monkeypatch.setattr(srv.audit, "log", lambda **kw: None)
+        resp = srv.opensearch_shard_status()
+        assert resp["top_indices_by_shard_count"] == []
+        assert resp["current_shards"] == 100
+        assert resp["max_total"] == 1000
+        assert resp["status"] == "ok"
 
 
 # --- _estimate_new_shards ---
