@@ -103,7 +103,7 @@ def test_dist_version_resolves_and_is_not_a_stale_literal(dist: str) -> None:
 @pytest.mark.parametrize("module_name,dist", MODULE_TO_DIST)
 def test_module_version_matches_dist_metadata(module_name: str, dist: str) -> None:
     # Gate on DIST METADATA presence first: the modules now guard version() with
-    # a PackageNotFoundError fallback ("0.0.0+unknown"), so importing them no
+    # a PackageNotFoundError fallback ("0.0.0.dev0"), so importing them no
     # longer raises when uninstalled — without this gate the module would resolve
     # to its sentinel and spuriously mismatch.
     try:
@@ -179,7 +179,7 @@ def test_no_module_version_literals() -> None:
     )
 
 
-_FALLBACK_VERSION = re.compile(r'^fallback-version\s*=\s*"([^"]+)"', re.MULTILINE)
+_FALLBACK_VERSION = re.compile(r"""^fallback-version\s*=\s*["']([^"']+)["']""", re.MULTILINE)
 
 
 def test_fallback_versions_are_consistent() -> None:

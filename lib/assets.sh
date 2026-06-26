@@ -250,7 +250,7 @@ install_hayabusa() {
     sudo_if_needed chown -R "$SIFT_GATEWAY_SERVICE_USER:$SIFT_GATEWAY_SERVICE_USER" "$rules_dir"
     # Cache the count so report_hayabusa_status (called later this run) doesn't
     # re-walk the ~3-4k-file rules tree a second time.
-    HAYABUSA_RULES_COUNT="$(sudo_if_needed find "$rules_dir" -name '*.yml' | wc -l | tr -d ' ')"
+    HAYABUSA_RULES_COUNT="$(sudo_if_needed find "$rules_dir" -name '*.yml' 2>/dev/null | wc -l | tr -d ' ')"
     log "hayabusa rules installed: ${HAYABUSA_RULES_COUNT} YAML files"
   else
     warn "Bundled rules not found in release archive."

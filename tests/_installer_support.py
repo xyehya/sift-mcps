@@ -35,5 +35,6 @@ def run_bash(
         cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         env=full_env,
     )
