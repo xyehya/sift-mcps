@@ -1251,8 +1251,9 @@ def _drop_empty(data: dict[str, Any]) -> dict[str, Any]:
 def _first_text(result: ToolResult) -> str | None:
     """Extract the first text content from a ToolResult, or None."""
     for item in result.content or []:
-        if getattr(item, "type", None) == "text":
-            return item.text
+        text = getattr(item, "text", None)
+        if isinstance(text, str):
+            return text
     return None
 
 

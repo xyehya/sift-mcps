@@ -67,7 +67,6 @@ from pydantic import BaseModel
 
 from sift_common.registry_helpers import tool_output_schema
 
-
 # ---------------------------------------------------------------------------
 # Seam A: drive real run_* via monkeypatched _impl_server
 # ---------------------------------------------------------------------------
@@ -244,7 +243,6 @@ async def assert_sdk_output_schema_enforced(
             "call mcp_server.run() or use _setup_handlers() before this assertion."
         )
 
-    from contextlib import asynccontextmanager
 
     # Provide a minimal request_context so the handler doesn't crash on ctx access.
     from unittest.mock import MagicMock, patch
@@ -301,11 +299,11 @@ def assert_model_matches_output_schema(
     if instance is None:
         try:
             instance = out_model.model_construct()
-        except Exception:
+        except Exception as exc:
             raise RuntimeError(
                 f"Cannot construct {out_model.__name__!r} with no arguments; "
                 "pass an explicit instance= to assert_model_matches_output_schema."
-            )
+            ) from exc
     payload = instance.model_dump(mode="json")
     try:
         jsonschema.validate(instance=payload, schema=schema)

@@ -1,5 +1,9 @@
 # Audit-Provenance Hardening Wave — Requirements & Design Spec
 
+> Covers: packages/sift-gateway/src/sift_gateway/**, packages/sift-core/src/sift_core/**
+> Class: point-in-time
+> Last validated: 93f8999 (2026-06-26)
+
 **Status:** DONE + LIVE-PROVEN + PUSHED (origin/portal-v3/p0-foundation @ `a76a940`; `main` clean). Decisions LOCKED 2026-06-24 (W3 = cap-hint; L-1b = implement; L-2a = defer→later SUPERSEDED). W1/W2/W3 shipped, then a Round-2 follow-up — see "Round-2 amendments" below.
 **Branch:** `portal-v3/p0-foundation` · **HEAD at spec time:** `62cb650` (Unit 1 Gap A + Unit 2 Gap B complete + live-proven; NOT pushed; `main` clean at `b995491`).
 **Authority basis:** `trackers/AUDIT_STATE_VERIFICATION.md` §9 (systemic contract), §10/§10b (Unit 1/2 status); `trackers/PORTAL_V3_EXTENSION_BACKLOG.md` B7 (UI render req); `security_report/sec_review_portal-v3-p0-foundation_2026-06-24_19-44-25.md` (open items I-2/L-1/L-2).
@@ -29,7 +33,7 @@ Round-2 commits: `a1b781c` `1098308` `05e9782` `02a79e2` `d60974e` `03a6082` `a7
 The gateway is the single provenance authority and there is one resolver:
 
 - **Mint authority:** `AuditEnvelopeMiddleware.on_call_tool` (`packages/sift-gateway/src/sift_gateway/policy_middleware.py:911`) mints `envelope_event_id` (uuid PK, `:927`) + `request_id` pre-dispatch for every call; canonical selection (§9.3) holds verbatim at `:1019-1024` (`is_core` → `native_ids[0] else envelope_event_id`; proxied → `envelope_event_id`).
-- **Single resolver:** `InvestigationService.audit_events` (`packages/case-dashboard/src/case_dashboard/portal_services.py:1619`), 6 superset OR-clauses (`:1686-1691`), each ANDed with `case_id` (`:1685`).
+- **Single resolver:** `InvestigationService.audit_events` (`packages/sift-gateway/src/sift_gateway/portal_services.py:1619`), 6 superset OR-clauses (`:1686-1691`), each ANDed with `case_id` (`:1685`).
 - **Write-side classifier:** `record_finding` → `_classify_provenance` (`packages/sift-core/src/sift_core/case_manager.py:2175`), fail-closed DB verification `_db_audit_id_known` (`:901-924`) / `_db_audit_event_has_audit_id` (`:197-229`).
 
 **Naming correction:** the core run_command scheme is minted as **`siftcore-*`** (`agent_tools.py:1308` `AuditWriter(mcp_name="sift-core")` → prefix transform in `sift-common/.../audit.py:176`), not `siftgateway-*`. The literal `siftgateway-*` survives only as the never-authoritative JSONL mirror (`sift-gateway/.../server.py:218`) and stale test/doc strings. Functionally identical scheme `{prefix}-{examiner}-{YYYYMMDD}-{NNN}`.
@@ -116,7 +120,7 @@ This test **fails the day a future backend breaks the invariant** — the system
 ### W2.3 Back-compat + acceptance
 - **No regression to the gateway tier:** gateway rows have `source="gateway_mcp_envelope"` → skip the new branches; F-006/007/008 must still render Tool/Params/Result. Regression-test against those three.
 - **Acceptance:** open F-006 (gateway), F-009 (ingest), F-010 (shell) → every cited id expands to non-empty useful detail; **zero** "No tool-call provenance recorded" for resolving ids; the `/audit` endpoint returns 200 (not 500) for F-009.
-- **Test plan — RENDER-side mandatory** (the lesson from the last wave): unit-test the shaping for each event_type (assert projected fields); and a **live render check** — open the panel in Chrome and screenshot the expanded audit id for F-006/F-009/F-010 AND assert `GET /portal/api/audit/<finding>` returns 200 with the projected fields present (`params.command`/`purpose` for shell; `tool`+context+`result_summary` for ingest). "Resolves" ≠ "renders" — we assert rendered detail, not just a resolving row.
+- **Test plan — RENDER-side mandatory** (the lesson from the last wave): unit-test the shaping for each event_type (assert projected fields); and a **live render check** — open the panel in Chrome and screenshot the expanded audit id for F-006/F-009/F-010 AND assert `GET /portal/api/audit/{finding}` returns 200 with the projected fields present (`params.command`/`purpose` for shell; `tool`+context+`result_summary` for ingest). "Resolves" ≠ "renders" — we assert rendered detail, not just a resolving row.
 
 ---
 
@@ -182,10 +186,10 @@ This re-bases the FK's own HIGH≥2 / MEDIUM≥1 thresholds onto ids that actual
 Discovery (done) → **operator approves this spec** → W1 → W2 → W3 (W1 assurance+security first so the base is trusted; W2 render; W3 the contract change last). Each workstream runs the gated loop: coder (sole writer in worktree, codeguard-loaded, commit-in-worktree, NO push/deploy) → verifier-griller (read-only, reproduces tests with the PYTHONPATH gotcha, greps regressions, **verifies render/behavior** for W2/W3 not just resolution) → security-expert (one pass: PASS / PASS-WITH-FIXES / FAIL) → **orchestrator deploys + live-proves on the VM**. Agents deliver verdicts via `SendMessage(to:"main")`. Phase 4: consolidated security-review of the full unpushed delta + full-regression live test (F-006/007/008 still rich; F-009/010 now render detail; a NEW finding proves auto-confidence) → hand back for the push decision. **Do NOT push.**
 
 ### Lessons applied (from the last wave)
-- **"Resolves" ≠ "renders":** W2/W3 live-prove MUST open the actual panel (Chrome screenshots) AND assert the `/portal/api/audit/<finding>` JSON carries the projected fields — not just that an id classifies MCP in the DB.
+- **"Resolves" ≠ "renders":** W2/W3 live-prove MUST open the actual panel (Chrome screenshots) AND assert the `/portal/api/audit/{finding}` JSON carries the projected fields — not just that an id classifies MCP in the DB.
 - **Don't break the rich tier:** every routes.py shaping change is additive + regression-tested against F-006/007/008.
 - **rsync zsh exclude bug:** use INLINE quoted `--exclude=` args (zsh does not word-split an unquoted var → excludes silently collapse to one arg → would clobber the VM venv). Always `--dry-run` first; confirm 0 `.venv`/`node_modules` transfers + 0 deletions before the real run.
-- **Worktree test PYTHONPATH:** root `.venv` editable-installs from the MAIN checkout. Run worktree tests with per-package PYTHONPATH prepended (sift-core: `packages/sift-core/src:packages/sift-common/src:packages/forensic-knowledge/src`; gateway: `packages/sift-gateway/src:packages/sift-core/src:packages/sift-common/src`; opensearch: add its `src`+`tests`). Prove worktree source via `inspect.getfile` before trusting green.
+- **Worktree test PYTHONPATH:** root `.venv` editable-installs from the MAIN checkout. Run worktree tests with per-package PYTHONPATH prepended (sift-core: `packages/sift-core/src`:`packages/sift-common/src`:`packages/forensic-knowledge/src`; gateway: `packages/sift-gateway/src`:`packages/sift-core/src`:`packages/sift-common/src`; opensearch: add its `src`+`tests`). Prove worktree source via `inspect.getfile` before trusting green.
 - **New id scheme ⇒ end-to-end acceptance test** (Unit 2 lesson): not just that the row is written, but that the scheme is accepted by `_AUDIT_ID_PATTERN`/`_classify_provenance` end-to-end.
 
 ---

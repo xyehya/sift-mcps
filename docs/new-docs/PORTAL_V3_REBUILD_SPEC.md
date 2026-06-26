@@ -1,5 +1,9 @@
 # SIFT Examiner Portal v3 — Ground-Up Rebuild Spec
 
+> Covers: packages/case-dashboard/frontend/**
+> Class: point-in-time
+> Last validated: 93f8999 (2026-06-26)
+
 **Status:** APPROVED FOR BUILD (design + scope locked) · **Date:** 2026-06-20
 **Owner:** Yehya (operator) · **Build mode:** orchestrated agent team, new session
 **Package:** `packages/case-dashboard/frontend` · served by gateway (`case_dashboard`)

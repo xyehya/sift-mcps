@@ -1,5 +1,9 @@
 # SIFT Examiner Portal — Design Brief for Claude Design
 
+> Covers: packages/case-dashboard/frontend/**
+> Class: point-in-time
+> Last validated: 93f8999 (2026-06-26)
+
 > Paste/upload this into claude.ai/design as the brief. We are handing you the
 > **concept, the domain theme, and the technical requirements** — and explicitly
 > handing **the visual identity, palette, typography, and design language to you**.
