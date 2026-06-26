@@ -6,19 +6,16 @@ frontend, where the frontend `AGENTS.md` (design-system contract) governs UI.
 
 ## Repo map & where to work
 
-- **This folder** (`/home/yk/AI/SIFTHACK/sift-mcps`) is the `main` checkout — the
-  Python MCP gateway + the *current* portal. Launching an agent here puts you on
-  `main`.
-- **Portal v3 rebuild does NOT happen on `main`.** It lives in a linked worktree:
-  - Frontend: `packages/case-dashboard/frontend`
-  - Branch: `portal-v3/p0-foundation`
-  - Worktree: `.claude/worktrees/portal-v3-p0-foundation`
-  - **For portal work, `cd` into that worktree first** (a worktree folder is
-    permanently bound to its branch — entering it = you are on that branch, no
-    checkout needed). The frontend there carries its own `AGENTS.md` /
-    `DESIGN-SYSTEM.md` — read those before touching UI.
-- A worktree folder *is* its branch. One branch can be checked out in only one
-  worktree at a time. Walk between folders to switch branches.
+- **`/home/yk/AI/SIFTHACK/sift-mcps` is the `main` checkout** — Python MCP gateway
+  + portal. **`main` is the single canonical line.** (The old two-track separation
+  is retired: `portal-v3/p0-foundation` was fast-forwarded into `main` 2026-06-26 and
+  that branch + its remote deleted. Do NOT recreate a separate portal track — commit
+  portal + gateway work on `main`; if launched on a stale linked worktree, treat its
+  branch as a local alias of `main` and push to `main`.)
+- **Portal frontend:** `packages/case-dashboard/frontend` — carries its own
+  `AGENTS.md` / `DESIGN-SYSTEM.md` (design-system contract); read those before
+  touching UI. Inside the frontend, that `AGENTS.md` wins over this file.
+- A worktree folder *is* its branch; one branch checks out in one worktree at a time.
 
 ## Active focus
 
@@ -27,6 +24,33 @@ Design System project (synced to Claude Design via `DesignSync` / `/design-sync`
 the codebase is the consumer. Token sync is one-way: when `tokens.css` changes in
 the design project, copy it to `packages/case-dashboard/frontend/src/styles/tokens.css`.
 Severity is **High / Medium / Low only** — the old `--sev-spec`/violet tier is dropped.
+
+## Operating model, trackers & lessons (read before substantive work)
+
+Internal ops hub lives **outside this repo** (local): `~/AI/SIFTHACK/sift-portal-ops/`.
+- **Start here:** `STATUS.md` (current state) + `trackers/OPEN_ITEMS_MASTER.md` (every
+  open / deferred item + pending decisions). Read it before "discovering" work — don't
+  re-scan the per-topic trackers. Friction history: `trackers/MCP_WORKFLOW_FRICTION_TRACKER.md`;
+  coder briefs: `briefs/`.
+- **Surfacing lesson (the #1 repeat bug):** a gateway/add-on fix is INERT live unless it
+  lands at the **agent-facing surface** — the registry `*Out` Pydantic model + the worker
+  `result_public` envelope + the DB-authority path — NOT the impl function. SDK `outputSchema`
+  rejects a result with no `structured_content`. The agent backend has **no DB creds by design**
+  (DB-reading logic belongs in the gateway, not the add-on subprocess). Full writeup +
+  pre-merge checklist: `runbooks/LESSONS-MCP-FIX-SURFACING.md`.
+- **Guard:** a conformance harness now catches that class in CI —
+  `packages/sift-common/src/sift_common/testing/surface.py`. When you add/change an MCP tool's
+  output, write a **fail-on-revert** surface test with it and add the optional key to
+  `SURFACE_OPTIONAL_KEYS` (else CI fails). A regression test that can't catch its own bug is theater.
+
+## Deploy-and-prove (standing rule)
+
+A green test is a hypothesis; the **live gateway is the proof for BEHAVIOR** (the harness covers
+plumbing only). VM deploy = rsync changed source to `/opt/sift-mcps/packages/.../` → clear
+`__pycache__` → restart `sift-gateway` + `sift-opensearch-worker@{1,2}` + `sift-job-worker` →
+re-run the exact repro live and diff before/after. If the live setup can't reproduce it, say so —
+never imply a live proof that didn't happen. VM coords + live-MCP connection: see the recalled
+`reference_harness_mcp_live_connection` / VM-coordinates memories.
 
 ## Code Discovery
 
