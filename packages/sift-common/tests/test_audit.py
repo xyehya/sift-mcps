@@ -891,3 +891,417 @@ class TestAuditWriterAdversarial:
         aid = w.log("t1", {"field": synthetic_sensitive}, "ok")
         assert aid is not None
         assert synthetic_sensitive not in aid
+
+
+# ---------------------------------------------------------------------------
+# AuditWriter — durability/concurrency hardening (#27)
+#
+#   1. Atomic .seq sidecar write (temp + fsync + os.replace) — no torn sidecar.
+#   2. Cross-process flock — two processes sharing one audit_dir must never
+#      resume the same seq and mint DUPLICATE audit IDs.
+# ---------------------------------------------------------------------------
+
+import multiprocessing as _mp
+
+import pytest
+
+
+def _xproc_mint_worker(audit_dir: str, mcp: str, n: int, out_q) -> None:
+    """Top-level (picklable) worker: mint N audit IDs and push them to a queue.
+
+    Runs in a separate PROCESS (multiprocessing) sharing one audit_dir with a
+    sibling worker. Each returned non-None ID is the audit_id of a JSONL entry
+    that was durably written, so the union across both processes must be
+    duplicate-free if the cross-process flock holds.
+    """
+    w = AuditWriter(mcp, audit_dir=audit_dir)
+    ids = []
+    for _i in range(n):
+        aid = w.log("t", {}, "ok", examiner_override="analyst")
+        if aid is not None:
+            ids.append(aid)
+    w.close()
+    out_q.put(ids)
+
+
+# fork is required so the child inherits this module's definitions cleanly and
+# flock semantics are exercised on a shared FS. Guard for platforms without it.
+_HAS_FORK = hasattr(os, "fork") and "fork" in _mp.get_all_start_methods()
+
+from sift_common import audit as _audit_mod
+
+_HAS_FLOCK = _audit_mod.fcntl is not None
+
+
+class TestAuditWriterCrossProcessLock:
+    """#27: cross-process duplicate-ID prevention via fcntl.flock."""
+
+    @pytest.mark.skipif(
+        not (_HAS_FORK and _HAS_FLOCK),
+        reason="requires POSIX fork + fcntl.flock (cross-process advisory lock)",
+    )
+    def test_two_processes_concurrent_mint_no_duplicate_ids(self, tmp_path):
+        """Two processes minting concurrently on ONE audit_dir must yield 2N
+        unique IDs (zero duplicates).
+
+        This is the substantive #27 bug: without the flock, both processes
+        independently resume the same on-disk sequence and mint colliding audit
+        IDs — a forensic chain-of-custody failure. Removing the flock from
+        _next_audit_id makes this test FAIL (observed duplicates); with the
+        flock it PASSES.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+        n = 50
+
+        ctx = _mp.get_context("fork")
+        q = ctx.Queue()
+        procs = [
+            ctx.Process(target=_xproc_mint_worker, args=(str(audit_dir), mcp, n, q))
+            for _ in range(2)
+        ]
+        for p in procs:
+            p.start()
+        collected: list[str] = []
+        for _ in procs:
+            collected.extend(q.get(timeout=60))
+        for p in procs:
+            p.join(timeout=60)
+            assert p.exitcode == 0, f"child exited {p.exitcode}"
+
+        # Every returned ID corresponds to a durably-written JSONL entry.
+        assert len(collected) == 2 * n, (
+            f"Expected {2 * n} minted IDs, got {len(collected)}"
+        )
+        dupes = sorted({x for x in collected if collected.count(x) > 1})
+        assert not dupes, f"Duplicate audit IDs across processes: {dupes}"
+
+        # Cross-check against what actually landed in the JSONL ledger.
+        log_file = audit_dir / f"{mcp}.jsonl"
+        persisted = [
+            json.loads(line)["audit_id"]
+            for line in log_file.read_text().splitlines()
+            if line.strip()
+        ]
+        assert len(persisted) == 2 * n
+        assert len(set(persisted)) == 2 * n, (
+            "Duplicate audit IDs found in persisted JSONL ledger"
+        )
+
+    def test_flock_unavailable_degrades_to_threading_only(self, tmp_path, monkeypatch):
+        """When fcntl is unavailable (non-POSIX), the cross-process lock is a
+        graceful no-op — minting still works and never blocks/raises.
+        """
+        monkeypatch.setattr(_audit_mod, "fcntl", None)
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        w = AuditWriter("probe-mcp", audit_dir=str(audit_dir))
+        # _get_lock_fd returns None, _acquire/_release are no-ops; minting works.
+        assert w._acquire_xproc_lock() is None
+        w._release_xproc_lock(None)  # must not raise
+        aid1 = w.log("t1", {}, "ok")
+        aid2 = w.log("t2", {}, "ok")
+        assert aid1 and aid2 and aid1 != aid2
+
+
+class TestAuditWriterAtomicSidecar:
+    """#27: atomic .seq sidecar write (temp + fsync + os.replace)."""
+
+    def test_sidecar_written_via_os_replace(self, tmp_path):
+        """The sidecar must be persisted via os.replace (atomic rename), not a
+        plain in-place write — observed by spying on os.replace.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+        seq_target = audit_dir / f"{mcp}.seq"
+
+        real_replace = os.replace
+        calls: list[tuple[str, str]] = []
+
+        def spy_replace(src, dst):
+            calls.append((str(src), str(dst)))
+            return real_replace(src, dst)
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+        with mock.patch("sift_common.audit.os.replace", side_effect=spy_replace):
+            aid = w.log("t1", {}, "ok")
+        assert aid is not None
+        # os.replace was called targeting the sidecar.
+        assert any(dst == str(seq_target) for _src, dst in calls), (
+            f"os.replace never targeted the sidecar; calls={calls}"
+        )
+        # The source was a temp path in the SAME directory.
+        for src, dst in calls:
+            if dst == str(seq_target):
+                assert Path(src).parent == seq_target.parent
+                assert ".tmp." in Path(src).name
+
+    def test_no_tmp_residue_after_successful_write(self, tmp_path):
+        """After successful sidecar writes, no .seq.tmp.* residue may remain."""
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+        for i in range(5):
+            assert w.log(f"t{i}", {}, "ok") is not None
+        residue = list(audit_dir.glob(f"{mcp}.seq.tmp.*"))
+        assert not residue, f"Temp sidecar residue left behind: {residue}"
+        # The real sidecar exists and is valid JSON with the latest seq.
+        data = json.loads((audit_dir / f"{mcp}.seq").read_text())
+        assert data["seq"] == 5
+
+    def test_replace_failure_cleans_up_temp_and_does_not_crash(self, tmp_path):
+        """If os.replace fails (e.g. simulated rename error), the temp file is
+        cleaned up and the call is a graceful no-op (no crash, no residue).
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        with mock.patch(
+            "sift_common.audit.os.replace", side_effect=OSError("rename failed")
+        ):
+            # log() still returns the id (JSONL append succeeded); only the
+            # sidecar persist degrades. The sidecar write is best-effort.
+            aid = w.log("t1", {}, "ok")
+        assert aid is not None
+        residue = list(audit_dir.glob(f"{mcp}.seq.tmp.*"))
+        assert not residue, f"Temp residue after failed replace: {residue}"
+
+    def test_crash_between_jsonl_and_sidecar_recovers_without_duplicate(self, tmp_path):
+        """Simulate a crash AFTER the JSONL append but BEFORE the sidecar is
+        durably renamed: a fresh AuditWriter must resume from the JSONL scan and
+        NOT re-mint the same seq (no duplicate).
+
+        This extends the existing crash-window coverage with the atomic-write
+        path: even when os.replace never lands, the recoverable order
+        (JSONL-append-then-sidecar) guarantees no duplicate on restart.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "probe-mcp"
+
+        # First writer: JSONL append succeeds, but the sidecar rename is forced
+        # to fail (crash window). The JSONL entry with seq=1 is durable.
+        w1 = AuditWriter(mcp, audit_dir=str(audit_dir))
+        with mock.patch(
+            "sift_common.audit.os.replace", side_effect=OSError("crash before rename")
+        ):
+            aid1 = w1.log("t1", {}, "ok", examiner_override="analyst")
+        assert aid1 is not None
+        seq1 = int(aid1.rsplit("-", 1)[-1])
+        assert seq1 == 1
+        # Sidecar must be absent/stale (rename failed) — prove no residue.
+        assert not list(audit_dir.glob(f"{mcp}.seq.tmp.*"))
+
+        # Fresh writer (simulated restart): must resume from JSONL (seq=1) and
+        # mint seq=2 — never duplicate seq=1.
+        w2 = AuditWriter(mcp, audit_dir=str(audit_dir))
+        aid2 = w2.log("t2", {}, "ok", examiner_override="analyst")
+        assert aid2 is not None
+        assert aid2 != aid1
+        seq2 = int(aid2.rsplit("-", 1)[-1])
+        assert seq2 == 2, f"Expected seq=2 after crash-window resume, got {seq2}"
+
+
+# ---------------------------------------------------------------------------
+# In-process thread-safety (review #27): lock-fd init + per-thread sidecar temp
+# ---------------------------------------------------------------------------
+
+
+class TestThreadSafety:
+    def test_concurrent_log_unique_ids_single_lock_fd(self, tmp_path):
+        """Many threads in one process minting IDs concurrently on one writer.
+
+        Asserts: no exception, every minted audit_id is unique, and the
+        lazy lock-fd is opened EXACTLY ONCE (no fd leak from a check-then-open
+        race in ``_get_lock_fd``). The os.open count is measured only on the
+        ``.lock`` path so unrelated opens (JSONL/sidecar) are not counted.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "race-mcp"
+        lock_path = str(audit_dir / f"{mcp}.lock")
+
+        real_open = os.open
+        lock_open_count = 0
+        count_lock = threading.Lock()
+
+        def counting_open(path, *args, **kwargs):
+            nonlocal lock_open_count
+            if path == lock_path:
+                with count_lock:
+                    lock_open_count += 1
+            return real_open(path, *args, **kwargs)
+
+        n_threads = 16
+        per_thread = 25
+        ids: list[str] = []
+        ids_lock = threading.Lock()
+        errors: list[BaseException] = []
+        start = threading.Barrier(n_threads)
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        def worker():
+            try:
+                start.wait()
+                local: list[str] = []
+                for i in range(per_thread):
+                    aid = w.log("t", {"i": i}, "ok", examiner_override="analyst")
+                    assert aid is not None
+                    local.append(aid)
+                with ids_lock:
+                    ids.extend(local)
+            except BaseException as e:  # noqa: BLE001 - surface in assertion
+                errors.append(e)
+
+        with mock.patch("sift_common.audit.os.open", side_effect=counting_open):
+            threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        assert not errors, f"worker threads raised: {errors!r}"
+        assert len(ids) == n_threads * per_thread
+        assert len(set(ids)) == len(ids), "duplicate audit IDs minted under contention"
+        # The whole point: the lock fd is opened once and reused, never racing
+        # two os.open calls on the lockfile (which would leak an fd and create
+        # mutually-blocking flock fds in one process).
+        assert lock_open_count == 1, (
+            f"lock fd opened {lock_open_count} times; expected exactly 1 "
+            "(check-then-open race in _get_lock_fd)"
+        )
+        assert isinstance(w._lock_fd, int)
+        w.close()
+
+    def test_concurrent_sidecar_writes_no_residue_no_fnf(self, tmp_path):
+        """Two+ threads writing the sidecar concurrently must not collide.
+
+        Before the fix the temp path used only ``os.getpid()`` so two threads in
+        one process computed the SAME ``.tmp.<pid>`` path → truncation /
+        interleaved writes / FileNotFoundError on ``os.replace``. With the
+        thread-id in the temp name each thread uses a distinct temp file. We
+        assert no exception, the sidecar ends valid, and no ``.tmp.*`` residue
+        remains.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "sidecar-mcp"
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        n_threads = 16
+        iters = 50
+        errors: list[BaseException] = []
+        start = threading.Barrier(n_threads)
+
+        def worker(tid: int):
+            try:
+                start.wait()
+                for k in range(iters):
+                    # Vary date/seq per call; the writer is the locked atomic path.
+                    w._write_seq_sidecar_locked("20260626", tid * 1000 + k)
+            except BaseException as e:  # noqa: BLE001 - surface in assertion
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=worker, args=(i,)) for i in range(n_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"sidecar writers raised: {errors!r}"
+        seq_file = audit_dir / f"{mcp}.seq"
+        assert seq_file.exists(), "sidecar missing after concurrent writes"
+        # Final sidecar must be a complete, valid JSON document (no torn write).
+        data = json.loads(seq_file.read_text())
+        assert data["date"] == "20260626"
+        # No leftover temp files from any thread.
+        assert not list(audit_dir.glob(f"{mcp}.seq.tmp.*")), "temp sidecar residue left"
+
+    def test_sidecar_temp_name_includes_thread_id(self, tmp_path):
+        """The temp sidecar path embeds both pid and thread id (regression guard).
+
+        Intercepts the open() used by ``_write_seq_sidecar_locked`` to capture
+        the temp path and assert it carries ``.tmp.<pid>.<ident>`` — a fail-on
+        -revert guard for the per-thread temp-name fix.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "name-mcp"
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        captured: list[str] = []
+        real_builtin_open = open
+
+        def spy_open(file, *args, **kwargs):
+            captured.append(str(file))
+            return real_builtin_open(file, *args, **kwargs)
+
+        with mock.patch("builtins.open", side_effect=spy_open):
+            w._write_seq_sidecar_locked("20260626", 7)
+
+        ident = threading.get_ident()
+        expected_suffix = f".tmp.{os.getpid()}.{ident}"
+        assert any(p.endswith(expected_suffix) for p in captured), (
+            f"temp sidecar path missing per-thread suffix {expected_suffix!r}; "
+            f"captured opens: {captured!r}"
+        )
+
+
+class TestAuditWriterThreadSafety:
+    """Same-process, multi-thread hardening (Gemini PR #28 review).
+
+    Guards two intra-process races that the cross-process flock does NOT cover
+    (flock on a single shared fd gives no thread mutual exclusion):
+    - ``_get_lock_fd`` lazy init must be race-free (no fd leak / stray flock fd).
+    - ``_write_seq_sidecar_locked`` temp path must be per-thread (same pid) so
+      concurrent sidecar writes don't collide on ``os.replace``.
+    """
+
+    def test_many_threads_one_writer_unique_ids_no_tmp_residue(self, tmp_path):
+        import concurrent.futures as cf
+
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        w = AuditWriter("opensearch-mcp", str(audit_dir))
+
+        THREADS = 8
+        PER = 40
+        errors: list[str] = []
+
+        def mint(_):
+            out = []
+            try:
+                for i in range(PER):
+                    out.append(
+                        w.log("t", {"i": i}, "ok", examiner_override="x")
+                    )
+            except Exception as e:  # noqa: BLE001 - surface any race crash
+                errors.append(repr(e))
+            return out
+
+        all_ids: list[str] = []
+        with cf.ThreadPoolExecutor(max_workers=THREADS) as ex:
+            for chunk in ex.map(mint, range(THREADS)):
+                all_ids.extend(chunk)
+
+        assert not errors, f"thread raised during concurrent mint: {errors[:3]}"
+        all_ids = [a for a in all_ids if a]
+        assert len(all_ids) == THREADS * PER
+        assert len(set(all_ids)) == len(all_ids), "duplicate audit IDs across threads"
+
+        # Comment-2 guard: no leftover per-thread temp sidecar files.
+        residue = list(audit_dir.glob(f"{w.mcp_name}.seq.tmp.*"))
+        assert not residue, f"temp sidecar residue left behind: {residue}"
+
+        # Comment-1 guard: a single cached lock fd + the lockfile present.
+        assert isinstance(w._lock_fd, int)
+        assert (audit_dir / f"{w.mcp_name}.lock").exists()
+        w.close()

@@ -239,7 +239,7 @@ def _case_bound_args(gateway: GatewayProtocol, name: str) -> set[str]:
     fn = getattr(gateway, "case_bound_argument_names", None)
     if not callable(fn):
         return set()
-    result = fn(name)
+    result = cast("Iterable[str] | None", fn(name))
     return set(result) if result else set()
 
 
@@ -257,7 +257,7 @@ def _active_case_index_prefix(gateway: GatewayProtocol, case: ActiveCase) -> str
     if not callable(fn):
         return None
     try:
-        prefix = fn(case)
+        prefix = cast("str | None", fn(case))
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("case_bound: active-case prefix lookup failed: %s", exc)
         return None

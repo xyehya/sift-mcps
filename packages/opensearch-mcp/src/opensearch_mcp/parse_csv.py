@@ -16,6 +16,24 @@ from opensearch_mcp.bulk import flush_bulk
 csv.field_size_limit(10 * 1024 * 1024)  # 10 MB — L2T CSV can have >131 KB fields
 
 
+def table_name_from_stem(stem: str) -> str:
+    """Derive a logical sub-table name from an EZ-tools CSV stem.
+
+    EZ tools prefix output filenames with a timestamp:
+    ``20260329224802_Amcache_DeviceContainers``. Strip the leading
+    timestamp prefix (digits + one underscore) to get the meaningful
+    sub-table name; fall back to the full stem when no such prefix
+    exists. Shared by tools.py (multi_csv) and the SRUM/Prefetch parser
+    loops so all three derive the same per-CSV ``table_name`` that
+    ``_doc_id`` folds into the content-hash seed (preventing sub-table
+    id collisions when several logical tables share one index).
+    """
+    parts = stem.split("_", 1)
+    if len(parts) > 1 and parts[0].isdigit():
+        return parts[1]
+    return stem
+
+
 def _detect_encoding(path: Path) -> str:
     """Detect CSV encoding from BOM.
 
