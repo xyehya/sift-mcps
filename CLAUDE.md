@@ -66,6 +66,36 @@ graph tools over grep/glob for code discovery:
 Fall back to `rg` for string literals, configs, shell scripts, docs, or when the
 graph is insufficient.
 
+## Spawned agents & agent teams — required loadout
+
+Every spawned subagent and agent-team member (coding, reviewing, verifying,
+exploring) MUST do the following, and the orchestrator MUST bake these into each
+agent prompt by name — plugin skills sometimes do not auto-load in subagents, so
+the explicit prompt text is the required fallback:
+
+1. **codeguard-security skill** — invoke `codeguard-security:codeguard` for
+   secure-by-default guidance while writing/modifying code (use
+   `codeguard-security:security-review` for a full review pass); report which ran
+   and its verdict in the closeout.
+2. **codebase-memory MCP** — use the graph tools (`search_graph`, `trace_path`,
+   `get_code_snippet`, `query_graph`, `get_architecture`) for code discovery over
+   grep/glob, plus the `codebase-memory` skill for query syntax (same tool as the
+   Code Discovery section above).
+3. **LSP validators on changed files before closing** — Python:
+   `uv run --extra dev ruff check <paths>` + `uv run --extra dev pyright` (and
+   targeted `uv run --extra dev pyright <file>` on each file touched); frontend:
+   `npm --prefix packages/case-dashboard/frontend run lint`. `sift-gateway` is the
+   type-clean Pyright baseline — keep it at **0 new diagnostics**; non-baseline
+   packages (opensearch-mcp, portal/case-dashboard backend, some sift-core) carry
+   legacy type debt — report NEW diagnostics from your edits SEPARATELY from
+   pre-existing debt, fix only what you introduced, and do NOT expand
+   `pyrightconfig.json`. Full guide: `docs/new-docs/LSP_AGENT_WORKFLOW.md`. A
+   fresh worktree's uv env may miss dev deps — fall back to repo-root tooling.
+
+LSP/diagnostics catch import/signature/optional-value/rename slips early; they do
+NOT prove policy/runtime/DB/live-VM behavior. codebase-memory is first for
+call-graphs/architecture; tests + deploy-and-prove remain the final authority.
+
 ## Agent Worktrees
 
 The harness `isolation: worktree` flag does NOT create isolated working
