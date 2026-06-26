@@ -2,7 +2,7 @@
 
 > Covers: Pyright, Ruff, TypeScript language server, Codex, Claude Code
 > Class: live-reference
-> Last validated: b5112a1 (2026-06-26)
+> Last validated: 3323a75 (2026-06-26)
 
 Status: repo baseline for using Language Server Protocol tooling with human
 editors and coding agents.
