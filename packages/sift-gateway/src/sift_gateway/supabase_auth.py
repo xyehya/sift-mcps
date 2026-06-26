@@ -945,6 +945,10 @@ def _record_to_identity(
         principal_id=record.principal_id,
         system_role=record.system_role,
         case_memberships=tuple(record.case_memberships),
+        # SEC-1 step-up: carry the principal's email so require_recent_reauth can
+        # re-verify the operator's password against Supabase using the bearer
+        # identity's own email (never an email from the request body).
+        email=record.email,
     )
 
 
