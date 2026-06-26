@@ -868,30 +868,43 @@ class ProxyActiveCaseMiddleware(Middleware):
         bound_args = _case_bound_args(self.gateway, name)
         if bound_args:
             prefix = _active_case_index_prefix(self.gateway, case)
-            if prefix:
-                args = _tool_args(context)
-                for key in bound_args:
-                    supplied = args.get(key)
-                    if not supplied:
-                        continue
-                    for segment in str(supplied).split(","):
-                        segment = segment.strip()
-                        if not segment:
-                            await self._audit_denial(name, case, "case_bound_empty_segment")
-                            return _error_result(
-                                "invalid_input",
-                                f"client-supplied {key} contains an empty segment "
-                                "(cross-case access denied)",
-                                tool=name,
-                            )
-                        if not segment.startswith(prefix):
-                            await self._audit_denial(name, case, "case_bound_cross_case")
-                            return _error_result(
-                                "invalid_input",
-                                f"client-supplied {key} segment '{segment}' is outside "
-                                "the DB active case (cross-case access denied)",
-                                tool=name,
-                            )
+            args = _tool_args(context)
+            for key in bound_args:
+                supplied = args.get(key)
+                if not supplied:
+                    continue
+                # Fail closed: a case_bound value was supplied but the active-case
+                # prefix cannot be resolved (abnormal — an active case with no
+                # artifact_path). Deny rather than fall through to the backend
+                # guard, which cannot bind tools that receive no injected case_dir
+                # (opensearch_get_event). A security gate that cannot evaluate
+                # must deny, not skip.
+                if not prefix:
+                    await self._audit_denial(name, case, "case_bound_prefix_unresolved")
+                    return _error_result(
+                        "invalid_input",
+                        f"client-supplied {key} cannot be bound to the active case "
+                        "(cross-case access denied)",
+                        tool=name,
+                    )
+                for segment in str(supplied).split(","):
+                    segment = segment.strip()
+                    if not segment:
+                        await self._audit_denial(name, case, "case_bound_empty_segment")
+                        return _error_result(
+                            "invalid_input",
+                            f"client-supplied {key} contains an empty segment "
+                            "(cross-case access denied)",
+                            tool=name,
+                        )
+                    if not segment.startswith(prefix):
+                        await self._audit_denial(name, case, "case_bound_cross_case")
+                        return _error_result(
+                            "invalid_input",
+                            f"client-supplied {key} segment '{segment}' is outside "
+                            "the DB active case (cross-case access denied)",
+                            tool=name,
+                        )
         safe_args = _safe_case_args(self.gateway, name)
         # OS2: safe_args == None means the tool's case-arg contract is unknown
         # (no manifest declaration and no schema property found) — deny
