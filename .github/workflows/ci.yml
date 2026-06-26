@@ -244,11 +244,13 @@ jobs:
 
   shell-lint:
     # I-PS4 (#18): the installer is a thin install.sh entrypoint that sources
-    # lib/*.sh. Gate it with `bash -n` (parse) on every shell unit + ShellCheck
-    # on the modular installer. `shellcheck -x` follows install.sh's `source`
-    # statements so the entrypoint + all lib/*.sh are linted as one logical unit
-    # (matching runtime); .shellcheckrc enables external-sources. setup-addon.sh
-    # is linted the same way because it sources install.sh as a function library.
+    # lib/*.sh. Gate it with `bash -n` (parse) on every shell unit + ShellCheck.
+    # install.sh sources its modules via a DYNAMIC path ($SIFT_INSTALL_LIB_DIR/
+    # ${_sift_lib}.sh) carrying `# shellcheck source=/dev/null`, so `shellcheck -x
+    # install.sh` CANNOT descend into the modules — they must be linted directly.
+    # We therefore ShellCheck install.sh + setup-addon.sh AND every lib/*.sh
+    # explicitly so a defect inside a module is actually caught (.shellcheckrc
+    # disables only SC2034 for the cross-module status globals).
     name: Shell lint (install.sh + lib)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -271,7 +273,11 @@ jobs:
             bash -n "$f"
           done
 
-      - name: ShellCheck the modular installer (entrypoint + sourced lib/*.sh)
+      - name: ShellCheck the modular installer (entrypoint + every lib module)
         run: |
           shellcheck -x install.sh
           shellcheck -x scripts/setup-addon.sh
+          # Lint each module directly — `-x` cannot follow install.sh's dynamic
+          # `source` loop, so without this the lib/*.sh modules would only get
+          # `bash -n` (parse), never a real ShellCheck pass.
+          shellcheck lib/*.sh
