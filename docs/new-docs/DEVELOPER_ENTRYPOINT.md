@@ -9,6 +9,8 @@ together for engineers and agents. It is not the active task queue; use Linear
 for current status, session notes, forks, blockers, and decisions.
 
 Start here when you need to understand the codebase before changing it.
+Use `docs/new-docs/LSP_AGENT_WORKFLOW.md` for Codex, Claude Code, and editor
+language-server setup.
 
 ## 1. Mental Model
 

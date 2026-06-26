@@ -26,7 +26,6 @@ from sift_core.agent_tools import core_tool_names
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
 from sift_gateway.audit_helpers import (
     _extract_all_audit_ids_from_result,
-    _extract_audit_id_from_result,
     _extract_run_command_detail,
     redact_for_audit,
 )
@@ -239,7 +238,7 @@ def _case_bound_args(gateway: GatewayProtocol, name: str) -> set[str]:
     fn = getattr(gateway, "case_bound_argument_names", None)
     if not callable(fn):
         return set()
-    result = cast("Iterable[str] | None", fn(name))
+    result = cast(Iterable[str] | None, fn(name))
     return set(result) if result else set()
 
 
@@ -257,11 +256,11 @@ def _active_case_index_prefix(gateway: GatewayProtocol, case: ActiveCase) -> str
     if not callable(fn):
         return None
     try:
-        prefix = cast("str | None", fn(case))
+        prefix = cast(str | None, fn(case))
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("case_bound: active-case prefix lookup failed: %s", exc)
         return None
-    return prefix or None
+    return prefix if prefix else None
 
 
 def _is_gateway_local_tool(gateway: GatewayProtocol, name: str) -> bool:
