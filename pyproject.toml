@@ -16,17 +16,32 @@ case-dashboard = { workspace = true }
 windows-triage-mcp = { workspace = true }
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "sift-mcps"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Portable MCP runtime for the Hermes forensic investigation agent (SIFT Workstation)"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "AppliedIncidentResponse.com" }]
 keywords = ["mcp", "forensics", "incident-response", "dfir", "security"]
+
+# Single source of truth for the version of EVERY workspace member (#15/I-PS1):
+# hatch-vcs derives it from the git tag (PEP 440), so there is no hand-edited
+# literal to drift. tag-pattern + the `--match v*` describe command make the
+# resolver IGNORE the repo's non-PEP440 tags (e.g. p0-signoff) and key only off
+# release tags `vX.Y.Z`. fallback-version covers a no-.git source tree (sdist
+# install). Until the operator applies `git tag v0.6.2`, an untagged checkout
+# resolves to a dev version (e.g. 0.6.3.devN+g<sha>) — expected, not a literal.
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.6.2"
+tag-pattern = "^v(?P<version>\\d+\\.\\d+\\.\\d+.*)$"
+
+[tool.hatch.version.raw-options]
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v*"]
 
 [project.optional-dependencies]
 core = [

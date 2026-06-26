@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "case-dashboard"
-version = "0.6.1"
+dynamic = ["version"]
 description = "Valhuntir case dashboard — web-based finding review interface"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -31,6 +31,17 @@ dev = [
     "pytest-cov>=4.0",
     "httpx>=0.27",
 ]
+
+# Version single source of truth (#15/I-PS1): derived from the git release tag
+# via hatch-vcs — no hand-edited literal. See root pyproject.toml for the full
+# rationale; `--match v*` ignores the repo's non-PEP440 tags.
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.6.2"
+tag-pattern = "^v(?P<version>\\d+\\.\\d+\\.\\d+.*)$"
+
+[tool.hatch.version.raw-options]
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v*"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/case_dashboard"]

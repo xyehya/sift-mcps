@@ -32,7 +32,9 @@ Usage:
     from rag_mcp.pgvector_store import PgVectorRagStore
 """
 
-__version__ = "0.6.1"
+from importlib.metadata import version
+
+__version__ = version("rag-mcp")
 
 # NOTE: ``pgvector_store`` is dependency-light and is intentionally NOT eagerly
 # imported so it can be used without loading ChromaDB. Import it directly:

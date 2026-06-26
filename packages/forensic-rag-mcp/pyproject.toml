@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "rag-mcp"
-version = "0.6.1"
+dynamic = ["version"]
 description = "MCP server for IR knowledge base semantic search over 23 authoritative sources"
 license = "MIT"
 authors = [
@@ -48,6 +48,17 @@ dev = [
 rag-mcp = "rag_mcp.server:main"
 rag-mcp-seed-pgvector = "rag_mcp.pgvector_seed:main"
 rag-mcp-import-chroma-pgvector = "rag_mcp.pgvector_chroma_import:main"
+
+# Version single source of truth (#15/I-PS1): derived from the git release tag
+# via hatch-vcs — no hand-edited literal. See root pyproject.toml for the full
+# rationale; `--match v*` ignores the repo's non-PEP440 tags.
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.6.2"
+tag-pattern = "^v(?P<version>\\d+\\.\\d+\\.\\d+.*)$"
+
+[tool.hatch.version.raw-options]
+git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v*"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rag_mcp"]

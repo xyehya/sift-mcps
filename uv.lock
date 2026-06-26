@@ -491,7 +491,6 @@ wheels = [
 
 [[package]]
 name = "case-dashboard"
-version = "0.6.1"
 source = { editable = "packages/case-dashboard" }
 dependencies = [
     { name = "sift-common" },
@@ -1235,7 +1234,6 @@ wheels = [
 
 [[package]]
 name = "forensic-knowledge"
-version = "0.6.1"
 source = { editable = "packages/forensic-knowledge" }
 dependencies = [
     { name = "pyyaml" },
@@ -2823,7 +2821,6 @@ wheels = [
 
 [[package]]
 name = "opencti-mcp"
-version = "0.6.1"
 source = { editable = "packages/opencti-mcp" }
 dependencies = [
     { name = "fastmcp" },
@@ -2855,7 +2852,6 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "opensearch-mcp"
-version = "0.6.1"
 source = { editable = "packages/opensearch-mcp" }
 dependencies = [
     { name = "defusedxml" },
@@ -4078,7 +4074,6 @@ wheels = [
 
 [[package]]
 name = "rag-mcp"
-version = "0.6.1"
 source = { editable = "packages/forensic-rag-mcp" }
 dependencies = [
     { name = "mcp" },
@@ -4796,7 +4791,6 @@ wheels = [
 
 [[package]]
 name = "sift-common"
-version = "0.6.1"
 source = { editable = "packages/sift-common" }
 dependencies = [
     { name = "pyyaml" },
@@ -4807,7 +4801,6 @@ requires-dist = [{ name = "pyyaml", specifier = ">=6.0" }]
 
 [[package]]
 name = "sift-core"
-version = "0.1.0"
 source = { editable = "packages/sift-core" }
 dependencies = [
     { name = "forensic-knowledge" },
@@ -4837,7 +4830,6 @@ provides-extras = ["dev", "solana"]
 
 [[package]]
 name = "sift-gateway"
-version = "0.6.1"
 source = { editable = "packages/sift-gateway" }
 dependencies = [
     { name = "bcrypt" },
@@ -4883,7 +4875,6 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "sift-mcps"
-version = "0.1.0"
 source = { virtual = "." }
 
 [package.optional-dependencies]
@@ -4937,8 +4928,13 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "case-dashboard", marker = "extra == 'core'", editable = "packages/case-dashboard" },
+    { name = "case-dashboard", marker = "extra == 'full'", editable = "packages/case-dashboard" },
+    { name = "case-dashboard", marker = "extra == 'standard'", editable = "packages/case-dashboard" },
     { name = "forensic-knowledge", marker = "extra == 'core'", editable = "packages/forensic-knowledge" },
+    { name = "forensic-knowledge", marker = "extra == 'full'", editable = "packages/forensic-knowledge" },
+    { name = "forensic-knowledge", marker = "extra == 'standard'", editable = "packages/forensic-knowledge" },
     { name = "opencti-mcp", marker = "extra == 'opencti'", editable = "packages/opencti-mcp" },
+    { name = "opensearch-mcp", marker = "extra == 'full'", editable = "packages/opensearch-mcp" },
     { name = "opensearch-mcp", marker = "extra == 'standard'", editable = "packages/opensearch-mcp" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
@@ -4948,13 +4944,17 @@ requires-dist = [
     { name = "rag-mcp", extras = ["chroma-import"], marker = "extra == 'chroma-import'", editable = "packages/forensic-rag-mcp" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15" },
     { name = "sift-common", marker = "extra == 'core'", editable = "packages/sift-common" },
+    { name = "sift-common", marker = "extra == 'full'", editable = "packages/sift-common" },
+    { name = "sift-common", marker = "extra == 'standard'", editable = "packages/sift-common" },
     { name = "sift-core", marker = "extra == 'core'", editable = "packages/sift-core" },
+    { name = "sift-core", marker = "extra == 'full'", editable = "packages/sift-core" },
+    { name = "sift-core", marker = "extra == 'standard'", editable = "packages/sift-core" },
     { name = "sift-gateway", marker = "extra == 'core'", editable = "packages/sift-gateway" },
-    { name = "sift-mcps", extras = ["core"], marker = "extra == 'standard'" },
-    { name = "sift-mcps", extras = ["standard"], marker = "extra == 'full'" },
+    { name = "sift-gateway", marker = "extra == 'full'", editable = "packages/sift-gateway" },
+    { name = "sift-gateway", marker = "extra == 'standard'", editable = "packages/sift-gateway" },
     { name = "windows-triage-mcp", marker = "extra == 'windows-triage'", editable = "packages/windows-triage-mcp" },
 ]
-provides-extras = ["core", "standard", "full", "opencti", "windows-triage", "chroma-import", "dev"]
+provides-extras = ["chroma-import", "core", "dev", "full", "opencti", "standard", "windows-triage"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5696,7 +5696,6 @@ wheels = [
 
 [[package]]
 name = "windows-triage-mcp"
-version = "0.1.0"
 source = { editable = "packages/windows-triage-mcp" }
 dependencies = [
     { name = "fastmcp" },

@@ -1,3 +1,5 @@
 """sift-core: shared case I/O, identity, approval auth, and HMAC verification."""
 
-__version__ = "0.1.0"
+from importlib.metadata import version
+
+__version__ = version("sift-core")
