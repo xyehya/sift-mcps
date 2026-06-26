@@ -18,4 +18,19 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
+  {
+    // Build/config files run in Node — allow node globals (process, fs, etc.).
+    files: ['vite.config.js'],
+    languageOptions: { globals: globals.node },
+  },
+  {
+    // Vendored shadcn/ui primitives — keep generator output verbatim.
+    // They import the `React` namespace by convention and co-export `cva`
+    // variant constants alongside components; both are intentional here.
+    files: ['src/components/ui/**/*.{js,jsx}'],
+    rules: {
+      'no-unused-vars': ['error', { varsIgnorePattern: '^React$' }],
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

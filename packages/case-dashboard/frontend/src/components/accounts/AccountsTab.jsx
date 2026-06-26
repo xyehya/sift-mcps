@@ -1,298 +1,155 @@
-import { useMemo } from 'react'
-import { useStoreSlice } from '../../store/useStore'
-import { SkeletonBlock } from '../common/Skeleton'
+import { useMemo, useState } from 'react'
+import { Users } from 'lucide-react'
 
-const CONF_COLOR = {
-  HIGH:        'var(--crimson)',
-  MEDIUM:      'var(--amber)',
-  LOW:         'var(--cyan)',
-  SPECULATIVE: 'var(--violet)',
+import { useStoreSlice } from '@/store/useStore'
+import { SkeletonBlock } from '@/components/common/Skeleton'
+import { sortBy } from '@/components/common/entity-utils'
+import { EntityShell, EntityEmptyState, OverflowTags } from '@/components/common/EntityShell'
+import { EntityTable } from '@/components/common/EntityTable'
+import { ConfidenceBadge, StatusSummary } from '@/components/common/EntityBadges'
+import { useAccountsData } from './useAccountsData'
+
+// ─────────────────────────────────────────────────────────────────────────
+// AccountsTab — "Accounts in Scope" registry (Mission-Control reskin of the
+// legacy accounts view, full functional parity). Groups findings by attributed
+// account; findings with no account fall into an italic "Unattributed Account"
+// bucket. Single-host cases collapse the Hosts / Host-List columns (legacy
+// behaviour) and append "— Host: X" to the title. Row click sets the Findings
+// account filter ('' for the N/A bucket) and jumps to Findings.
+//
+// Parity + enhancement: legacy columns reproduced 1:1; sortable via EntityTable.
+// Decomposed: useAccountsData (derivation) · shared common/* primitives.
+// ─────────────────────────────────────────────────────────────────────────
+
+function buildColumns(isSingleHost) {
+  return [
+    { key: 'account', label: 'Account', sortable: true },
+    { key: 'findingsCount', label: 'Findings', sortable: true, align: 'right' },
+    ...(isSingleHost
+      ? []
+      : [
+          { key: 'hostCount', label: 'Hosts', sortable: true, align: 'right' },
+          { key: 'hosts', label: 'Host List' },
+        ]),
+    { key: 'bestConfidence', label: 'Best Confidence', sortable: true },
+    { key: 'timeRange', label: 'Time Range', sortable: true, nowrap: true },
+    { key: 'statuses', label: 'Status Summary' },
+  ]
 }
 
-const displayHost = (h) => (h ? h.toUpperCase() : 'UNKNOWN');
-
-function ConfidenceIcon({ confidence }) {
-  const size = "w-3 h-3 inline-block mr-1 align-middle";
-  if (confidence === 'HIGH') {
-    return (
-      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 2L2 22h20L12 2z" />
-      </svg>
-    )
-  }
-  if (confidence === 'MEDIUM') {
-    return (
-      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 2L2 12l10 10 10-10L12 2z" />
-      </svg>
-    )
-  }
-  if (confidence === 'LOW') {
-    return (
-      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
-        <circle cx="12" cy="12" r="10" />
-      </svg>
-    )
-  }
-  return (
-    <svg className={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-      <path d="M12 2L2 12l10 10 10-10L12 2z" />
-    </svg>
-  )
-}
-
-function getAccountsForFinding(f) {
-  const raw = f.affected_account || f.account
-  if (!raw) return []
-  if (Array.isArray(raw)) {
-    return raw.map(a => typeof a === 'string' ? a.trim() : (a.value ?? '')).filter(Boolean)
-  }
-  if (typeof raw === 'string') {
-    return raw.split(',').map(s => s.trim()).filter(Boolean)
-  }
-  return []
+const SORT_VALUE = {
+  account: (r) => r.account,
+  findingsCount: (r) => r.findingsCount,
+  hostCount: (r) => r.hostCount,
+  bestConfidence: (r) => r.bestConfidence,
+  timeRange: (r) => r.timeRange,
 }
 
 export function AccountsTab() {
-  const { findings, setActiveTab, setFindingsAccountFilter, isLoading } = useStoreSlice((state) => ({
-    findings: state.findings,
-    setActiveTab: state.setActiveTab,
-    setFindingsAccountFilter: state.setFindingsAccountFilter,
-    isLoading: state.isLoading,
+  const { findings, setActiveTab, setFindingsAccountFilter, isLoading } = useStoreSlice((s) => ({
+    findings: s.findings,
+    setActiveTab: s.setActiveTab,
+    setFindingsAccountFilter: s.setFindingsAccountFilter,
+    isLoading: s.isLoading,
   }))
 
-  const uniqueHosts = useMemo(() => {
-    return [...new Set(findings.map((f) => f.host).filter(Boolean).map((h) => h.toUpperCase()))]
-  }, [findings])
-  const isSingleHost = uniqueHosts.length === 1
-  const singleHostName = isSingleHost ? displayHost(uniqueHosts[0]) : null
+  const { accountsData, isSingleHost, singleHostName } = useAccountsData(findings)
+  const [sortKey, setSortKey] = useState('findingsCount')
+  const [sortAsc, setSortAsc] = useState(false)
 
-  const accountsData = useMemo(() => {
-    const groups = {}
-    for (const f of findings) {
-      const accs = getAccountsForFinding(f)
-      if (accs.length === 0) {
-        // "Unknown" / N/A bucket
-        if (!groups['N/A']) groups['N/A'] = []
-        groups['N/A'].push(f)
-      } else {
-        for (const acc of accs) {
-          if (!groups[acc]) groups[acc] = []
-          groups[acc].push(f)
-        }
-      }
+  const columns = useMemo(() => buildColumns(isSingleHost), [isSingleHost])
+  const rows = useMemo(
+    () => sortBy(accountsData, SORT_VALUE[sortKey] ?? SORT_VALUE.account, sortAsc),
+    [accountsData, sortKey, sortAsc],
+  )
+
+  function handleSort(key) {
+    if (key === sortKey) setSortAsc((v) => !v)
+    else {
+      setSortKey(key)
+      setSortAsc(true)
     }
+  }
 
-    return Object.entries(groups).map(([account, list]) => {
-      const findingsCount = list.length
-
-      // Unique hosts
-      const hostsSet = new Set()
-      for (const f of list) {
-        const host = (f.host ?? '').trim()
-        if (host) hostsSet.add(displayHost(host))
-      }
-      const hosts = [...hostsSet].sort()
-
-      // Best confidence
-      const CONF_WEIGHTS = { HIGH: 4, MEDIUM: 3, LOW: 2, SPECULATIVE: 1 }
-      let bestConf = 'SPECULATIVE'
-      let maxWeight = 0
-      for (const f of list) {
-        const conf = (f.confidence ?? '').toUpperCase()
-        const weight = CONF_WEIGHTS[conf] ?? 0
-        if (weight > maxWeight) {
-          maxWeight = weight
-          bestConf = f.confidence
-        }
-      }
-
-      // Time range
-      let minMs = Infinity
-      let maxMs = -Infinity
-      let hasValidTime = false
-      for (const f of list) {
-        const rawTs = f.event_timestamp || f.timestamp
-        if (rawTs) {
-          const ms = new Date(rawTs).getTime()
-          if (!isNaN(ms)) {
-            hasValidTime = true
-            if (ms < minMs) minMs = ms
-            if (ms > maxMs) maxMs = ms
-          }
-        }
-      }
-
-      let timeRange = '—'
-      if (hasValidTime) {
-        const minStr = new Date(minMs).toISOString().replace('T', ' ').substring(0, 19)
-        const maxStr = new Date(maxMs).toISOString().replace('T', ' ').substring(0, 19)
-        timeRange = minStr === maxStr ? minStr : `${minStr} to ${maxStr}`
-      }
-
-      // Status summary
-      const statuses = { draft: 0, approved: 0, rejected: 0 }
-      for (const f of list) {
-        const st = (f.status ?? 'draft').toLowerCase()
-        if (st === 'draft') statuses.draft++
-        else if (st === 'approved') statuses.approved++
-        else if (st === 'rejected') statuses.rejected++
-        else statuses.draft++
-      }
-
-      return {
-        account,
-        findingsCount,
-        hosts,
-        hostCount: hosts.length,
-        bestConfidence: bestConf,
-        timeRange,
-        statuses,
-        isNa: account === 'N/A',
-      }
-    })
-  }, [findings])
-
-  function handleRowClick(account) {
-    if (account === 'N/A') {
-      // Filter to findings with no affected_account
-      setFindingsAccountFilter('')
-    } else {
-      setFindingsAccountFilter(account)
-    }
+  function handleRowClick(row) {
+    setFindingsAccountFilter(row.isNa ? '' : row.account)
     setActiveTab('findings')
   }
 
+  const subtitle = isSingleHost
+    ? `Host: ${singleHostName}`
+    : 'Identities attributed in this case'
+
   if (isLoading) {
     return (
-      <div className="h-full overflow-y-auto p-5 space-y-4" style={{ background: 'var(--bg-base)' }}>
-        <div className="pb-2 border-b" style={{ borderColor: 'var(--border-faint)' }}>
-          <h1 className="font-display font-bold text-lg" style={{ color: 'var(--text-bright)' }}>Accounts</h1>
-        </div>
+      <EntityShell title="Accounts in Scope" subtitle="Identities attributed in this case" ariaLabel="Accounts in scope">
         <SkeletonBlock rows={8} gap={12} />
-      </div>
+      </EntityShell>
     )
   }
 
-  return (
-    <div className="h-full overflow-y-auto p-5 space-y-4 flex flex-col" style={{ background: 'var(--bg-base)' }}>
-      {/* Header */}
-      <div className="shrink-0 flex justify-between items-center pb-2 border-b" style={{ borderColor: 'var(--border-faint)' }}>
-        <div className="flex items-baseline gap-2">
-          <h1 className="font-display font-bold text-lg" style={{ color: 'var(--text-bright)' }}>
-            Accounts in Scope {isSingleHost && `— Host: ${singleHostName}`}
-          </h1>
-          <span className="font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
-            ({accountsData.length} total)
-          </span>
-        </div>
-      </div>
-
-      {/* Main Content Area */}
-      <div className="flex-1 overflow-x-auto min-h-0">
-        {accountsData.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center" style={{ color: 'var(--text-muted)' }}>
-            <svg className="w-12 h-12 mb-3 opacity-40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <circle cx="12" cy="8" r="4" />
-              <path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7" />
-            </svg>
-            <p className="font-mono text-sm">No accounts in scope yet.</p>
-          </div>
+  function renderCell(row, key) {
+    switch (key) {
+      case 'account':
+        return row.isNa ? (
+          <span className="text-[13px] italic text-muted-foreground">Unattributed Account</span>
         ) : (
-          <table className="w-full text-left text-xs" style={{ borderCollapse: 'collapse' }}>
-            <thead>
-              <tr className="border-b" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
-                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Account</th>
-                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px] text-right">Findings</th>
-                {!isSingleHost && <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px] text-right">Hosts</th>}
-                {!isSingleHost && <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Host List</th>}
-                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Best Confidence</th>
-                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Time Range</th>
-                <th className="py-2.5 font-sans font-semibold uppercase tracking-wider text-[10px]">Status Summary</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y" style={{ divideColor: 'var(--border-faint)' }}>
-              {accountsData.map(({ account, findingsCount, hosts, hostCount, bestConfidence, timeRange, statuses, isNa }) => {
-                const confColor = CONF_COLOR[bestConfidence] ?? 'var(--text-muted)'
-                return (
-                  <tr
-                    key={account}
-                    onClick={() => handleRowClick(account)}
-                    className="hover:bg-bg-raised transition-colors cursor-pointer"
-                    style={{ color: 'var(--text-primary)' }}
-                  >
-                    <td className="py-3 pr-4 font-mono font-semibold" style={{ color: isNa ? 'var(--text-muted)' : 'var(--text-bright)' }}>
-                      {isNa ? (
-                        <span className="italic" style={{ color: 'var(--text-muted)' }}>Unattributed Account</span>
-                      ) : (
-                        account
-                      )}
-                    </td>
-                    <td className="py-3 pr-4 font-mono text-right" style={{ color: 'var(--text-primary)' }}>
-                      {findingsCount}
-                    </td>
-                    {!isSingleHost && (
-                      <td className="py-3 pr-4 font-mono text-right" style={{ color: 'var(--text-primary)' }}>
-                        {hostCount}
-                      </td>
-                    )}
-                    {!isSingleHost && (
-                      <td className="py-3 pr-4">
-                        <div className="flex flex-wrap gap-1 max-w-[240px]">
-                          {hosts.map(h => (
-                            <span key={h} className="font-mono text-[10px] px-1 py-0.5 rounded" style={{ color: 'var(--text-muted)', background: 'var(--bg-raised)' }}>
-                              {displayHost(h)}
-                            </span>
-                          ))}
-                          {hosts.length === 0 && (
-                            <span style={{ color: 'var(--text-ghost)' }}>—</span>
-                          )}
-                        </div>
-                      </td>
-                    )}
-                    <td className="py-3 pr-4">
-                      <Badge color={confColor}>
-                        <ConfidenceIcon confidence={bestConfidence} /> {bestConfidence}
-                      </Badge>
-                    </td>
-                    <td className="py-3 pr-4 font-mono text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      {timeRange}
-                    </td>
-                    <td className="py-3">
-                      <div className="flex flex-wrap gap-1.5">
-                        {statuses.approved > 0 && (
-                          <Badge color="var(--jade)">{statuses.approved} Approved</Badge>
-                        )}
-                        {statuses.draft > 0 && (
-                          <Badge color="var(--amber)">{statuses.draft} Draft</Badge>
-                        )}
-                        {statuses.rejected > 0 && (
-                          <Badge color="var(--crimson)">{statuses.rejected} Rejected</Badge>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  )
-}
+          <span className="mono text-[13px] font-medium text-foreground">{row.account}</span>
+        )
+      case 'findingsCount':
+        return <span className="mono text-foreground">{row.findingsCount}</span>
+      case 'hostCount':
+        return <span className="mono text-foreground">{row.hostCount}</span>
+      case 'hosts':
+        return (
+          <OverflowTags
+            items={row.hosts}
+            max={3}
+            renderChip={(h) => (
+              <span className="mono rounded border border-border-faint bg-bg-raised px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {h}
+              </span>
+            )}
+          />
+        )
+      case 'bestConfidence':
+        return <ConfidenceBadge confidence={row.bestConfidence} />
+      case 'timeRange':
+        return <span className="mono text-[11px] text-muted-foreground">{row.timeRange}</span>
+      case 'statuses':
+        return <StatusSummary statuses={row.statuses} />
+      default:
+        return null
+    }
+  }
 
-function Badge({ color, children }) {
   return (
-    <span
-      className="px-1.5 py-0.5 rounded font-mono text-[10px] tracking-wider uppercase inline-flex items-center"
-      style={{
-        color,
-        background: color + '1a',
-        border: `1px solid ${color}33`,
-      }}
+    <EntityShell
+      title="Accounts in Scope"
+      subtitle={subtitle}
+      shownCount={rows.length}
+      totalCount={accountsData.length}
+      ariaLabel="Accounts in scope"
     >
-      {children}
-    </span>
+      {accountsData.length === 0 ? (
+        <EntityEmptyState
+          icon={Users}
+          title="No accounts in scope yet."
+          hint="Accounts appear here as findings attribute activity to user or service accounts."
+        />
+      ) : (
+        <EntityTable
+          caption="Accounts in scope"
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.account}
+          renderCell={renderCell}
+          sortKey={sortKey}
+          sortAsc={sortAsc}
+          onSort={handleSort}
+          onRowClick={handleRowClick}
+        />
+      )}
+    </EntityShell>
   )
 }

@@ -4,7 +4,7 @@ import {
   getCase, getCases, getSummary,
   getFindings, getDelta, getTimeline,
   getChainStatus, getIocs, getTodos, getReports,
-  getPortalState,
+  getPortalState, getAgentActivity,
 } from '../api/endpoints'
 
 export function useDataPolling() {
@@ -12,7 +12,7 @@ export function useDataPolling() {
     setActiveCase, setCases, setSummary,
     setFindings, setDelta, setTimeline,
     setChainStatus, setLastSync, setIsLoading, setIocs, setTodos, setReports,
-    setPortalState,
+    setPortalState, setAgentActivity,
   } = useStoreSlice((state) => ({
     setActiveCase: state.setActiveCase,
     setCases: state.setCases,
@@ -27,10 +27,27 @@ export function useDataPolling() {
     setTodos: state.setTodos,
     setReports: state.setReports,
     setPortalState: state.setPortalState,
+    setAgentActivity: state.setAgentActivity,
   }))
 
   usePolling(async () => {
-    const [cas, cases, summary, findings, delta, timeline, chain, iocs, todos, reports, portal] = await Promise.allSettled([
+    // DEV-only: when seeded with mock fixtures (?mock), skip the poll so it
+    // doesn't overwrite them. The flag is never set in prod/tests.
+    if (typeof window !== 'undefined' && window.__SIFT_MOCK__) return
+    const [
+      cas,
+      cases,
+      summary,
+      findings,
+      delta,
+      timeline,
+      chain,
+      iocs,
+      todos,
+      reports,
+      portal,
+      agentActivity,
+    ] = await Promise.allSettled([
       getCase(),
       getCases(),
       getSummary(),
@@ -42,6 +59,7 @@ export function useDataPolling() {
       getTodos(),
       getReports(),
       getPortalState(),
+      getAgentActivity(),
     ])
 
     if (cas.status === 'fulfilled' && cas.value) setActiveCase(cas.value)
@@ -55,6 +73,9 @@ export function useDataPolling() {
     if (todos.status === 'fulfilled' && todos.value) setTodos(todos.value)
     if (reports.status === 'fulfilled' && reports.value) setReports(reports.value)
     if (portal.status === 'fulfilled' && portal.value) setPortalState(portal.value)
+    if (agentActivity.status === 'fulfilled' && agentActivity.value) {
+      setAgentActivity(agentActivity.value?.events ?? [])
+    }
 
     setLastSync(Date.now())
     setIsLoading(false)

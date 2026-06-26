@@ -34,6 +34,7 @@ from sift_common.audit import AuditWriter
 
 from opensearch_mcp.client import get_client
 from opensearch_mcp.host_dictionary import detect_host_id_mapping_type
+from opensearch_mcp.paths import build_index_pattern, normalize_case_key
 
 logger = logging.getLogger(__name__)
 
@@ -140,13 +141,60 @@ def _case_relative_ref(path: str | os.PathLike[str] | None) -> str | None:
     return sanitize_path_value(str(path), case_dir=active_case_dir() or None)
 
 
+def _active_index_prefix() -> str | None:
+    """Authoritative active-case index prefix (``case-{key}-``), or None.
+
+    Mirrors :func:`opensearch_mcp.paths.build_index_pattern` with an empty tail.
+    The key is the DB-active case derived from the Gateway-injected ``case_dir``
+    (the only authority the backend holds — see :func:`_get_active_case`). Returns
+    None when no active case is resolvable in this call's context (standalone CLI
+    with no active case, or a tool the Gateway does not inject ``case_dir`` into).
+    """
+    active = _get_active_case()
+    if not active:
+        return None
+    return build_index_pattern(active, tail="")
+
+
 def _validate_index(index: str) -> str | None:
-    """Validate all index segments start with 'case-'. Returns error or None."""
+    """Bind every index segment to the DB-active case. Returns error or None.
+
+    SEC-2 / DSS-CAN-010: a caller-supplied ``index`` must stay within the active
+    case. When an active case is resolvable, every comma-separated segment MUST
+    start with the active-case prefix ``case-{key}-`` (which a concrete index
+    name, a ``case-{key}-*`` pattern, and an intra-case artifact-family pattern
+    like ``case-{key}-evtx-*`` all satisfy). This denies the cross-case read
+    primitive: ``case-*`` (all cases), another case's pattern, and an exact
+    other-case index name are all rejected. The active-case prefix already starts
+    with ``case-`` so system/`.`-indices remain blocked.
+
+    When NO active case is resolvable in this context (standalone CLI without an
+    active case, or ``opensearch_get_event`` under the Gateway — which carries no
+    injected ``case_dir``), this falls back to the legacy system-index guard
+    (``case-`` prefix). Active-case binding for those paths is enforced at the
+    Gateway policy boundary, which holds the authoritative ``case_key`` and
+    validates ``index`` there too (defense in depth, both layers).
+    """
     if not index or not index.strip():
         return "Index parameter must not be empty"
+    active_prefix = _active_index_prefix()
     for segment in index.split(","):
         segment = segment.strip()
         if not segment:
+            # Fail closed: a blank comma segment (e.g. trailing/leading/double
+            # comma) is rejected rather than skipped, so a value cannot pass on
+            # the strength of its other segments alone (SEC-2 hardening).
+            return (
+                "Index contains an empty segment "
+                "(remove stray/leading/trailing commas)"
+            )
+        if active_prefix is not None:
+            if not segment.startswith(active_prefix):
+                return (
+                    f"Index segment '{segment}' is outside the active case "
+                    "(security: cross-case access denied; allowed prefix "
+                    f"'{active_prefix}')"
+                )
             continue
         if not segment.startswith("case-"):
             return (
@@ -378,6 +426,41 @@ def _build_coverage_state(
             "warning": None,
         })
 
+    # F4/Hayabusa (Option B): surface a remediation gap when evtx is indexed but
+    # hayabusa Sigma detection has not run.  Hayabusa executes at evtx-ingest time
+    # (cmd_scan → run_hayabusa_batch over raw .evtx); there is no standalone re-scan
+    # path (the source .evtx files are cleaned up post-ingest). Re-ingest with a
+    # force flag is the only way to re-run detection.  Option A (retention +
+    # hayabusa-only re-scan mode) is deferred — high effort, custody implications.
+    if (
+        disk_artifacts.get("hayabusa") == "not_run"
+        and disk_artifacts.get("evtx") == "indexed"
+    ):
+        gaps.append({
+            "coverage_gap": (
+                "Hayabusa Sigma detection not run — Windows event log threat "
+                "detections unavailable. evtx is indexed but hayabusa was not "
+                "executed at ingest time (binary missing or --no-hayabusa used)."
+            ),
+            "when_to_run": (
+                "When Hayabusa is installed on the SIFT VM and threat detection "
+                "coverage over evtx logs is required."
+            ),
+            "command": (
+                "opensearch_ingest(path='<disk_image>', format='auto', "
+                "hostname='<hostname>', force=True)  # force re-ingest to re-run hayabusa"
+            ),
+            "output_path": None,
+            "next_mcp_step": (
+                "opensearch_case_summary to verify hayabusa index after re-ingest; "
+                "opensearch_search(query='Level:critical OR Level:high', "
+                "index=<active-case hayabusa pattern>) to review Hayabusa alerts"
+            ),
+            "warning": (
+                "Force re-ingest re-processes the entire disk image — only needed "
+                "when Hayabusa detection coverage is required and was missed on first ingest."
+            ),
+        })
 
     if enrichment_state["threat_intel"] == "not_run" and art_keys:
         gaps.append({
@@ -587,264 +670,32 @@ def _os_call(fn, *args, **kwargs):
         raise ValueError(f"Query error: {reason}") from e
 
 
-# Fields excluded from opensearch_search results by default (token optimization).
-# These are duplicated content, raw unparsed data where parsed equivalents
-# exist, or metadata with zero triage value. Full docs via opensearch_get_event.
-_SEARCH_EXCLUDE_FIELDS = frozenset(
-    {
-        # Duplicated content (parsed equivalents exist)
-        "ExtraFieldInfo",  # Hayabusa: duplicates Details
-        "Payload",  # EvtxECmd: raw XML, PayloadData1-6 already extracted
-        "FilesLoaded",  # PECmd: bulk DLL list
-        "Directories",  # PECmd: bulk directory list
-        "task.xml",  # Scheduled tasks: full XML
-        "wer.full_text",  # WER: full crash report text
-        # EvtxECmd duplicate/metadata
-        "SourceFile",  # duplicates sift.source_file
-        "Computer",  # duplicated to host.name by parse_delimited
-        # Metadata (available via opensearch_get_event, zero triage value)
-        "ExtraDataOffset",
-        "HiddenRecord",
-        "Keywords",
-        "ChunkNumber",
-        "pipeline_version",
-        "sift.source_file",
-        "sift.ingest_audit_id",
-        "sift.parse_method",
-        # MFT structural fields (low triage value, high field count)
-        "UpdateSequenceNumber",
-        "LogfileSequenceNumber",
-        "SecurityId",
-        "ReferenceCount",
-        "NameType",
-        "IsAds",
-        "Is256",
-        # --- EvtxECmd low-value fields ---
-        "RecordNumber",
-        "EventRecordId",
-        "ProcessId",
-        "ThreadId",
-        "UserId",
-    }
+# --- Search result formatting — extracted to search_format.py (D5/XYE-73) ----
+# Field exclusion, hit stripping, constant-field hoisting, and large-result
+# autosave are all in opensearch_mcp.search_format.  Re-exported here so the
+# existing public surface (tests reference srv._strip_hits, etc.) is unchanged.
+from opensearch_mcp.search_format import (  # noqa: E402
+    _SEARCH_EXCLUDE_FIELDS,
+    _MAX_FIELD_CHARS,
+    _strip_hits,
+    _HOISTABLE_CONSTANT_FIELDS,
+    _HOIST_MISSING,
+    _hoist_constant_fields,
+    _payload_bytes,
+    _save_full_results,
+    _SEARCH_AUTOSAVE_THRESHOLD,
+    _SEARCH_INLINE_TOP_N,
+    _SEARCH_AUTOSAVE_MAX_BYTES,
+    _AGG_AUTOSAVE_THRESHOLD,
+    _AGG_INLINE_TOP_N,
+    _AGG_AUTOSAVE_MAX_BYTES,
+    _autosave_or_inline,
 )
-
-_MAX_FIELD_CHARS = 500
-
-
-def _strip_hits(
-    hits: list[dict],
-    exclude_fields: frozenset[str] = _SEARCH_EXCLUDE_FIELDS,
-    max_chars: int = _MAX_FIELD_CHARS,
-) -> list[dict]:
-    """Extract _source from hits with field exclusion and truncation.
-
-    Default behavior (compact): excludes bloat fields and truncates
-    values > 500 chars. Pass empty exclude_fields and large max_chars
-    for full documents.
-    """
-    results = []
-    for hit in hits:
-        src = hit.get("_source", {})
-        idx_name = hit.get("_index", "")
-        doc: dict = {"_id": hit.get("_id"), "_index": idx_name}
-        # Note: _type extraction via rsplit is unreliable for dashed hostnames
-        # (e.g., evtx-web-server-01 → type=evtx-web-server). Use _index for
-        # authoritative artifact type. Removed _type field from results.
-
-        truncated_fields = []
-        for key, val in src.items():
-            if key in exclude_fields:
-                continue
-            sval = str(val) if not isinstance(val, str) else val
-            if len(sval) > max_chars:
-                doc[key] = sval[:max_chars] + "..."
-                truncated_fields.append(key)
-            else:
-                doc[key] = val
-
-        if truncated_fields:
-            doc["_truncated"] = truncated_fields
-
-        results.append(doc)
-    return results
-
 
 _UUID_RE = _re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
     _re.IGNORECASE,
 )
-
-# Search result fields that are typically constant across an entire result set
-# (provenance/case scoping injected at ingest). When every returned hit carries
-# the same value, they are hoisted into a single response header (`common_fields`)
-# instead of repeated on every hit. This is a candidate list; the hoist still
-# verifies per-call that the value is actually identical across all hits.
-_HOISTABLE_CONSTANT_FIELDS: tuple[str, ...] = (
-    "sift.case_id",
-    "sift.provenance_id",
-)
-
-# Marker the hoister stores per-hit-key so a hit that genuinely lacks a field is
-# never confused with a field whose value happens to equal a real document value.
-_HOIST_MISSING = object()
-
-
-def _hoist_constant_fields(
-    docs: list[dict],
-    candidate_fields: tuple[str, ...] = _HOISTABLE_CONSTANT_FIELDS,
-) -> tuple[dict, list[dict]]:
-    """Lift fields that are identical across *all* hits into one header.
-
-    Returns ``(common_fields, slim_docs)``. A candidate field is hoisted only
-    when it is present on every hit with the *same* value (the mixed/partial
-    case is left untouched so correctness is preserved). The hoisted keys are
-    stripped from each per-hit document; ``_id``/``_index`` are never hoisted.
-    """
-    if not docs:
-        return {}, docs
-
-    common: dict = {}
-    for field in candidate_fields:
-        if field in {"_id", "_index"}:
-            continue
-        first = docs[0].get(field, _HOIST_MISSING)
-        if first is _HOIST_MISSING:
-            continue
-        identical = all(hit.get(field, _HOIST_MISSING) == first for hit in docs)
-        if identical:
-            common[field] = first
-
-    if not common:
-        return {}, docs
-
-    slim_docs = [
-        {key: value for key, value in hit.items() if key not in common}
-        for hit in docs
-    ]
-    return common, slim_docs
-
-
-def _save_full_results(kind: str, payload) -> str | None:
-    """Persist a full result payload under ``<case>/agent/<kind>/`` and return a
-    case-relative ref (e.g. ``agent/searches/search_<uuid>.json``).
-
-    Mirrors the run_command / output-cap disk-spill pattern so a large result
-    set (search hits, aggregate buckets, ...) can be saved once and
-    grepped/transformed on disk by the agent instead of being dumped inline
-    (PTC "query -> save -> grep" loop). ``kind`` selects both the subdirectory
-    and the filename prefix (``searches`` -> ``search_*.json``;
-    ``aggregations`` -> ``aggregation_*.json``). Returns ``None`` if there is no
-    active case dir or the write fails (the caller then degrades to returning
-    the inline preview without a path).
-    """
-    import json as _json
-    import uuid as _uuid
-
-    case_dir = active_case_dir()
-    if not case_dir:
-        return None
-    # filename prefix per kind: searches -> "search", aggregations -> "aggregation"
-    prefix = {"searches": "search", "aggregations": "aggregation"}.get(
-        kind, kind.rstrip("s") or kind
-    )
-    try:
-        case_resolved = Path(case_dir).resolve()
-        out_dir = case_resolved / "agent" / kind
-        # Safety: stay under <case>/agent (parallels run_command + output cap).
-        if not out_dir.is_relative_to(case_resolved / "agent"):
-            return None
-        out_dir.mkdir(parents=True, exist_ok=True)
-        fname = f"{prefix}_{_uuid.uuid4().hex}.json"
-        target = out_dir / fname
-        with open(target, "w", encoding="utf-8") as fh:
-            _json.dump(payload, fh, ensure_ascii=False, default=str)
-        return f"agent/{kind}/{fname}"
-    except OSError as exc:  # pragma: no cover - defensive
-        logger.warning("opensearch %s: failed to persist full results: %s", kind, exc)
-        return None
-
-
-def _payload_bytes(payload) -> int:
-    """Approximate the serialized JSON byte size of a result payload.
-
-    Used by the byte-size autosave cap so a small *count* of very large
-    documents (e.g. 20 fat SRUM rows) still spills to disk instead of flooding
-    context. Best-effort: any serialization failure returns 0 so the byte cap
-    simply does not trigger (the count threshold still applies).
-    """
-    import json as _json
-
-    try:
-        return len(_json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"))
-    except (TypeError, ValueError):  # pragma: no cover - defensive
-        return 0
-
-
-# Autosave caps (mirror run_command output-cap disk spill). A result set
-# exceeding EITHER the hit/bucket count threshold OR the serialized byte cap is
-# written in full to <case>/agent/<kind>/ and only a small inline preview is
-# returned. The byte cap catches the "few but huge docs" case the count
-# threshold misses (e.g. 20 large SRUM rows that still flood context).
-_SEARCH_AUTOSAVE_THRESHOLD = 20
-_SEARCH_INLINE_TOP_N = 20
-_SEARCH_AUTOSAVE_MAX_BYTES = 64 * 1024  # 64 KiB inline ceiling for search hits
-_AGG_AUTOSAVE_THRESHOLD = 100
-_AGG_INLINE_TOP_N = 50
-_AGG_AUTOSAVE_MAX_BYTES = 32 * 1024  # 32 KiB inline ceiling for aggregate buckets
-
-
-def _autosave_or_inline(
-    kind: str,
-    items: list,
-    *,
-    count_threshold: int,
-    byte_cap: int,
-    inline_n: int,
-    note_builder,
-) -> tuple[list, str | None, str | None]:
-    """Decide between returning a result set inline and spilling it to disk.
-
-    Shared by :func:`opensearch_search` and :func:`opensearch_aggregate` so the
-    byte/count autosave policy lives in ONE place. Triggers when ``items``
-    exceeds EITHER ``count_threshold`` OR the serialized ``byte_cap`` (a small
-    count of very large items still floods context). Returns
-    ``(inline_items, full_path, note)``:
-
-    - Not triggered: ``(items, None, None)`` — the whole set stays inline.
-    - Triggered + save SUCCESS: full set written under ``<case>/agent/<kind>/``;
-      returns ``(preview, full_path, note_builder(full_path, len(preview),
-      len(items)))`` where ``preview`` is the top-N shrunk by bytes until it
-      fits ``byte_cap`` (exact prior success behavior).
-    - Triggered + save FAILURE (no active case dir / write error): STILL caps the
-      preview to the byte-shrunk top-N and returns ``(preview, None, failure_note)``
-      so an oversized set never floods context uncapped. This closes the gap where
-      a save failure previously returned the full oversized set inline.
-
-    ``note_builder(full_path, inline_count, total_count)`` builds the success-path
-    note; the failure note is generated here.
-    """
-    total = len(items)
-    if not (total > count_threshold or _payload_bytes(items) > byte_cap):
-        return items, None, None
-
-    def _shrink(seq: list) -> list:
-        preview = seq[:inline_n]
-        # Byte-driven spill of fat items: even the inline top-N may be large, so
-        # halve the preview until it fits the byte cap (or one item remains).
-        while len(preview) > 1 and _payload_bytes(preview) > byte_cap:
-            preview = preview[: max(1, len(preview) // 2)]
-        return preview
-
-    full_path = _save_full_results(kind, items)
-    preview = _shrink(items)
-    if full_path:
-        return preview, full_path, note_builder(full_path, len(preview), total)
-    # No case dir to spill to / write failed: degrade but still cap the inline.
-    note = (
-        f"Could not persist full set; inline truncated to {len(preview)} of "
-        f"{total}. Narrow the query or set an active case to capture the rest."
-    )
-    return preview, None, note
 
 
 def _resolve_index(index: str, case_id: str) -> str:
@@ -857,18 +708,23 @@ def _resolve_index(index: str, case_id: str) -> str:
     ``case_id`` that is the opaque DB UUID (which the Gateway uses internally
     and would otherwise build a ``case-<uuid>-*`` pattern that matches nothing)
     is ignored in favour of the active-case directory basename. See B1.
+
+    SEC-2: a caller-supplied ``index`` is returned as the query target (to keep
+    legitimate intra-case artifact-family narrowing, e.g. ``case-{key}-evtx-*``)
+    but is NOT trusted blindly — every handler runs :func:`_validate_index`
+    immediately after, which rejects any segment outside the DB-active case. The
+    short-circuit below therefore no longer overrides isolation: the active case
+    is the authority and a cross-case ``index`` is denied at validation.
     """
     if index:
         return index
-    from opensearch_mcp.paths import sanitize_index_component
-
     cid = ""
     if case_id and not _UUID_RE.match(case_id.strip()):
         cid = case_id.strip()
     if not cid:
         cid = _get_active_case() or ""
     if cid:
-        return f"case-{sanitize_index_component(cid)}-*"
+        return build_index_pattern(cid)
     return "case-*"
 
 
@@ -1013,6 +869,36 @@ def _resolve_tool_path(path: str, *, default_subdir: str = "evidence") -> tuple[
         }
 
 
+# OpenSearch meta-fields are not document fields and reject the `unmapped_type`
+# sort option (it is only valid for real fields with a potential mapping gap).
+# Attaching it to `_score`/`_doc` makes OpenSearch 400 → opaque "tool execution
+# failed".  Listed here so the sort-body builder can omit `unmapped_type` for them.
+_SORT_META_FIELDS = frozenset({"_score", "_doc"})
+
+
+def _build_sort_body(sort: str) -> list[dict]:
+    """Build an OpenSearch sort body from a ``field:order`` string.
+
+    - Meta-fields (``_score``/``_doc``) get ``{order}`` only — ``unmapped_type``
+      is invalid for them and triggers a 400.
+    - Real document fields keep ``unmapped_type: date`` so a sort on a field that
+      is unmapped in some of the searched indices does not error (mixed-mapping
+      guard).
+    - An empty/blank sort string defaults to ``@timestamp:desc``.
+    Order is validated against an allowlist (asc/desc); anything else → desc.
+    """
+    sort = (sort or "").strip() or "@timestamp:desc"
+    sort_field, _, sort_order = sort.partition(":")
+    sort_field = sort_field.strip() or "@timestamp"
+    sort_order = sort_order.strip()
+    if sort_order not in ("asc", "desc", ""):
+        sort_order = "desc"
+    spec: dict = {"order": sort_order or "desc"}
+    if sort_field not in _SORT_META_FIELDS:
+        spec["unmapped_type"] = "date"
+    return [{sort_field: spec}]
+
+
 def opensearch_search(
     query: str,
     index: str = "",
@@ -1076,10 +962,7 @@ def opensearch_search(
     client = _get_os()
     limit = min(limit, 200)
 
-    sort_field, _, sort_order = sort.partition(":")
-    if sort_order not in ("asc", "desc", ""):
-        sort_order = "desc"
-    sort_body = [{sort_field: {"order": sort_order or "desc", "unmapped_type": "date"}}]
+    sort_body = _build_sort_body(sort)
 
     query_body: dict = {"query_string": {"query": query}}
     if time_from or time_to:
@@ -1539,6 +1422,55 @@ def opensearch_field_values(
     ]
 
     resp = {"field": field, "values": values, "truncated": len(values) >= limit}
+
+    # M-FIELDVALS: when values is empty, check whether the field is absent from
+    # the mapping entirely — an empty result means "no values" for a real field
+    # but "field absent" for an unmapped field.  Surface an advisory so the agent
+    # gets an actionable diagnosis instead of silently returning [].
+    if not values:
+        try:
+            mapping_resp = _os_call(
+                client.indices.get_field_mapping,
+                index=index,
+                fields=field,
+            )
+            # mapping_resp is {index_name: {mappings: {field: {...}}}} for each index.
+            # If the field key is absent from ALL index mappings, it's not in the schema.
+            field_mapped = any(
+                field in idx_data.get("mappings", {})
+                for idx_data in mapping_resp.values()
+            )
+            if not field_mapped:
+                # Best-effort: collect top-level field names from any available index
+                top_fields: list[str] = []
+                try:
+                    any_mapping = _os_call(
+                        client.indices.get_field_mapping,
+                        index=index,
+                        fields="*",
+                    )
+                    seen: set[str] = set()
+                    for idx_data in any_mapping.values():
+                        for fname in idx_data.get("mappings", {}):
+                            top = fname.split(".")[0]
+                            if top not in seen:
+                                seen.add(top)
+                                top_fields.append(top)
+                    top_fields = sorted(top_fields)[:30]
+                except Exception:
+                    pass
+                resp["advisory"] = (
+                    f"Field '{field}' is not in the mapping for index '{index}'; "
+                    f"an empty result means 'field absent', not 'no values'. "
+                    + (
+                        f"Available top-level fields: {', '.join(top_fields)}."
+                        if top_fields
+                        else "Use opensearch_search to inspect available fields."
+                    )
+                )
+        except Exception:
+            pass  # Fail-safe: mapping read error — skip advisory, return empty values
+
     aid = audit.log(
         tool="opensearch_field_values",
         params={"field": field, "query": query, "index": index},
@@ -1577,37 +1509,73 @@ def _hayabusa_health() -> dict:
     }
 
 
-def opensearch_status() -> dict:
-    """Show OpenSearch cluster health, case index doc counts, and Hayabusa health.
+def _resolve_active_prefix(case_id: str, case_dir: str) -> str | None:
+    """Resolve the authoritative active-case index prefix for a status call.
 
-    Use to verify the cluster is reachable and see what cases have indexed data.
+    SEC-7: ``opensearch_status``/``opensearch_shard_status`` bind their per-case
+    catalog to the DB-active case so an agent cannot enumerate other cases'
+    indices. The Gateway injects ``case_dir`` (DB authority) and ``case_id`` for
+    these tools (manifest ``safe_case_argument_names``); this resolves the same
+    way :func:`opensearch_case_summary` does. Returns ``case-{key}-`` or None when
+    no active case is resolvable in this call's context.
+    """
+    _INJECTED_CASE_DIR.set((case_dir or "").strip())
+    # A caller/Gateway-supplied UUID-shaped case_id is the opaque DB id and would
+    # build a ``case-<uuid>-`` prefix that matches nothing, so the authoritative
+    # active-case directory takes precedence (mirrors case_summary's cid logic).
+    cid = ""
+    if case_id and not _UUID_RE.match(case_id.strip()):
+        cid = case_id.strip()
+    if not cid:
+        cid = _get_active_case() or ""
+    return build_index_pattern(cid, tail="") if cid else None
+
+
+def opensearch_status(case_id: str = "", case_dir: str = "") -> dict:
+    """Show OpenSearch cluster health, ACTIVE-case index doc counts, and Hayabusa health.
+
+    Use to verify the cluster is reachable and see the active case's indexed data.
     Use opensearch_case_summary for per-case artifact breakdown and coverage state.
+
+    SEC-7: the index catalog is bound to the DB-active case — only the active
+    case's ``case-{key}-*`` indices are returned, never the cluster-wide ``case-*``
+    set (which is a cross-case targeting map). ``cluster_status`` and ``hayabusa``
+    are cluster/engine health, not case data, so they stay unscoped. When no active
+    case resolves (e.g. a standalone health probe), the index list is EMPTY rather
+    than falling back to enumerating every case.
 
     Returns: {cluster_status, indices: [{index, docs, size, status}], total_indices,
       hayabusa: {binary, rules_dir, rules_count}}. hayabusa.binary is null when the
       detection engine is NOT installed — evtx ingest will skip Sigma detection.
     """
+    active_prefix = _resolve_active_prefix(case_id, case_dir)
+
     client = _get_os()
-
-    indices = _os_call(client.cat.indices, format="json")
-    case_indices = [
-        {
-            "index": idx["index"],
-            "docs": int(idx.get("docs.count", 0)),
-            "size": idx.get("store.size", "0"),
-            "status": idx.get("status", "unknown"),
-        }
-        for idx in indices
-        if idx["index"].startswith("case-")
-    ]
-
-    case_indices.sort(key=lambda x: x["index"])
 
     health = _os_call(client.cluster.health)
     cluster_status = health.get("status")
     nodes = health.get("number_of_nodes", 0)
     if cluster_status == "yellow" and nodes <= 1:
         cluster_status = "yellow (normal for single-node deployment)"
+
+    # SEC-7: enumerate ONLY the active case's indices. With no active case the
+    # list is empty (never the cluster-wide case-* enumeration), so the cross-case
+    # targeting map stays closed while the health/probe path still works. The
+    # active prefix starts with ``case-`` so system/`.`-indices remain excluded.
+    case_indices: list[dict] = []
+    if active_prefix:
+        indices = _os_call(client.cat.indices, format="json")
+        case_indices = [
+            {
+                "index": idx["index"],
+                "docs": int(idx.get("docs.count", 0)),
+                "size": idx.get("store.size", "0"),
+                "status": idx.get("status", "unknown"),
+            }
+            for idx in indices
+            if idx["index"].startswith(active_prefix)
+        ]
+        case_indices.sort(key=lambda x: x["index"])
 
     resp = {
         "cluster_status": cluster_status,
@@ -1617,25 +1585,36 @@ def opensearch_status() -> dict:
     }
     aid = audit.log(
         tool="opensearch_status",
-        params={},
-        result_summary=f"{len(case_indices)} indices",
+        params={"case_scope": active_prefix or "(no active case)"},
+        result_summary=(
+            f"{len(case_indices)} indices for {active_prefix or '(no active case)'}"
+        ),
     )
     if aid:
         resp["audit_id"] = aid
     return resp
 
 
-def opensearch_shard_status() -> dict:
+def opensearch_shard_status(case_id: str = "", case_dir: str = "") -> dict:
     """Report OpenSearch shard usage and capacity headroom.
 
     Use before large ingests to check whether the cluster can accept new indices.
     A full disk image ingest can add 40+ shards. status=warning at <10% headroom;
     status=critical at <2%.
 
+    SEC-7: cluster capacity (current_shards, max_shards_per_node, data_nodes,
+    max_total, headroom_pct, status) is cluster-wide operational signal — not case
+    data — so it stays unscoped (the agent legitimately needs headroom before
+    ingest). The ``top_indices_by_shard_count`` catalog, which would otherwise leak
+    other cases' index names and doc counts, is bound to the DB-active case; with
+    no active case it is empty.
+
     Returns: {current_shards, max_shards_per_node, data_nodes, max_total,
       headroom_pct, status: ok|warning|critical, top_indices_by_shard_count}
     """
     from opensearch_mcp.shard_capacity import _resolve_setting
+
+    active_prefix = _resolve_active_prefix(case_id, case_dir)
 
     client = _get_os()
     try:
@@ -1665,33 +1644,39 @@ def opensearch_shard_status() -> dict:
     max_total = max_per_node * int(data_nodes)
     headroom_pct = round(((max_total - current) / max_total) * 100, 1) if max_total else 0.0
 
-    # Top 10 indices by shard count for capacity diagnosis.
-    # Exclude system/hidden indices (.opendistro_security, .tasks, etc.)
-    # so the top-10 reflects case data, not cluster housekeeping.
-    try:
-        indices_info = client.cat.indices(format="json", request_timeout=10) or []
-    except Exception:
-        indices_info = []
-    visible = [i for i in indices_info if not (i.get("index") or "").startswith(".")]
-    top_indices = sorted(
-        visible,
-        key=lambda i: int(i.get("pri", 0) or 0) + int(i.get("rep", 0) or 0),
-        reverse=True,
-    )[:10]
-    top = [
-        {
-            "index": i.get("index"),
-            "primary_shards": int(i.get("pri", 0) or 0),
-            "replica_shards": int(i.get("rep", 0) or 0),
-            "doc_count": int(i.get("docs.count", 0) or 0),
-            "size": i.get("store.size"),
-        }
-        for i in top_indices
-    ]
+    # Top 10 indices by shard count for capacity diagnosis, SCOPED to the active
+    # case (SEC-7): other cases' index names + doc counts are a cross-case leak.
+    # Filtering to the active-case prefix ``case-{key}-`` also inherently drops
+    # system/hidden ``.``-indices. No active case ⇒ empty top list; the
+    # cluster-wide capacity figures above are sufficient for a pre-ingest check.
+    top: list[dict] = []
+    if active_prefix:
+        try:
+            indices_info = client.cat.indices(format="json", request_timeout=10) or []
+        except Exception:
+            indices_info = []
+        visible = [
+            i for i in indices_info if (i.get("index") or "").startswith(active_prefix)
+        ]
+        top_indices = sorted(
+            visible,
+            key=lambda i: int(i.get("pri", 0) or 0) + int(i.get("rep", 0) or 0),
+            reverse=True,
+        )[:10]
+        top = [
+            {
+                "index": i.get("index"),
+                "primary_shards": int(i.get("pri", 0) or 0),
+                "replica_shards": int(i.get("rep", 0) or 0),
+                "doc_count": int(i.get("docs.count", 0) or 0),
+                "size": i.get("store.size"),
+            }
+            for i in top_indices
+        ]
 
     aid = audit.log(
         tool="opensearch_shard_status",
-        params={},
+        params={"case_scope": active_prefix or "(no active case)"},
         result_summary=(f"{current}/{max_total} shards ({headroom_pct}% headroom)"),
     )
     resp = {
@@ -1746,8 +1731,6 @@ def opensearch_case_summary(case_id: str = "", include_fields: bool = False, cas
         include_fields: Include field mappings per artifact type (large output).
             Default False to keep response compact.
     """
-    from opensearch_mcp.paths import sanitize_index_component
-
     _INJECTED_CASE_DIR.set((case_dir or "").strip())
     # B1: index names use the case *key* (dir basename). A caller/Gateway
     # supplied case_id that is the opaque DB UUID would build a
@@ -1766,8 +1749,8 @@ def opensearch_case_summary(case_id: str = "", include_fields: bool = False, cas
         }
 
     client = _get_os()
-    safe = sanitize_index_component(cid)
-    pattern = f"case-{safe}-*"
+    safe = normalize_case_key(cid)
+    pattern = build_index_pattern(cid)
     resp: dict = {}
 
     # Get all indices for this case
@@ -2028,6 +2011,18 @@ def opensearch_inspect_container(path: str, case_dir: str = "") -> dict:
                 result["container_type"] = "e01"
                 info = _parse_ewfinfo(proc.stdout)
                 result.update(info)
+                # F3-DIAG: ewfinfo reports acquisition metadata but does NOT
+                # enumerate partitions.  Many triage E01s are a single NTFS
+                # volume with no partition table, where mmls exits 1 with empty
+                # output — a common dead-end.  Surface an actionable note when no
+                # partitions were discovered so the agent goes straight to fls.
+                if not result.get("partitions"):
+                    result["partition_note"] = (
+                        "no partition table detected (ewfinfo does not enumerate "
+                        "partitions; single-volume images have none) — mmls will "
+                        "exit 1 with empty output; use "
+                        "fls -i ewf -f ntfs <path> directly"
+                    )
                 return result
         except (subprocess.TimeoutExpired, OSError):
             pass
@@ -2046,6 +2041,14 @@ def opensearch_inspect_container(path: str, case_dir: str = "") -> dict:
             if proc.returncode == 0:
                 result["container_type"] = "raw"
                 result["raw_info"] = proc.stdout.strip()[:2000]
+                # F3-DIAG: same single-volume footgun for raw images — if no
+                # partitions were discovered, point at fls directly.
+                if not result.get("partitions"):
+                    result["partition_note"] = (
+                        "no partition table detected — mmls will exit 1 with "
+                        "empty output for a single-volume image; use "
+                        "fls -f ntfs <path> directly"
+                    )
                 break
         except (subprocess.TimeoutExpired, OSError):
             pass
@@ -2442,7 +2445,7 @@ def opensearch_ingest(
                 if _cli is not None:
                     _existing = (
                         _cli.cat.indices(
-                            index=f"case-{case_id}-*",
+                            index=build_index_pattern(case_id),
                             format="json",
                             h="index,docs.count",
                         )
@@ -2552,7 +2555,7 @@ def opensearch_ingest(
                     if _cli is not None:
                         _existing = (
                             _cli.cat.indices(
-                                index=f"case-{case_id}-*",
+                                index=build_index_pattern(case_id),
                                 format="json",
                                 h="index,docs.count",
                             )
@@ -2599,15 +2602,11 @@ def opensearch_ingest(
                 is_memory = _looks_like_memory(c)
 
                 if is_memory:
-                    if not hostname:
-                        started.append(
-                            {
-                                "path": rel_path,
-                                "status": "skipped",
-                                "reason": "Memory format requires hostname= parameter",
-                            }
-                        )
-                        continue
+                    # M-HOSTNAME fix: idx_ingest_memory always derives the hostname
+                    # from the image (registry ComputerName, then envars) when
+                    # hostname is empty, and only returns the structured error if
+                    # BOTH probes fail.  The old `if not hostname: skip` block was
+                    # dead defensive code that defeated derive-first.
                     result = idx_ingest_memory(
                         rel_path,
                         hostname,
@@ -2777,7 +2776,7 @@ def opensearch_ingest(
             if _cli is not None:
                 _existing = (
                     _cli.cat.indices(
-                        index=f"case-{case_id}-*",
+                        index=build_index_pattern(case_id),
                         format="json",
                         h="index,docs.count",
                     )
@@ -2886,9 +2885,7 @@ def _last_completed_from_opensearch(filter_case: str) -> dict | None:
     if not filter_case or filter_case == "*":
         return None
     try:
-        from opensearch_mcp.paths import sanitize_index_component
-
-        pattern = f"case-{sanitize_index_component(filter_case)}-*"
+        pattern = build_index_pattern(filter_case)
         client = _get_os()
         rows = (
             _os_call(
@@ -2935,7 +2932,7 @@ def _last_completed_from_opensearch(filter_case: str) -> dict | None:
         "note": (
             "Derived from OpenSearch case indices (NOT the Postgres durable-job "
             "record). Confirms a prior ingest landed; for authoritative per-job "
-            "status of a worker-dispatched ingest, poll job_status(job_id)."
+            "status of a worker-dispatched ingest, poll running_commands_status(job_id)."
         )
         + ctime_note,
     }
@@ -2950,9 +2947,9 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
     last_completed summary DERIVED FROM OPENSEARCH (most-recent case index +
     doc total) so you can confirm a finished run without polling opensearch_count.
     Only a worker-dispatched ingest (opensearch_ingest status="queued") yields a
-    durable job_id you can poll with job_status(job_id); a non-dispatched ingest
-    returns only run_id/audit_id and has NO pollable job_id — confirm it landed
-    with opensearch_count / opensearch_case_summary instead.
+    durable job_id you can poll with running_commands_status(job_id); a
+    non-dispatched ingest returns only run_id/audit_id and has NO pollable job_id
+    — confirm it landed with opensearch_count / opensearch_case_summary instead.
 
     Args:
         case_id: Filter to this case (default: active case). "*" for all.
@@ -2960,8 +2957,9 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
             the Gateway populates it from the DB active case.
         job_id: Optional durable job_id, only available when opensearch_ingest
             returned status="queued" (worker-dispatched). When set, the response
-            echoes it with a job_status(job_id) next_step. opensearch_ingest's
-            run_id/audit_id are NOT job_ids and cannot be polled here.
+            echoes it with a running_commands_status(job_id) next_step.
+            opensearch_ingest's run_id/audit_id are NOT job_ids and cannot be
+            polled here.
     """
     from opensearch_mcp.ingest_status import db_status_active, read_active_ingests
 
@@ -2975,39 +2973,32 @@ def opensearch_ingest_status(case_id: str = "", case_dir: str = "", job_id: str 
             "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
         }
 
-    # B3 (K4-preserving): in DB-active mode Postgres is the authoritative
-    # ingest-status authority (app.job_status_public). The agent backend has no
-    # DB credentials by design; local status JSON files can be tampered and MUST
-    # NOT be read (BATCH-K4 locked contract). Return ingests=[] and an accurate
-    # pointer to the durable job authority.
-    #
-    # IMPORTANT (B-MVP-029): opensearch_ingest does NOT emit a Postgres job_id —
-    # it returns a `run_id` (background run id) plus an `audit_id`. Only a
-    # *queued* worker-dispatched ingest (status="queued") carries a durable
-    # `job_id`; a non-dispatched/inline ingest never does. So this redirect must
-    # not promise "job_status(job_id=<from ingest>)" unconditionally — that was a
-    # dead-end. Real DB-job-row injection here (so every ingest exposes a
-    # pollable job_id) is DEFERRED; it depends on the durable-lane work tracked
-    # by B-MVP-027.
+    # B3 K4-preserving: in DB-active mode Postgres is the authoritative ingest-
+    # status authority (app.job_status_public). Local status JSON files MUST NOT
+    # be read (BATCH-K4 locked contract — tamper vector). The backend has no DB
+    # credentials by design; ingests[] is populated by the GATEWAY's
+    # OpenSearchIngestStatusAugmentMiddleware (policy_middleware.py), which calls
+    # JobService.list_ingest_jobs_for_case(case_uuid) using the gateway DSN and
+    # merges the rows into the ingests[] this envelope provides. We return the
+    # authority envelope here; the gateway fills ingests[].
     _db_active = db_status_active()
     if _db_active:
         resp: dict = {
-            "ingests": [],
+            "ingests": [],  # populated by the gateway's augment middleware
             "authority": "postgres-durable-jobs",
             "message": (
-                "Durable job authority is active. Local ingest-mirror files are "
-                "not read (BATCH-K4). If your opensearch_ingest returned a "
-                "job_id (status='queued', worker-dispatched), poll "
-                "job_status(job_id=<that job_id>) for realtime worker_label, "
-                "current_step, and the terminal result_public. A non-dispatched "
-                "ingest returns only a run_id/audit_id and has no pollable "
-                "job_id; confirm completion with opensearch_count / "
+                "No active or recent ingest/enrich jobs found for this case. "
+                "If your opensearch_ingest returned a job_id (status='queued'), "
+                "poll running_commands_status(job_id=<that job_id>) directly. "
+                "Confirm a completed ingest with opensearch_count / "
                 "opensearch_case_summary on the target indices."
             ),
         }
         if job_id:
             resp["job_id"] = job_id
-            resp["next_step"] = f"Call job_status(job_id='{job_id}') for durable status."
+            resp["next_step"] = (
+                f"Call running_commands_status(job_id='{job_id}') for durable status."
+            )
         # Last-completed signal derived from OpenSearch (the backend has no DB
         # creds; this confirms a finished run without polling opensearch_count).
         last_completed = _last_completed_from_opensearch(filter_case)
@@ -3434,11 +3425,11 @@ def opensearch_enrich_intel(
 
     No LLM tokens consumed — all lookups are programmatic.
 
-    Scope requirement: the caller must hold `enrichment:intel` scope
-    (SIFT_ENRICHMENT_SCOPE env contains "enrichment:intel" or "*").
-    In deploy mode this is enforced by the Gateway; in direct-MCP mode
-    it falls back to the env check. Missing scope returns a typed error
-    rather than silently running or silently denying.
+    Scope requirement: the caller must hold the `enrichment:intel` scope.
+    This is enforced AUTHORITATIVELY at the Gateway policy boundary
+    (AddonAuthorityMiddleware required_scopes); a caller lacking the scope is
+    denied before this tool runs. There is no in-process env gate (the former
+    SIFT_ENRICHMENT_SCOPE check was inert/fail-open dead code — see SEC-12).
 
     Args:
         case_id: Case to enrich (default: active case).
@@ -3458,30 +3449,22 @@ def opensearch_enrich_intel(
     Poll: opensearch_ingest_status(case_id=<case_id>) — look for
     checklist entry with artifact=="intel".
     """
-    from opensearch_mcp.paths import sanitize_index_component
     from opensearch_mcp.threat_intel import extract_unique_iocs
 
     _INJECTED_CASE_DIR.set((case_dir or "").strip())
-    # BATCH-OS5: scope gate for enrichment mutation.
-    # Dry-run IOC extraction is allowed without scope (read-only path).
-    # Actual enrichment (dry_run=False) requires enrichment:intel scope.
-    if not dry_run:
-        _scope_env = os.environ.get("SIFT_ENRICHMENT_SCOPE", "")
-        if _scope_env and _scope_env != "*" and "enrichment:intel" not in _scope_env:
-            return {
-                "status": "scope_denied",
-                "error": (
-                    "Enrichment mutation requires 'enrichment:intel' scope. "
-                    "The caller does not hold this scope on the current session."
-                ),
-                "required_scope": "enrichment:intel",
-                "guidance": (
-                    "Request the enrichment:intel scope from the operator or "
-                    "use the Examiner Portal to initiate threat-intel enrichment."
-                ),
-                "dry_run_available": True,
-                "isError": True,
-            }
+    # SEC-2 / SEC-12 / DSS-CAN-012: the enrichment:intel scope gate is enforced
+    # AUTHORITATIVELY at the Gateway by AddonAuthorityMiddleware
+    # (required_scopes=["enrichment:intel"], policy_middleware.py) BEFORE this
+    # tool is dispatched. The former in-process SIFT_ENRICHMENT_SCOPE env check
+    # here was inert dead code — SIFT_ENRICHMENT_SCOPE is never set in any real
+    # deployment (no systemd unit / install / gateway-spawn sets it), so it only
+    # ever failed OPEN. It was removed rather than fail-closed: the
+    # gateway-spawned backend subprocess (and the pre-authorized worker job at
+    # ingest_job.py) run with the env unset and the gateway does not propagate
+    # per-call scope into the subprocess, so a fail-closed in-process gate would
+    # deny every legitimate gateway-authorized enrich. If a standalone-CLI
+    # defense-in-depth gate is wanted, it belongs at the CLI entrypoint (where the
+    # operator identity/scope is actually present), fail-closed — not here.
 
     cid = case_id or _get_active_case()
     if not cid:
@@ -3493,8 +3476,7 @@ def opensearch_enrich_intel(
 
     if dry_run:
         client = _get_os()
-        safe_case = sanitize_index_component(cid)
-        iocs = extract_unique_iocs(client, f"case-{safe_case}-*", force=force)
+        iocs = extract_unique_iocs(client, build_index_pattern(cid), force=force)
         resp = {
             "status": "preview",
             "case_id": cid,
@@ -3503,6 +3485,26 @@ def opensearch_enrich_intel(
             "domains": len(iocs["domain"]),
             "total_iocs": sum(len(v) for v in iocs.values()),
         }
+        # F8: the dry-run extracts IOCs from OpenSearch but does NOT contact the
+        # intel backend, so it cannot tell the caller whether the *actual*
+        # enrichment (dry_run=False) would be able to run.  Without a registered
+        # OpenCTI/intel backend, execute-mode lookups are silently skipped
+        # (threat_intel.batch_lookup → gateway_available() guard), so an agent
+        # that sees a clean "preview" is misled into expecting enrichment to work.
+        # Surface a clear unavailable signal here instead.  This does NOT block
+        # the preview (IOC extraction is still useful) — it annotates it.
+        from opensearch_mcp.gateway import gateway_available
+
+        if not gateway_available():
+            resp["intel_backend"] = "unavailable"
+            resp["intel_backend_message"] = (
+                "intel enrichment unavailable — no OpenCTI/intel backend is "
+                "registered. IOC extraction succeeded, but running enrichment "
+                "(dry_run=False) would index 0 enriched docs. Register OpenCTI "
+                "via setup-addon, then re-run."
+            )
+        else:
+            resp["intel_backend"] = "available"
         aid = audit.log(
             tool="opensearch_enrich_intel",
             params={"case_id": cid, "dry_run": True, "force": force},
@@ -3514,6 +3516,26 @@ def opensearch_enrich_intel(
         if aid:
             resp["audit_id"] = aid
         return resp
+
+    # F8: execute mode — refuse to launch a background enrichment that would
+    # index 0 docs because no intel backend is registered.  Return a clear
+    # unavailable signal instead of a misleading "started".
+    from opensearch_mcp.gateway import gateway_available
+
+    if not gateway_available():
+        return {
+            "status": "unavailable",
+            "case_id": cid,
+            "error": (
+                "intel enrichment unavailable — no OpenCTI/intel backend is "
+                "registered. Register OpenCTI via setup-addon, then re-run."
+            ),
+            "intel_backend": "unavailable",
+            "guidance": (
+                "Run dry_run=True to extract and count IOCs without a backend; "
+                "register OpenCTI to enable lookups."
+            ),
+        }
 
     resp = _launch_enrich_background(cid, force=force)
     # BATCH-OS5: add poll guidance so callers know how to track enrichment status.
@@ -4010,29 +4032,37 @@ def idx_ingest_memory(
         # F-MVP-2: omit the absolute resolved path; the agent supplied `path`.
         return {"error": f"Path not found: {path}"}
 
-    # B-MVP-042: auto-derive hostname from the image when operator did not supply one.
+    # M-HOSTNAME fix: derivation is authoritative for memory images — always
+    # attempt derivation first so the derived host wins over any caller-supplied
+    # value.  The caller-supplied hostname is only used as a last-resort fallback
+    # when derivation returns nothing (e.g. non-Windows image, vol3 not found).
     # Derivation runs here (before subprocess spawn) so the subprocess always
     # receives a concrete --hostname value (the CLI arg is required=True).
-    hostname_source: str = "operator"
-    if not hostname:
-        from opensearch_mcp.parse_memory import _derive_hostname_from_image as _derive_hn
-        from pathlib import Path as _Path
+    hostname_source: str | None = None
+    from opensearch_mcp.parse_memory import _derive_hostname_from_image as _derive_hn
+    from pathlib import Path as _Path
 
-        _derived, hostname_source = _derive_hn(_Path(resolved_path), timeout=120)
-        if not _derived:
-            return {
-                "error": "hostname is required for format='memory'.",
-                "detail": (
-                    "Auto-derivation was attempted (windows.registry.printkey + "
-                    "windows.envars) but both probes returned nothing. "
-                    "Supply hostname= explicitly."
-                ),
-                "next_step": (
-                    "Call opensearch_ingest(..., format='memory', "
-                    "hostname='<source-host>', dry_run=True)."
-                ),
-            }
+    _derived, _derived_source = _derive_hn(_Path(resolved_path), timeout=120)
+    if _derived:
+        # Derived host wins — even if caller supplied a value it is ignored here.
         hostname = _derived
+        hostname_source = _derived_source
+    elif hostname:
+        # Derivation returned nothing; accept the caller-supplied fallback.
+        hostname_source = "operator"
+    else:
+        return {
+            "error": "hostname is required for format='memory'.",
+            "detail": (
+                "Auto-derivation was attempted (windows.registry.printkey + "
+                "windows.envars) but both probes returned nothing. "
+                "Supply hostname= explicitly."
+            ),
+            "next_step": (
+                "Call opensearch_ingest(..., format='memory', "
+                "hostname='<source-host>', dry_run=True)."
+            ),
+        }
 
     from opensearch_mcp.parse_memory import TIER_1, TIER_2, TIER_3
 
@@ -4046,6 +4076,8 @@ def idx_ingest_memory(
         plugin_list = TIER_1
 
     if dry_run:
+        from opensearch_mcp.parse_memory import memory_ram_preflight as _ram_preflight
+
         resp = {
             "status": "preview",
             "tier": tier,
@@ -4054,7 +4086,22 @@ def idx_ingest_memory(
             # B-MVP-042: surface derived hostname in dry-run so agent can confirm
             "hostname": hostname,
             "hostname_source": hostname_source,
+            # M-DRYRUN-MEM: surface routing + estimate so the agent knows where
+            # the real ingest will land before committing.
+            "dispatched_to": "opensearch-worker",
+            "estimate": {
+                "plugin_count": len(plugin_list),
+                "note": (
+                    "tier-3 timeliner dominates runtime/RAM; "
+                    "expect ~image-size peak RSS"
+                ),
+            },
         }
+        # M-WORKER-DBDROP (preview plane): warn before the operator commits
+        # to a 26-min run when RAM looks insufficient.
+        _ram_warn = _ram_preflight(resolved)
+        if _ram_warn:
+            resp["warning"] = _ram_warn
         aid = audit.log(
             tool="idx_ingest_memory",
             params={"path": resolved_path, "dry_run": True, "tier": tier,
@@ -4268,162 +4315,6 @@ def _get_active_case() -> str | None:
     return None
 
 
-def _hayabusa_absent_hint() -> str:
-    """Honest degraded-detection text when Hayabusa is NOT installed (XYE-26).
-
-    Returns staging instructions instead of the misleading "runs during evtx
-    ingest if installed" framing, which read as if detection had already run.
-    """
-    return (
-        "Hayabusa detection engine is NOT installed, so no Sigma/Hayabusa alerts "
-        "exist for this case. Stage the binary at $SIFT_HOME/bin/hayabusa "
-        "(symlinked to /usr/local/bin/hayabusa) and rules under "
-        "$SIFT_HOME/hayabusa-rules, or re-run ./install.sh online, then re-ingest "
-        "the evtx data to populate detections. Confirm with "
-        "opensearch_status (hayabusa.binary)."
-    )
-
-
-def _hayabusa_suggestion(client) -> str:
-    """Build the Hayabusa fallback suggestion when no Sigma detections are shown.
-
-    Shared by :func:`opensearch_list_detections`' two no-Sigma branches (Security
-    Analytics plugin unavailable on OpenSearch 3.5, and Sigma returning zero
-    findings); both want the same agent-facing guidance — there is nothing from
-    Sigma, so point at Hayabusa and report its state. Returns one of:
-
-    - alerts present:  ``"No Sigma detections. {N} Hayabusa alerts available. Query: ..."``
-    - binary absent:   the disabled lead + :func:`_hayabusa_absent_hint` staging text
-    - installed-empty: ``"...Hayabusa is installed but no alerts are indexed for this case yet..."``
-    - count error:     the disabled lead + a generic "check Hayabusa" pointer
-    """
-    import shutil as _shutil
-
-    disabled = "No Sigma detections (disabled on OpenSearch 3.5). "
-    try:
-        hb_count = client.count(index="case-*-hayabusa-*")["count"]
-        if hb_count:
-            return (
-                f"No Sigma detections. {hb_count:,} Hayabusa alerts available. "
-                "Query: opensearch_search(query='Level:critical OR Level:high', "
-                "index='case-*-hayabusa-*')"
-            )
-        if not _shutil.which("hayabusa"):
-            # No Sigma AND no Hayabusa binary — be explicit, don't imply it ran.
-            return disabled + _hayabusa_absent_hint()
-        return (
-            disabled + "Hayabusa is installed but no alerts are indexed for this "
-            "case yet — run evtx ingest to populate detections."
-        )
-    except Exception:
-        # Count failed (or no usable count) — degrade to a generic pointer,
-        # matching the prior per-branch behavior.
-        return (
-            disabled + "Check Hayabusa: "
-            "opensearch_search(query='Level:*', index='case-*-hayabusa-*')"
-        )
-
-
-def opensearch_list_detections(
-    severity: str = "",
-    detector_type: str = "",
-    limit: int = 50,
-    offset: int = 0,
-) -> dict:
-    """List detection findings from Security Analytics (Sigma) or suggest Hayabusa alternatives.
-
-    Args:
-        severity: Filter by severity (critical, high, medium, low).
-                  Empty = all severities.
-        detector_type: Filter by detector type (windows, linux, dns, etc.).
-                  Empty = all detectors.
-        limit: Max results (default 50).
-        offset: Starting position for pagination (default 0).
-    """
-    limit = min(limit, 500)
-    client = _get_os()
-
-    # Fetch more than requested when filtering by severity (API doesn't support it)
-    fetch_size = limit * 3 if severity else limit
-    params: dict = {
-        "size": fetch_size,
-        "startIndex": offset,
-        "sortOrder": "desc",
-    }
-    if detector_type:
-        params["detectorType"] = detector_type
-
-    try:
-        response = _os_call(
-            client.transport.perform_request,
-            "GET",
-            "/_plugins/_security_analytics/findings/_search",
-            params=params,
-        )
-    except (RuntimeError, ValueError, Exception) as e:
-        if "security_analytics" in str(e).lower() or "400" in str(e) or "404" in str(e):
-            resp = {"error": "Security Analytics plugin not available", "findings": []}
-            # Still suggest Hayabusa when SA is unavailable (shared 3-way logic).
-            resp["suggestion"] = _hayabusa_suggestion(client)
-            return resp
-        raise
-
-    sev_filter = severity.lower() if severity else ""
-    findings = []
-    for finding in response.get("findings", []):
-        rules = []
-        for q in finding.get("queries", []):
-            rules.append(
-                {
-                    "name": q.get("name"),
-                    "tags": q.get("tags", []),
-                }
-            )
-
-        # Python-side severity filter — API doesn't support severity param
-        if sev_filter and rules:
-            if not any(sev_filter in t.lower() for r in rules for t in r.get("tags", [])):
-                continue
-
-        findings.append(
-            {
-                "id": finding.get("id"),
-                "timestamp": finding.get("timestamp"),
-                "index": finding.get("index"),
-                "rules": rules,
-                "matched_docs": len(finding.get("related_doc_ids", [])),
-            }
-        )
-
-        if len(findings) >= limit:
-            break
-
-    # Suggest Hayabusa when Sigma returns empty (shared 3-way logic).
-    hayabusa_hint = _hayabusa_suggestion(client) if not findings else ""
-
-    resp = {
-        "findings": findings,
-        "total": response.get("total_findings", 0),
-        "returned": len(findings),
-        "offset": offset,
-    }
-    if hayabusa_hint:
-        resp["suggestion"] = hayabusa_hint
-    aid = audit.log(
-        tool="opensearch_list_detections",
-        params={
-            "severity": severity,
-            "detector_type": detector_type,
-            "limit": limit,
-            "offset": offset,
-        },
-        result_summary=f"{len(findings)} findings",
-    )
-    if aid:
-        resp["audit_id"] = aid
-    return resp
-
-
 def opensearch_host_fix(raw: str, new_canonical: str, case_dir: str = "") -> dict:
     """Correct a wrong host.id mapping in the active case.
 
@@ -4614,7 +4505,7 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
     # values may contain Lucene metacharacters; term filter treats them
     # as exact-value).
     client = _get_os()
-    index_pattern = f"case-{case_id.lower()}-*"
+    index_pattern = build_index_pattern(case_id)
 
     # H1 defensive: refuse to write through indices where host.id is
     # non-keyword (pre-v1 upgrade path). Uses the shared detector
@@ -4715,8 +4606,11 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
                 },
                 result_summary=(f"dict saved at {dict_path}; reindex failed ({type(e).__name__})"),
             )
-        except Exception:
-            pass
+        except Exception as audit_exc:
+            logger.debug(
+                "opensearch_host_fix audit mirror write failed: %s",
+                type(audit_exc).__name__,
+            )
         return err_resp
     from opensearch_mcp.ingest_status import db_status_active
 
@@ -4752,8 +4646,11 @@ def _case_host_fix_impl(raw: str, new_canonical: str) -> dict:
         )
         if audit_id:
             resp["audit_id"] = audit_id
-    except Exception:
-        pass
+    except Exception as audit_exc:
+        logger.debug(
+            "opensearch_host_fix audit mirror write failed: %s",
+            type(audit_exc).__name__,
+        )
 
     # BATCH-K4: persist a host-identity correction receipt. The affected derived
     # indices are the case-scoped index pattern this reindex touched (sanitized

@@ -1,28 +1,21 @@
 import { useState } from 'react'
-import {
-  getMe,
-  postSupabaseLogin,
-  postForcedReset,
-} from '../../api/endpoints'
 
-function Input({ label, value, onChange, type = 'text', autoComplete }) {
-  return (
-    <label className="block">
-      <span className="block text-text-muted text-xs font-sans font-medium uppercase tracking-wider mb-1">{label}</span>
-      <input
-        type={type}
-        value={value}
-        autoComplete={autoComplete}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3 py-2 rounded bg-bg-raised border border-border-soft text-text-bright text-sm font-sans focus:border-cyan focus:outline-none transition-colors"
-        required
-      />
-    </label>
-  )
-}
+import { getMe, postForcedReset, postSupabaseLogin } from '@/api/endpoints'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 
-// WI6 — forced first-login reset. Explains where the temporary password came
-// from (installer handoff file) and that it is unrecoverable once replaced.
+// ─────────────────────────────────────────────────────────────────────────
+// LoginCard — behavior-preserving port (spec §6). Supabase email/password is
+// the only login path (B-MVP-011): the server validates against Supabase Auth
+// and sets a signed HttpOnly session cookie; the browser never receives,
+// stores, or displays any JWT/refresh token. WI6 forced first-login reset is
+// preserved. onLogin(principal) hands the session up to AuthProvider.
+// ─────────────────────────────────────────────────────────────────────────
+
+// WI6 — forced first-login reset (temporary installer password → permanent).
 function ResetPasswordForm({ onSession, onNeedLogin }) {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -31,19 +24,30 @@ function ResetPasswordForm({ onSession, onNeedLogin }) {
 
   async function submit(e) {
     e.preventDefault()
-    if (password !== confirm) { setErr('Passwords do not match'); return }
-    if (password.length < 8) { setErr('Password must be at least 8 characters.'); return }
+    if (password !== confirm) {
+      setErr('Passwords do not match.')
+      return
+    }
+    if (password.length < 8) {
+      setErr('Password must be at least 8 characters.')
+      return
+    }
     setLoading(true)
     setErr('')
     try {
       await postForcedReset({ new_password: password })
-      // Changing the password invalidates the temporary Supabase session, so the
-      // current cookie is usually already dead. Try to reuse it; if it's gone,
-      // route the operator to the sign-in form with the new password rather than
-      // leaving them stuck on this reset form.
+      // Changing the password usually invalidates the temporary session; try to
+      // reuse the cookie, otherwise route back to sign-in with the new password.
       let session = null
-      try { session = await getMe() } catch { session = null }
-      if (session) { onSession(session); return }
+      try {
+        session = await getMe()
+      } catch {
+        session = null
+      }
+      if (session) {
+        onSession(session)
+        return
+      }
       onNeedLogin('Password set. Sign in with your new password.')
     } catch (ex) {
       console.error('Password reset failed:', ex)
@@ -54,40 +58,41 @@ function ResetPasswordForm({ onSession, onNeedLogin }) {
   }
 
   return (
-    <form onSubmit={submit} className="space-y-4">
-      <div>
-        <p className="font-mono text-cyan text-xs tracking-widest uppercase mb-2">protocol sift gateway</p>
-        <h1 className="font-display font-extrabold text-2xl text-text-bright">Set your password</h1>
-        <p className="text-text-muted text-xs mt-1">
-          First sign-in detected. You logged in with the one-time temporary
-          password the installer wrote to the operator handoff file. Choose a
-          permanent password to activate the account.
+    <form onSubmit={submit} className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1">
+        <p className="mono text-xs uppercase tracking-widest text-primary">protocol sift gateway</p>
+        <h1 className="text-xl font-semibold text-foreground">Set your password</h1>
+        <p className="text-sm text-muted-foreground">
+          First sign-in detected. Choose a permanent password to activate the account.
         </p>
       </div>
-      <div
-        className="rounded border px-3 py-2.5 text-[11px] leading-relaxed font-sans"
-        style={{ background: 'var(--amber-dim)', borderColor: 'var(--amber)', color: 'var(--text-bright)' }}
-      >
-        <span className="font-semibold" style={{ color: 'var(--amber)' }}>Where did the temporary password come from?</span>
-        <span className="block mt-1" style={{ color: 'var(--text-primary)' }}>
-          The installer stored it in <span className="font-mono">/var/lib/sift/tokens/installer-handoff.txt</span> on
-          the SIFT VM. Once you set a new password it is no longer recoverable
-          from that file — rotate it through Supabase if it is ever lost.
-        </span>
+      <Alert>
+        <AlertTitle>Where did the temporary password come from?</AlertTitle>
+        <AlertDescription>
+          The installer stored it in <span className="mono">/var/lib/sift/tokens/installer-handoff.txt</span> on the
+          SIFT VM. Once you set a new password it is no longer recoverable from that file.
+        </AlertDescription>
+      </Alert>
+      {err && (
+        <p role="alert" aria-live="assertive" className="text-sm text-destructive">
+          {err}
+        </p>
+      )}
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="reset-new">New password</Label>
+        <Input id="reset-new" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
       </div>
-      {err && <p className="text-crimson text-xs">{err}</p>}
-      <Input label="New password" type="password" value={password} onChange={setPassword} autoComplete="new-password" />
-      <Input label="Confirm password" type="password" value={confirm} onChange={setConfirm} autoComplete="new-password" />
-      <button type="submit" disabled={loading} className="w-full py-2 rounded bg-cyan text-bg-base font-sans font-semibold text-sm hover:opacity-90 transition-opacity disabled:opacity-50">
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="reset-confirm">Confirm password</Label>
+        <Input id="reset-confirm" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+      </div>
+      <Button type="submit" disabled={loading} className="w-full">
         {loading ? 'Updating…' : 'Set password and continue'}
-      </button>
+      </Button>
     </form>
   )
 }
 
-// B-MVP-011 — Supabase Auth is the only login path. There is no local
-// examiner.json setup/challenge fallback; the SPA goes straight to the
-// email/password sign-in form.
 export function LoginCard({ onLogin }) {
   const [phase, setPhase] = useState('login') // 'login' | 'reset'
   const [email, setEmail] = useState('')
@@ -96,25 +101,32 @@ export function LoginCard({ onLogin }) {
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // Supabase email/password login. The server validates the password against
-  // Supabase Auth and sets a signed, HttpOnly session cookie. The browser never
-  // receives, displays, or stores any JWT or refresh token.
   async function handleLogin(e) {
     e.preventDefault()
     setLoading(true)
     setErr('')
     try {
       const result = await postSupabaseLogin({ email, password })
-      if (!result) { setErr('Authentication failed. Check your email and password.'); return }
-      if (result?.error) { setErr(result.error); return }
-      if (result?.must_reset) { setPhase('reset'); return }
+      if (!result) {
+        setErr('Authentication failed. Check your email and password.')
+        return
+      }
+      if (result?.error) {
+        setErr(result.error)
+        return
+      }
+      if (result?.must_reset) {
+        setPhase('reset')
+        return
+      }
       onLogin(result)
     } catch (ex) {
       console.error('Login failed:', ex)
-      // 503 from the server means the control plane (Supabase) is unreachable.
-      const msg = ex?.status === 503
-        ? (ex?.message || 'Control plane unavailable — the gateway cannot reach Supabase Auth. Check the control plane and retry.')
-        : 'Authentication failed. Check your email and password.'
+      // 503 → the control plane (Supabase) is unreachable.
+      const msg =
+        ex?.status === 503
+          ? ex?.message || 'Control plane unavailable — the gateway cannot reach Supabase Auth. Check the control plane and retry.'
+          : 'Authentication failed. Check your email and password.'
       setErr(msg)
     } finally {
       setLoading(false)
@@ -122,30 +134,53 @@ export function LoginCard({ onLogin }) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-bg-base">
-      <div className="w-full max-w-sm p-8 rounded-lg border border-border-soft bg-bg-surface">
-        {phase === 'reset' ? (
-          <ResetPasswordForm
-            onSession={onLogin}
-            onNeedLogin={(msg) => { setPhase('login'); setNotice(msg); setPassword('') }}
-          />
-        ) : (
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <p className="font-mono text-cyan text-xs tracking-widest uppercase mb-2">protocol sift gateway</p>
-              <h1 className="font-display font-extrabold text-2xl text-text-bright">Examiner Portal</h1>
-              <p className="text-text-muted text-xs mt-1">Sign in with your Supabase operator email and password.</p>
-            </div>
-            {notice && <p className="text-xs" style={{ color: 'var(--jade)' }}>{notice}</p>}
-            {err && <p className="text-crimson text-xs">{err}</p>}
-            <Input label="Email" type="email" value={email} onChange={setEmail} autoComplete="username" />
-            <Input label="Password" type="password" value={password} onChange={setPassword} autoComplete="current-password" />
-            <button type="submit" disabled={loading} className="w-full py-2 rounded bg-cyan text-bg-base font-sans font-semibold text-sm hover:opacity-90 transition-opacity disabled:opacity-50">
-              {loading ? 'Authenticating…' : 'Sign in'}
-            </button>
-          </form>
-        )}
-      </div>
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle className="sr-only">Examiner Portal sign in</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {phase === 'reset' ? (
+            <ResetPasswordForm
+              onSession={onLogin}
+              onNeedLogin={(msg) => {
+                setPhase('login')
+                setNotice(msg)
+                setPassword('')
+              }}
+            />
+          ) : (
+            <form onSubmit={handleLogin} className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1">
+                <p className="mono text-xs uppercase tracking-widest text-primary">protocol sift gateway</p>
+                <h1 className="text-2xl font-semibold text-foreground">Examiner Portal</h1>
+                <p className="text-sm text-muted-foreground">Sign in with your Supabase operator email and password.</p>
+              </div>
+              {notice && (
+                <p aria-live="polite" className="text-sm text-status-approved">
+                  {notice}
+                </p>
+              )}
+              {err && (
+                <p role="alert" aria-live="assertive" className="text-sm text-destructive">
+                  {err}
+                </p>
+              )}
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="login-email">Email</Label>
+                <Input id="login-email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="login-password">Password</Label>
+                <Input id="login-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              </div>
+              <Button type="submit" disabled={loading} className="w-full">
+                {loading ? 'Authenticating…' : 'Sign in'}
+              </Button>
+            </form>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

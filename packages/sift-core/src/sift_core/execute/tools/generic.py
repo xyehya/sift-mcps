@@ -37,6 +37,28 @@ logger = logging.getLogger(__name__)
 # two layers never disagree about which stages count as "failed".
 _SIGPIPE_EXIT_CODES = (141, -13)
 
+# Broken-pipe stderr markers.  grep exits 2 (not 141) on Linux when it gets
+# EPIPE from a closed downstream pipe (e.g. `grep … | head -N`) and emits a
+# "grep: write error: Broken pipe" message.  We treat that as a SIGPIPE-
+# equivalent for the partial_failure exemption when a later stage exited 0.
+#
+# These markers are deliberately broken-pipe-SPECIFIC.  A bare "write error"
+# marker would also match genuine non-final-stage failures such as
+# "write error: No space left on device", wrongly exempting them from
+# partial_failure.  Only phrases unambiguously tied to a closed pipe are listed.
+_BROKEN_PIPE_MARKERS = ("broken pipe", "write error: broken pipe")
+
+
+def _is_broken_pipe_stderr(stderr_tail: str) -> bool:
+    """Return True when stderr suggests a broken-pipe write error (not a real
+    grep failure).  Case-insensitive.  Conservative: only matches known broken-
+    pipe patterns so genuine errors like 'No such file' are never suppressed.
+    """
+    if not stderr_tail:
+        return False
+    lower = stderr_tail.lower()
+    return any(m in lower for m in _BROKEN_PIPE_MARKERS)
+
 
 def _is_in_directory(path_str: str, parent: Path) -> bool:
     try:
@@ -313,6 +335,10 @@ def run_command(
             }
             if stderr_tail:
                 stage_info["stderr_tail"] = stderr_tail
+            # NB: empty-stderr failed stages get an agent-facing hint downstream
+            # in agent_tools._run_command (failed_stages, ~L990) — this raw
+            # stages[] dict is popped as _internal before the agent sees it, so a
+            # hint here would be dead.  Do not add one.
             executed_stages_info.append(stage_info)
 
         if pipeline_result:
@@ -373,7 +399,25 @@ def run_command(
             rc = s_info.get("exit_code")
             if rc in (0, None):
                 continue
-            if rc in _SIGPIPE_EXIT_CODES and idx < n_stages - 1:
+            is_non_final = idx < n_stages - 1
+            # Classic SIGPIPE: shell exits 141 or the process exits with signal -13.
+            if rc in _SIGPIPE_EXIT_CODES and is_non_final:
+                continue
+            # Broken-pipe equivalence: a non-final stage (e.g. grep) exits 2 on
+            # Linux when the downstream consumer (e.g. head) closes the pipe early
+            # and write() returns EPIPE.  Exempt when BOTH:
+            #   (a) the stage is non-final (a later stage consumed the output), AND
+            #   (b) stderr indicates a broken-pipe write error — NOT a real error.
+            # This is conservative: we only suppress when the stderr text matches
+            # known broken-pipe markers, so genuine errors stay flagged.
+            if (
+                is_non_final
+                and _is_broken_pipe_stderr(s_info.get("stderr_tail", ""))
+                and any(
+                    later.get("exit_code") in (0, None)
+                    for later in executed_stages_info[idx + 1 :]
+                )
+            ):
                 continue
             partial_failure = True
             break

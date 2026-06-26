@@ -1,5 +1,3 @@
-import React from 'react';
-
 export function Icon({ name, className = 'w-4 h-4', ...props }) {
   switch (name) {
     case 'chain':

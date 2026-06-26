@@ -175,9 +175,13 @@ def test_guard_tool_result_redacts_and_caps_structured_content(tmp_path):
 
 
 def test_rest_tool_path_keeps_unredacted_examiner_output():
+    from sift_gateway.server import ToolSurfaceSnapshot
     gateway = Gateway({"backends": {}, **_execute_security()})
     secret = "AKIAIOSFODNN7EXAMPLE"
-    gateway._tool_map = {"addon_leak": "addon"}
+    # D7: inject test state via the atomic snapshot rather than direct attribute.
+    gateway._tool_surface = ToolSurfaceSnapshot(
+        tool_map={"addon_leak": "addon"}, tool_cache={}, manifest_meta={}
+    )
 
     async def call_tool(name, arguments, examiner=None):
         return [TextContent(type="text", text=f"examiner sees {secret}")]
@@ -212,7 +216,10 @@ def test_http_proxy_egress_guard_blocks_loopback_targets():
         _validate_egress_url("https://127.0.0.1:9000/mcp", label="backend.url")
 
 
-async def test_sift_token_verifier_accepts_hash_registry_token():
+async def test_sift_token_verifier_rejects_hash_registry_token():
+    # SEC-6 (DSS-CAN-015): the legacy PR02 hash-registry fallback is removed —
+    # the verifier NEVER accepts a registry/api-key token, even when a registry
+    # is wired. Supabase JWT is the sole credential authority on /mcp.
     token = "sift_svc_" + "a" * 48
     record = RegistryToken(
         id="11111111-1111-1111-1111-111111111111",
@@ -230,18 +237,17 @@ async def test_sift_token_verifier_accepts_hash_registry_token():
     )
 
     class Registry:
+        def __init__(self):
+            self.lookups = 0
+
         def lookup_token(self, candidate):
+            self.lookups += 1
             return record if candidate == token else None
 
-    verifier = SiftTokenVerifier(
-        api_keys={},
-        token_registry=Registry(),
-    )
+    registry = Registry()
+    verifier = SiftTokenVerifier(api_keys={}, token_registry=registry)
 
-    access_token = await verifier.verify_token(token)
-
-    assert access_token is not None
-    assert access_token.client_id == record.id
-    assert access_token.scopes == ["mcp:*"]
-    assert access_token.claims["sift_identity"]["principal"] == "hermes"
-    assert access_token.claims["sift_identity"]["case_id"] == "case-1"
+    # No resolver and no legacy fallback => the token is denied and the registry
+    # is never consulted.
+    assert await verifier.verify_token(token) is None
+    assert registry.lookups == 0

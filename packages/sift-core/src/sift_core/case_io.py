@@ -7,15 +7,13 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
-
-_EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
+from sift_common.identifiers import is_valid_examiner_slug
 
 DEFAULT_CASES_DIR = str(Path.home() / "cases")
 DEFAULT_STATE_DIR = "/var/lib/sift"
@@ -94,7 +92,7 @@ def _validate_case_id(case_id: str) -> None:
 
 
 def _validate_examiner(examiner: str) -> None:
-    if not examiner or not _EXAMINER_RE.match(examiner):
+    if not examiner or not is_valid_examiner_slug(examiner):
         raise CaseError(f"Invalid examiner slug: {examiner!r}")
 
 

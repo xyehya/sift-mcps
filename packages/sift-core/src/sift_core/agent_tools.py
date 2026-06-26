@@ -210,6 +210,16 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
         "mitre_ids, iocs, event_type, event_timestamp, artifact_ref, related_findings, "
         "supersedes (finding id(s) this finding corrects/replaces, for self-correction chains), "
         "affected_account.\n\n"
+        "CONFIDENCE RULES (C3/W3):\n"
+        "  (a) REQUIRED — must be exactly one of HIGH, MEDIUM, LOW, SPECULATIVE. "
+        "Missing or empty confidence is REJECTED.\n"
+        "  (b) AUTO-CLAMPED DOWN to a provenance-derived ceiling (W3 cap-hint): "
+        "final = min(agent_confidence, derived_ceiling). You CANNOT over-claim. "
+        "Only `artifacts[]` entries whose audit_id chains to sealed registered "
+        "evidence raise the provenance grade (and thus the confidence ceiling) "
+        "above LOW; bare `audit_ids` are recorded for traceability but do NOT "
+        "raise confidence. To support a higher confidence, cite structured "
+        "`artifacts[]` (source + audit_id) traceable to sealed evidence.\n\n"
         "EXAMPLE: {\"finding\": {\"title\": \"Suspicious PowerShell Execution\", \"type\": \"finding\", "
         "\"host\": \"WEBSRV01\", \"observation\": \"Encoded PowerShell ran from outlook.exe — EventID 1, "
         "ParentImage: outlook.exe, Image: powershell.exe\", \"interpretation\": \"Likely initial access "
@@ -232,7 +242,7 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
                         "host": {"type": "string", "description": "Affected hostname"},
                         "observation": {"type": "string", "description": "Raw evidence observed"},
                         "interpretation": {"type": "string", "description": "Analytical interpretation of observation"},
-                        "confidence": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW", "SPECULATIVE"]},
+                        "confidence": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW", "SPECULATIVE"], "description": "REQUIRED. Exactly one of HIGH/MEDIUM/LOW/SPECULATIVE. Empty or invalid is REJECTED. Auto-clamped DOWN to a provenance ceiling (W3) — cite strong MCP audit_ids + evidence artifacts to support higher values."},
                         "confidence_justification": {"type": "string", "description": "Why this confidence level is justified"},
                         "audit_ids": {"type": "array", "items": {"type": "string"}},
                         "mitre_ids": {"type": "array", "items": {"type": "string"}},
@@ -948,10 +958,15 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         # (resp_data = exec_result) — an inconsistent, branch-dependent signal.
         partial_failure = exec_result.get("partial_failure")
         partial_failure_note = exec_result.get("partial_failure_note")
+        # SEC-11: the applied isolation posture rides up from executor/worker on
+        # the exec_result root. Capture it BEFORE the _internal pop so it lands on
+        # the response root (agent-facing surface) and the DB audit detail rather
+        # than leaking into the inline data block.
+        isolation = exec_result.get("isolation")
         for _internal in ("stages", "_output_format", "executor", "runtime_user",
                           "output_file", "output_sha256",
                           "stderr_file", "stderr_sha256",
-                          "partial_failure", "partial_failure_note"):
+                          "partial_failure", "partial_failure_note", "isolation"):
             exec_result.pop(_internal, None)
         # Context efficiency: for a single-stage command the structured
         # command echo pure-duplicates the response-level command string —
@@ -1047,6 +1062,12 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             response["partial_failure"] = True
             if partial_failure_note:
                 response["partial_failure_note"] = partial_failure_note
+        # SEC-11: report the actual applied isolation posture on the response
+        # root so the agent (and any reviewer of the audit trail) can see whether
+        # the cgroup scope, restricted runtime user, seccomp filter, and Landlock
+        # were really in force for this command.
+        if isinstance(isolation, dict):
+            response["isolation"] = isolation
         if output_file_ref:
             # full_output_ref is the canonical output path key (case-relative,
             # never absolute). full_output_path was an alias — dropped to avoid
@@ -1094,6 +1115,10 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             extra_audit["privilege_events"] = exec_result["privilege_events"]
         if raw_stages:
             extra_audit["stages"] = raw_stages
+        # SEC-11: persist the applied isolation posture into app.audit_events
+        # details (DB-authority path) — the third surfacing layer.
+        if isinstance(isolation, dict):
+            extra_audit["isolation"] = isolation
 
         if (
             audit.log(

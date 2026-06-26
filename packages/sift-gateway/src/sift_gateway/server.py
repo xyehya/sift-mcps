@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import dataclasses
 import logging
 import time
 
@@ -58,11 +59,31 @@ class SecureHeadersMiddleware(BaseHTTPMiddleware):
         if "text/html" in content_type:
             path = request.url.path
             if path.startswith("/portal"):
+                # AUTHORITATIVE portal CSP. The gateway mounts the case_dashboard
+                # portal sub-app, and this middleware WRAPS it — so this header
+                # overrides case_dashboard's own SecurityHeadersMiddleware CSP for
+                # /portal text/html responses. Future portal-CSP edits MUST land
+                # here (routes.py is inert for /portal). Kept byte-consistent with
+                # case_dashboard/routes.py SecurityHeadersMiddleware.
+                #
+                # Portal v3 self-hosts fonts (@fontsource → /portal/assets/*.woff2),
+                # so font-src is 'self' and the dead Google font origins are dropped.
+                # 'unsafe-inline' is retained for style-src ONLY: a few data-driven
+                # numeric styles (progress/ring/severity-bar widths, grid ratio —
+                # AGENTS §11-sanctioned, token-var values, never untrusted) emit
+                # inline style attributes; a per-request nonce is the deferred P4
+                # path to pure 'self'.
                 response.headers["Content-Security-Policy"] = (
-                    "default-src 'self'; "
+                    "default-src 'none'; "
                     "script-src 'self'; "
-                    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-                    "font-src 'self' https://fonts.gstatic.com"
+                    "style-src 'self' 'unsafe-inline'; "
+                    "font-src 'self'; "
+                    "img-src 'self' data:; "
+                    "connect-src 'self'; "
+                    "base-uri 'none'; "
+                    "form-action 'self'; "
+                    "frame-ancestors 'none'; "
+                    "object-src 'none'"
                 )
         return response
 
@@ -152,6 +173,25 @@ def _sanitize_output_schema(tool: Tool) -> None:
             tool.outputSchema = None
 
 
+@dataclasses.dataclass(frozen=True)
+class ToolSurfaceSnapshot:
+    """Immutable triple of the three tool-surface dicts.
+
+    ``_build_tool_map`` builds this object from scratch and publishes it via a
+    single ``self._tool_surface = snapshot`` assignment, so every reader that
+    reads from ``_tool_surface`` sees a consistent (map, cache, manifest_meta)
+    triple — never a new map with stale cache/meta or vice-versa.
+    """
+
+    tool_map: dict[str, str]       # tool_name -> backend_name
+    tool_cache: dict[str, Tool]    # tool_name -> Tool object
+    manifest_meta: dict[str, dict] # tool_name -> manifest UX metadata
+
+    @classmethod
+    def empty(cls) -> "ToolSurfaceSnapshot":
+        return cls(tool_map={}, tool_cache={}, manifest_meta={})
+
+
 class Gateway:
     """Aggregates multiple MCP backends behind a single HTTP service.
 
@@ -170,17 +210,15 @@ class Gateway:
         # once without a full gateway restart.
         self._mounted_proxy_backends: set[str] = set()
         self._fastmcp_server = None
-        self._tool_map: dict[str, str] = {}  # tool_name -> backend_name
-        self._tool_cache: dict[str, Tool] = {}  # tool_name -> Tool object
+        # D7: single atomic snapshot — tool_map + tool_cache + manifest_meta are
+        # always swapped together so no concurrent reader can observe a new map
+        # with a stale cache/meta or vice-versa.
+        self._tool_surface: ToolSurfaceSnapshot = ToolSurfaceSnapshot.empty()
         self._start_locks: dict[str, asyncio.Lock] = {}
         self._audit = AuditWriter(mcp_name="sift-gateway")
         self._available_backends: set[str] = set()
         self.mcp_backend_registry = None
         self._mcp_catalog_loaded_at = None
-        # tool_name -> manifest-declared UX metadata (category / recommended_phase /
-        # health / health_args / hidden_from_agent / backend). Rebuilt on every
-        # _build_tool_map so the gateway never hardcodes add-on tool names.
-        self._tool_manifest_meta: dict[str, dict] = {}
         self.active_case_service = None
         self.control_plane_dsn = None
         self.evidence_service = None
@@ -254,6 +292,22 @@ class Gateway:
         gw_config = self.config.get("gateway", {})
         return gw_config.get("idle_timeout_seconds", 0)
 
+    # D7: backward-compat views into the atomic snapshot — external callers
+    # (health.py, rest.py, policy_middleware.py, mcp_endpoint.py, mcp_server.py)
+    # access these attributes by name; routing them through properties means they
+    # always read from the *current* snapshot without needing call-site rewrites.
+    @property
+    def _tool_map(self) -> dict[str, str]:
+        return self._tool_surface.tool_map
+
+    @property
+    def _tool_cache(self) -> dict[str, Tool]:
+        return self._tool_surface.tool_cache
+
+    @property
+    def _tool_manifest_meta(self) -> dict[str, dict]:
+        return self._tool_surface.manifest_meta
+
     async def start(self) -> None:
         """Build the manifest tool map for the FastMCP gateway.
 
@@ -288,8 +342,9 @@ class Gateway:
                 logger.error(
                     "Error stopping backend %s: %s: %s", name, type(exc).__name__, exc
                 )
-        self._tool_map.clear()
-        self._tool_cache.clear()
+        # D7: swap in an empty snapshot atomically so readers always see a
+        # consistent (empty) triple rather than a half-cleared state.
+        self._tool_surface = ToolSurfaceSnapshot.empty()
 
     async def restart_backends(self) -> None:
         """Stop and restart all backends to reload active case."""
@@ -471,6 +526,19 @@ class Gateway:
                     else:
                         _scans_value = None
 
+                    # SEC-2: case_bound_argument_names — free-form args (e.g. the
+                    # OpenSearch ``index``) the Gateway must validate stay within
+                    # the DB active-case prefix. Unlike safe_case_argument_names
+                    # these are VALIDATED, not overwritten: the agent may narrow
+                    # to an artifact family within its own case but cannot target
+                    # another case. None/absent => no such args to constrain.
+                    _raw_bound = t_decl.get("case_bound_argument_names")
+                    _bound_value: list[str] | None = (
+                        [str(s) for s in _raw_bound]
+                        if isinstance(_raw_bound, list)
+                        else None
+                    )
+
                     manifest_meta[t_meta_name] = {
                         "backend": name,
                         # K1: read-only marker for the DB-first audit envelope so
@@ -493,6 +561,9 @@ class Gateway:
                         "authority_contract": authority_contract,
                         # OS2: None means absent/unknown; [] means declared-empty.
                         "safe_case_argument_names": _scans_value,
+                        # SEC-2: None means none declared; a list names args the
+                        # Gateway validates against the active-case prefix.
+                        "case_bound_argument_names": _bound_value,
                     }
 
             if backend.started:
@@ -566,7 +637,6 @@ class Gateway:
                 )
             new_map[tool_name] = backend_names[0]
 
-        self._tool_map = new_map  # atomic reference swap
         new_cache: dict[str, Tool] = {}
         for mapped_name in new_map:
             if mapped_name in tool_objects:
@@ -590,15 +660,23 @@ class Gateway:
                 # whenever the live backend list_tools is unavailable.
                 _sanitize_output_schema(cached_tool)
                 new_cache[mapped_name] = cached_tool
-        self._tool_cache = new_cache
         # Keep metadata only for tools that survived into the live map.
-        self._tool_manifest_meta = {
+        new_manifest_meta = {
             t: manifest_meta[t] for t in new_map if t in manifest_meta
         }
 
+        # D7: atomic three-dict swap — build all three dicts first, then publish
+        # the complete ToolSurfaceSnapshot in ONE assignment so no concurrent
+        # reader can observe a new tool_map paired with stale cache/manifest_meta.
+        self._tool_surface = ToolSurfaceSnapshot(
+            tool_map=new_map,
+            tool_cache=new_cache,
+            manifest_meta=new_manifest_meta,
+        )
+
         logger.info(
             "Tool map built: %d add-on tools across %d add-on backends; %d core tools in-process",
-            len(self._tool_map),
+            len(self._tool_surface.tool_map),
             len(self.backends),
             len(core_tool_names()),
         )
@@ -805,7 +883,8 @@ class Gateway:
         """Return the current tool map (tool_name -> backend_name)."""
         result = {name: "sift-core" for name in core_tool_names()}
         result.update({name: "sift-gateway" for name in self._gateway_local_tools})
-        result.update(self._tool_map)
+        # D7: read from snapshot so callers always see a consistent triple.
+        result.update(self._tool_surface.tool_map)
         return result
 
     def is_case_scoped_tool(self, tool_name: str) -> bool:
@@ -814,10 +893,12 @@ class Gateway:
             return tool_name not in {"get_tool_help", "capability_guide"}
         if tool_name in self._gateway_local_tools:
             return True
-        meta = self._tool_manifest_meta.get(tool_name, {})
+        # D7: capture the snapshot once so meta and tool come from the same triple.
+        snap = self._tool_surface
+        meta = snap.manifest_meta.get(tool_name, {})
         if isinstance(meta.get("case_scoped"), bool):
             return bool(meta["case_scoped"])
-        tool = self._tool_cache.get(tool_name)
+        tool = snap.tool_cache.get(tool_name)
         schema = getattr(tool, "inputSchema", None) if tool else None
         props = schema.get("properties", {}) if isinstance(schema, dict) else {}
         if any(k in props for k in ("case_id", "case_key", "case_dir")):
@@ -844,7 +925,9 @@ class Gateway:
             closed (original behaviour for non-OpenSearch add-ons).
         """
         # OS2: prefer manifest-declared names over placeholder schema.
-        meta = self._tool_manifest_meta.get(tool_name)
+        # D7: capture the snapshot once so meta and tool come from the same triple.
+        snap = self._tool_surface
+        meta = snap.manifest_meta.get(tool_name)
         if meta is not None:
             manifest_names = meta.get("safe_case_argument_names")
             if manifest_names is not None:
@@ -852,13 +935,50 @@ class Gateway:
                 return set(manifest_names)
         # Fallback: derive from live schema properties when manifest is absent
         # or the tool entry predates the safe_case_argument_names field.
-        tool = self._tool_cache.get(tool_name)
+        tool = snap.tool_cache.get(tool_name)
         schema = getattr(tool, "inputSchema", None) if tool else None
         props = schema.get("properties", {}) if isinstance(schema, dict) else {}
         found = {name for name in ("case_id", "case_key", "case_dir") if name in props}
         # Return None (not an empty set) when neither manifest nor schema has
         # an answer — the middleware must deny fail-closed in that case.
         return found if found else None
+
+    def case_bound_argument_names(self, tool_name: str) -> set[str]:
+        """Return argument names whose value must stay within the active case.
+
+        SEC-2: these are free-form, agent-settable args (e.g. the OpenSearch
+        ``index``) that must be VALIDATED against the DB active-case prefix but
+        not overwritten (unlike ``safe_case_argument_names``). Declared per-tool
+        in the manifest via ``case_bound_argument_names``. Empty set when none
+        are declared (the common case — no extra constraint).
+        """
+        meta = self._tool_surface.manifest_meta.get(tool_name)
+        if meta:
+            names = meta.get("case_bound_argument_names")
+            if names:
+                return {str(n) for n in names}
+        return set()
+
+    @staticmethod
+    def _active_case_index_prefix(active_case) -> str:
+        """The authoritative OpenSearch index prefix for the active case.
+
+        SEC-2: mirrors ``opensearch_mcp.paths.build_index_pattern(key, tail="")``
+        — ``case-{key}-`` where ``key`` is the case directory basename
+        (``artifact_path``), which is exactly what the OpenSearch backend resolves
+        the active case from (``Path(case_dir).name.lower()``). Replicated here
+        (rather than importing the add-on package, which the gateway does not
+        depend on) so the boundary check agrees with the backend resolver; a unit
+        test pins the two in lock-step.
+        """
+        import re
+        from pathlib import Path
+
+        base = Path(active_case.artifact_path or "").name.lower()
+        key = re.sub(r"[^a-z0-9._-]", "-", base)
+        if key.startswith("case-"):
+            key = key[len("case-"):]
+        return f"case-{key}-"
 
     def addon_authority_for_tool(self, tool_name: str) -> dict | None:
         """Return the H1 add-on authority enforcement profile for a tool.
@@ -869,7 +989,7 @@ class Gateway:
         ``None`` for in-process core tools and unknown/unmapped tools (core
         tools enforce their own policy and never carry an add-on contract).
         """
-        meta = self._tool_manifest_meta.get(tool_name)
+        meta = self._tool_surface.manifest_meta.get(tool_name)
         if not meta:
             return None
         contract = meta.get("authority_contract") or {}
@@ -929,11 +1049,14 @@ class Gateway:
                         },
                     )
                 )
-        for mapped_name in self._tool_map:
+        # D7: capture the snapshot once so tool_map and tool_cache come from the
+        # same consistent triple even if a reload races with this method.
+        snap = self._tool_surface
+        for mapped_name in snap.tool_map:
             src = by_name.get(mapped_name)
             if src is None:
                 # Use cached Tool from _build_tool_map if available
-                cached = self._tool_cache.get(mapped_name)
+                cached = snap.tool_cache.get(mapped_name)
                 if cached:
                     tools.append(cached)
                 else:
@@ -1031,10 +1154,12 @@ class Gateway:
             text = await asyncio.to_thread(_run_core)
             return [TextContent(type="text", text=text)]
 
-        if name not in self._tool_map:
+        # D7: capture snapshot once so the map lookup and routing use the same triple.
+        snap = self._tool_surface
+        if name not in snap.tool_map:
             raise KeyError(f"Unknown tool: {name}")
 
-        backend_name = self._tool_map[name]
+        backend_name = snap.tool_map[name]
         backend = self.backends[backend_name]
 
         if active_case is not None and self.is_case_scoped_tool(name):
@@ -1061,6 +1186,18 @@ class Gateway:
                     if supplied and str(supplied) != expected:
                         raise RuntimeError(f"client-supplied {key} does not match DB active case")
                     arguments[key] = expected
+
+            # SEC-2 case_bound (the OpenSearch ``index``) enforcement is NOT here.
+            # Gateway.call_tool is the portal-only (human) path; the agent tool
+            # call goes through the policy_middleware chain. Binding a free-form
+            # arg to the active case must run on BOTH surfaces, so the check lives
+            # in ProxyActiveCaseMiddleware.on_call_tool (gate ⑥), which runs for
+            # every case-scoped tool regardless of safe_args — including
+            # opensearch_get_event (empty safe_case_argument_names, so the backend
+            # cannot bind it via an injected case_dir). The backend
+            # _validate_index remains defense-in-depth. The helpers
+            # case_bound_argument_names() and _active_case_index_prefix() below are
+            # reused by that middleware.
 
         # Lazy recovery — restart backend if it crashed
         if not backend.started:
@@ -1241,7 +1378,6 @@ class Gateway:
             token_registry=token_registry,
             base_url=f"{gateway_base_url}/mcp",
             resolver=resolver,
-            legacy_fallback_enabled=auth_config.legacy_token_fallback_enabled,
         )
         mcp_app = gateway_mcp.http_app(path="/")
         # B-14: when a FastMCP verifier owns identity (Supabase resolver and/or
@@ -1401,6 +1537,17 @@ class Gateway:
 
         # Attach gateway to app state so endpoints can access it
         app.state.gateway = gateway
+
+        # SEC-1: expose the parsed auth config + the portal re-verify primitive
+        # to the /api/v1 control-plane handlers so require_recent_reauth() can
+        # enforce step-up on register-new-backend / mint-join-code. The reverify
+        # callable is the same SupabaseAuthCallbacks.reverify_password the portal
+        # uses (password grant, identity-bound, session tokens discarded); it is
+        # only wired when Supabase auth is configured, so step-up is a no-op on
+        # pure legacy / single-user deployments.
+        app.state.auth_config = auth_config
+        if supabase_callbacks is not None and hasattr(supabase_callbacks, "reverify_password"):
+            app.state.supabase_reverify = supabase_callbacks.reverify_password
 
         async def _sanitized_error(request, exc):
             """Global unhandled exception handler — never leak file paths or tracebacks."""

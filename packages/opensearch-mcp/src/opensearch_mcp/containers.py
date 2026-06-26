@@ -9,9 +9,11 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 import time
 import urllib.parse
 from pathlib import Path
+from typing import NamedTuple
 
 from sift_core.case_io import cases_root
 
@@ -42,27 +44,340 @@ def detect_container(path: Path) -> str:
     return "unknown"
 
 
+# ---------------------------------------------------------------------------
+# SEC-8: single hardened archive extraction chokepoint
+#
+# All archive extraction (scan path + memory path) funnels through
+# ``extract_container``. Containment no longer rests solely on the external
+# tar/7z binaries' version defaults: every archive is (1) member-preflighted
+# (traversal / absolute / symlink / hardlink / device / fifo / setuid-setgid
+# rejected before a single byte is written), (2) capped against decompression
+# bombs / disk exhaustion (entry count, uncompressed total, compression ratio,
+# free-space), and (3) post-walked for any escape the binary might still have
+# produced. Caps carry operator-approved defaults and are env-overridable.
+# ---------------------------------------------------------------------------
+
+
+class ArchiveRejected(ValueError):
+    """An archive member or resource cap violated extraction policy.
+
+    Raised *before* (or instead of) writing anything outside ``dest`` so callers
+    can surface a typed rejection reason at the agent-facing status surface
+    (``opensearch_ingest_status`` / ``result_public``) rather than letting the
+    rejection masquerade as a generic crash.
+    """
+
+
+class _Member(NamedTuple):
+    """One archive entry as seen during preflight (no extraction yet)."""
+
+    name: str
+    size: int  # declared uncompressed size in bytes (0 for non-files)
+    kind: str  # file | dir | symlink | hardlink | char | block | fifo | socket
+    setid: bool  # setuid or setgid bit set on the member
+
+
+# Anti-bomb / containment caps (operator-approved defaults; env-overridable).
+_DEFAULT_MAX_RATIO = 200  # uncompressed:compressed
+_DEFAULT_MAX_ENTRIES = 1_000_000
+_DEFAULT_MAX_UNCOMPRESSED = 512 * 1024**3  # 512 GiB absolute backstop
+_DEFAULT_TIMEOUT_S = 3600  # one hour per extraction subprocess
+_FREE_SPACE_MARGIN = 0.95  # projected size must stay under 95% of free space
+
+# Member kinds that have no place in forensic triage/evidence archives and that
+# are the classic write-escape / privilege vectors. Reject on sight.
+_UNSAFE_KINDS = frozenset({"symlink", "hardlink", "char", "block", "fifo", "socket"})
+
+# Unix mode token inside a 7z ``-slt`` Attributes line, e.g. ``-rw-r--r--`` or
+# ``lrwxrwxrwx`` (symlink) or ``-rwsr-xr-x`` (setuid). Matched per-token via
+# fullmatch (a leading ``-`` defeats ``\b`` word-boundary anchoring).
+_UNIX_MODE_RE = re.compile(r"[-dlbcps][-rwxsStT]{9}")
+_UNIX_TYPE_MAP = {
+    "-": "file",
+    "d": "dir",
+    "l": "symlink",
+    "b": "block",
+    "c": "char",
+    "p": "fifo",
+    "s": "socket",
+}
+
+
+def _cap_int(env: str, default: int) -> int:
+    """Read a positive-int cap from the environment, falling back to default."""
+    raw = os.environ.get(env, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _extract_timeout() -> int:
+    return _cap_int("SIFT_ARCHIVE_TIMEOUT_SECONDS", _DEFAULT_TIMEOUT_S)
+
+
 def extract_container(path: Path, dest: Path, password: str | None = None) -> None:
-    """Extract archive to dest directory."""
+    """Extract an archive to ``dest`` through the hardened SEC-8 chokepoint.
+
+    Order is deliberate and fail-closed: enumerate + validate every member and
+    enforce the anti-bomb caps BEFORE invoking the extractor binary, then walk
+    the result to catch any escape the binary itself produced. Raises
+    ``ArchiveRejected`` on any policy violation (a subclass of ``ValueError`` so
+    existing ``except ValueError`` callers still catch it).
+    """
     suffix = path.suffix.lower()
     suffixes = "".join(path.suffixes[-2:]).lower()
 
     if suffix in (".zip", ".7z"):
+        members = _list_7z_members(path, password)
+        _enforce_policy(path, dest, members)
         _extract_7z(path, dest, password)
     elif suffixes in (".tar.gz", ".tgz") or suffix == ".tar":
+        members = _list_tar_members(path, dest)
+        _enforce_policy(path, dest, members)
         _extract_tar(path, dest)
     else:
         raise ValueError(f"Unknown archive format: {path.name}")
 
+    _verify_no_escape(dest)
+
+
+def _is_unsafe_path(name: str) -> bool:
+    """True if a member name is absolute or contains a ``..`` traversal segment.
+
+    Handles POSIX absolute paths, Windows drive-letter / UNC absolute paths, and
+    both separator styles. Note: Velociraptor collections legitimately carry
+    URL-encoded names such as ``C%3A/Windows`` — those are relative and remain
+    safe here (decoding to ``C:`` happens post-extraction in
+    ``normalize_velociraptor``).
+    """
+    if not name:
+        return False
+    if name.startswith("/") or name.startswith("\\"):
+        return True
+    # Windows drive letter (``C:\``) or UNC (``\\host``) absolute paths.
+    if re.match(r"^[A-Za-z]:", name):
+        return True
+    parts = re.split(r"[\\/]+", name)
+    return ".." in parts
+
+
+def _reject_unsafe_member(m: _Member) -> None:
+    """Raise ``ArchiveRejected`` if a single member violates the safety policy."""
+    if _is_unsafe_path(m.name):
+        raise ArchiveRejected(f"unsafe member path: {m.name!r}")
+    if m.kind in _UNSAFE_KINDS:
+        raise ArchiveRejected(f"disallowed member type {m.kind}: {m.name!r}")
+    if m.setid:
+        raise ArchiveRejected(f"setuid/setgid member: {m.name!r}")
+
+
+def _enforce_policy(path: Path, dest: Path, members: list[_Member]) -> None:
+    """Apply per-member safety + anti-bomb caps before any extraction."""
+    for m in members:
+        _reject_unsafe_member(m)
+
+    max_entries = _cap_int("SIFT_ARCHIVE_MAX_ENTRIES", _DEFAULT_MAX_ENTRIES)
+    if len(members) > max_entries:
+        raise ArchiveRejected(
+            f"archive entry count {len(members)} exceeds cap {max_entries}"
+        )
+
+    total = sum(m.size for m in members if m.size > 0)
+    max_total = _cap_int("SIFT_ARCHIVE_MAX_UNCOMPRESSED_BYTES", _DEFAULT_MAX_UNCOMPRESSED)
+    if total > max_total:
+        raise ArchiveRejected(
+            f"declared uncompressed size {total} exceeds cap {max_total}"
+        )
+
+    max_ratio = _cap_int("SIFT_ARCHIVE_MAX_RATIO", _DEFAULT_MAX_RATIO)
+    try:
+        compressed = path.stat().st_size
+    except OSError:
+        compressed = 0
+    if compressed > 0 and total > compressed * max_ratio:
+        raise ArchiveRejected(
+            f"compression ratio {total // compressed}:1 exceeds cap {max_ratio}:1"
+        )
+
+    _check_free_space(dest, total)
+
+
+def _check_free_space(dest: Path, projected: int) -> None:
+    """Refuse extraction if the projected uncompressed size would fill the disk."""
+    try:
+        st = os.statvfs(dest)
+    except OSError:
+        return  # Cannot stat (e.g. dest not yet created) — best-effort only.
+    free = st.f_bavail * st.f_frsize
+    if projected > free * _FREE_SPACE_MARGIN:
+        raise ArchiveRejected(
+            f"projected uncompressed size {projected} would exhaust free space "
+            f"({free} bytes available)"
+        )
+
+
+def _list_tar_members(path: Path, dest: Path) -> list[_Member]:
+    """Enumerate tar members and apply PEP-706 ``data`` filter validation.
+
+    The data filter (rejects absolute paths, traversal, device/fifo nodes, and
+    links that escape ``dest``) is the maintained, well-reviewed implementation
+    of the rules SEC-8 needs; we layer our own stricter link/setid rejection on
+    top (we forbid links entirely, not just escaping ones).
+    """
+    members: list[_Member] = []
+    data_filter = getattr(tarfile, "data_filter", None)
+    try:
+        with tarfile.open(path, "r:*") as tf:
+            for ti in tf.getmembers():
+                if data_filter is not None:
+                    try:
+                        data_filter(ti, str(dest))
+                    except tarfile.FilterError as exc:  # type: ignore[attr-defined]
+                        raise ArchiveRejected(
+                            f"tar member rejected by data filter: {exc}"
+                        ) from exc
+                kind = _tarinfo_kind(ti)
+                setid = bool(ti.mode & 0o6000)
+                members.append(
+                    _Member(
+                        name=ti.name,
+                        size=ti.size if ti.isreg() else 0,
+                        kind=kind,
+                        setid=setid,
+                    )
+                )
+    except ArchiveRejected:
+        raise
+    except (tarfile.TarError, OSError) as exc:
+        raise ArchiveRejected(f"cannot read tar archive: {exc}") from exc
+    return members
+
+
+def _tarinfo_kind(ti: tarfile.TarInfo) -> str:
+    if ti.isdir():
+        return "dir"
+    if ti.issym():
+        return "symlink"
+    if ti.islnk():
+        return "hardlink"
+    if ti.ischr():
+        return "char"
+    if ti.isblk():
+        return "block"
+    if ti.isfifo():
+        return "fifo"
+    return "file"
+
+
+def _list_7z_members(path: Path, password: str | None = None) -> list[_Member]:
+    """Enumerate zip/7z members via ``7z l -slt`` (technical listing)."""
+    cmd = ["7z", "l", "-slt", str(path)]
+    if password:
+        cmd.append(f"-p{password}")
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_extract_timeout()
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ArchiveRejected("listing archive exceeded timeout") from exc
+    # rc 0=ok, 1=warning, 2+=fatal. We cannot trust a listing we could not fully
+    # read, so anything >=2 is a hard reject (fail-closed).
+    if result.returncode >= 2:
+        raise ArchiveRejected(f"cannot list archive (7z rc={result.returncode})")
+    return _parse_7z_slt(result.stdout)
+
+
+def _parse_7z_slt(output: str) -> list[_Member]:
+    """Parse ``7z l -slt`` output into members.
+
+    The technical listing emits an archive-level header block first, then a
+    ``----------`` separator, then one ``key = value`` block per member. Only
+    records after the separator are members (the header's own ``Path`` is the
+    archive file itself and must not be treated as an entry).
+    """
+    members: list[_Member] = []
+    cur: dict[str, str] | None = None
+    in_members = False
+
+    def _flush() -> None:
+        nonlocal cur
+        if cur is not None:
+            m = _member_from_record(cur)
+            if m is not None:
+                members.append(m)
+            cur = None
+
+    for line in output.splitlines():
+        if line.strip() == "----------":
+            in_members = True
+            continue
+        if not in_members:
+            continue
+        if line.startswith("Path = "):
+            _flush()
+            cur = {"Path": line[len("Path = ") :]}
+        elif cur is not None and " = " in line:
+            key, _, value = line.partition(" = ")
+            cur[key] = value
+        elif not line.strip():
+            _flush()
+    _flush()
+    return members
+
+
+def _member_from_record(rec: dict[str, str]) -> _Member | None:
+    name = rec.get("Path", "")
+    if not name:
+        return None
+    try:
+        size = int(rec.get("Size", "0") or 0)
+    except ValueError:
+        size = 0
+    kind, setid = _classify_7z_attrs(rec.get("Attributes", ""), rec.get("Folder", ""))
+    return _Member(name=name, size=size if kind == "file" else 0, kind=kind, setid=setid)
+
+
+def _classify_7z_attrs(attrs: str, folder: str) -> tuple[str, bool]:
+    """Classify a 7z member from its Attributes/Folder fields.
+
+    7z encodes the unix mode (when present) inside ``Attributes`` alongside the
+    DOS flags, e.g. ``A_ -rw-r--r--`` or ``D_ drwxr-xr-x`` or ``A_ lrwxrwxrwx``.
+    The unix type char and the setuid/setgid bits are read from that token; the
+    DOS ``D`` flag and the ``Folder = +`` field are the directory fallback.
+    """
+    kind = "dir" if folder == "+" else "file"
+    tokens = attrs.split()
+    if tokens and tokens[0].startswith("D"):
+        kind = "dir"
+
+    setid = False
+    mode = next((t for t in tokens if _UNIX_MODE_RE.fullmatch(t)), None)
+    if mode:
+        kind = _UNIX_TYPE_MAP.get(mode[0], kind)
+        # setuid lives at index 3 (owner-exec), setgid at index 6 (group-exec);
+        # 's'/'S' there means the bit is set.
+        if mode[3] in ("s", "S") or mode[6] in ("s", "S"):
+            setid = True
+    return kind, setid
+
 
 def _extract_7z(path: Path, dest: Path, password: str | None = None) -> None:
-    """Extract archive with 7z."""
+    """Extract a zip/7z archive (called only after preflight + caps pass)."""
     cmd = ["7z", "x", str(path), f"-o{dest}", "-y"]
     if password:
         cmd.append(f"-p{password}")
-    result = subprocess.run(cmd, capture_output=True)
-    # 7z exit codes: 0=ok, 1=warning (timestamps), 2+=error
-    if result.returncode > 1:
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=_extract_timeout())
+    except subprocess.TimeoutExpired as exc:
+        raise ArchiveRejected("7z extraction exceeded timeout") from exc
+    # SEC-8: 7z rc==1 (warning — e.g. a member could not be read) is treated as
+    # FAILURE, not success. A partial extraction must never be mistaken for a
+    # clean one when the output is forensic evidence.
+    if result.returncode != 0:
         # Sanitize command to strip password before including in error
         safe_cmd = [c if not c.startswith("-p") else "-p***" for c in cmd]
         raise subprocess.CalledProcessError(
@@ -71,15 +386,34 @@ def _extract_7z(path: Path, dest: Path, password: str | None = None) -> None:
 
 
 def _extract_tar(path: Path, dest: Path) -> None:
-    """Extract tar/tar.gz archive with path traversal validation."""
-    subprocess.run(["tar", "xf", str(path), "-C", str(dest)], check=True)
-    # Validate no files escaped destination
+    """Extract a tar/tar.gz archive (called only after preflight + caps pass)."""
+    try:
+        subprocess.run(
+            ["tar", "xf", str(path), "-C", str(dest)],
+            check=True,
+            capture_output=True,
+            timeout=_extract_timeout(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ArchiveRejected("tar extraction exceeded timeout") from exc
+
+
+def _verify_no_escape(dest: Path) -> None:
+    """Post-extraction walk: no symlink and nothing resolving outside ``dest``.
+
+    Generalised from the old files-only tar check to also cover directories and
+    symlinks. A symlink is rejected outright (a member-type check already blocks
+    them at preflight, but if a binary ignored that we must not leave a link
+    behind that a later scan could follow out of the case jail).
+    """
     dest_resolved = dest.resolve()
-    for root, _dirs, files in os.walk(dest):
-        for f in files:
-            full = Path(root, f).resolve()
-            if not full.is_relative_to(dest_resolved):
-                raise ValueError(f"Path traversal detected in archive: {full}")
+    for root, dirs, files in os.walk(dest):
+        for name in (*dirs, *files):
+            full = Path(root, name)
+            if full.is_symlink():
+                raise ArchiveRejected(f"symlink created during extraction: {full}")
+            if not full.resolve().is_relative_to(dest_resolved):
+                raise ArchiveRejected(f"path traversal detected in archive: {full}")
 
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from sift_gateway.auth import is_agent_principal, resolve_examiner
+from sift_gateway.auth import (
+    is_agent_principal,
+    require_control_plane_operator,
+    require_recent_reauth,
+    resolve_examiner,
+)
 from sift_gateway.join import (
     check_join_rate_limit,
     generate_join_code,
@@ -483,6 +488,9 @@ async def list_services(request: Request) -> JSONResponse:
 
 async def start_service(request: Request) -> JSONResponse:
     """POST /api/v1/services/{name}/start — start a backend and rebuild tool map."""
+    authz = require_control_plane_operator(request)  # SEC-1: operator-only
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     name = request.path_params["name"]
 
@@ -525,6 +533,9 @@ async def start_service(request: Request) -> JSONResponse:
 
 async def stop_service(request: Request) -> JSONResponse:
     """POST /api/v1/services/{name}/stop — stop a backend and rebuild tool map."""
+    authz = require_control_plane_operator(request)  # SEC-1: operator-only
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     name = request.path_params["name"]
 
@@ -551,6 +562,9 @@ async def stop_service(request: Request) -> JSONResponse:
 
 async def restart_service(request: Request) -> JSONResponse:
     """POST /api/v1/services/{name}/restart — stop + start a backend."""
+    authz = require_control_plane_operator(request)  # SEC-1: operator-only
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     name = request.path_params["name"]
 
@@ -612,14 +626,27 @@ async def create_join_code(request: Request) -> JSONResponse:
 
     Requires bearer token auth (authenticated examiner).
     """
+    # SEC-1: control-plane mutation (mints a credential that bootstraps a fresh
+    # gateway token / new backend) — operator-only + step-up re-auth.
+    authz = require_control_plane_operator(request)
+    if authz is not None:
+        return authz
+
     expires_hours = 2
+    data: dict = {}
     body = await request.body()
     if body:
         try:
             data = json.loads(body)
-            expires_hours = data.get("expires_hours", 2)
         except json.JSONDecodeError:
             return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+        if not isinstance(data, dict):
+            return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
+        expires_hours = data.get("expires_hours", 2)
+
+    reauth = await require_recent_reauth(request, data)  # SEC-1: step-up on mint
+    if reauth is not None:
+        return reauth
 
     if (
         not isinstance(expires_hours, (int, float))
@@ -631,8 +658,28 @@ async def create_join_code(request: Request) -> JSONResponse:
             status_code=400,
         )
 
+    # DSS-CAN-019: optionally bind the code to an expected wintools host identity.
+    # A wintools machine can only redeem a code that was minted with the host it
+    # presents; codes without a bound host cannot register a wintools backend.
+    bound_host = data.get("wintools_host")
+    if bound_host is not None:
+        if not isinstance(bound_host, str) or not bound_host.strip():
+            return JSONResponse(
+                {"error": "wintools_host must be a non-empty hostname string"},
+                status_code=400,
+            )
+        # Accept a bare hostname/IP; reject anything with scheme/path/userinfo so
+        # the bound identity is unambiguous when matched against wintools_url.
+        candidate = bound_host.strip()
+        if any(c in candidate for c in ("/", "@", " ")) or "://" in candidate:
+            return JSONResponse(
+                {"error": "wintools_host must be a bare hostname or IP (no scheme/path)"},
+                status_code=400,
+            )
+        bound_host = candidate
+
     code = generate_join_code()
-    store_join_code(code, expires_hours=expires_hours)
+    store_join_code(code, expires_hours=expires_hours, bound_host=bound_host)
 
     gateway = request.app.state.gateway
     gw_url = _get_gateway_url(gateway)
@@ -672,13 +719,14 @@ async def join_gateway(request: Request) -> JSONResponse:
     wintools_token = body.get("wintools_token")
     wintools_cert = body.get("wintools_cert")
 
-    matched_hash = await validate_and_consume_join_code(code)
-    if not matched_hash:
+    code_info = await validate_and_consume_join_code(code)
+    if not code_info:
         record_join_failure(client_ip)
         return JSONResponse(
             {"error": "Invalid or expired join code"},
             status_code=403,
         )
+    bound_host = code_info.get("bound_host")
 
     examiner_name = hostname or machine_type
     gateway = request.app.state.gateway
@@ -706,6 +754,41 @@ async def join_gateway(request: Request) -> JSONResponse:
         if not parsed.hostname:
             return JSONResponse(
                 {"error": "wintools_url must include a hostname"},
+                status_code=400,
+            )
+        # DSS-CAN-019: the join code must have been minted bound to an expected
+        # wintools host, and the presented wintools_url host must match it.
+        # Fail closed when no host was bound (an unbound code cannot register a
+        # backend the gateway will dial + send a credential to).
+        if not bound_host:
+            record_join_failure(client_ip)
+            return JSONResponse(
+                {
+                    "error": "join code is not bound to a wintools host; mint a "
+                    "code with wintools_host set to register a wintools backend"
+                },
+                status_code=403,
+            )
+        if parsed.hostname.lower() != bound_host:
+            record_join_failure(client_ip)
+            return JSONResponse(
+                {"error": "wintools_url host does not match the bound host for this join code"},
+                status_code=403,
+            )
+        # SEC-3: run the shared egress policy on the wintools URL before
+        # registering it. The DSS-CAN-019 bound host authorizes egress to that
+        # one (possibly LAN-internal) host — nothing else.
+        from sift_gateway.backends.egress import validate_egress_url
+
+        try:
+            validate_egress_url(
+                wintools_url,
+                label="wintools_url",
+                extra_allowed_hosts=frozenset({bound_host}),
+            )
+        except ValueError as exc:
+            return JSONResponse(
+                {"error": f"wintools_url rejected by egress policy: {exc}"},
                 status_code=400,
             )
         # Store pinned TLS cert if provided
@@ -747,6 +830,8 @@ async def join_gateway(request: Request) -> JSONResponse:
             gateway,
             {"name": "wintools-mcp", "config": backend_config},
             actor=None,
+            # DSS-CAN-019 bound host authorizes persisting this one LAN host.
+            extra_allowed_egress_hosts=frozenset({bound_host}),
         )
         if register_status < 400:
             wintools_registered = True
@@ -943,6 +1028,9 @@ async def reload_backends(request: Request) -> JSONResponse:
     D34 is restart-to-apply for FastMCP catalog exposure. This endpoint does not
     live-remount providers; it reports which DB rows are pending Gateway restart.
     """
+    authz = require_control_plane_operator(request)  # SEC-1: operator-only
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     registry = getattr(gateway, "mcp_backend_registry", None)
     if registry is None:
@@ -1024,7 +1112,13 @@ def validate_backend_logic(gateway, body: dict) -> tuple[dict, int]:
     return response, status_code
 
 
-async def register_backend_logic(gateway, body: dict, *, actor=None) -> tuple[dict, int]:
+async def register_backend_logic(
+    gateway,
+    body: dict,
+    *,
+    actor=None,
+    extra_allowed_egress_hosts: frozenset[str] = frozenset(),
+) -> tuple[dict, int]:
     name, config, inline_manifest, reasons = _normalize_backend_payload(body)
     registry = getattr(gateway, "mcp_backend_registry", None)
     if inline_manifest is not None and "manifest_path" not in config:
@@ -1036,9 +1130,28 @@ async def register_backend_logic(gateway, body: dict, *, actor=None) -> tuple[di
         )
     if not reasons:
         try:
-            from sift_gateway.mcp_backends_registry import normalize_connection_config
+            from sift_gateway.mcp_backends_registry import (
+                assert_stdio_command_allowlisted,
+                normalize_connection_config,
+            )
 
-            normalize_connection_config(config)
+            connection = normalize_connection_config(config)
+            # SEC-4: a registered stdio backend launches as the gateway account,
+            # so constrain its command to the installed add-on catalog (reject
+            # arbitrary interpreters/binaries) at the registration surface.
+            if str(config.get("type") or "stdio") == "stdio":
+                assert_stdio_command_allowlisted(config.get("command"))
+            else:
+                # SEC-3: persistence gate — refuse to persist an HTTP backend row
+                # the gateway would later dial to a non-routable/internal address
+                # (anti-SSRF). The authoritative pin is re-applied at connect.
+                from sift_gateway.backends.egress import validate_egress_url
+
+                validate_egress_url(
+                    str(connection.get("url")),
+                    label="backend url",
+                    extra_allowed_hosts=extra_allowed_egress_hosts,
+                )
         except Exception as exc:
             reasons.append({"field": "config", "reason": str(exc)})
 
@@ -1096,6 +1209,11 @@ async def register_backend_logic(gateway, body: dict, *, actor=None) -> tuple[di
 
 async def validate_backend(request: Request) -> JSONResponse:
     """POST /api/v1/backends/validate — validate a backend manifest/config."""
+    # SEC-1: validation triggers a remote manifest fetch (egress) and is a
+    # control-plane operation — operator-only, not agent/service/readonly.
+    authz = require_control_plane_operator(request)
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     body, error = await _read_json_body(request)
     if error:
@@ -1107,11 +1225,19 @@ async def validate_backend(request: Request) -> JSONResponse:
 
 async def register_backend(request: Request) -> JSONResponse:
     """POST /api/v1/backends — validate, persist, and hot-register a backend."""
+    # SEC-1: registering a backend persists a row the gateway later launches
+    # (stdio process / HTTP egress) — operator-only + step-up re-auth.
+    authz = require_control_plane_operator(request)
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     body, error = await _read_json_body(request)
     if error:
         return error
     assert body is not None
+    reauth = await require_recent_reauth(request, body)  # SEC-1: step-up
+    if reauth is not None:
+        return reauth
     actor = getattr(request.state, "identity", None)
     response, status_code = await register_backend_logic(gateway, body, actor=actor)
     return JSONResponse(response, status_code=status_code)
@@ -1124,6 +1250,9 @@ async def unregister_backend(request: Request) -> JSONResponse:
     unregister is a DB/catalog change that requires Gateway restart to apply to
     the served `/mcp` catalog.
     """
+    authz = require_control_plane_operator(request)  # SEC-1: operator-only
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     registry = getattr(gateway, "mcp_backend_registry", None)
     if registry is None:
@@ -1186,6 +1315,9 @@ async def set_backend_enabled(request: Request) -> JSONResponse:
     that the served /mcp aggregate applies on Gateway restart, so it reports
     ``restart_required``. Body: {"enabled": bool}.
     """
+    authz = require_control_plane_operator(request)  # SEC-1: operator-only
+    if authz is not None:
+        return authz
     gateway = request.app.state.gateway
     name = request.path_params["name"]
     registry = getattr(gateway, "mcp_backend_registry", None)

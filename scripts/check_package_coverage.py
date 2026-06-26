@@ -33,14 +33,13 @@ PACKAGE_GATES: tuple[PackageCoverageGate, ...] = (
         observed=72,
         floor=70,
     ),
-    # AU2 locks today's very low common baseline; Axis C should ratchet this
-    # after direct AuditWriter/parser tests land.
+    # C1 (XYE-65) adversarial AuditWriter custody tests landed; ratcheted from 4%.
     PackageCoverageGate(
         name="sift-common",
         tests="packages/sift-common/tests",
         source="packages/sift-common/src/sift_common",
-        observed=4,
-        floor=3,
+        observed=67,
+        floor=65,
     ),
     PackageCoverageGate(
         name="sift-core",
@@ -85,12 +84,13 @@ PACKAGE_GATES: tuple[PackageCoverageGate, ...] = (
         observed=20,
         floor=18,
     ),
+    # C3 (XYE-67) risk-path tests landed; ratcheted from 48%.
     PackageCoverageGate(
         name="windows-triage-mcp",
         tests="packages/windows-triage-mcp/tests",
         source="packages/windows-triage-mcp/src/windows_triage_mcp",
-        observed=48,
-        floor=46,
+        observed=57,
+        floor=55,
     ),
 )
 

@@ -227,13 +227,9 @@ def run_and_ingest(
     if cfg is None:
         raise ValueError(f"Unknown tool: {tool_name}")
 
-    from opensearch_mcp.paths import sanitize_index_component as _sanitize_index_component
+    from opensearch_mcp.paths import build_index_name
 
-    index_name = (
-        f"case-{_sanitize_index_component(case_id)}"
-        f"-{cfg.index_suffix}"
-        f"-{_sanitize_index_component(hostname)}"
-    )
+    index_name = build_index_name(case_id, cfg.index_suffix, hostname)
     tmpdir = tempfile.mkdtemp(prefix=f"sift-{tool_name}-")
     natural_key = natural_key_override if natural_key_override is not None else cfg.natural_key
 
@@ -268,12 +264,9 @@ def run_and_ingest(
             if cfg.multi_csv:
                 # EZ tools prefix with timestamp: 20260329224802_Amcache_DeviceContainers
                 # Strip the timestamp prefix (digits + underscore) to get meaningful name
-                stem = csv_file.stem
-                parts = stem.split("_", 1)
-                if len(parts) > 1 and parts[0].isdigit():
-                    table_name = parts[1]
-                else:
-                    table_name = stem
+                from opensearch_mcp.parse_csv import table_name_from_stem
+
+                table_name = table_name_from_stem(csv_file.stem)
             count, sk, bf = ingest_csv(
                 csv_path=csv_file,
                 client=client,

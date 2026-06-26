@@ -1,352 +1,252 @@
-import { useMemo, useState } from 'react'
-import { useStoreSlice } from '../../store/useStore'
-import { Skeleton } from '../common/Skeleton'
-import { CaseBriefCard } from './CaseBriefCard'
-import { formatDistanceToNow } from 'date-fns'
+import { useEffect, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
+import { FolderOpen } from 'lucide-react'
 
-const CONFIDENCE_COLORS = {
-  HIGH:        'var(--crimson)',
-  MEDIUM:      'var(--amber)',
-  LOW:         'var(--cyan)',
-  SPECULATIVE: 'var(--violet)',
+import { useStoreSlice } from '@/store/useStore'
+import { useMotionVariants } from '@/lib/motion'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { AgentHero } from '@/components/overview/AgentHero'
+import { BlockedActionsPane } from '@/components/overview/BlockedActionsPane'
+import { MissionStats } from '@/components/overview/MissionStats'
+import { VelocityCard } from '@/components/overview/VelocityCard'
+import { SeverityDistribution } from '@/components/overview/SeverityDistribution'
+import { CaseContextCard } from '@/components/overview/CaseContextCard'
+import { AgentActivityFeed } from '@/components/overview/AgentActivityFeed'
+import { RecentFindings } from '@/components/overview/RecentFindings'
+
+// ─────────────────────────────────────────────────────────────────────────
+// Overview → Mission Control (handoff §Screen 1). Ground-up rebuild per the
+// design handoff: 8fr/4fr CSS grid, session timer, agent hero → case brief →
+// velocity+severity → blocked actions (left); stat tiles → agent activity →
+// recent findings (right). MitreMatrix and EvidenceChainSummary are NOT on
+// the Overview screen — do not import them here. The old "Recent activity"
+// panel is replaced by the handoff's AgentActivityFeed + RecentFindings.
+// Reads only EXISTING polled store slices + portalState — the useStore
+// interface contract stays frozen.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Case nature → accent class for the chip. */
+const NATURE_CLS = {
+  INTRUSION: 'border-sev-high/40 text-sev-high bg-sev-high/10',
+  intrusion: 'border-sev-high/40 text-sev-high bg-sev-high/10',
+  EXFILTRATION: 'border-sev-med/40 text-sev-med bg-sev-med/10',
+  exfiltration: 'border-sev-med/40 text-sev-med bg-sev-med/10',
+  RANSOMWARE: 'border-status-staged/40 text-status-staged bg-status-staged/10',
+  ransomware: 'border-status-staged/40 text-status-staged bg-status-staged/10',
+}
+
+function natureChipCls(nature) {
+  return NATURE_CLS[nature] ?? 'border-border text-muted-foreground bg-secondary'
+}
+
+/** Live session elapsed clock — ticks every second, format hh:mm:ss. */
+function useSessionElapsed() {
+  const startRef = useRef(0)
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    startRef.current = Date.now()
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [])
+  const h = String(Math.floor(elapsed / 3600)).padStart(2, '0')
+  const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0')
+  const s = String(elapsed % 60).padStart(2, '0')
+  return `${h}:${m}:${s}`
+}
+
+/** Minimal card with a section title. */
+function Section({ title, children, className, contentClassName }) {
+  return (
+    <Card className={className}>
+      <CardHeader className="pb-0">
+        <CardTitle className="text-sm font-semibold">{title}</CardTitle>
+      </CardHeader>
+      <CardContent className={contentClassName}>{children}</CardContent>
+    </Card>
+  )
+}
+
+function NoCaseState() {
+  return (
+    <Card className="items-center gap-4 py-16 text-center">
+      <CardContent className="flex flex-col items-center gap-4">
+        <span aria-hidden className="flex size-14 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+          <FolderOpen className="size-7" />
+        </span>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-lg font-semibold text-foreground">No active case</h2>
+          <p className="max-w-sm text-sm text-muted-foreground">
+            Select or create a case from the case selector in the header to load findings, evidence and the
+            investigation dashboard.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  )
 }
 
 export function OverviewTab() {
-  const { activeCase, summary, findings, reports, delta, isLoading, setActiveTab, setFindingsFilter, setCommitDrawerOpen, setSelectedFindingId } = useStoreSlice((state) => ({
-    activeCase: state.activeCase,
-    summary: state.summary,
-    findings: state.findings,
-    reports: state.reports,
-    delta: state.delta,
-    isLoading: state.isLoading,
-    setActiveTab: state.setActiveTab,
-    setFindingsFilter: state.setFindingsFilter,
-    setCommitDrawerOpen: state.setCommitDrawerOpen,
-    setSelectedFindingId: state.setSelectedFindingId,
+  const variants = useMotionVariants()
+  const sessionElapsed = useSessionElapsed()
+
+  const { activeCase, findings, isLoading, user } = useStoreSlice((s) => ({
+    activeCase: s.activeCase,
+    findings: s.findings,
+    isLoading: s.isLoading,
+    user: s.user,
   }))
-  const [bannerExpanded, setBannerExpanded] = useState(false)
 
-  const findingStats = useMemo(() => {
-    const stats = {
-      approvedFallback: 0,
-      pendingFallback: 0,
-      highCount: 0,
-      medCount: 0,
-      lowCount: 0,
-      specCount: 0,
-      mitreIds: [],
-    }
-    const mitreIds = new Set()
-    for (const finding of findings) {
-      const status = finding.status
-      if (status === 'approved' || status === 'APPROVED') stats.approvedFallback += 1
-      if (status === 'draft' || status === 'DRAFT') stats.pendingFallback += 1
+  const operator = user?.examiner || user?.email || 'E.VARGA'
+  const operatorLabel = operator.toUpperCase()
 
-      const confidence = (finding.confidence ?? '').toUpperCase()
-      if (confidence === 'HIGH') stats.highCount += 1
-      if (confidence === 'MEDIUM') stats.medCount += 1
-      if (confidence === 'LOW') stats.lowCount += 1
-      if (confidence === 'SPECULATIVE') stats.specCount += 1
-
-      for (const mitreId of finding.mitre_ids ?? []) {
-        mitreIds.add(mitreId)
-      }
-    }
-    stats.mitreIds = [...mitreIds]
-    return stats
-  }, [findings])
-
-  // API shape: { findings: { total, by_status: {DRAFT, APPROVED, REJECTED} }, timeline, evidence, todos }
-  const fstats    = summary?.findings ?? {}
-  const byStatus  = fstats.by_status ?? {}
-  const total     = fstats.total     ?? findings.length
-  const approved  = byStatus.approved  ?? byStatus.APPROVED  ?? findingStats.approvedFallback
-  const pending   = byStatus.draft     ?? byStatus.DRAFT     ?? findingStats.pendingFallback
-  const staged    = delta.length
-  const reviewPct = findings.length > 0 ? Math.round((delta.length / findings.length) * 100) : 0
-
-  const highCount = findingStats.highCount
-  const medCount  = findingStats.medCount
-  const lowCount  = findingStats.lowCount
-  const specCount = findingStats.specCount
-  const maxCount  = Math.max(highCount, medCount, lowCount, specCount, 1)
-  const mitreIds = findingStats.mitreIds
+  // Case brief: nature tag from incident_type or nature field
+  const caseNature =
+    (activeCase?.incident_type ?? activeCase?.nature ?? '').toUpperCase()
+  const caseScope = activeCase?.affected_systems?.length > 0
+    ? activeCase.affected_systems.join(' · ')
+    : activeCase?.scope
 
   return (
-    <div className="h-full overflow-y-auto p-5" style={{ background: 'var(--bg-base)' }}>
-      {/* Case banner */}
-      {activeCase && (
-        <button
-          onClick={() => setBannerExpanded(!bannerExpanded)}
-          className="mb-4 w-full text-left px-4 py-2.5 rounded text-xs font-mono cursor-pointer transition-colors"
-          style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}
-        >
-          <div className="flex items-center gap-3">
-            <span style={{ color: 'var(--text-muted)' }}>CASE</span>
-            <span style={{ color: 'var(--text-bright)' }}>{activeCase.case_id}</span>
-            {activeCase.name && activeCase.name !== activeCase.case_id && (
-              <>
-                <span style={{ color: 'var(--border-hard)' }}>·</span>
-                <span style={{ color: 'var(--text-primary)' }}>{activeCase.name}</span>
-              </>
-            )}
-            <span
-              className="ml-auto inline-flex items-center justify-center transition-transform"
-              style={{
-                color: 'var(--text-muted)', fontSize: '10px',
-                width: '22px', height: '20px',
-                transform: bannerExpanded ? 'rotate(180deg)' : undefined,
-              }}
-            >
-              ▾
+    <div className="relative isolate flex min-h-full flex-col">
+      {/* Ambient field — orange aurora + drifting hairline grid, reduced-motion gated. */}
+      <div aria-hidden className="ambient" />
+
+      <motion.section
+        variants={variants.fadeRise}
+        initial="hidden"
+        animate="show"
+        aria-label="Mission Control"
+        className="relative z-10 mx-auto flex w-full max-w-7xl flex-1 flex-col gap-4 p-4 sm:p-6"
+      >
+        {/* ── Header ─────────────────────────────────────────────────────── */}
+        <header className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex flex-col gap-1">
+            <h1 className="font-display text-[26px] font-bold leading-tight tracking-[-0.4px] text-foreground">
+              Mission Control
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              Supervising the autonomous investigation · live agent state
+            </p>
+          </div>
+
+          {/* Right-aligned mono session / operator readout */}
+          <div className="mono flex flex-col items-end gap-0.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+            <span>
+              Session{' '}
+              <span className="tabular-nums text-foreground">{sessionElapsed}</span>{' '}
+              elapsed
             </span>
-            <span className="px-1.5 py-0.5 rounded text-[10px]"
-              style={{ background: 'var(--jade-dim)', color: 'var(--jade)', border: '1px solid var(--jade)' }}>
-              ACTIVE
+            <span>
+              Operator <span className="text-foreground">{operatorLabel}</span>
             </span>
           </div>
-          {bannerExpanded && (
-            <div className="mt-2 pt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-0.5"
-              style={{ borderTop: '1px solid var(--border-faint)' }}>
-              <span style={{ color: 'var(--text-muted)' }}>name</span>
-              <span style={{ color: 'var(--text-primary)' }}>{activeCase.name ?? '—'}</span>
-              <span style={{ color: 'var(--text-muted)' }}>title</span>
-              <span style={{ color: 'var(--text-primary)' }}>{activeCase.title ?? '—'}</span>
-              <span style={{ color: 'var(--text-muted)' }}>status</span>
-              <span style={{ color: 'var(--text-primary)' }}>{activeCase.status ?? '—'}</span>
-              <span style={{ color: 'var(--text-muted)' }}>examiner</span>
-              <span style={{ color: 'var(--text-primary)' }}>{activeCase.examiner ?? '—'}</span>
-              <span style={{ color: 'var(--text-muted)' }}>created</span>
-              <span style={{ color: 'var(--text-primary)' }}>{activeCase.created ?? '—'}</span>
-            </div>
-          )}
-        </button>
-      )}
+        </header>
 
-      {/* Case brief (intake scope + objectives; examiner-editable) */}
-      <CaseBriefCard />
-
-      {/* KPI row */}
-      <div className="grid grid-cols-4 gap-3 mb-4">
-        <KPICard label="FINDINGS" value={total} color="var(--cyan)" loading={isLoading} />
-        <KPICard label="APPROVED" value={approved} color="var(--jade)" loading={isLoading}
-          onClick={() => { setActiveTab('findings'); setFindingsFilter('approved') }} />
-        <KPICard label="PENDING" value={pending} color="var(--amber)" loading={isLoading}
-          onClick={() => { setActiveTab('findings'); setFindingsFilter('pending') }} />
-        <KPICard
-          label="STAGED"
-          value={`${staged}`}
-          color="var(--status-staged)"
-          loading={isLoading}
-          onClick={() => staged > 0 && setCommitDrawerOpen(true)}
-          extra={
-            <div className="mt-2 h-1 rounded-full overflow-hidden" style={{ background: 'var(--bg-raised)' }}>
-              <div className="h-full rounded-full transition-all"
-                style={{ width: `${reviewPct}%`, background: 'var(--status-staged)' }} />
-            </div>
-          }
-        />
-      </div>
-
-      {/* Middle row */}
-      <div className="grid grid-cols-2 gap-3 mb-4">
-        {/* Severity distribution */}
-        <div className="p-4 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}>
-          <SectionHeader>SEVERITY DISTRIBUTION</SectionHeader>
-          <div className="space-y-2 mt-3">
-            {[
-              ['HIGH',        highCount, CONFIDENCE_COLORS.HIGH],
-              ['MEDIUM',      medCount,  CONFIDENCE_COLORS.MEDIUM],
-              ['LOW',         lowCount,  CONFIDENCE_COLORS.LOW],
-              ['SPECULATIVE', specCount, CONFIDENCE_COLORS.SPECULATIVE],
-            ].map(([label, count, color]) => (
-              <div key={label} className="flex items-center gap-2 text-xs font-mono">
-                <span className="w-20 shrink-0" style={{ color: 'var(--text-muted)' }}>{label}</span>
-                <span className="w-6 text-right shrink-0" style={{ color }}>{count}</span>
-                <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--bg-raised)' }}>
-                  <div className="h-full rounded-full"
-                    style={{ width: `${(count / maxCount) * 100}%`, background: color }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Reports */}
-        <div className="p-4 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}>
-          <SectionHeader>REPORTS</SectionHeader>
-          {reports.length > 0 ? (
-            <div className="mt-3 space-y-1.5">
-              {reports.slice(0, 5).map((r) => (
-                <button
-                  key={r.id}
-                  onClick={() => setActiveTab('reports')}
-                  className="w-full text-left flex items-center gap-3 text-xs font-mono px-1 py-1 rounded cursor-pointer transition-colors"
-                  style={{ background: 'none', border: 'none' }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-raised)'}
-                  onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
-                >
-                  <span style={{ color: 'var(--text-primary)', textTransform: 'capitalize' }}>{r.profile}</span>
-                  <span className="font-mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                    {(r.id ?? '').slice(0, 8)}
-                  </span>
-                  {r.examiner && (
-                    <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{r.examiner}</span>
-                  )}
-                  <span className="ml-auto text-[10px] shrink-0" style={{ color: 'var(--text-muted)' }}>
-                    {r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p className="mt-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-              No reports generated yet · Generate one from the Reports tab
-            </p>
-          )}
-        </div>
-      </div>
-
-      {/* Bottom row */}
-      <div className="grid grid-cols-2 gap-3">
-        {/* Activity feed */}
-        <div className="p-4 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}>
-          <SectionHeader>RECENT ACTIVITY</SectionHeader>
-          <ActivityFeed findings={findings} delta={delta} setActiveTab={setActiveTab} setSelectedFindingId={setSelectedFindingId} />
-        </div>
-
-        {/* MITRE ATT&CK */}
-        <div className="p-4 rounded" style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}>
-          <SectionHeader>MITRE ATT&CK · {mitreIds.length} techniques</SectionHeader>
-          {mitreIds.length > 0 ? (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {mitreIds.map((id) => (
-                <span key={id} className="px-2 py-0.5 rounded font-mono text-[11px]"
-                  style={{ background: 'var(--cyan-dim)', color: 'var(--cyan)', border: '1px solid var(--border-soft)' }}>
-                  {id}
-                </span>
-              ))}
-            </div>
-          ) : (
-            <p className="mt-3 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-              No MITRE technique IDs found in findings.
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function KPICard({ label, value, color, loading, extra, onClick }) {
-  return (
-    <div
-      className={`px-4 py-3 rounded ${onClick ? 'cursor-pointer hover:bg-bg-raised transition-colors' : ''}`}
-      style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-faint)' }}
-      onClick={onClick}
-      role={onClick ? 'button' : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onKeyDown={onClick ? (e) => { if (e.key === 'Enter') onClick() } : undefined}
-    >
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[11px] font-sans font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>{label}</span>
-        {loading
-          ? <Skeleton style={{ height: 20, width: 40 }} />
-          : <span className="font-mono font-bold text-xl" style={{ color }}>{value}</span>}
-      </div>
-      {extra}
-    </div>
-  )
-}
-
-function SectionHeader({ children }) {
-  return (
-    <p className="text-[11px] font-sans font-semibold tracking-wider uppercase" style={{ color: 'var(--text-muted)' }}>
-      {children}
-    </p>
-  )
-}
-
-const TIME_RANGES = [
-  { label: 'Last hour', value: '1h', ms: 60 * 60 * 1000 },
-  { label: 'Last 24h', value: '24h', ms: 24 * 60 * 60 * 1000 },
-  { label: 'Last 7d', value: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
-  { label: 'Last 30d', value: '30d', ms: 30 * 24 * 60 * 60 * 1000 },
-  { label: 'All', value: 'all', ms: Infinity },
-]
-
-function ActivityFeed({ findings, delta, setActiveTab, setSelectedFindingId }) {
-  const [timeRange, setTimeRange] = useState('24h')
-
-  const cutoff = TIME_RANGES.find((t) => t.value === timeRange)?.ms ?? Infinity
-
-  const filtered = [...findings]
-    .filter((f) => {
-      if (cutoff === Infinity) return true
-      const ts = f.modified_at || f.timestamp || f.event_timestamp
-      if (!ts) return false
-      return Date.now() - new Date(ts).getTime() < cutoff
-    })
-    .sort((a, b) => new Date(b.modified_at || b.timestamp || b.event_timestamp) - new Date(a.modified_at || a.timestamp || a.event_timestamp))
-    .slice(0, 8)
-
-  function handleClick(f) {
-    setSelectedFindingId(f.id)
-    setActiveTab('findings')
-  }
-
-  return (
-    <>
-      <div className="mt-3 mb-2 flex gap-1">
-        {TIME_RANGES.map((t) => (
-          <button
-            key={t.value}
-            onClick={() => setTimeRange(t.value)}
-            className="px-2 py-0.5 rounded text-[10px] font-mono cursor-pointer transition-colors"
-            style={{
-              background: timeRange === t.value ? 'var(--cyan-dim)' : 'var(--bg-raised)',
-              color: timeRange === t.value ? 'var(--cyan)' : 'var(--text-muted)',
-              border: `1px solid ${timeRange === t.value ? 'var(--border-soft)' : 'var(--border-faint)'}`,
-            }}
+        {!activeCase && !isLoading ? (
+          <NoCaseState />
+        ) : (
+          /* ── Body: 8fr / 4fr grid (handoff §Screen 1) ─────────────────── */
+          <div
+            className="grid flex-1 gap-4"
+            style={{ gridTemplateColumns: 'minmax(0,8fr) minmax(0,4fr)', alignItems: 'stretch' }}
           >
-            {t.label}
-          </button>
-        ))}
-      </div>
+            {/* ═══════════════════════════════════
+                LEFT COLUMN
+                ═══════════════════════════════════ */}
+            <div className="flex min-h-0 flex-col gap-4">
 
-      {filtered.length === 0 ? (
-        <p className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>No findings in this period.</p>
-      ) : (
-        <div className="space-y-1.5">
-          {filtered.map((f) => {
-            const color = CONFIDENCE_COLORS[(f.confidence ?? '').toUpperCase()] ?? 'var(--text-muted)'
-            const staged = delta.find((d) => d.id === f.id)
-            const activityTs = f.modified_at || f.timestamp || f.event_timestamp
-            return (
-              <button
-                key={f.id}
-                onClick={() => handleClick(f)}
-                className="w-full text-left flex items-center gap-2 text-xs px-1 py-0.5 rounded cursor-pointer transition-colors"
-                style={{ background: 'none', border: 'none' }}
-                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-raised)'}
-                onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
-              >
-                <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
-                <span className="font-mono" style={{ color: 'var(--text-muted)', flexShrink: 0, whiteSpace: 'nowrap' }}>{f.id}</span>
-                <span className="flex-1 truncate" style={{ color: 'var(--text-primary)' }}>{f.title}</span>
-                {staged && (
-                  <span className="font-mono text-[10px]" style={{ color: 'var(--status-staged)' }}>staged</span>
-                )}
-                {activityTs && (
-                  <span className="font-mono text-[10px] shrink-0" style={{ color: 'var(--text-muted)' }}>
-                    {formatDistanceToNow(new Date(activityTs), { addSuffix: true })}
+              {/* 1 — Hero: Autonomous Investigator */}
+              <AgentHero />
+
+              {/* 2 — Case Brief (flex:1 to fill remaining height) */}
+              <Card className="flex flex-1 flex-col gap-0 p-0">
+                <CardHeader className="flex flex-row flex-wrap items-center gap-2 border-b border-border p-4 pb-3">
+                  {/* Doc icon */}
+                  <span aria-hidden className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-secondary/60 text-muted-foreground">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="size-3.5"
+                      aria-hidden
+                    >
+                      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                      <polyline points="14 2 14 8 20 8" />
+                      <line x1="16" y1="13" x2="8" y2="13" />
+                      <line x1="16" y1="17" x2="8" y2="17" />
+                      <line x1="10" y1="9" x2="8" y2="9" />
+                    </svg>
                   </span>
-                )}
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </>
+
+                  <CardTitle className="text-sm font-semibold">Case brief</CardTitle>
+
+                  {caseNature && (
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] ${natureChipCls(caseNature)}`}
+                    >
+                      {caseNature}
+                    </span>
+                  )}
+
+                  {activeCase?.case_id && (
+                    <span className="mono ml-auto text-[10px] text-muted-foreground">
+                      {activeCase.case_id}
+                    </span>
+                  )}
+                </CardHeader>
+
+                <CardContent className="flex-1 overflow-y-auto p-4 pt-3">
+                  {/* Scope line */}
+                  {caseScope && (
+                    <p className="mono mb-3 text-[11px] uppercase tracking-[0.1em] text-muted-foreground">
+                      Scope {caseScope}
+                    </p>
+                  )}
+                  <CaseContextCard activeCase={activeCase} />
+                </CardContent>
+              </Card>
+
+              {/* 3 — Finding velocity + Severity (side-by-side) */}
+              <div className="grid grid-cols-2 gap-4">
+                <Section title="Finding velocity">
+                  <VelocityCard findings={findings} loading={isLoading} />
+                </Section>
+                <Section title="Confidence" contentClassName="flex-1">
+                  <SeverityDistribution findings={findings} loading={isLoading} />
+                </Section>
+              </div>
+
+              {/* 4 — Blocked actions (read-only pane, flex-fills remaining left-col height) */}
+              <div className="flex min-h-0 flex-1 flex-col">
+                <BlockedActionsPane fill />
+              </div>
+            </div>
+
+            {/* ═══════════════════════════════════
+                RIGHT COLUMN
+                ═══════════════════════════════════ */}
+            <div className="flex min-h-0 flex-col gap-4">
+
+              {/* 1 — 2×2 stat tiles (fixed height, no grow) */}
+              <MissionStats />
+
+              {/* 2 — Agent activity (live tail, flex-fills column) */}
+              <Card className="flex min-h-0 flex-1 flex-col gap-0 p-4">
+                <AgentActivityFeed />
+              </Card>
+
+              {/* 3 — Recent findings (flex-fills column) */}
+              <Card className="flex min-h-0 flex-1 flex-col gap-0 p-4">
+                <RecentFindings />
+              </Card>
+            </div>
+          </div>
+        )}
+      </motion.section>
+    </div>
   )
 }

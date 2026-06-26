@@ -34,6 +34,24 @@ async function responseError(res) {
 export async function apiFetch(path, opts = {}) {
   const controller = new AbortController()
   const { suppressUnauthorized = false, timeoutMs = TIMEOUT_MS, ...fetchOpts } = opts
+
+  // DEV-ONLY mock/real split (AGENTS §3): when fixtures are installed (?mock=1),
+  // consult the mock route table BEFORE the network. Handled paths return a
+  // fixture; unhandled paths fall through to the real fetch below. Gated by
+  // import.meta.env.DEV so the dynamic import (and the fixtures) tree-shake out
+  // of production builds.
+  if (
+    import.meta.env.DEV &&
+    typeof window !== 'undefined' &&
+    window.__SIFT_MOCK__
+  ) {
+    const { mockRoute } = await import('@/_mock/routes')
+    const result = await mockRoute(path, (fetchOpts.method || 'GET').toUpperCase())
+    if (!result || result.__mockHandled !== false) {
+      return result
+    }
+  }
+
   const tid = setTimeout(() => controller.abort(), timeoutMs)
 
   const headers = { 'Content-Type': 'application/json', ...(fetchOpts.headers ?? {}) }
@@ -48,7 +66,7 @@ export async function apiFetch(path, opts = {}) {
     })
   } catch (err) {
     clearTimeout(tid)
-    if (err.name === 'AbortError') throw new Error('Request timed out')
+    if (err.name === 'AbortError') throw new Error('Request timed out', { cause: err })
     throw err
   }
   clearTimeout(tid)

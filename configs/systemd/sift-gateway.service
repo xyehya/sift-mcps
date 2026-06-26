@@ -50,7 +50,13 @@ Environment=SIFT_EXECUTE_REQUIRE_RUNTIME_USER=1
 Environment=SIFT_EXECUTE_REQUIRE_LANDLOCK=1
 Environment=SIFT_EXECUTE_SYSTEMD_SCOPE=1
 Environment=SIFT_EXECUTE_SYSTEMD_SCOPE_HELPER=/usr/local/sbin/sift-run-command-systemd-scope
-Environment=SIFT_EXECUTE_SECCOMP_MODE=log
+# SEC-16: enforce (kill) on the synchronous run_command lane, matching the
+# job-worker. The per-tool seccomp filter is installed in the forked
+# dfir-exec-launcher grandchild immediately before execvpe — SECCOMP_RET_KILL
+# kills only the forensic-tool process, never the gateway event loop. socket()
+# stays LOG-only (see _X86_64_ALWAYS_LOG_SYSCALLS) so curl/wget read-only
+# fetches and AF_UNIX IPC survive; cgroup IPAddressDeny=any enforces egress.
+Environment=SIFT_EXECUTE_SECCOMP_MODE=kill
 
 # === BATCH-HR3 systemd hardening ============================================
 # Minimal, tested containment for a service that (a) spawns forensic tooling via

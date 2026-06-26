@@ -140,7 +140,12 @@ class TestB3IngestStatusDBActive:
         assert read_called == [], "read_active_ingests must NOT be called in DB-active mode"
         # Authority pointer must be present.
         assert resp.get("authority") == "postgres-durable-jobs"
-        assert "job_status" in resp.get("message", "")
+        # M-JOBSTATUS-NAME fix: message must reference running_commands_status, not job_status.
+        msg = resp.get("message", "")
+        assert "running_commands_status" in msg, f"Message must reference running_commands_status: {msg!r}"
+        assert "job_status" not in msg or "running_commands_status" in msg, (
+            "Message must not reference the nonexistent job_status tool"
+        )
         # Tamper values from _RUNNING_MIRROR must not appear.
         assert "srl-forge" not in repr(resp)
         assert "12000" not in repr(resp)
@@ -156,6 +161,10 @@ class TestB3IngestStatusDBActive:
         assert resp.get("job_id") == "abc-job-1"
         assert "next_step" in resp
         assert "abc-job-1" in resp["next_step"]
+        # M-JOBSTATUS-NAME: next_step must use running_commands_status not job_status.
+        assert "running_commands_status" in resp["next_step"], (
+            f"next_step must reference running_commands_status: {resp['next_step']!r}"
+        )
 
     def test_no_job_id_returns_redirect_without_job_id_key(self, monkeypatch):
         """Without a job_id argument, redirect has no job_id key."""
@@ -215,6 +224,54 @@ class TestB3IngestStatusDBActive:
 
         assert resp["ingests"] == []
         assert resp.get("authority") == "postgres-durable-jobs"
+
+    def test_m_ingstatus_backend_always_returns_empty_ingests_in_db_active(self, monkeypatch):
+        """M-INGSTATUS: in DB-active mode the BACKEND always returns ingests=[].
+
+        The gateway's OpenSearchIngestStatusAugmentMiddleware (policy_middleware.py)
+        populates ingests[] using its own DSN. The backend has no DB credentials by
+        design. This test pins that the backend envelope is stable and never changes
+        from the expected ingests=[]+authority+message shape — the gateway augments on
+        top of this exact envelope.
+        """
+        self._active_case(monkeypatch)
+
+        with (
+            patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
+            patch(
+                "opensearch_mcp.ingest_status.read_active_ingests",
+                return_value=[],  # K4: mirror must not be consulted
+            ),
+        ):
+            resp = opensearch_ingest_status()
+
+        # Backend always returns ingests=[] — gateway augments on top.
+        assert resp["ingests"] == [], (
+            "Backend must always return ingests=[] in DB-active mode — "
+            "the gateway's augment middleware populates it"
+        )
+        assert resp.get("authority") == "postgres-durable-jobs"
+        # Message must reference running_commands_status (not job_status).
+        msg = resp.get("message", "")
+        assert "running_commands_status" in msg, (
+            f"Backend message must name running_commands_status: {msg!r}"
+        )
+
+    def test_m_ingstatus_backend_has_no_job_status_lister(self, monkeypatch):
+        """M-INGSTATUS: the backend server module must NOT have a _JOB_STATUS_LISTER
+        attribute. Population is the gateway's responsibility, not the backend's.
+
+        Regression guard: the old injected-lister approach was inert (the subprocess
+        never received the injection) and has been removed. Ensure it doesn't return.
+        """
+        assert not hasattr(srv, "_JOB_STATUS_LISTER"), (
+            "_JOB_STATUS_LISTER must be removed from the backend — "
+            "population is now the gateway's OpenSearchIngestStatusAugmentMiddleware"
+        )
+        assert not hasattr(srv, "set_job_status_lister"), (
+            "set_job_status_lister must be removed from the backend — "
+            "population is now the gateway's OpenSearchIngestStatusAugmentMiddleware"
+        )
 
 
 class TestB3IngestStatusNonDBActive:

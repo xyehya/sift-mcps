@@ -24,10 +24,14 @@ Authority invariants enforced here:
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Status values that represent a final human decision; agents must not overwrite.
 HUMAN_LOCKED_STATUSES = frozenset({"APPROVED", "REJECTED"})
@@ -177,6 +181,11 @@ HASH_EXCLUDE_KEYS: frozenset[str] = frozenset({
     "provenance_gaps",
     "timeline_event_id",
     "source_evidence",
+    # W3: provenance metadata recording how confidence was derived/clamped.
+    # EXCLUDED from the hash — confidence ITSELF (the final clamped value) stays
+    # IN the hash as the recorded fact; this companion field is reasoning-about
+    # that fact and would only bloat/destabilize the content hash.
+    "confidence_derivation",
 })
 
 # Private alias kept for internal use within this module.
@@ -660,6 +669,216 @@ def control_plane_dsn() -> str | None:
     return dsn or None
 
 
+def audit_writer_dsn() -> str | None:
+    """L-1b: the least-privilege audit-write DSN, when configured.
+
+    Returns the value of ``SIFT_AUDIT_WRITER_DSN`` (the scoped ``sift_audit_writer``
+    role's connection string) or ``None`` when it is unset/empty. Callers on the
+    forward-write path prefer this over :func:`control_plane_dsn` so the audit
+    forward-writes run under the least-privilege role; they fall back to the full
+    control-plane DSN when this is unset (non-breaking rollout — least-privilege
+    activates only once the operator sets the secret).
+    """
+    dsn = os.environ.get("SIFT_AUDIT_WRITER_DSN", "").strip()
+    return dsn or None
+
+
+def audit_forward_write_dsn() -> str | None:
+    """The DSN the audit forward-write path should connect with.
+
+    Prefers the scoped :func:`audit_writer_dsn` (L-1b least-privilege role);
+    falls back to the full :func:`control_plane_dsn` when the scoped DSN is unset
+    so provenance keeps working before the operator provisions the role/secret.
+    A warning is logged on fallback so it is observable that least-privilege
+    is not yet active. Returns ``None`` only when NEITHER is configured.
+    """
+    scoped = audit_writer_dsn()
+    if scoped:
+        return scoped
+    full = control_plane_dsn()
+    if full:
+        logger.warning(
+            "audit forward-write: SIFT_AUDIT_WRITER_DSN unset — falling back to "
+            "the full control-plane DSN (L-1b least-privilege role not active)"
+        )
+    return full
+
+
+def list_sealed_evidence_db(case_id: str) -> list[dict]:
+    """Return sealed evidence entries from Postgres for a given case.
+
+    In DB-authority mode the on-disk ``evidence.json`` manifest is empty;
+    the authoritative registry lives in ``app.evidence_objects``.  This
+    function reads that table and returns rows shaped to match file-manifest
+    entries (plus the ``evidence_id``) so the existing provenance grader loop
+    in ``case_manager.py`` consumes them unchanged:
+
+        [{"evidence_id": <id::text>, "path": <display_path, relative>,
+          "sha256": <bare 64-hex>, "status": "sealed"}]
+
+    The ``evidence_id`` is the ``app.evidence_objects.id`` (uuid) that the
+    gateway records as the resolved ``evidence_refs`` in ``app.audit_events``;
+    it powers the DB-mode evidence-ref FULL-grade path.  The Layer-1 consumer
+    (registered/ev_by_hash builder) ignores the extra key.
+
+    Fails CLOSED (returns ``[]``) on any error — including a missing DSN,
+    missing psycopg, DB connectivity failures, and malformed rows.  It must
+    NEVER fail open to a fake-registered state.
+
+    SQL uses parameterised queries (CodeGuard: input-validation-injection).
+    """
+    if not case_id:
+        return []
+    dsn = control_plane_dsn()
+    if not dsn:
+        return []
+    try:
+        import psycopg
+
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select id::text, display_path, current_sha256"
+                    " from app.evidence_objects"
+                    " where case_id = %s"
+                    " and status = 'sealed'"
+                    " and seal_status = 'sealed'",
+                    (case_id,),
+                )
+                rows = cur.fetchall()
+    except Exception:
+        logger.warning(
+            "list_sealed_evidence_db: DB read failed (fail-closed, returning [])",
+            exc_info=True,
+        )
+        return []
+
+    result: list[dict] = []
+    for evidence_id, display_path, current_sha256 in rows:
+        if not display_path:
+            continue
+        # Strip the "sha256:" prefix so the bare 64-hex matches ev_by_hash keys.
+        sha256_bare = ""
+        if current_sha256:
+            raw = str(current_sha256)
+            if raw.startswith("sha256:"):
+                sha256_bare = raw[len("sha256:"):]
+            else:
+                sha256_bare = raw
+        result.append(
+            {
+                "evidence_id": str(evidence_id) if evidence_id else "",
+                "path": str(display_path),
+                "sha256": sha256_bare,
+                "status": "sealed",
+            }
+        )
+    return result
+
+
+def list_audit_provenance_db(case_id: str) -> list[dict]:
+    """Return tool-result audit entries from Postgres for a given case.
+
+    In pure DB-authority mode there are NO per-case JSONL audit files — the
+    run_command/tool audit is written to ``app.audit_events``.  ``record_finding``'s
+    provenance block is gated on a non-empty audit trail, so without this the
+    whole block is skipped and every finding floors at LOW.  This reader makes
+    the DB-recorded tool calls visible to that block.
+
+    Reads the ``mcp.tool.result`` rows and shapes each into the JSONL-entry
+    contract the provenance resolver expects, carrying the gateway-resolved
+    ``evidence_refs`` (a list of ``app.evidence_objects.id`` uuids) so the
+    DB-mode evidence-ref FULL path can match them against the sealed registry.
+
+    Rows with no ``backend_audit_id`` are skipped (no agent-facing audit_id to
+    cite).  Returns ``[]`` on ANY psycopg/connection error (fail-closed): the
+    grader then degrades to PARTIAL, never fabricating provenance.
+
+    SQL uses parameterised queries (CodeGuard: input-validation-injection).
+    ``case_id`` is the authoritative DB case UUID, never agent input.
+    """
+    if not case_id:
+        return []
+    dsn = control_plane_dsn()
+    if not dsn:
+        return []
+    try:
+        import psycopg
+
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "select details from app.audit_events"
+                    " where case_id = %s"
+                    " and event_type = 'mcp.tool.result'"
+                    " and status in ('ok', 'success')"
+                    " order by created_at",
+                    (case_id,),
+                )
+                rows = cur.fetchall()
+    except Exception:
+        logger.warning(
+            "list_audit_provenance_db: DB read failed (fail-closed, returning [])",
+            exc_info=True,
+        )
+        return []
+
+    result: list[dict] = []
+    for (details,) in rows:
+        if not isinstance(details, dict):
+            continue
+        backend_audit_id = details.get("backend_audit_id") or ""
+        if not backend_audit_id:
+            continue
+        detail = details.get("detail") or {}
+        provenance = detail.get("provenance") or {} if isinstance(detail, dict) else {}
+        evidence_refs = provenance.get("evidence_refs", []) or []
+        if not isinstance(evidence_refs, list):
+            evidence_refs = []
+        result_summary = details.get("result_summary") or {}
+        if not isinstance(result_summary, dict):
+            result_summary = {}
+        aliases = details.get("audit_aliases", []) or []
+        if not isinstance(aliases, list):
+            aliases = []
+        # CONF-1-IDX: for opensearch ingest rows, carry the ingested artifact
+        # path(s) and host into input_files / params so the opensearch-indirect
+        # (idx_) provenance resolver can trace a cited opensearch_search back to
+        # the ingest of sealed evidence and grade it FULL.  Non-ingest rows keep
+        # the empty defaults.  Fail-closed: an ingest row that recorded no
+        # input_files yields [] here, so the resolver cannot grade it FULL.
+        tool_name = str(details.get("tool", ""))
+        idx_input_files: list[str] = []
+        idx_params: dict = {}
+        if tool_name.startswith("opensearch_ingest") or tool_name.startswith("ingest_"):
+            raw_inputs = details.get("input_files", []) or []
+            if isinstance(raw_inputs, list):
+                idx_input_files = [str(f) for f in raw_inputs if f]
+            hostname = str(details.get("hostname", "") or "")
+            idx_params = {
+                "hostname": hostname,
+                "hosts": [hostname] if hostname else [],
+            }
+        entry = {
+            "audit_id": str(backend_audit_id),
+            "tool": tool_name,
+            # backend: the registered MCP backend name recorded by the gateway
+            # envelope middleware (details->>'backend').  Used by _score_grounding
+            # to attribute a grounding source via the stable backend name rather
+            # than the content-free UUID canonical id.
+            "backend": str(details.get("backend", "")),
+            "evidence_refs": [str(r) for r in evidence_refs if r],
+            "audit_aliases": [str(a) for a in aliases if a],
+            "envelope_event_id": str(details.get("envelope_event_id", "")),
+            "input_files": idx_input_files,
+            "result_summary": result_summary,
+            "params": idx_params,
+            "case_id": str(case_id),
+        }
+        result.append(entry)
+    return result
+
+
 def resolve_investigation_store() -> InvestigationAuthorityStore | None:
     """Return a DB authority store when the current call is DB-active.
 
@@ -725,38 +944,319 @@ def _case_meta_from_row(row: Any) -> dict[str, Any]:
     return meta
 
 
+# --------------------------------------------------------------------------- #
+# E1 (XYE-34): per-process connection reuse for the case-metadata authority read.
+#
+# Opening a fresh psycopg connection on every case-metadata read (the BU1 shape)
+# is a TCP+TLS+auth round-trip per fail-closed authority check. E1 reuses ONE
+# connection per (pid, dsn) and re-queries the live row each call. We cache the
+# *socket*, never the *result*: the closed-case refusal / examiner-identity /
+# report-inclusion decisions must always read the current DB row.
+#
+# Design constraints (see docs/drafts/e1-connection-reuse-spec.md §4):
+#   * autocommit=True            — fresh MVCC snapshot per statement; no
+#                                  idle-in-transaction; never a frozen snapshot
+#                                  that could serve a stale "open" for a closed
+#                                  case.
+#   * prepare_threshold=None     — disable client-side prepared statements so the
+#                                  design stays safe if the DSN is ever repointed
+#                                  at a transaction pooler (PgBouncer et al.).
+#   * connect_timeout=5          — a DB outage fails closed FAST instead of
+#                                  hanging the hot path.
+#   * statement_timeout=5000ms / idle_in_transaction_session_timeout=10000ms
+#                                  — server-side backstops on the same posture.
+#   * default_transaction_read_only=on
+#                                  — this path never writes; deny it write rights
+#                                    at the session level. (A dedicated read-only
+#                                    DB ROLE is the stronger posture and is a
+#                                    deploy follow-up; the SET is the in-code
+#                                    floor until that role is provisioned.)
+#
+# READ COMMITTED + autocommit is the ONLY isolation posture allowed here. Raising
+# the isolation level would hold a transaction open and freeze the snapshot,
+# which could serve a stale authority read — forbidden (see the guard test).
+# --------------------------------------------------------------------------- #
+
+# Cache of live connections keyed by (os.getpid(), dsn). pid-keying ensures a
+# forked child never *uses* a connection it inherited from the parent.
+_CONN_CACHE: dict[tuple[int, str], Any] = {}
+
+# Guards the cache dict ONLY (create / evict / fork-clear). It is NEVER held
+# across cur.execute(): psycopg3 Connection is internally thread-safe, and a lock
+# around execute would serialize every case-metadata read in the process behind
+# one connection. The off-event-loop threadpool (gateway _run_core) means
+# concurrent reads can share the cached connection — that is safe by design.
+_CACHE_LOCK = threading.Lock()
+
+# psycopg application_name for this path — visible in pg_stat_activity so a leak
+# or unbounded backend growth is diagnosable. Carries no secret.
+_CASE_STORE_APPLICATION_NAME = "sift-case-store"
+
+
+def _psycopg():
+    try:
+        import psycopg
+    except ImportError as exc:  # pragma: no cover - deployment env
+        raise InvestigationStoreError("psycopg is required for the DB store") from exc
+    return psycopg
+
+
+def _connection_for(dsn: str):
+    """Create one hardened, read-only, autocommit connection for ``dsn``.
+
+    This is the single connection-creation point and the default provider for
+    :class:`PostgresCaseStore`. Tests inject a fake provider to prove reuse
+    without a live database.
+    """
+    psycopg = _psycopg()
+    conn = psycopg.connect(
+        dsn,
+        autocommit=True,
+        prepare_threshold=None,
+        connect_timeout=5,
+        application_name=_CASE_STORE_APPLICATION_NAME,
+        options="-c statement_timeout=5000 -c idle_in_transaction_session_timeout=10000",
+    )
+    try:
+        # Read-only posture at the session level (autocommit ⇒ this SET sticks
+        # for the connection). The authority read needs no write rights.
+        conn.execute("SET default_transaction_read_only = on")
+    except BaseException:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover - best-effort cleanup
+            pass
+        raise
+    return conn
+
+
+def _borrow_connection(dsn: str, provider):
+    """Return the cached connection for ``(pid, dsn)``, creating it if absent.
+
+    The connection is NOT closed by the caller — it is reused on the next read.
+    Creation happens under the lock so a burst of first-time readers opens at
+    most one connection; execute() runs after the lock is released.
+    """
+    key = (os.getpid(), dsn)
+    with _CACHE_LOCK:
+        conn = _CONN_CACHE.get(key)
+        if conn is None:
+            conn = provider(dsn)
+            _CONN_CACHE[key] = conn
+        return conn
+
+
+def _evict(pid: int, dsn: str) -> None:
+    """Drop the cached connection for ``(pid, dsn)`` and best-effort close it.
+
+    Called when a read hit a connection-level error (the socket is already dead)
+    or any query error (do not leave a possibly-poisoned connection cached).
+    """
+    key = (pid, dsn)
+    with _CACHE_LOCK:
+        conn = _CONN_CACHE.pop(key, None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover - the socket is typically already gone
+            pass
+
+
+def _clear_cache() -> None:
+    """Fork hook: drop inherited cache entries WITHOUT closing them.
+
+    Registered via ``os.register_at_fork(after_in_child=...)``. After fork the
+    child's connection objects wrap file descriptors duplicated from the parent;
+    letting the child close one would send a libpq Terminate on the shared server
+    connection and corrupt the parent's session. So we drop the references
+    (pid-keying already prevents the child from *using* them) but never call
+    ``close()``. We also reset the lock: a thread may have held it at fork time,
+    leaving it locked with no owner in the single-threaded child.
+    """
+    global _CACHE_LOCK
+    _CONN_CACHE.clear()
+    _CACHE_LOCK = threading.Lock()
+
+
+# Register the fork hook once at import. Best-effort: not all platforms expose
+# os.register_at_fork (the SIFT VM is Linux, where it is present).
+try:
+    os.register_at_fork(after_in_child=_clear_cache)
+except (AttributeError, ValueError):  # pragma: no cover - non-fork platforms
+    pass
+
+
+# --------------------------------------------------------------------------- #
+# C4: audit-write connection reuse (same methodology as E1 case-store cache).
+#
+# The forward-write paths (_persist_shell_audit_event in case_manager.py and
+# _persist_ingest_audit_event in opensearch_mcp/ingest.py) previously opened a
+# fresh psycopg.connect() per row — a TCP+TLS+auth round-trip on every INSERT.
+# C4 applies the E1 pattern: one cached write-capable connection per (pid, dsn),
+# reused across calls. The connection is evicted on any error so the next call
+# gets a fresh socket.
+#
+# Design choices (mirroring E1 §4 constraints):
+#   * autocommit=False — INSERTs still commit per-statement via explicit
+#     conn.commit(); no autocommit so the caller controls the transaction.
+#   * prepare_threshold=None — safe for PgBouncer transaction-mode poolers.
+#   * connect_timeout=5 — fail fast on DB outage rather than blocking ingest.
+#   * application_name — visible in pg_stat_activity for leak diagnosis.
+# --------------------------------------------------------------------------- #
+
+# Separate cache so write connections never share keys with the read-only store.
+_AUDIT_WRITE_CONN_CACHE: dict[tuple[int, str], Any] = {}
+_AUDIT_WRITE_CACHE_LOCK = threading.Lock()
+_AUDIT_WRITE_APPLICATION_NAME = "sift-audit-writer"
+
+
+def _audit_write_connection_for(dsn: str):
+    """Create one write-capable psycopg connection for the audit forward-write path.
+
+    This is the single creation point for the write-connection cache. Tests may
+    inject a fake provider to prove reuse without a live database.
+    """
+    psycopg = _psycopg()
+    return psycopg.connect(
+        dsn,
+        autocommit=False,
+        prepare_threshold=None,
+        connect_timeout=5,
+        application_name=_AUDIT_WRITE_APPLICATION_NAME,
+    )
+
+
+def borrow_audit_write_connection(dsn: str, *, provider=None):
+    """Return the cached write connection for ``(pid, dsn)``, creating it if absent.
+
+    Same methodology as :func:`_borrow_connection` (E1 read-store cache). The
+    caller (forward-write helper) owns commit/rollback; the connection is NOT
+    closed after use — it is returned to the cache for the next call.
+
+    ``provider`` is injectable for tests (pass a factory that returns a fake conn).
+    """
+    key = (os.getpid(), dsn)
+    _provider = provider if provider is not None else _audit_write_connection_for
+    with _AUDIT_WRITE_CACHE_LOCK:
+        conn = _AUDIT_WRITE_CONN_CACHE.get(key)
+        if conn is None:
+            conn = _provider(dsn)
+            _AUDIT_WRITE_CONN_CACHE[key] = conn
+        return conn
+
+
+def evict_audit_write_connection(dsn: str) -> None:
+    """Evict and best-effort close the cached write connection for ``(pid, dsn)``.
+
+    Called when a forward-write error signals the connection is dead or poisoned.
+    The next call to :func:`borrow_audit_write_connection` will open a fresh one.
+    """
+    key = (os.getpid(), dsn)
+    with _AUDIT_WRITE_CACHE_LOCK:
+        conn = _AUDIT_WRITE_CONN_CACHE.pop(key, None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover - socket may already be gone
+            pass
+
+
+def _clear_audit_write_cache() -> None:
+    """Fork hook: drop inherited write-connection cache entries WITHOUT closing.
+
+    Same posture as :func:`_clear_cache`: after fork, closing a parent's socket
+    from the child would corrupt the parent's session. We drop references; the
+    pid-key already prevents the child from finding them.
+    """
+    global _AUDIT_WRITE_CACHE_LOCK
+    _AUDIT_WRITE_CONN_CACHE.clear()
+    _AUDIT_WRITE_CACHE_LOCK = threading.Lock()
+
+
+try:
+    os.register_at_fork(after_in_child=_clear_audit_write_cache)
+except (AttributeError, ValueError):  # pragma: no cover - non-fork platforms
+    pass
+
+
 class PostgresCaseStore:
-    """Read-only DB authority for ``app.cases`` metadata (BU1).
+    """Read-only DB authority for ``app.cases`` metadata (BU1; E1 conn reuse).
 
     Mirrors the gateway ``ActiveCaseService`` query so in-process core readers
     (orientation, status, reporting) can resolve case metadata from Postgres
     instead of the tamperable CASE.yaml mirror, without depending on the gateway
     package. Writes remain portal/gateway-owned (BU2).
+
+    E1 (XYE-34): reuses one cached connection per process via the module-level
+    provider/cache above. The connection is reused; the row is always re-read.
+    A ``connection_provider`` may be injected for tests; it defaults to the
+    module pooled provider :func:`_connection_for`.
     """
 
-    def __init__(self, dsn: str) -> None:
+    def __init__(self, dsn: str, *, connection_provider=None) -> None:
         self._dsn = dsn
+        # Injectable creation point; default = the module per-process provider.
+        self._provider = (
+            connection_provider if connection_provider is not None else _connection_for
+        )
 
-    def _connect(self):
-        try:
-            import psycopg
-        except ImportError as exc:  # pragma: no cover - deployment env
-            raise InvestigationStoreError("psycopg is required for the DB store") from exc
-        return psycopg.connect(self._dsn)
+    def _borrow(self):
+        return _borrow_connection(self._dsn, self._provider)
 
-    def get_case_metadata(self, case_id: str) -> dict[str, Any] | None:
-        """Return CASE.yaml-shaped metadata for ``case_id`` (UUID or case_key)."""
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"select {', '.join(_CASE_ROW_COLUMNS)} from app.cases "
-                    "where id::text = %s or case_key = %s",
-                    (case_id, case_id),
-                )
-                row = cur.fetchone()
+    def _query(self, conn, case_id: str) -> dict[str, Any] | None:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"select {', '.join(_CASE_ROW_COLUMNS)} from app.cases "
+                "where id::text = %s or case_key = %s",
+                (case_id, case_id),
+            )
+            row = cur.fetchone()
         if not row:
             return None
         return _case_meta_from_row(row)
+
+    def get_case_metadata(self, case_id: str) -> dict[str, Any] | None:
+        """Return CASE.yaml-shaped metadata for ``case_id`` (UUID or case_key).
+
+        Reuses the cached per-process connection. Error posture (spec §4.3):
+
+        * Connection-level error (``OperationalError`` / ``InterfaceError`` — a
+          dead socket after a server idle-timeout): evict the dead connection,
+          reconnect once, retry the SELECT once (the read is idempotent). If the
+          retry also fails, fail closed with :class:`InvestigationStoreError`.
+        * Any other error (programming / data error): evict and fail closed
+          immediately — no retry loop.
+        * Never fall back to a file, never return stale/empty on error.
+        """
+        psycopg = _psycopg()
+        conn_errors = (psycopg.OperationalError, psycopg.InterfaceError)
+        try:
+            conn = self._borrow()
+            return self._query(conn, case_id)
+        except conn_errors:
+            # Connection-level: evict and fall through to the single retry.
+            _evict(os.getpid(), self._dsn)
+        except InvestigationStoreError:
+            _evict(os.getpid(), self._dsn)
+            raise
+        except Exception as exc:
+            # Query/programming/data error: the statement is the problem, not the
+            # socket. Evict (don't leave a poisoned connection cached) and fail
+            # closed at once — NO retry.
+            _evict(os.getpid(), self._dsn)
+            raise InvestigationStoreError(
+                f"case-metadata read failed for {case_id}"
+            ) from exc
+
+        # Reconnect-and-retry exactly once (connection-level error path only).
+        try:
+            conn = self._borrow()
+            return self._query(conn, case_id)
+        except Exception as exc:
+            _evict(os.getpid(), self._dsn)
+            raise InvestigationStoreError(
+                f"case-metadata read failed for {case_id} after one reconnect"
+            ) from exc
 
 
 def resolve_case_metadata() -> dict[str, Any] | None:

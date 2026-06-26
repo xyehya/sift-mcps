@@ -37,19 +37,18 @@ export const createTodo = (body) => apiPost('/api/todos', body)
 export const updateTodo = (id, body) => apiPatch(`/api/todos/${id}`, body)
 export const deleteTodo = (id) => apiDelete(`/api/todos/${id}`)
 export const getSummary = () => apiFetch('/api/summary')
+export const getAgentActivity = () => apiFetch('/api/agent/activity')
 export const getAudit = (findingId) => apiFetch(`/api/audit/${findingId}`)
 
 // --- Delta (review workflow) ---
 export const getDelta = () => apiFetch('/api/delta')
 export const postDelta = (body) => apiPost('/api/delta', body)
 export const deleteDelta = (id) => apiDelete(`/api/delta/${id}`)
-export const getCommitChallenge = () => apiFetch('/api/commit/challenge')
 export const postCommit = (body) => apiPost('/api/commit', body, REAUTH_OPTS)
 
 // --- Evidence chain ---
 export const getChainStatus = () => apiFetch('/api/evidence/chain/status')
 export const postChainRescan = () => apiPost('/api/evidence/chain/rescan', {})
-export const getChainChallenge = () => apiFetch('/api/evidence/chain/challenge')
 export const postChainSeal = (body) => apiPost('/api/evidence/chain/seal', body, REAUTH_HASH_OPTS)
 export const postChainAnchor = (body) => apiPost('/api/evidence/chain/anchor', body)
 export const postChainProofExport = (body) => apiPost('/api/evidence/chain/proof-export', body, { timeoutMs: LONG_TIMEOUT_MS })
@@ -75,15 +74,12 @@ export const postResponseGuardOverride = (body = {}) => apiPost('/api/response-g
 export const postResponseGuardOverrideCancel = () => apiPost('/api/response-guard/override/cancel', {})
 
 // --- Agent tokens ---
-export const getTokens = () => apiFetch('/api/tokens')
-export const postToken = (body) => apiPost('/api/tokens', body)
-export const deleteToken = (id) => apiDelete(`/api/tokens/${id}`)
-export const postRotateToken = (id) => apiPost(`/api/tokens/${id}/rotate`, {})
-export const postReactivateToken = (id) => apiPost(`/api/tokens/${id}/reactivate`, {})
+// SEC-6: the legacy PR02 /api/tokens/* lifecycle was removed. Agent/service
+// credentials are issued through the Supabase principal API (getPrincipals /
+// postPrincipal / deletePrincipal above).
 
 // --- Reports ---
 export const getReports = () => apiFetch('/api/reports')
-export const getReportChallenge = () => apiFetch('/api/reports/challenge')
 export const postReportGenerate = (body) => apiPost('/api/reports/generate', body, REAUTH_OPTS)
 export const postReportSave = (id) => apiPost(`/api/reports/${id}/save`, {})
 export const getReport = (id) => apiFetch(`/api/reports/${id}`)

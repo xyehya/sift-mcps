@@ -12,6 +12,7 @@ from opensearchpy import OpenSearch
 
 from opensearch_mcp.bulk import flush_bulk
 from opensearch_mcp.parse_csv import _doc_id
+from opensearch_mcp.parse_srum import flag_unresolved_srum_application
 
 # Plaso internal metadata fields — excluded from content hash for dedup stability.
 _PLASO_VOLATILE_KEYS = {
@@ -123,6 +124,18 @@ def _ingest_jsonl(
             if vss_id:
                 record["sift.vss_id"] = vss_id
             record["sift.parse_method"] = "plaso"
+
+            # F9 (LIVE-CONFIRMED): Plaso's esedb/srum emits each network-usage
+            # row's application as a bare SruDbId (e.g. application:1) when the
+            # SruDbIdMapTable entry doesn't decode to a name; other rows carry a
+            # resolved name (e.g. "TermService").  Flag the unresolved numeric
+            # ids so top-egress views don't present a bare id as an app name.
+            # Gated on the SRUM network-usage data_type because _ingest_jsonl is
+            # SHARED by other Plaso parsers (prefetch, etc.) — only SRUM
+            # network-usage docs carry this field.
+            if record.get("data_type") == "windows:srum:network_usage":
+                flag_unresolved_srum_application(record)
+
             actions.append({"_index": index_name, "_id": _id, "_source": record})
 
             if len(actions) >= 1000:

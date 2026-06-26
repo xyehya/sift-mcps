@@ -190,3 +190,100 @@ class TestParseSrum:
         # Verify Plaso called with "esedb/srum" parser
         mock_run.assert_called_once()
         assert mock_run.call_args[0][0] == "esedb/srum"
+
+
+class TestSrumApplicationFlagWiring:
+    """F9 (LIVE-CONFIRMED): _ingest_jsonl flags unresolved numeric SRUM
+    network-usage application ids, gated on data_type so non-SRUM plaso
+    records (the shared-path consumers) are untouched."""
+
+    @patch("opensearch_mcp.parse_plaso.flush_bulk")
+    def test_srum_numeric_application_flagged(self, mock_flush, tmp_path):
+        mock_flush.return_value = (1, 0)
+        jsonl = tmp_path / "srum.jsonl"
+        rec = {
+            "timestamp": 1,
+            "parser": "esedb",
+            "data_type": "windows:srum:network_usage",
+            "application": 1,
+            "user_identifier": 2,
+            "message": "Application: 1",
+        }
+        jsonl.write_text(json.dumps(rec) + "\n")
+        _ingest_jsonl(jsonl, MagicMock(), "case-test-srum-host1", "HOST1")
+        doc = mock_flush.call_args[0][1][0]["_source"]
+        assert doc["application_unresolved"] is True
+        assert doc["application_id"] == "1"
+        assert doc["application"] == 1  # raw value preserved
+
+    @patch("opensearch_mcp.parse_plaso.flush_bulk")
+    def test_srum_resolved_name_untouched(self, mock_flush, tmp_path):
+        mock_flush.return_value = (1, 0)
+        jsonl = tmp_path / "srum.jsonl"
+        rec = {
+            "timestamp": 1,
+            "parser": "esedb",
+            "data_type": "windows:srum:network_usage",
+            "application": "TermService",
+            "user_identifier": "S-1-5-20",
+            "message": "Application: TermService",
+        }
+        jsonl.write_text(json.dumps(rec) + "\n")
+        _ingest_jsonl(jsonl, MagicMock(), "case-test-srum-host1", "HOST1")
+        doc = mock_flush.call_args[0][1][0]["_source"]
+        assert "application_unresolved" not in doc
+        assert "application_id" not in doc
+        assert doc["application"] == "TermService"
+
+    @patch("opensearch_mcp.parse_plaso.flush_bulk")
+    def test_non_srum_plaso_record_untouched(self, mock_flush, tmp_path):
+        """A non-SRUM record that happens to carry a numeric `application`
+        must NOT be flagged — the data_type guard scopes the flag to SRUM."""
+        mock_flush.return_value = (1, 0)
+        jsonl = tmp_path / "other.jsonl"
+        rec = {
+            "timestamp": 1,
+            "parser": "prefetch",
+            "data_type": "windows:prefetch:execution",
+            "application": 1,  # numeric, but NOT a SRUM record
+            "message": "unrelated",
+        }
+        jsonl.write_text(json.dumps(rec) + "\n")
+        _ingest_jsonl(jsonl, MagicMock(), "case-test-prefetch-host1", "HOST1")
+        doc = mock_flush.call_args[0][1][0]["_source"]
+        assert "application_unresolved" not in doc
+        assert "application_id" not in doc
+
+    @patch("opensearch_mcp.parse_plaso.flush_bulk")
+    def test_record_without_data_type_untouched(self, mock_flush, tmp_path):
+        """No data_type at all → guard skips the flag entirely."""
+        mock_flush.return_value = (1, 0)
+        jsonl = tmp_path / "nodt.jsonl"
+        rec = {"timestamp": 1, "parser": "esedb", "application": 1, "message": "x"}
+        jsonl.write_text(json.dumps(rec) + "\n")
+        _ingest_jsonl(jsonl, MagicMock(), "idx", "HOST1")
+        doc = mock_flush.call_args[0][1][0]["_source"]
+        assert "application_unresolved" not in doc
+
+    @patch("opensearch_mcp.parse_plaso.flush_bulk")
+    def test_mixed_batch_only_srum_numeric_flagged(self, mock_flush, tmp_path):
+        """A realistic mixed batch: numeric-SRUM flagged, named-SRUM and
+        non-SRUM untouched — all in one ingest pass."""
+        mock_flush.return_value = (3, 0)
+        jsonl = tmp_path / "mixed.jsonl"
+        recs = [
+            {"timestamp": 1, "data_type": "windows:srum:network_usage",
+             "application": 1, "message": "Application: 1"},
+            {"timestamp": 2, "data_type": "windows:srum:network_usage",
+             "application": "TermService", "message": "Application: TermService"},
+            {"timestamp": 3, "data_type": "windows:prefetch:execution",
+             "application": 1, "message": "prefetch"},
+        ]
+        jsonl.write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+        _ingest_jsonl(jsonl, MagicMock(), "idx", "HOST1")
+        actions = mock_flush.call_args[0][1]
+        by_ts = {a["_source"]["timestamp"]: a["_source"] for a in actions}
+        assert by_ts[1]["application_unresolved"] is True
+        assert by_ts[1]["application_id"] == "1"
+        assert "application_unresolved" not in by_ts[2]
+        assert "application_unresolved" not in by_ts[3]

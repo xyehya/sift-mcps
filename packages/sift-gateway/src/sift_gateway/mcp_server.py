@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import json
 import logging
 import os
-import socket
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import urlparse
 
-import httpx
 from fastmcp import FastMCP
 from fastmcp.client import Client
 from fastmcp.client.transports import StdioTransport, StreamableHttpTransport
@@ -24,6 +20,10 @@ from mcp.types import TextContent, ToolAnnotations
 from pydantic import PrivateAttr
 from sift_core.agent_tools import call_core_tool, core_tool_names, core_tool_specs
 
+from sift_gateway.backends.egress import (
+    make_pinned_egress_factory,
+    validate_egress_url,
+)
 from sift_gateway.mcp_endpoint import (
     SiftTokenVerifier,
     _build_gateway_instructions,
@@ -367,12 +367,13 @@ def create_gateway_mcp_server(
     token_registry: Any | None = None,
     base_url: str | None = None,
     resolver: Any | None = None,
-    legacy_fallback_enabled: bool = True,
 ) -> FastMCP:
     """Create the aggregate FastMCP server for the gateway."""
     verifier = None
-    # A verifier is needed whenever any credential authority exists: a Supabase
-    # resolver, the PR02 registry, or legacy api_keys.
+    # A verifier is needed whenever any credential authority exists. SEC-6: the
+    # Supabase resolver is the sole authenticator; api_keys / token_registry no
+    # longer authenticate but their presence still gates the verifier so that a
+    # misconfigured deployment fails closed rather than running open.
     auth_enabled = bool(resolver is not None or api_keys or token_registry is not None)
     if auth_enabled:
         verifier = SiftTokenVerifier(
@@ -380,7 +381,6 @@ def create_gateway_mcp_server(
             token_registry=token_registry,
             base_url=base_url,
             resolver=resolver,
-            legacy_fallback_enabled=legacy_fallback_enabled,
         )
     # B6: when auth is configured, tool authorization fails closed on a missing
     # identity. In anonymous single-user mode (no verifier) the catalog is open.
@@ -617,7 +617,11 @@ def _stdio_base_env() -> dict[str, str]:
 
 def _create_http_proxy(backend_name: str, config: dict) -> FastMCPProxy:
     url = str(config.get("url") or "")
+    # SEC-3: fail fast at mount if the destination is already non-routable; the
+    # authoritative per-connection pin happens inside client_factory below.
     _validate_egress_url(url, label=f"{backend_name}.url")
+    tls_cert = config.get("tls_cert")
+    verify: bool | str = str(os.path.expanduser(tls_cert)) if tls_cert else True
 
     def client_factory() -> Client:
         headers = {}
@@ -625,30 +629,21 @@ def _create_http_proxy(backend_name: str, config: dict) -> FastMCPProxy:
             if str(key).lower() == "authorization":
                 continue
             headers[str(key)] = str(value)
-        tls_cert = config.get("tls_cert")
-        verify: bool | str = str(os.path.expanduser(tls_cert)) if tls_cert else True
 
-        def httpx_client_factory(
-            headers=None,
-            timeout=None,
-            auth=None,
-            follow_redirects: bool | None = None,
-            **kwargs,
-        ):
-            del follow_redirects, kwargs
-            return httpx.AsyncClient(
-                headers=headers,
-                timeout=timeout or httpx.Timeout(30.0, read=300.0),
-                auth=auth,
-                verify=verify,
-                follow_redirects=False,
-            )
+        # SEC-3: re-validate + PIN on EVERY (re)connection so a host that
+        # rebinds to a private address between proxy connections is denied, and
+        # the socket targets the pinned IP while TLS verifies the original
+        # hostname. validate_egress_url raises before any credential is sent.
+        target = validate_egress_url(url, label=f"{backend_name}.url")
+        pinned_factory = make_pinned_egress_factory(
+            target, tls_cert=str(verify) if isinstance(verify, str) else None
+        )
 
         transport = StreamableHttpTransport(
             url=url,
             headers=headers or None,
             auth=config.get("bearer_token") or None,
-            httpx_client_factory=httpx_client_factory,
+            httpx_client_factory=pinned_factory,
         )
         transport.forward_incoming_headers = False
         client = Client(transport)
@@ -663,26 +658,13 @@ def _create_http_proxy(backend_name: str, config: dict) -> FastMCPProxy:
 
 
 def _validate_egress_url(url: str, *, label: str) -> None:
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError(f"{label} must be an http(s) URL with a hostname")
-    host = parsed.hostname
-    try:
-        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
-    except socket.gaierror as exc:
-        raise ValueError(f"{label} hostname could not be resolved") from exc
+    """Back-compat thin wrapper over the shared SEC-3 egress policy.
 
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
-            raise ValueError(f"{label} resolves to a blocked private/link-local address")
+    Retained as a name-stable entry point (tests + mount-time fast fail). The
+    pinning + connect happen through :func:`validate_egress_url` /
+    :func:`make_pinned_egress_factory` in ``backends.egress``.
+    """
+    validate_egress_url(url, label=label)
 
 
 async def assert_mounted_tool_names(mcp: FastMCP, expected: set[str]) -> None:

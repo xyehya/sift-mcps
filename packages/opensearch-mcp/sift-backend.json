@@ -73,6 +73,9 @@
       "safe_case_argument_names": [
         "case_id",
         "case_dir"
+      ],
+      "case_bound_argument_names": [
+        "index"
       ]
     },
     {
@@ -105,6 +108,9 @@
       "safe_case_argument_names": [
         "case_id",
         "case_dir"
+      ],
+      "case_bound_argument_names": [
+        "index"
       ]
     },
     {
@@ -141,6 +147,9 @@
       "safe_case_argument_names": [
         "case_id",
         "case_dir"
+      ],
+      "case_bound_argument_names": [
+        "index"
       ]
     },
     {
@@ -167,7 +176,10 @@
       "evidence_class": "read_only",
       "category": "search-analysis",
       "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": []
+      "safe_case_argument_names": [],
+      "case_bound_argument_names": [
+        "index"
+      ]
     },
     {
       "name": "opensearch_timeline",
@@ -204,6 +216,9 @@
       "safe_case_argument_names": [
         "case_id",
         "case_dir"
+      ],
+      "case_bound_argument_names": [
+        "index"
       ]
     },
     {
@@ -240,19 +255,22 @@
       "safe_case_argument_names": [
         "case_id",
         "case_dir"
+      ],
+      "case_bound_argument_names": [
+        "index"
       ]
     },
     {
       "name": "opensearch_status",
-      "description": "Backend health/readiness check: OpenSearch cluster connectivity plus per-case index document counts. Deprecated tool form; prefer the opensearch://cluster/status resource.",
-      "when_to_use": "Use as the backend health/readiness check and to confirm per-case index state.",
+      "description": "Backend health/readiness check: OpenSearch cluster connectivity plus the ACTIVE case's index document counts. The index catalog is scoped to the active case (SEC-7); cluster health stays cluster-wide. Deprecated tool form; prefer the opensearch://cluster/status resource.",
+      "when_to_use": "Use as the backend health/readiness check and to confirm the active case's index state.",
       "avoid_when": "Deprecated tool form \u2014 prefer the resource opensearch://cluster/status. For one case's artifact/coverage breakdown use opensearch_case_summary.",
-      "output_notes": "Health/status output only; it is not case evidence.",
-      "output_shape": "StatusOut: cluster_status (single-node yellow may be annotated normal), indices[] of {index, docs, size, status}, total_indices.",
-      "response_shaping": "Compact cluster + index roll-up; also exposed as a read-only resource to keep it out of the tool budget.",
+      "output_notes": "Health/status output only; it is not case evidence. The indices[] catalog is bound to the active case \u2014 it never enumerates other cases' indices; cluster_status and hayabusa remain cluster/engine health.",
+      "output_shape": "StatusOut: cluster_status (single-node yellow may be annotated normal), indices[] of {index, docs, size, status} for the ACTIVE case only (empty with no active case), total_indices.",
+      "response_shaping": "Compact cluster + active-case index roll-up; also exposed as a read-only resource to keep it out of the tool budget.",
       "usage_examples": [
         {
-          "description": "Cluster + per-case index health",
+          "description": "Cluster health + the active case's index health",
           "arguments": {}
         }
       ],
@@ -264,16 +282,19 @@
       "category": "ingest",
       "recommended_phase": "INGEST",
       "health": true,
-      "safe_case_argument_names": []
+      "safe_case_argument_names": [
+        "case_id",
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_shard_status",
-      "description": "Report shard usage and capacity headroom across the cluster. Deprecated tool form; prefer the opensearch://cluster/shards resource.",
+      "description": "Report cluster-wide shard usage and capacity headroom, plus the ACTIVE case's top shard-heavy indices (SEC-7). Deprecated tool form; prefer the opensearch://cluster/shards resource.",
       "when_to_use": "Use for operational readiness before large ingest or when indexing fails.",
       "avoid_when": "Deprecated tool form \u2014 prefer the resource opensearch://cluster/shards. Administrative signal, not investigation evidence.",
-      "output_notes": "Administrative capacity signal; not investigation evidence.",
-      "output_shape": "ShardStatusOut: current_shards, max_shards_per_node, data_nodes, max_total, headroom_pct, status (ok>=10% | warning>=2% | critical<2%), top_indices_by_shard_count[].",
-      "response_shaping": "Capacity roll-up with only the top shard-heavy indices; also exposed as a read-only resource.",
+      "output_notes": "Administrative capacity signal; not investigation evidence. Cluster capacity (current_shards/max_total/headroom_pct/status) is cluster-wide; top_indices_by_shard_count is scoped to the active case and never lists other cases' indices.",
+      "output_shape": "ShardStatusOut: current_shards, max_shards_per_node, data_nodes, max_total, headroom_pct, status (ok>=10% | warning>=2% | critical<2%), top_indices_by_shard_count[] (active case only, empty with no active case).",
+      "response_shaping": "Cluster-wide capacity roll-up with only the active case's top shard-heavy indices; also exposed as a read-only resource.",
       "usage_examples": [
         {
           "description": "Check shard headroom before a large image ingest",
@@ -287,7 +308,10 @@
       "evidence_class": "read_only",
       "category": "admin",
       "recommended_phase": "INGEST",
-      "safe_case_argument_names": []
+      "safe_case_argument_names": [
+        "case_id",
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_case_summary",
@@ -361,8 +385,8 @@
       "when_to_use": "Use after examiner approval to index evidence for structured search.",
       "avoid_when": "Avoid setting dry_run=False until the target evidence and ingest plan are clear; use force=True only for an intentional re-ingest when the case already has docs.",
       "output_notes": "Mutating operation scoped to the OpenSearch index; dry runs should precede writes.",
-      "output_shape": "IngestOut: status (preview|started|containers_detected|multi_started|already_indexed|failed|queued), case_id, job_id, job_type, dispatched_to, next_step, plan{}, container{}, already_indexed{}, suggested_hostname, warning, pid, run_id, log_file, note, details{}. Disk/E01 ingest returns status=queued + job_id (dispatched to sift-opensearch-worker@); poll job_status(job_id).",
-      "response_shaping": "Returns a plan/run reference (run_id, log_file) rather than streaming ingest output \u2014 poll opensearch_ingest_status for progress. The 'password' arg is a SECRET, redacted from audit/logs/results.",
+      "output_shape": "IngestOut: status (preview|started|containers_detected|multi_started|already_indexed|failed|queued), case_id, job_id, job_type, dispatched_to, next_step, plan{}, container{}, already_indexed{}, suggested_hostname, warning, pid, run_id, log_file, note, details{}. Disk/E01 ingest returns status=queued + job_id (dispatched to sift-opensearch-worker@); poll running_commands_status(job_id) for realtime status.",
+      "response_shaping": "Returns a plan/run reference (run_id, log_file) rather than streaming ingest output \u2014 poll opensearch_ingest_status for progress. The 'password' arg is a SECRET, redacted from audit/logs/results. Host is auto-derived from the evidence (registry ComputerName for disk/archive, vol3 for memory); use opensearch_fix_host_mapping to correct a wrong mapping after ingest.",
       "usage_examples": [
         {
           "description": "Preview an auto-detected container (default dry run)",
@@ -372,11 +396,10 @@
           }
         },
         {
-          "description": "Ingest a specific delimited artifact set for one host",
+          "description": "Ingest a specific delimited artifact set (host derived from evidence)",
           "arguments": {
             "path": "evidence/triage/wksn01",
             "format": "delimited",
-            "hostname": "wksn01",
             "include": [
               "amcache",
               "shimcache"
@@ -385,11 +408,29 @@
           }
         },
         {
-          "description": "Deep memory analysis, write",
+          "description": "Ingest a flat JSON event log where host can't be derived — supply hostname explicitly",
+          "arguments": {
+            "path": "evidence/events.jsonl",
+            "format": "json",
+            "hostname": "SRL-FORGE",
+            "time_field": "@timestamp",
+            "dry_run": false
+          }
+        },
+        {
+          "description": "Ingest an access log without a derivable host — supply hostname explicitly",
+          "arguments": {
+            "path": "evidence/apache_access.log",
+            "format": "accesslog",
+            "hostname": "WEB-SRV01",
+            "dry_run": false
+          }
+        },
+        {
+          "description": "Deep memory analysis, write (host auto-derived via vol3; hostname ignored)",
           "arguments": {
             "path": "evidence/memdump.raw",
             "format": "memory",
-            "hostname": "wksn01",
             "tier": 3,
             "dry_run": false
           }
@@ -408,10 +449,10 @@
     },
     {
       "name": "opensearch_ingest_status",
-      "description": "Check running/recent ingest and enrichment operations for a case (\"*\" for all cases), with the per-host artifact checklist. In DB-active mode (BATCH-K4), local mirror files are NOT read; returns ingests=[] + authority=\"postgres-durable-jobs\" and a pointer to job_status(job_id) where authoritative worker_label, current_step, and terminal result_public live. Pass job_id (from the opensearch_ingest dispatch response) to get a direct link in the redirect. Also the status channel for async enrichment.",
-      "when_to_use": "Use to check whether a non-DB-active ingest is running (~every 30s while active). In DB-active mode, this returns the durable-job authority pointer; use job_status(job_id) for the actual realtime status.",
+      "description": "Check running/recent ingest and enrichment operations for a case (\"*\" for all cases), with the per-host artifact checklist. In DB-active mode (BATCH-K4), reads durable jobs from app.job_status_public and returns them in ingests[] with worker_label and current_step; use running_commands_status(job_id) for per-job detail. Pass job_id (from the opensearch_ingest dispatch response) to get a direct link. Also the status channel for async enrichment.",
+      "when_to_use": "Use to check whether a non-DB-active ingest is running (~every 30s while active). In DB-active mode, this returns durable job rows from app.job_status_public plus an authority pointer; use running_commands_status(job_id) for per-job realtime status.",
       "avoid_when": "Operational status only \u2014 inspect indexed records (opensearch_search) for evidence, not this.",
-      "output_notes": "In DB-active mode, ingests=[] always (BATCH-K4); authority and job_id fields redirect to the canonical durable job. In legacy mode, ingests[] carries per-artifact progress from local status files.",
+      "output_notes": "In DB-active mode (BATCH-K4), ingests[] contains durable job rows from app.job_status_public (no local mirror files are read); details{} carries job_id, worker_label, current_step. In legacy mode, ingests[] carries per-artifact progress from local status files.",
       "output_shape": "IngestStatusOut: ingests[] of {case_id, status, pid, elapsed, total_indexed, bulk_failed, hosts_complete/total, artifacts_complete/total, log_file, checklist[], message, halt_reason, errors[], next_steps[], warnings[], details{}}, message, authority (DB-active mode only), job_id (when supplied), next_step.",
       "response_shaping": "In DB-active mode returns a redirect only (no mirror content). In legacy mode returns a structured progress summary plus a log_file reference.",
       "usage_examples": [
@@ -450,7 +491,7 @@
       "when_to_use": "Use after indexed indicators exist and CTI context would help prioritize pivots.",
       "avoid_when": "Avoid when OpenCTI is unavailable or when indicators are speculative. Use dry_run=True first to size the IOC corpus.",
       "output_notes": "Starts asynchronous enrichment; follow status/results before relying on output. No OpenCTI credentials or OpenSearch passwords are returned. Enrichment cannot approve findings, alter evidence, or decide reports.",
-      "output_shape": "EnrichIntelOut: status (preview|started), case_id, ips, hashes, domains, total_iocs (preview counts), pid, run_id, log_file, note. Async on write \u2014 poll opensearch_ingest_status (artifact_name=='intel').",
+      "output_shape": "EnrichIntelOut: status (preview|started|queued), case_id, ips, hashes, domains, total_iocs (preview counts), job_id, job_type, dispatched_to, next_step, pid, run_id, log_file, note. Disk/E01 enrich returns status=queued + job_id (non-blocking, dispatched to sift-opensearch-worker@); poll running_commands_status(job_id). Async on write \u2014 poll opensearch_ingest_status (artifact_name=='intel').",
       "response_shaping": "Returns counts + a run reference, never IOC dumps or OpenCTI/OpenSearch credentials.",
       "usage_examples": [
         {
@@ -481,7 +522,7 @@
       "required_scopes": [
         "enrichment:intel"
       ],
-      "scope_enforcement": "gateway_primary_env_fallback",
+      "scope_enforcement": "gateway_authoritative",
       "enrichment_policy": {
         "derived_state_only": true,
         "audit_required": true,
@@ -495,35 +536,6 @@
         "decide_reports"
       ],
       "secret_leak_guarantee": "No OpenCTI credentials, OpenSearch passwords, DB DSNs, or service tokens are returned in any response."
-    },
-    {
-      "name": "opensearch_list_detections",
-      "description": "List Security Analytics (Sigma) detection findings for triage pivots, filtered by severity/detector_type; falls back to a Hayabusa query suggestion when the Sigma plugin is unavailable or empty.",
-      "when_to_use": "Use to identify indexed Sigma/Security Analytics detections for triage pivots.",
-      "avoid_when": "Detection hits are leads, not conclusions \u2014 validate against source events and surrounding context before recording a finding.",
-      "output_notes": "Detection hits require validation against source events and surrounding context.",
-      "output_shape": "ListDetectionsOut: findings[] of {id, timestamp, index, rules[] of {name, tags[]}, matched_docs}, total, returned, offset, suggestion (Hayabusa fallback when present).",
-      "response_shaping": "Paginate with limit/offset; the per-finding payload references matched docs by count, not by embedding them.",
-      "usage_examples": [
-        {
-          "description": "All detections, first page",
-          "arguments": {}
-        },
-        {
-          "description": "High-severity detections only",
-          "arguments": {
-            "severity": "high"
-          }
-        }
-      ],
-      "defer_loading": true,
-      "defer_loading_rationale": "Depends on the optional Security Analytics plugin; lower-frequency. Tool-Search defer_loading candidate.",
-      "read_only": true,
-      "readOnlyHint": true,
-      "evidence_class": "read_only",
-      "category": "search-analysis",
-      "recommended_phase": "ANALYZE",
-      "safe_case_argument_names": []
     },
     {
       "name": "opensearch_fix_host_mapping",

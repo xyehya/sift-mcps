@@ -293,28 +293,35 @@ def test_host_fix_db_active_with_recorder_still_proceeds(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_enrich_intel_scope_denied_without_correct_scope(monkeypatch):
-    """opensearch_enrich_intel (dry_run=False) must deny when caller lacks
-    enrichment:intel scope — returns typed guidance, no subprocess spawned."""
-    import sys as _sys
-
+def test_enrich_intel_has_no_inprocess_env_gate(monkeypatch, tmp_path):
+    """SEC-12 / DSS-CAN-012: the inert in-process SIFT_ENRICHMENT_SCOPE env gate
+    was REMOVED — the authoritative enrichment:intel gate is the Gateway's
+    AddonAuthorityMiddleware (see test_ad2_addon_conformance). This is a
+    fail-on-revert guard: even with a WRONG env scope set, the backend must NOT
+    return scope_denied (re-adding any in-process env gate — fail-open OR
+    fail-closed — would deny here and break the legitimate gateway/worker paths,
+    which run with the env unset). The gateway gate is asserted separately."""
     from opensearch_mcp import server
 
-    # Set a scope env that does NOT include enrichment:intel.
+    # A scope env that does NOT include enrichment:intel — must be IGNORED now.
     monkeypatch.setenv("SIFT_ENRICHMENT_SCOPE", "enrichment:triage")
     monkeypatch.setattr(server, "_get_active_case", lambda: "INC-ENRICH")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(tmp_path / "INC-ENRICH"))
+    (tmp_path / "INC-ENRICH").mkdir(parents=True)
 
-    # Track subprocess launches (must NOT happen).
-    spawned = []
-    monkeypatch.setattr(server, "_spawn_ingest", lambda *a, **kw: spawned.append(a) or MagicMock())
+    with patch("opensearch_mcp.gateway.gateway_available", return_value=True), \
+         patch("opensearch_mcp.server._spawn_ingest") as mock_spawn, \
+         patch("opensearch_mcp.ingest_status.write_status"), \
+         patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]):
+        mock_proc = MagicMock()
+        mock_proc.pid = 4242
+        mock_spawn.return_value = mock_proc
+        result = server.opensearch_enrich_intel(case_id="INC-ENRICH", dry_run=False)
 
-    result = server.opensearch_enrich_intel(case_id="INC-ENRICH", dry_run=False)
-
-    assert result.get("status") == "scope_denied", f"Expected scope_denied, got: {result}"
-    assert result.get("isError") is True
-    assert result.get("required_scope") == "enrichment:intel"
-    assert "guidance" in result
-    assert spawned == [], "No subprocess must be spawned when scope is denied"
+    assert result.get("status") != "scope_denied", (
+        f"in-process env gate must be gone (gateway is authority), got: {result}"
+    )
+    assert result.get("status") == "started", f"Expected started, got: {result}"
 
 
 def test_enrich_intel_dry_run_allowed_without_scope(monkeypatch):
@@ -350,7 +357,8 @@ def test_enrich_intel_execute_returns_pollable_status(monkeypatch, tmp_path):
     monkeypatch.setenv("SIFT_CASE_DIR", str(tmp_path / "INC-POLL"))
     (tmp_path / "INC-POLL").mkdir(parents=True)
 
-    with patch("opensearch_mcp.server._spawn_ingest") as mock_spawn, \
+    with patch("opensearch_mcp.gateway.gateway_available", return_value=True), \
+         patch("opensearch_mcp.server._spawn_ingest") as mock_spawn, \
          patch("opensearch_mcp.ingest_status.write_status"), \
          patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]):
         mock_proc = MagicMock()

@@ -54,6 +54,152 @@ def _iso(value: Any) -> str | None:
     return str(value)
 
 
+def _compact_label(value: Any, *, limit: int = 90) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text[: max(0, limit - 3)].rstrip()
+    if " " in cut:
+        cut = cut.rsplit(" ", 1)[0].rstrip()
+    return f"{cut.rstrip(' ,.;:-')}..."
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, dict):
+            for key in ("message", "error", "detail", "title", "finding_id", "description"):
+                found = _first_text(value.get(key))
+                if found:
+                    return found
+            continue
+        if isinstance(value, list):
+            for item in value:
+                found = _first_text(item)
+                if found:
+                    return found
+            continue
+        text = _compact_label(value)
+        if text:
+            return text
+    return ""
+
+
+def _event_details(row: dict[str, Any]) -> dict[str, Any]:
+    details = row.get("details")
+    return details if isinstance(details, dict) else {}
+
+
+def _activity_args(row: dict[str, Any]) -> dict[str, Any]:
+    for details in (_event_details(row), row.get("_pre_details")):
+        if not isinstance(details, dict):
+            continue
+        args = details.get("arguments")
+        if isinstance(args, dict):
+            return args
+    return {}
+
+
+def _activity_tool(row: dict[str, Any]) -> str:
+    details = _event_details(row)
+    return _compact_label(details.get("tool") or row.get("event_type") or "activity", limit=64)
+
+
+def _activity_backend(row: dict[str, Any]) -> str:
+    details = _event_details(row)
+    return _compact_label(details.get("backend") or row.get("source") or "unknown", limit=64)
+
+
+def _activity_kind(tool: str, status: str) -> str:
+    if status == "failure":
+        return "alert"
+    if tool == "record_finding":
+        return "discovery"
+    if tool in {"record_timeline_event", "manage_todo"}:
+        return "io"
+    if (
+        tool == "run_command"
+        or tool.startswith("opensearch_")
+    ):
+        return "analysis"
+    return "info"
+
+
+def _activity_label(row: dict[str, Any]) -> str:
+    details = _event_details(row)
+    tool = _activity_tool(row)
+    status = str(row.get("status") or details.get("status") or "").lower()
+    summary = _compact_label(row.get("summary"), limit=90)
+    result = details.get("result_summary")
+    detail = details.get("detail")
+    args = _activity_args(row)
+
+    if status == "failure":
+        reason = _first_text(result, detail, summary)
+        return _compact_label(f"{tool} failed - {reason}" if reason else f"{tool} failed")
+
+    if tool == "record_finding":
+        title = _first_text(args.get("title"), result)
+        confidence = _first_text(args.get("confidence"))
+        suffix = f" ({confidence})" if confidence else ""
+        return _compact_label(f"Recorded finding - {title}{suffix}" if title else "Recorded finding")
+
+    if tool == "record_timeline_event":
+        desc = _first_text(args.get("description"), args.get("title"), result)
+        return _compact_label(f"Timeline event added - {desc}" if desc else "Timeline event added")
+
+    if tool == "manage_todo":
+        action = _first_text(args.get("action"), args.get("operation"))
+        return _compact_label(f"TODO {action}" if action else "TODO updated")
+
+    if tool == "run_command":
+        command = _first_text(args.get("command"), detail.get("command") if isinstance(detail, dict) else None)
+        exit_code = None
+        if isinstance(result, dict):
+            exit_code = result.get("exit_code")
+        if exit_code is None and isinstance(detail, dict):
+            exit_code = detail.get("exit_code")
+        exit_part = f" (exit {exit_code})" if exit_code is not None else ""
+        return _compact_label(f"Ran command - {command}{exit_part}" if command else f"Ran command{exit_part}")
+
+    if tool.startswith("opensearch_"):
+        op = tool.removeprefix("opensearch_").replace("_", " ")
+        count = None
+        if isinstance(result, dict):
+            for key in ("hits", "count", "total", "records"):
+                if result.get(key) is not None:
+                    count = result.get(key)
+                    break
+        count_part = f" - {count} hits" if count is not None else ""
+        return _compact_label(f"OpenSearch {op}{count_part}")
+
+    # Generic add-on tool: format as "namespace op" for any "prefix_action" pattern.
+    if "_" in tool:
+        ns, _, rest = tool.partition("_")
+        op = rest.replace("_", " ")
+        return _compact_label(f"{ns} {op}" if op else ns)
+
+    return summary or _compact_label(tool)
+
+
+def _collapse_activity_rows(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for row in rows:
+        key = str(row.get("request_id") or row.get("id") or "")
+        if not key:
+            continue
+        if key not in grouped:
+            grouped[key] = row
+            order.append(key)
+            continue
+        details = _event_details(row)
+        if details.get("phase") == "pre_dispatch" and details.get("arguments"):
+            grouped[key]["_pre_details"] = details
+    return [grouped[key] for key in order[:limit]]
+
+
 def _actor_columns(actor: Any) -> tuple[str, str | None, str | None, str | None]:
     if not isinstance(actor, dict):
         return "system", None, None, None
@@ -1475,27 +1621,219 @@ class InvestigationService(_BasePortalDbService):
         tampering with or deleting the JSONL files cannot spoof, hide, or fabricate
         the audit trail shown for a finding. Scoped to ``case_id`` so a leaked
         event id from another case cannot be surfaced here.
+
+        Resolution order (any match returns the row once):
+        1. ``id::text = any(%s)`` — uuid PK match (legacy / direct references).
+        2. ``details->>'backend_audit_id' = any(%s)`` — gateway-stamped core-plane id.
+        3. ``details->'audit_aliases' ?| %s`` — any alias in the per-response set
+           stamped by the gateway envelope (sub-plane ids: shell exec, ingest, etc.).
+
+        SECURITY INVARIANT: every predicate is ANDed with ``case_id = %s`` so a
+        requested id that belongs to another case is never surfaced here, even if
+        that case's audit row carries a matching alias.  Rows that satisfy multiple
+        predicates are de-duplicated by ``DISTINCT ON (id)`` in SQL.
+
+        Each returned row carries an ``audit_id`` field set to the requested
+        human/backend-scheme id it satisfied, mirroring the old file-mode JSONL
+        reader so the frontend can group results by ``audit_id``.  A single DB
+        row may appear more than once if it satisfies multiple requested ids.
+
+        Note: ``audit_aliases`` are response-asserted by the backend that ran the
+        tool — within-case corroboration is only as trustworthy as that backend.
+        Cross-case surfacing is structurally blocked by the ``case_id`` scope.
         """
         ids = [str(a) for a in (audit_ids or []) if str(a).strip()]
         if not ids:
             return []
+        # §9.6 superset resolver: match any id the agent could have cited so
+        # every gateway-issued audit handle resolves, regardless of backend.
+        # Predicates (all ANDed with case_id):
+        #   - PK uuid / backend_audit_id / audit_aliases  (existing)
+        #   - envelope_event_id — call-row uuid always present in result details
+        #   - request_id column  — 100% populated, links call↔result pair
+        #   - details->>'audit_id' (the clause at the bottom of the SQL below) —
+        #     INTENTIONAL defense-in-depth / future-proofing seam, kept on purpose
+        #     (G2): no producer writes a top-level details.audit_id today (every
+        #     writer uses backend_audit_id / envelope_event_id / audit_aliases),
+        #     so it currently matches nothing — DO NOT delete it as dead code. It
+        #     mirrors the same predicate in case_manager.py:214
+        #     (_db_audit_event_has_audit_id) so a future writer that emits
+        #     details.audit_id resolves through BOTH the fail-closed write-side
+        #     verifier and this read-side resolver without a code change.
+        #
+        # §9.6 dedup fix: each envelope produces TWO rows per tool call — a
+        # pre-dispatch 'requested' row (PK = envelope_event_id) and a result row
+        # (different PK, details->>'envelope_event_id' = envelope_event_id).
+        # Citing the envelope_event_id matches BOTH via id::text AND via the
+        # envelope_event_id predicate, so naïve DISTINCT ON(id) returns both.
+        # The panel would show a sparse 'requested' stub alongside the rich result.
+        #
+        # Fix: dedupe by request_id (the stable identifier linking the pair),
+        # preferring the result row (status != 'requested') over the call stub.
+        # NULL-safe: rows with NULL request_id (reauth.*, lifecycle, job.* events)
+        # must NOT be collapsed — each has a unique PK and may independently be
+        # cited as a provenance reference (e.g. reauth_audit_event_id).
+        # COALESCE(request_id, id::text) gives every NULL-request_id row its own
+        # unique dedup key (its PK uuid) while request_id-bearing envelope pairs
+        # still collapse to one row.  DISTINCT ON expr MUST match the leading
+        # ORDER BY expr exactly — both use the same COALESCE expression.
+        #
+        # Note: literal '?' is safe here — psycopg3 only treats %s/%()s as
+        # placeholders (qmark-paramstyle drivers would misparse this).
+        sql = (
+            "select distinct on (coalesce(request_id, id::text)) "
+            "id::text, event_type, actor_type, source, status, summary, "
+            "request_id, job_id::text, created_at, details "
+            "from app.audit_events "
+            "where case_id = %s and ("
+            "    id::text = any(%s) "
+            "    or details->>'backend_audit_id' = any(%s) "
+            "    or details->'audit_aliases' ?| %s "
+            "    or details->>'envelope_event_id' = any(%s) "
+            "    or request_id = any(%s) "
+            "    or details->>'audit_id' = any(%s)"
+            ") "
+            "order by coalesce(request_id, id::text), (status = 'requested'), created_at"
+        )
+        db_rows: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (case_id, ids, ids, ids, ids, ids, ids))
+                cols = [d[0] for d in cur.description]
+                for record in cur.fetchall():
+                    row = dict(zip(cols, record, strict=False))
+                    row["created_at"] = _iso(row.get("created_at"))
+                    db_rows.append(row)
+
+            # Batch-fetch the paired mcp.tool.call events so the panel can show
+            # the real tool arguments (command/purpose/etc.).  Each result row
+            # stamped by the gateway envelope carries details.envelope_event_id
+            # pointing to its pre-dispatch call record.  One query, case-scoped.
+            envelope_ids = [
+                str(row.get("details", {}).get("envelope_event_id") or "")
+                for row in db_rows
+                if isinstance(row.get("details"), dict)
+                and row["details"].get("envelope_event_id")
+            ]
+            call_args: dict[str, Any] = {}  # envelope_event_id → arguments dict
+            if envelope_ids:
+                call_sql = (
+                    "select id::text, details "
+                    "from app.audit_events "
+                    # SECURITY: case_id scope preserved — same invariant as above.
+                    "where case_id = %s and id::text = any(%s)"
+                )
+                with conn.cursor() as cur2:
+                    cur2.execute(call_sql, (case_id, envelope_ids))
+                    for call_id, call_details in cur2.fetchall():
+                        if isinstance(call_details, dict):
+                            args = call_details.get("arguments")
+                            if args is not None:
+                                call_args[call_id] = args
+
+        # Attach paired-call arguments onto each result row before fan-out.
+        for row in db_rows:
+            det = row.get("details") or {}
+            eid = det.get("envelope_event_id") if isinstance(det, dict) else None
+            if eid and eid in call_args:
+                row["arguments"] = call_args[eid]
+
+        # Label each DB row with the requested human id(s) it satisfies so the
+        # frontend (AuditTrailPanel) can group by audit_id.  The old file-mode
+        # reader returned raw JSONL entries that carried audit_id = the human id;
+        # this fan-out preserves that contract for DB-mode rows.
+        #
+        # One DB row can back multiple requested ids (e.g. backend_audit_id matches
+        # one cited id while an alias matches a second) → emit one copy per matched
+        # id.  Defensive fallback: if no requested id maps to the row (impossible
+        # given the SQL matched it) emit a single row keyed by its uuid.
+        out: list[dict[str, Any]] = []
+        for row in db_rows:
+            row_uuid = row.get("id", "")
+            details = row.get("details") or {}
+            row_req_id = str(row.get("request_id") or "")
+            bid = details.get("backend_audit_id")
+            aliases: set[str] = set(details.get("audit_aliases") or [])
+            envelope_eid = details.get("envelope_event_id") or ""
+            detail_audit_id = details.get("audit_id") or ""
+            # §9.6: match against every handle the superset SQL may have matched.
+            matched = [
+                aid for aid in ids
+                if (
+                    aid == row_uuid
+                    or aid == bid
+                    or aid in aliases
+                    or (envelope_eid and aid == envelope_eid)
+                    or (row_req_id and aid == row_req_id)
+                    or (detail_audit_id and aid == detail_audit_id)
+                )
+            ]
+            if not matched:
+                # Defensive: SQL matched the row but we can't pin it to a
+                # specific requested id — emit once keyed by the uuid PK.
+                row_copy = dict(row)
+                row_copy["audit_id"] = row_uuid
+                out.append(row_copy)
+            else:
+                for aid in matched:
+                    row_copy = dict(row)
+                    row_copy["audit_id"] = aid
+                    out.append(row_copy)
+
+        out.sort(key=lambda r: r.get("created_at") or "")
+        return out
+
+    def audit_events_recent(
+        self, case_id: str, *, limit: int = 30
+    ) -> list[dict[str, Any]]:
+        """Return recent DB-authoritative tool activity for one active case.
+
+        This is the real-mode source for the portal Overview agent-activity
+        feed. It reads only ``app.audit_events`` scoped to the server-resolved
+        ``case_id`` and collapses the requested/result envelope pair by
+        request_id so the UI shows one row per tool call.
+        """
+        try:
+            safe_limit = int(limit or 30)
+        except (TypeError, ValueError):
+            safe_limit = 30
+        safe_limit = max(1, min(safe_limit, 100))
         sql = (
             "select id::text, event_type, actor_type, source, status, summary, "
             "request_id, job_id::text, created_at, details "
             "from app.audit_events "
-            "where case_id = %s and id::text = any(%s) "
-            "order by created_at"
+            "where case_id = %s "
+            "order by created_at desc "
+            "limit %s"
         )
         rows: list[dict[str, Any]] = []
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(sql, (case_id, ids))
+                cur.execute(sql, (case_id, safe_limit * 2))
                 cols = [d[0] for d in cur.description]
                 for record in cur.fetchall():
-                    row = dict(zip(cols, record))
+                    row = dict(zip(cols, record, strict=False))
                     row["created_at"] = _iso(row.get("created_at"))
                     rows.append(row)
-        return rows
+
+        events: list[dict[str, Any]] = []
+        for row in _collapse_activity_rows(rows, safe_limit):
+            details = _event_details(row)
+            tool = _activity_tool(row)
+            status = str(row.get("status") or details.get("status") or "requested").lower()
+            events.append(
+                {
+                    "id": str(row.get("id") or ""),
+                    "ts": row.get("created_at"),
+                    "tool": tool,
+                    "backend": _activity_backend(row),
+                    "status": status,
+                    "principal": _compact_label(details.get("principal"), limit=80),
+                    "kind": _activity_kind(tool, status),
+                    "text": _activity_label(row),
+                }
+            )
+        return events
 
     def create_todo(
         self,

@@ -56,15 +56,6 @@
   "resource_templates": [
     {
       "annotations": null,
-      "description": "Unfiltered resource view of detection findings for case-oriented clients.",
-      "meta": null,
-      "mime_type": "application/json",
-      "name": "opensearch_case_detections",
-      "title": "Case Detection Findings",
-      "uri_template": "opensearch://case/{case_id}/detections"
-    },
-    {
-      "annotations": null,
       "description": "Flattened field-to-type mapping for an artifact type.",
       "meta": null,
       "mime_type": "application/json",
@@ -91,15 +82,6 @@
       "name": "opensearch_index_catalog",
       "title": "Index Catalog",
       "uri": "opensearch://catalog/indices"
-    },
-    {
-      "annotations": null,
-      "description": "Installed Sigma detector counts, with Hayabusa fallback guidance.",
-      "meta": null,
-      "mime_type": "application/json",
-      "name": "opensearch_detection_catalog",
-      "title": "Detection Rule Catalog",
-      "uri": "opensearch://catalog/detections"
     },
     {
       "annotations": null,
@@ -152,7 +134,7 @@
           },
           "index": {
             "default": "",
-            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "description": "Index pattern to narrow WITHIN the active case (e.g. 'case-<key>-evtx-*'). Every segment must stay inside the active case; a cross-case value (case-*, another case's pattern, or an exact other-case index) is rejected. Leave empty to query the whole active case.",
             "title": "Index",
             "type": "string"
           },
@@ -451,7 +433,7 @@
           },
           "index": {
             "default": "",
-            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "description": "Index pattern to narrow WITHIN the active case (e.g. 'case-<key>-evtx-*'). Every segment must stay inside the active case; a cross-case value (case-*, another case's pattern, or an exact other-case index) is rejected. Leave empty to query the whole active case.",
             "title": "Index",
             "type": "string"
           },
@@ -557,267 +539,6 @@
         "type": "object"
       },
       "title": "Count Documents"
-    },
-    {
-      "annotations": {
-        "destructiveHint": false,
-        "idempotentHint": true,
-        "openWorldHint": true,
-        "readOnlyHint": true,
-        "title": "Security Analytics Detections"
-      },
-      "description": "List Security Analytics detection findings, or suggest a Hayabusa query when Sigma is unavailable or empty. Use to triage rule-based detections; severity filtering is applied behavior-compatibly. Example: opensearch_list_detections(severity='high').",
-      "input_schema": {
-        "properties": {
-          "detector_type": {
-            "default": "",
-            "description": "Detector type filter; empty returns all.",
-            "title": "Detector Type",
-            "type": "string"
-          },
-          "limit": {
-            "default": 50,
-            "description": "Max findings. Hard cap 500.",
-            "maximum": 500,
-            "minimum": 1,
-            "title": "Limit",
-            "type": "integer"
-          },
-          "offset": {
-            "default": 0,
-            "description": "Pagination start.",
-            "minimum": 0,
-            "title": "Offset",
-            "type": "integer"
-          },
-          "severity": {
-            "default": "",
-            "description": "Severity filter; empty returns all severities.",
-            "enum": [
-              "",
-              "critical",
-              "high",
-              "medium",
-              "low"
-            ],
-            "title": "Severity",
-            "type": "string"
-          }
-        },
-        "title": "ListDetectionsIn",
-        "type": "object"
-      },
-      "meta": {
-        "avoid_when": "Detection hits are leads, not conclusions \u2014 validate against source events and surrounding context before recording a finding.",
-        "category": "search-analysis",
-        "defer_loading": true,
-        "defer_loading_rationale": "Depends on the optional Security Analytics plugin; lower-frequency. Tool-Search `defer_loading` candidate.",
-        "output_shape": "ListDetectionsOut: findings[] of Detection{id, timestamp, index, rules[] of {name, tags[]}, matched_docs}, total, returned, offset, suggestion (Hayabusa fallback when present).",
-        "recommended_for_phase": "ANALYZE",
-        "response_shaping": "Paginate with limit/offset; the per-finding payload references matched docs by count, not by embedding them.",
-        "usage_examples": [
-          {
-            "arguments": {},
-            "description": "All detections, first page"
-          },
-          {
-            "arguments": {
-              "severity": "high"
-            },
-            "description": "High-severity detections only"
-          }
-        ],
-        "when_to_use": "List Security Analytics (Sigma) detection findings for triage pivots, filtered by severity/detector_type; falls back to a Hayabusa query suggestion when the Sigma plugin is unavailable or empty."
-      },
-      "name": "opensearch_list_detections",
-      "output_schema": {
-        "anyOf": [
-          {
-            "properties": {
-              "findings": {
-                "description": "Detection findings.",
-                "items": {
-                  "properties": {
-                    "id": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ],
-                      "default": null,
-                      "description": "Finding id.",
-                      "title": "Id"
-                    },
-                    "index": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ],
-                      "default": null,
-                      "description": "Source index.",
-                      "title": "Index"
-                    },
-                    "matched_docs": {
-                      "description": "Related document count.",
-                      "title": "Matched Docs",
-                      "type": "integer"
-                    },
-                    "rules": {
-                      "description": "Matched rules.",
-                      "items": {
-                        "properties": {
-                          "name": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ],
-                            "default": null,
-                            "description": "Detection rule name.",
-                            "title": "Name"
-                          },
-                          "tags": {
-                            "description": "Rule tags.",
-                            "items": {
-                              "type": "string"
-                            },
-                            "title": "Tags",
-                            "type": "array"
-                          }
-                        },
-                        "title": "DetectionRuleRef",
-                        "type": "object"
-                      },
-                      "title": "Rules",
-                      "type": "array"
-                    },
-                    "timestamp": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "integer"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ],
-                      "default": null,
-                      "description": "Finding timestamp.",
-                      "title": "Timestamp"
-                    }
-                  },
-                  "required": [
-                    "matched_docs"
-                  ],
-                  "title": "Detection",
-                  "type": "object"
-                },
-                "title": "Findings",
-                "type": "array"
-              },
-              "offset": {
-                "description": "Pagination offset.",
-                "title": "Offset",
-                "type": "integer"
-              },
-              "returned": {
-                "description": "Findings returned after filtering.",
-                "title": "Returned",
-                "type": "integer"
-              },
-              "suggestion": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null,
-                "description": "Hayabusa fallback query when Sigma is unavailable or empty.",
-                "title": "Suggestion"
-              },
-              "total": {
-                "description": "Total findings reported by upstream.",
-                "title": "Total",
-                "type": "integer"
-              }
-            },
-            "required": [
-              "findings",
-              "total",
-              "returned",
-              "offset"
-            ],
-            "title": "ListDetectionsOut",
-            "type": "object"
-          },
-          {
-            "properties": {
-              "details": {
-                "additionalProperties": true,
-                "description": "Optional structured context (e.g. supported_types, halt_reason).",
-                "title": "Details",
-                "type": "object"
-              },
-              "error": {
-                "description": "Machine-readable error category.",
-                "enum": [
-                  "invalid_input",
-                  "not_found",
-                  "upstream_unavailable",
-                  "upstream_degraded",
-                  "rate_limited",
-                  "not_configured",
-                  "no_active_case",
-                  "capacity_refused",
-                  "internal"
-                ],
-                "title": "ErrorCode",
-                "type": "string"
-              },
-              "message": {
-                "description": "Human-readable, secret-free explanation.",
-                "title": "Message",
-                "type": "string"
-              },
-              "remediation": {
-                "description": "Concrete next step the caller can take.",
-                "title": "Remediation",
-                "type": "string"
-              },
-              "retryable": {
-                "default": false,
-                "description": "True if retrying the same call may succeed (e.g. transient upstream loss).",
-                "title": "Retryable",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "error",
-              "message",
-              "remediation"
-            ],
-            "title": "ToolError",
-            "type": "object"
-          }
-        ],
-        "type": "object"
-      },
-      "title": "Security Analytics Detections"
     },
     {
       "annotations": {
@@ -1080,7 +801,7 @@
         "category": "enrichment",
         "defer_loading": true,
         "defer_loading_rationale": "CORRELATE-phase, scope-gated, add-on-dependent (OpenCTI); Tool-Search `defer_loading` candidate.",
-        "output_shape": "EnrichIntelOut: status (preview|started), case_id, ips, hashes, domains, total_iocs (preview counts), pid, run_id, log_file, note. ASYNC on write \u2014 returns a run reference; poll opensearch_ingest_status (artifact_name=='intel').",
+        "output_shape": "EnrichIntelOut: status (preview|started|queued), case_id, ips, hashes, domains, total_iocs (preview counts), job_id, job_type, dispatched_to, next_step, pid, run_id, log_file, note. Disk/E01 enrich returns status=queued + job_id (non-blocking, dispatched to sift-opensearch-worker@); poll running_commands_status(job_id) for realtime worker_label/current_step. ASYNC on write \u2014 returns a run reference; poll opensearch_ingest_status (artifact_name=='intel').",
         "recommended_for_phase": "CORRELATE",
         "response_shaping": "Returns counts + a run reference, never IOC dumps or OpenCTI/OpenSearch credentials. Cannot approve findings, alter evidence, or decide reports.",
         "usage_examples": [
@@ -1106,9 +827,30 @@
           {
             "properties": {
               "case_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
                 "description": "Resolved case id.",
-                "title": "Case Id",
-                "type": "string"
+                "title": "Case Id"
+              },
+              "dispatched_to": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Worker lane a queued enrich was dispatched to.",
+                "title": "Dispatched To"
               },
               "domains": {
                 "anyOf": [
@@ -1149,6 +891,32 @@
                 "description": "Unique IP indicators in preview.",
                 "title": "Ips"
               },
+              "job_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Durable job id for a queued (worker-dispatched) enrich; poll running_commands_status(job_id).",
+                "title": "Job Id"
+              },
+              "job_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Dispatched job type (enrich) when queued.",
+                "title": "Job Type"
+              },
               "log_file": {
                 "anyOf": [
                   {
@@ -1161,6 +929,19 @@
                 "default": null,
                 "description": "Background run log file.",
                 "title": "Log File"
+              },
+              "next_step": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Operator guidance for a queued dispatch.",
+                "title": "Next Step"
               },
               "note": {
                 "anyOf": [
@@ -1205,7 +986,8 @@
                 "description": "Enrichment response status.",
                 "enum": [
                   "preview",
-                  "started"
+                  "started",
+                  "queued"
                 ],
                 "title": "Status",
                 "type": "string"
@@ -1225,8 +1007,7 @@
               }
             },
             "required": [
-              "status",
-              "case_id"
+              "status"
             ],
             "title": "EnrichIntelOut",
             "type": "object"
@@ -1516,7 +1297,7 @@
                       "type": "string"
                     },
                     "total_indexed": {
-                      "description": "Total submitted documents.",
+                      "description": "Documents submitted to the bulk indexer (duplicate _ids from multi-timestamp rows \u2014 e.g. timeliner \u2014 collapse on write; final unique count may be lower; confirm with opensearch_count).",
                       "title": "Total Indexed",
                       "type": "integer"
                     },
@@ -1737,7 +1518,7 @@
           },
           "hostname": {
             "default": "",
-            "description": "Source hostname. Required for json/accesslog/memory and most delimited. 'auto' detects from filenames for flat delimited dirs.",
+            "description": "Only used for formats with no derivable host (json, accesslog, non-recursive delimited). IGNORED for auto/memory/e01-disk/recursive-delimited, where the true host is derived from the registry ComputerName / parser. Correct a wrong derived host with opensearch_fix_host_mapping.",
             "title": "Hostname",
             "type": "string"
           },
@@ -1842,11 +1623,11 @@
         "type": "object"
       },
       "meta": {
-        "avoid_when": "Do NOT set dry_run=False until the target evidence and plan are clear. Use force=True only for an intentional re-ingest when the case already has docs.",
+        "avoid_when": "Do NOT set dry_run=False until the target evidence and plan are clear. Use force=True only for an intentional re-ingest when the case already has docs. Do NOT pass hostname \u2014 host is auto-derived; use opensearch_fix_host_mapping to correct a wrong mapping after ingest.",
         "category": "ingest",
         "defer_loading": false,
         "defer_loading_rationale": "Central INGEST-phase verb; keep always-loaded.",
-        "output_shape": "IngestOut: status (preview|started|containers_detected|multi_started|already_indexed|failed|queued), case_id, job_id, job_type, dispatched_to, next_step, plan{}, container{}, already_indexed{}, suggested_hostname, warning, pid, run_id, log_file, note, details{}. Disk/E01 ingest returns status=queued + job_id (non-blocking, dispatched to a sift-opensearch-worker@); poll job_status(job_id) for realtime worker_label/current_step.",
+        "output_shape": "IngestOut: status (preview|started|containers_detected|multi_started|already_indexed|failed|queued), case_id, job_id, job_type, dispatched_to, next_step, plan{}, container{}, already_indexed{}, suggested_hostname, warning, pid, run_id, log_file, note, details{}. Disk/E01 ingest returns status=queued + job_id (non-blocking, dispatched to a sift-opensearch-worker@); poll running_commands_status(job_id) for realtime worker_label/current_step.",
         "recommended_for_phase": "INGEST",
         "response_shaping": "Returns a plan/run reference (run_id, log_file) rather than streaming ingest output \u2014 poll opensearch_ingest_status for progress. The 'password' arg is a SECRET, redacted from audit/logs/results.",
         "usage_examples": [
@@ -1861,27 +1642,25 @@
             "arguments": {
               "dry_run": false,
               "format": "delimited",
-              "hostname": "wksn01",
               "include": [
                 "amcache",
                 "shimcache"
               ],
               "path": "evidence/triage/wksn01"
             },
-            "description": "Ingest a specific delimited artifact set for one host"
+            "description": "Ingest a specific delimited artifact set (host derived from evidence)"
           },
           {
             "arguments": {
               "dry_run": false,
               "format": "memory",
-              "hostname": "wksn01",
               "path": "evidence/memdump.raw",
               "tier": 3
             },
-            "description": "Deep memory analysis, write"
+            "description": "Deep memory analysis, write (host auto-derived via vol3)"
           }
         ],
-        "when_to_use": "Discover and ingest forensic artifacts into OpenSearch after examiner approval. dry_run=True (default) previews the plan; set dry_run=False to write. Supports container/artifact-dir auto-detect, format override, include/exclude artifact filters, memory tiers/plugins, and VSS."
+        "when_to_use": "Discover and ingest forensic artifacts into OpenSearch after examiner approval. dry_run=True (default) previews the plan; set dry_run=False to write. Supports container/artifact-dir auto-detect, format override, include/exclude artifact filters, memory tiers/plugins, and VSS. Host is auto-derived from the evidence (registry ComputerName for disk/archive images, vol3 for memory); correct a wrong mapping with opensearch_fix_host_mapping after ingest."
       },
       "name": "opensearch_ingest",
       "output_schema": {
@@ -1958,7 +1737,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Durable job id for a queued (worker-dispatched) ingest; poll job_status.",
+                "description": "Durable job id for a queued (worker-dispatched) ingest; poll running_commands_status(job_id).",
                 "title": "Job Id"
               },
               "job_type": {
@@ -2177,7 +1956,7 @@
           },
           "index": {
             "default": "",
-            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "description": "Index pattern to narrow WITHIN the active case (e.g. 'case-<key>-evtx-*'). Every segment must stay inside the active case; a cross-case value (case-*, another case's pattern, or an exact other-case index) is rejected. Leave empty to query the whole active case.",
             "title": "Index",
             "type": "string"
           },
@@ -2233,6 +2012,19 @@
         "anyOf": [
           {
             "properties": {
+              "advisory": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Set when an empty result is due to the field being absent from the index mapping (i.e. 'field not mapped', not 'no values'); names available fields.",
+                "title": "Advisory"
+              },
               "field": {
                 "description": "Field enumerated.",
                 "title": "Field",
@@ -2355,7 +2147,7 @@
           },
           "index": {
             "default": "",
-            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "description": "Index pattern to narrow WITHIN the active case (e.g. 'case-<key>-evtx-*'). Every segment must stay inside the active case; a cross-case value (case-*, another case's pattern, or an exact other-case index) is rejected. Leave empty to query the whole active case.",
             "title": "Index",
             "type": "string"
           },
@@ -2733,7 +2525,7 @@
           },
           "index": {
             "default": "",
-            "description": "Index pattern; every segment MUST start with 'case-'. Overrides case_id when set. Leave empty to derive from case_id/active case.",
+            "description": "Index pattern to narrow WITHIN the active case (e.g. 'case-<key>-evtx-*'). Every segment must stay inside the active case; a cross-case value (case-*, another case's pattern, or an exact other-case index) is rejected. Leave empty to query the whole active case.",
             "title": "Index",
             "type": "string"
           },
@@ -2915,7 +2707,20 @@
       },
       "description": "DEPRECATED tool form; prefer resource opensearch://cluster/status when available. Shows cluster health and per-case-index document counts. Use to confirm the cluster is reachable and see which cases have data; use opensearch_case_summary for one case's artifact and coverage breakdown.",
       "input_schema": {
-        "properties": {},
+        "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
+          "case_id": {
+            "default": "",
+            "description": "Case id; empty resolves to the active portal case (case_dir).",
+            "title": "Case Id",
+            "type": "string"
+          }
+        },
         "title": "StatusIn",
         "type": "object"
       },
@@ -2996,7 +2801,7 @@
                 "description": "Hayabusa detection-engine health (binary/rules_dir/rules_count). binary=null \u21d2 engine not installed; evtx ingest will skip Sigma detection."
               },
               "indices": {
-                "description": "All case-* indices, sorted by name.",
+                "description": "Indices for the ACTIVE case only (case-{key}-*), sorted by name; cluster-wide enumeration is not exposed to the agent (SEC-7). Empty when no active case resolves.",
                 "items": {
                   "properties": {
                     "docs": {
@@ -3033,7 +2838,7 @@
                 "type": "array"
               },
               "total_indices": {
-                "description": "Number of case-* indices returned.",
+                "description": "Number of active-case indices returned (0 with no active case).",
                 "title": "Total Indices",
                 "type": "integer"
               }
@@ -3134,7 +2939,7 @@
         "category": "evidence-survey",
         "defer_loading": true,
         "defer_loading_rationale": "SURVEY-phase tool used once per evidence item; Tool-Search `defer_loading` candidate.",
-        "output_shape": "InspectContainerOut: path, resolved_path, container_type (e01|raw|file|unknown), tool_available, size_bytes, size_human, hashes{}, partitions[], acquiry_info{}, raw_info (truncated).",
+        "output_shape": "InspectContainerOut: path, resolved_path, container_type (e01|raw|file|unknown), tool_available, size_bytes, size_human, hashes{}, partitions[], acquiry_info{}, raw_info (truncated), partition_note (guidance when no partition table \u2014 use fls -i ewf -f ntfs directly).",
         "recommended_for_phase": "SURVEY",
         "response_shaping": "raw_info is truncated fdisk/img_stat text \u2014 a preview, not the full tool dump. Read-only; never modifies evidence.",
         "usage_examples": [
@@ -3184,6 +2989,19 @@
                 "description": "Reported hashes.",
                 "title": "Hashes",
                 "type": "object"
+              },
+              "partition_note": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Guidance when no partition table (single-volume image) \u2014 use fls -i ewf -f ntfs directly.",
+                "title": "Partition Note"
               },
               "partitions": {
                 "description": "Detected partitions when available.",
@@ -3669,7 +3487,20 @@
       },
       "description": "DEPRECATED tool form; prefer resource opensearch://cluster/shards when available. Reports shard usage and capacity headroom. Use before large ingests because a full disk image can add many shards.",
       "input_schema": {
-        "properties": {},
+        "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
+          "case_id": {
+            "default": "",
+            "description": "Case id; empty resolves to the active portal case (case_dir).",
+            "title": "Case Id",
+            "type": "string"
+          }
+        },
         "title": "ShardStatusIn",
         "type": "object"
       },
@@ -3733,7 +3564,7 @@
                 "type": "string"
               },
               "top_indices_by_shard_count": {
-                "description": "Top visible indices by shard count.",
+                "description": "Top indices by shard count, filtered to the ACTIVE case only (SEC-7); other cases' indices are not exposed. Empty when no active case resolves. Cluster capacity fields above remain cluster-wide.",
                 "items": {
                   "properties": {
                     "doc_count": {

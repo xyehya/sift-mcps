@@ -12,11 +12,14 @@ Manages 23 authoritative upstream sources:
 
 from __future__ import annotations
 
+import http.client
+import ipaddress
 import json
 import logging
 import os
 import random
 import re
+import socket
 import subprocess
 import tempfile
 import time
@@ -27,8 +30,7 @@ from pathlib import Path
 from socket import timeout as SocketTimeout
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.parse import urljoin, urlparse
 
 import toml
 import yaml
@@ -386,49 +388,253 @@ def _is_retryable_error(error: Exception) -> bool:
     return False
 
 
+_REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
+
+
+def _ip_is_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True when ``ip`` is not a globally-routable destination we may fetch from.
+
+    Self-contained copy of the gateway egress posture
+    (``sift_gateway.backends.egress._ip_is_blocked``). This add-on runs offline
+    via the operator CLI (``python -m rag_mcp.refresh``) and the gateway never
+    invokes it, so we deliberately do NOT import the gateway policy — keeping
+    this standalone.
+
+    The PRIMARY gate is ``not ip.is_global``: that blocks the whole
+    non-internet-routable class, including CGNAT/shared ``100.64.0.0/10`` and
+    benchmarking ``198.18.0.0/15`` which ``ipaddress`` reports as
+    is_private=False / is_reserved=False. The explicit
+    private/loopback/link-local/multicast/reserved/unspecified +
+    IPv6 site-local terms are belt-and-suspenders (all already implied by
+    ``not is_global``). IPv4-mapped IPv6 (``::ffff:a.b.c.d``) is unwrapped FIRST
+    so a non-global v4 cannot be smuggled inside a v6 literal.
+    """
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return (
+        not ip.is_global
+        or ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or bool(getattr(ip, "is_site_local", False))  # IPv6 fec0::/10 only
+    )
+
+
+def _resolve_and_pin(hostname: str, port: int) -> str:
+    """Resolve ``hostname`` and return ONE vetted IP to dial (SSRF/rebinding guard).
+
+    Every address the resolver returns is classified; if ANY is non-global the
+    whole fetch is refused (deny-by-default — a resolver returning
+    ``[public, private]`` must not let us pick the public one and then rebind to
+    the private one on connect). The returned IP is PINNED by the caller for the
+    actual socket connection, eliminating the TOCTOU window between this check
+    and connect.
+    """
+    try:
+        infos = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+    except OSError as e:
+        raise ValueError(f"DNS resolution failed for {hostname}: {e}") from e
+    if not infos:
+        raise ValueError(f"No addresses resolved for {hostname}")
+
+    pinned: str | None = None
+    for info in infos:
+        ip_str = str(info[4][0])  # sockaddr[0] is the address string
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError as e:
+            raise ValueError(
+                f"Unparseable resolved address {ip_str} for {hostname}"
+            ) from e
+        if _ip_is_blocked(ip):
+            raise ValueError(
+                f"Resolved address {ip_str} for {hostname} is not globally routable"
+            )
+        if pinned is None:
+            pinned = ip_str
+    assert pinned is not None  # infos non-empty and none blocked
+    return pinned
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPSConnection that dials a pre-vetted, pinned IP while keeping TLS SNI
+    and certificate hostname validation bound to the real hostname (SEC-14).
+
+    Pinning the socket to the already-classified IP closes the DNS-rebinding
+    TOCTOU window: the kernel never re-resolves the name at connect time.
+    """
+
+    def __init__(self, host: str, pinned_ip: str, **kwargs: Any) -> None:
+        super().__init__(host, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self) -> None:
+        # No CONNECT-proxy/tunnel path: this add-on never calls set_tunnel().
+        # getattr() reads stdlib-set attributes that typeshed marks private.
+        self.sock = socket.create_connection(
+            (self._pinned_ip, self.port),
+            self.timeout,
+            getattr(self, "source_address", None),
+        )
+        context = self._context  # type: ignore[attr-defined]  # built by HTTPSConnection
+        # SNI + certificate hostname validation stay bound to the real hostname.
+        self.sock = context.wrap_socket(self.sock, server_hostname=self.host)
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """Plain-HTTP variant that dials a pre-vetted, pinned IP (SEC-14).
+
+    Only reachable when ``RAG_ALLOW_HTTP=1``; the auto-generated Host header
+    still carries the real hostname.
+    """
+
+    def __init__(self, host: str, pinned_ip: str, **kwargs: Any) -> None:
+        super().__init__(host, **kwargs)
+        self._pinned_ip = pinned_ip
+
+    def connect(self) -> None:
+        # No CONNECT-proxy/tunnel path: this add-on never calls set_tunnel().
+        self.sock = socket.create_connection(
+            (self._pinned_ip, self.port),
+            self.timeout,
+            getattr(self, "source_address", None),
+        )
+
+
+def _http_exchange(
+    scheme: str,
+    hostname: str,
+    pinned_ip: str,
+    port: int,
+    selector: str,
+    headers: dict,
+    timeout: int,
+) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
+    """Perform ONE request against ``pinned_ip``; never auto-follows redirects.
+
+    ``http.client`` does not chase 3xx responses, so the caller revalidates each
+    hop. Returns the live connection (caller MUST close it) and the response.
+    """
+    conn: http.client.HTTPConnection
+    if scheme == "https":
+        conn = _PinnedHTTPSConnection(hostname, pinned_ip, port=port, timeout=timeout)
+    else:
+        conn = _PinnedHTTPConnection(hostname, pinned_ip, port=port, timeout=timeout)
+    try:
+        conn.request("GET", selector, headers=headers)
+        response = conn.getresponse()
+    except BaseException:
+        conn.close()
+        raise
+    return conn, response
+
+
 def _fetch_url_once(
     url: str, headers: dict | None = None, max_bytes: int | None = None
 ) -> bytes:
-    """Single fetch attempt (internal). Raises on error."""
+    """Single fetch attempt (internal). Raises on error.
+
+    SEC-14 hardening: redirects are followed MANUALLY (auto-redirect disabled)
+    with full revalidation on every hop — allowlist + scheme check, DNS
+    resolution classified against :func:`_ip_is_blocked`, and the connection
+    pinned to the vetted IP (anti SSRF / DNS-rebinding / redirect-to-internal).
+    Credentials are dropped on any cross-host hop. Hops are capped at
+    ``MAX_REDIRECT_HOPS``.
+    """
     if max_bytes is None:
         max_bytes = MAX_DOWNLOAD_BYTES
-    req = Request(url, headers=headers or get_github_headers())
-    with urlopen(req, timeout=30) as response:
-        # Security: Validate final URL after redirects (SSRF protection)
-        final_url = response.geturl()
-        if final_url != url:
-            logger.debug(f"Redirect detected: {url} -> {final_url}")
-            _validate_url_host(final_url)  # Raises ValueError if invalid
 
-        # Check Content-Length header if present
-        content_length = response.headers.get("Content-Length")
-        if content_length:
+    base_headers = dict(headers or get_github_headers())
+    initial_host = urlparse(url).hostname
+    current_url = url
+
+    for _hop in range(MAX_REDIRECT_HOPS + 1):
+        parsed = urlparse(current_url)
+        # Re-validate scheme + host allowlist on EVERY hop (initial and redirects).
+        _validate_url_host(current_url)
+
+        hostname = parsed.hostname or ""
+        scheme = parsed.scheme
+        port = parsed.port or (443 if scheme == "https" else 80)
+
+        # Resolve, classify, and pin the destination IP (anti SSRF/rebinding).
+        pinned_ip = _resolve_and_pin(hostname, port)
+
+        # Never leak credentials across a host boundary on redirect.
+        hop_headers = dict(base_headers)
+        if hostname != initial_host:
+            hop_headers.pop("Authorization", None)
+
+        selector = parsed.path or "/"
+        if parsed.query:
+            selector += "?" + parsed.query
+
+        try:
+            conn, response = _http_exchange(
+                scheme, hostname, pinned_ip, port, selector, hop_headers, 30
+            )
             try:
-                length = int(content_length)
-                if length > max_bytes:
-                    raise DownloadTooLargeError(
-                        f"Content-Length {length} exceeds limit {max_bytes}"
+                status = response.status
+
+                if status in _REDIRECT_CODES:
+                    location = response.getheader("Location")
+                    # SEC-14: bound the drain — the connection is closed in the
+                    # finally below, so we never need the full body, and an
+                    # allowlisted-but-hostile host must not exhaust memory here.
+                    response.read(MAX_DISCARD_BYTES)
+                    if not location:
+                        raise ValueError(
+                            f"Redirect with no Location header from {hostname}"
+                        )
+                    current_url = urljoin(current_url, location)
+                    logger.debug(f"Redirect: {hostname} -> {current_url}")
+                    continue
+
+                if status >= 400:
+                    # Surface as HTTPError so fetch_url's retry policy applies.
+                    # SEC-14: bound the error-body read (memory-DoS guard).
+                    response.read(MAX_DISCARD_BYTES)
+                    raise HTTPError(
+                        current_url, status, response.reason, response.msg, None
                     )
-            except ValueError:
-                pass  # Invalid Content-Length, will check during streaming
 
-        # Stream and check size
-        chunks = []
-        total_bytes = 0
-        chunk_size = 65536  # 64 KB chunks
+                # 2xx: pre-check Content-Length, then stream with a hard cap.
+                content_length = response.getheader("Content-Length")
+                if content_length:
+                    try:
+                        length = int(content_length)
+                        if length > max_bytes:
+                            raise DownloadTooLargeError(
+                                f"Content-Length {length} exceeds limit {max_bytes}"
+                            )
+                    except ValueError:
+                        pass  # Invalid Content-Length, will check during streaming
 
-        while True:
-            chunk = response.read(chunk_size)
-            if not chunk:
-                break
-            total_bytes += len(chunk)
-            if total_bytes > max_bytes:
-                raise DownloadTooLargeError(
-                    f"Download exceeded {max_bytes} bytes limit"
-                )
-            chunks.append(chunk)
+                chunks = []
+                total_bytes = 0
+                chunk_size = 65536  # 64 KB chunks
+                while True:
+                    chunk = response.read(chunk_size)
+                    if not chunk:
+                        break
+                    total_bytes += len(chunk)
+                    if total_bytes > max_bytes:
+                        raise DownloadTooLargeError(
+                            f"Download exceeded {max_bytes} bytes limit"
+                        )
+                    chunks.append(chunk)
+                return b"".join(chunks)
+            finally:
+                conn.close()
+        except OSError as e:
+            # Socket/connection failures → URLError so fetch_url can retry them.
+            raise URLError(str(e)) from e
 
-        return b"".join(chunks)
+    raise ValueError(f"Too many redirects (> {MAX_REDIRECT_HOPS})")
 
 
 def fetch_url(
@@ -602,6 +808,14 @@ MAX_DOWNLOAD_BYTES = int(os.environ.get("RAG_MAX_DOWNLOAD_BYTES", 60 * 1024 * 10
 
 # Security: Only allow HTTPS by default (set RAG_ALLOW_HTTP=1 to enable HTTP)
 HTTPS_ONLY = os.environ.get("RAG_ALLOW_HTTP", "").lower() not in ("1", "true", "yes")
+
+# Security: cap redirect hops; each hop is re-validated + re-pinned (SEC-14)
+MAX_REDIRECT_HOPS = int(os.environ.get("RAG_MAX_REDIRECT_HOPS", 5))
+
+# Security: bound non-2xx body reads (redirect drains + >=400 error bodies) so an
+# allowlisted-but-hostile host cannot exhaust memory on a path the size cap that
+# guards 2xx downloads does not cover (SEC-14).
+MAX_DISCARD_BYTES = int(os.environ.get("RAG_MAX_DISCARD_BYTES", 64 * 1024))
 
 # Retry configuration for transient failures
 FETCH_MAX_RETRIES = int(os.environ.get("RAG_FETCH_MAX_RETRIES", 3))

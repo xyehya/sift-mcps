@@ -16,6 +16,24 @@ from opensearch_mcp.bulk import flush_bulk
 csv.field_size_limit(10 * 1024 * 1024)  # 10 MB — L2T CSV can have >131 KB fields
 
 
+def table_name_from_stem(stem: str) -> str:
+    """Derive a logical sub-table name from an EZ-tools CSV stem.
+
+    EZ tools prefix output filenames with a timestamp:
+    ``20260329224802_Amcache_DeviceContainers``. Strip the leading
+    timestamp prefix (digits + one underscore) to get the meaningful
+    sub-table name; fall back to the full stem when no such prefix
+    exists. Shared by tools.py (multi_csv) and the SRUM/Prefetch parser
+    loops so all three derive the same per-CSV ``table_name`` that
+    ``_doc_id`` folds into the content-hash seed (preventing sub-table
+    id collisions when several logical tables share one index).
+    """
+    parts = stem.split("_", 1)
+    if len(parts) > 1 and parts[0].isdigit():
+        return parts[1]
+    return stem
+
+
 def _detect_encoding(path: Path) -> str:
     """Detect CSV encoding from BOM.
 
@@ -41,6 +59,7 @@ def _doc_id(
     row: dict,
     natural_key: str | None = None,
     volatile_keys: set[str] | None = None,
+    table: str = "",
 ) -> str:
     """Generate deterministic ID for dedup on re-ingest.
 
@@ -51,6 +70,18 @@ def _doc_id(
     ORDERING: natural key check MUST precede volatile key stripping
     (VSS MFT dedup depends on this — sift.vss_id is in _VOLATILE_KEYS
     but used as 5th natural key component for MFT when VSS is active).
+
+    table (XYE-40) scopes the CONTENT-HASH id for sub-tables that share a
+    single index without carrying a provenance-namespaced field. EZ Tools
+    CSV families (amcache, srum, shellbags, ...) write several logical
+    tables into one index; the logical table name must be folded into the
+    seed so two sub-tables with identical raw columns don't collide. It is
+    applied to the content-hash path ONLY and ONLY when non-empty, so the
+    natural-key id and every existing caller that passes no table (delimited,
+    plaso, json, transcripts) keep byte-for-byte identical ids. Folding the
+    table here — instead of relying on a stamped row["sift.table"] field —
+    means a future provenance rename (e.g. vhir.* -> sift.*) can never shift
+    the dedup id.
     """
     if natural_key:
         key_parts = [row.get(k, "") for k in natural_key.split(":")]
@@ -68,7 +99,11 @@ def _doc_id(
     # the walk on bad rows. Used by delimited AND json ingests.
     stable = {str(k): v for k, v in stable.items() if k is not None}
     content = json.dumps(stable, sort_keys=True)
-    return hashlib.sha256(f"{index_name}:{content}".encode()).hexdigest()[:20]
+    # When table == "" the seed is identical to the legacy form
+    # (f"{index_name}:{content}"), preserving ids for all callers that
+    # pass no table.
+    seed = f"{index_name}:{table}" if table else index_name
+    return hashlib.sha256(f"{seed}:{content}".encode()).hexdigest()[:20]
 
 
 def _resolve_cached(host_dict, raw: str) -> str | None:
@@ -156,6 +191,34 @@ def ingest_csv(
 
             per_row_host = extract_host_from_record(row)
             raw_host = per_row_host or hostname
+
+            # VSS: for natural key tools (MFT), inject vss_id BEFORE _doc_id
+            # so it becomes part of the natural key. For content-hash tools,
+            # sift.vss_id is in _VOLATILE_KEYS and stripped from the hash.
+            if vss_id:
+                row["sift.vss_id"] = vss_id
+
+            # Compute dedup ID BEFORE adding provenance/host/table fields.
+            # XYE-40: the content-hash id must depend ONLY on raw evidence
+            # columns (+ index_name, which encodes case/type/host) + the
+            # logical table name (passed explicitly as table=table_name).
+            # Stamping host.name / host.id / sift.table BEFORE the id made the
+            # id sensitive to ingester-derived, provenance-namespaced fields,
+            # so the XYE-28 vhir.* -> sift.* rename silently changed the hash
+            # and CSV-family docs duplicated on force re-ingest. Stamping them
+            # AFTER the id makes the dedup id immune to any future provenance
+            # rename. sift.vss_id stays before the id (above): it is in
+            # _VOLATILE_KEYS so it never enters the content hash, but MFT's
+            # natural key reads it as a key component.
+            _id = _doc_id(
+                index_name,
+                row,
+                natural_key,
+                volatile_keys=_VOLATILE_KEYS,
+                table=table_name,
+            )
+
+            # Host + table stamping (added AFTER ID computation — XYE-40).
             row["host.name"] = raw_host
             # host.id stamping (v1 host-identity). Resolve via dict;
             # on miss, stamp host.id = raw (parser resolve-miss policy).
@@ -167,18 +230,6 @@ def ingest_csv(
                     row["host.id"] = raw_host
             if table_name:
                 row["sift.table"] = table_name
-
-            # VSS: for natural key tools (MFT), inject vss_id BEFORE _doc_id
-            # so it becomes part of the natural key. For content-hash tools,
-            # sift.vss_id is in _VOLATILE_KEYS and stripped from the hash.
-            if vss_id:
-                row["sift.vss_id"] = vss_id
-
-            # Compute dedup ID BEFORE adding provenance fields.
-            # Provenance differs across re-ingests (different source_file),
-            # but evidence content is the same — ID must be stable.
-            # Also strip volatile fields that change per-run (temp dir paths).
-            _id = _doc_id(index_name, row, natural_key, volatile_keys=_VOLATILE_KEYS)
 
             # Provenance fields (added after ID computation)
             if source_file:

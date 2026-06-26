@@ -3,7 +3,7 @@
 import csv
 from unittest.mock import MagicMock, patch
 
-from opensearch_mcp.parse_csv import _detect_encoding, _doc_id, ingest_csv
+from opensearch_mcp.parse_csv import _VOLATILE_KEYS, _detect_encoding, _doc_id, ingest_csv
 
 
 class TestDetectEncoding:
@@ -258,3 +258,141 @@ class TestVolatileKeysIngest:
 
         output = stderr_capture.getvalue()
         assert "Replacement chars" in output or "replacement" in output.lower()
+
+
+# ---------------------------------------------------------------------------
+# XYE-40: CSV-family dedup _id stability across the vhir.* -> sift.*
+# provenance-schema boundary.
+# ---------------------------------------------------------------------------
+
+
+class TestReingestIdempotencyXYE40:
+    """The content-hash _id must depend ONLY on raw evidence columns
+    (+ index_name + logical table) — never on ingester-stamped or
+    provenance-namespaced fields. Before XYE-40, ingest_csv stamped
+    host.name / host.id / sift.table onto the row BEFORE computing the id,
+    so the XYE-28 vhir.* -> sift.* rename changed the hash and CSV-family
+    docs duplicated on force re-ingest.
+    """
+
+    def _write_csv(self, path, rows):
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def _ingest_capture(self, tmp_path, *, source_file, table_name="t", filename="t.csv"):
+        """Run ingest_csv on a tiny one-row CSV with flush_bulk patched to
+        capture the bulk actions; return the captured _id of the single row.
+        """
+        csv_file = tmp_path / filename
+        self._write_csv(csv_file, [{"Path": "C:\\evil.exe", "Hash": "abc123"}])
+
+        captured: list[dict] = []
+
+        def capture(_client, actions):
+            captured.extend(actions)
+            return len(actions), 0
+
+        with patch("opensearch_mcp.parse_csv.flush_bulk", side_effect=capture):
+            ingest_csv(
+                csv_path=csv_file,
+                client=MagicMock(),
+                index_name="case-x-amcache-host1",
+                hostname="HOST1",
+                source_file=source_file,
+                table_name=table_name,
+            )
+        assert len(captured) == 1
+        return captured[0]["_id"]
+
+    def test_id_stable_across_provenance_eras(self, tmp_path):
+        """Same evidence row -> same content-hash _id regardless of which
+        provenance era (different source_file, simulating vhir vs sift)
+        stamped the row. This is the core XYE-40 invariant.
+        """
+        id_vhir_era = self._ingest_capture(
+            tmp_path, source_file="vhir-era/evidence.e01", filename="a.csv"
+        )
+        id_sift_era = self._ingest_capture(
+            tmp_path, source_file="sift-era/evidence.e01", filename="b.csv"
+        )
+        assert id_vhir_era == id_sift_era
+
+    def test_different_subtables_get_different_ids(self, tmp_path):
+        """Identical raw evidence columns in DIFFERENT logical sub-tables
+        (different table_name) must produce DIFFERENT ids — table
+        disambiguation still works after folding table into the seed.
+        """
+        id_table_a = self._ingest_capture(
+            tmp_path, source_file="s", table_name="AssociatedFileEntries", filename="a.csv"
+        )
+        id_table_b = self._ingest_capture(
+            tmp_path, source_file="s", table_name="UnassociatedFileEntries", filename="b.csv"
+        )
+        assert id_table_a != id_table_b
+
+    def test_stamped_fields_excluded_from_id(self, tmp_path):
+        """Through the ingest_csv path: the id over a row is unaffected by
+        the host.* / sift.table fields that ingest stamps onto it, because
+        they are stamped AFTER the id is computed. Proven by capturing the
+        full _source (which DOES carry the stamped fields) yet observing the
+        id matches a run whose only difference is era/provenance.
+        """
+        csv_file = tmp_path / "t.csv"
+        self._write_csv(csv_file, [{"Path": "C:\\evil.exe", "Hash": "abc123"}])
+        captured: list[dict] = []
+
+        def capture(_client, actions):
+            captured.extend(actions)
+            return len(actions), 0
+
+        with patch("opensearch_mcp.parse_csv.flush_bulk", side_effect=capture):
+            ingest_csv(
+                csv_path=csv_file,
+                client=MagicMock(),
+                index_name="case-x-amcache-host1",
+                hostname="HOST1",
+                source_file="sift-era/evidence.e01",
+                table_name="t",
+            )
+        action = captured[0]
+        src = action["_source"]
+        # The stamped fields ARE present on the persisted doc...
+        assert src["host.name"] == "HOST1"
+        assert src["sift.table"] == "t"
+        assert src["sift.source_file"] == "sift-era/evidence.e01"
+        # ...but the id matches a _doc_id over ONLY the raw columns + table
+        # (i.e. the stamped/provenance fields did NOT enter the hash).
+        expected = _doc_id(
+            "case-x-amcache-host1",
+            {"Path": "C:\\evil.exe", "Hash": "abc123"},
+            volatile_keys=_VOLATILE_KEYS,
+            table="t",
+        )
+        assert action["_id"] == expected
+
+    def test_doc_id_table_param_changes_hash(self):
+        """Direct unit: same row, table='t' vs table='' -> different ids;
+        and table='' is byte-for-byte the legacy seed (id preservation for
+        delimited/plaso/json/transcripts callers that pass no table).
+        """
+        row = {"Path": "C:\\evil.exe", "Hash": "abc123"}
+        id_with_table = _doc_id("idx", row, table="t")
+        id_no_table = _doc_id("idx", row, table="")
+        assert id_with_table != id_no_table
+        # table="" must equal the no-arg legacy call exactly.
+        assert id_no_table == _doc_id("idx", row)
+
+    def test_doc_id_table_does_not_affect_natural_key(self):
+        """table param applies to the content-hash path ONLY — natural-key
+        ids are unchanged whether or not a table is supplied.
+        """
+        row = {
+            "EntryNumber": "100",
+            "SequenceNumber": "5",
+            "FileName": "test.txt",
+            "ParentEntryNumber": "50",
+        }
+        nk = "EntryNumber:SequenceNumber:FileName:ParentEntryNumber"
+        assert _doc_id("idx", row, nk, table="mft") == _doc_id("idx", row, nk)

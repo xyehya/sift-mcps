@@ -1,6 +1,7 @@
 # Protocol SIFT Gateway — Architecture Source-of-Truth Spec
 
-> Code-grounded as of commit `156e810`, 2026-06-14. This is the **data source** for
+> Code-grounded as of commit `a7ea369`, 2026-06-19 (reconciled against current code by the
+> `docs/new-docs/reconciliation/` exercise; supersedes the prior `156e810` grounding). This is the **data source** for
 > generating a professional architecture diagram — every plane, component, function,
 > data flow, and security boundary, end to end. Diagrams below are valid Mermaid
 > (render at mermaid.live / GitHub) and double as structured input for AI diagram tools.
@@ -29,7 +30,7 @@ execution runs in an **OS-sandboxed `run_command`** plane.
 | 3 | **Core in-process tools** | `sift-core`, `sift-common` | — | run_command sandbox, findings/timeline, case/evidence, reporting |
 | 4 | **Control plane — AUTHORITATIVE** | Supabase / Postgres (`supabase/migrations`) | source of truth | Identity, cases, evidence custody, jobs, audit, reports, registries |
 | 5 | **Add-on MCP backends** | `opensearch-mcp`, `forensic-rag-mcp`, `opencti-mcp` | — | Registered in `app.mcp_backends`; reached only via Gateway |
-| 6 | **Data plane — DERIVED** | OpenSearch 3.5.0 + N ingest workers | never authoritative | case-* + opencti_* indices, full-text/vector/timeline |
+| 6 | **Data plane — DERIVED** | OpenSearch 3.5.0 + N ingest workers | never authoritative | case-* indices, full-text/vector/timeline (opencti_* indices live in the OpenCTI add-on's separate isolated cluster — see ⑤/§6) |
 | 7 | **Execution plane** | `sift-job-worker`, `sift-opensearch-worker@` | — | Claim durable jobs; sandboxed exec; ingest/parse/report |
 | 8 | **Evidence & Reports** | Evidence Vault (filesystem), Reports | immutable / approved-only | Raw sealed bytes + hashes; HTML/PDF/JSON bundles |
 
@@ -49,7 +50,7 @@ flowchart TB
   subgraph GW["② GATEWAY — SINGLE POLICY BOUNDARY (sift-gateway)"]
     direction TB
     HTTPMW["HTTP middleware stack<br/>SecureHeaders → PortalHTTPSGuard →<br/>NormalizeMCPPath → CORS → AuthMiddleware"]
-    MCPMW["FastMCP tool-call chain (9)<br/>Catalog→ToolAuthz→AddonAuthority→CaseContext→<br/>Audit→ProxyActiveCase→EvidenceGate→ResponseGuard→JobDispatch"]
+    MCPMW["FastMCP tool-call chain (Catalog + 10 policy = 11)<br/>Catalog→ControlPlaneRequired→ToolAuthz→AddonAuthority→CaseContext→<br/>Audit→ProxyActiveCase→EvidenceGate→ResponseGuard→JobDispatch"]
     REST["REST routes (rest.py)<br/>portal-only operator API"]
     AGG["Backend aggregator<br/>mcp_backends_registry · http_backend · stdio_backend"]
     HTTPMW --> MCPMW --> AGG
@@ -83,7 +84,7 @@ flowchart TB
 
   %% ---------- DATA PLANE ----------
   subgraph DATA["⑥ DATA PLANE — DERIVED (never authoritative)"]
-    OS[("OpenSearch 3.5.0 (security ON)<br/>case-* + opencti_* indices<br/>per-consumer scoped roles")]
+    OS[("OpenSearch 3.5.0 (security ON)<br/>case-* indices (SIFT forensic cluster)<br/>per-consumer scoped roles")]
     OSW["N opensearch ingest workers<br/>sift-opensearch-worker@.service<br/>least-priv · parallel · non-blocking"]
   end
 
@@ -96,7 +97,7 @@ flowchart TB
 
   %% ---------- EVIDENCE & REPORTS ----------
   subgraph EVR["⑧ EVIDENCE & REPORTS"]
-    Vault[("Evidence Vault<br/>immutable raw bytes + hashes<br/>chattr +i · manifest + ledger")]
+    Vault[("Evidence Vault<br/>immutable raw bytes + hashes<br/>FS immutable flag (ioctl, ≡chattr +i) · manifest + ledger")]
     Bundle[("Reports / Exports<br/>HTML / PDF / JSON<br/>APPROVED findings + data only")]
   end
 
@@ -109,7 +110,7 @@ flowchart TB
   GW -- "opensearch_* tools" --> OSMCP
   GW -- "kb_* tools" --> RAGMCP
   GW -- "cti_* tools" --> CTIMCP
-  CTIMCP -- "opencti_* indices (scoped role)" --> OS
+  CTIMCP -- "GraphQL query-only (cti_*)" --> OCTI["OpenCTI platform + its OWN isolated<br/>opencti-opensearch cluster (opencti_* indices)<br/>docker-compose.opencti.yml — NOT the SIFT cluster"]
   CP == "workers CLAIM durable jobs (poll + lease)" ==> EXEC
   EXEC -- "status · steps · logs · proposed findings · audit" --> CP
   EXEC -- "parsed artifacts · timeline · IOC index (+provenance)" --> OS
@@ -169,14 +170,21 @@ sequenceDiagram
   T-->>A: result (redacted, audited, job_id if dispatched)
 ```
 
+> **Stage-count note (reconciled):** the served policy chain is **Catalog + 10 policy
+> middlewares = 11 stages**, not 9. The outermost policy stage is
+> `ControlPlaneRequiredMiddleware` (BU3/XYE-21 — refuses tools when no control-plane DSN),
+> prepended before `ToolAuthorization`; `GatewayToolCatalog` wraps them all
+> (`policy_middleware.py:1262-1280`, `mcp_server.py:387-390`). The named stages above are
+> otherwise accurate and correctly ordered.
+
 **HTTP middleware stack (outermost → innermost; Starlette last-added = outermost):**
 `SecureHeadersMiddleware` → `_PortalHTTPSGuard` → `_NormalizeMCPPath` → `CORSMiddleware`
 (origins pinned to gateway URL) → `AuthMiddleware` (Supabase JWT first, PR02/api_keys
 fallback; **skips `/mcp`** which is auth'd by `MCPAuthASGIApp`) → routes → sanitized
 exception handler (never leaks paths/tracebacks).
 
-**Mounts:** `/` & `/portal`→307→`/portal/` · `/portal` (v2 app) · `/dashboard` (v1 LEGACY,
-`legacy_portal_session_enabled` plane, slated removal) · `/mcp` (aggregate) · `/health` · REST.
+**Mounts:** `/` & `/portal`→307→`/portal/` · `/portal` (v2 app) · `/mcp` (aggregate) ·
+`/health` · REST. (The legacy `/dashboard` v1 mount has been removed.)
 
 ---
 
@@ -206,6 +214,11 @@ flowchart TB
 
 Live-proven (RUN-3): positive forensic matrix green under jail; ~25 negative red-team rows
 fail closed with zero `approval_required`; evidence sha256 unchanged post-run.
+
+> **Posture note (reconciled):** the FLOOR diagram shows the **hardened** end-state. In code the
+> default seccomp mode is `log` and AppArmor installs in `complain`; `kill`/`enforce` is the
+> deployed posture selected by `./install.sh --apparmor-enforce` / `harden.sh` /
+> `SIFT_EXECUTE_SECCOMP_MODE=kill` (`dfir_exec_launcher.py:475-477`, `harden.sh`).
 
 ---
 
@@ -244,7 +257,7 @@ OpenSearch ingest specifically fans out to **N least-privilege opensearch worker
 | `response_guard.py` | secret patterns, `[REDACTED:*]`, untrusted-output label, override TTL |
 | `audit_helpers.py` | actor columns, redact_for_audit, `_resolve_db_token_id` (FK guard) |
 | `mcp_backends_registry.py` | add-on registration (Postgres `app.mcp_backends`) |
-| `http_backend.py` / `stdio_backend.py` | proxy transports to add-on backends |
+| `backends/http_backend.py` / `backends/stdio_backend.py` | proxy transports to add-on backends |
 | `jobs.py` / `job_tools.py` | durable-job adapter, sanitized status, stale-lease reaper |
 | `active_case.py` / `portal_services.py` | active-case service, portal-facing services |
 | `rest.py` / `health.py` | operator REST API, `/health` |
@@ -267,7 +280,7 @@ OpenSearch ingest specifically fans out to **N least-privilege opensearch worker
 |---------|------|-------|-----------|
 | `opensearch-mcp` | CORE (install.sh) | `opensearch_*` (16) | `registry.py` typed contract → `server.py` engine; `client`, `ingest`, `bulk`, `paths`, `discover`, `parse_csv`, `host_dictionary` |
 | `forensic-rag-mcp` | CORE (install.sh) | `kb_search_knowledge`, `kb_list_knowledge_sources`, `kb_get_knowledge_stats` | pgvector, knowledge-only (no case evidence) |
-| `opencti-mcp` | EXTERNAL (setup-addon.sh) | `cti_*` / `opencti_*` | query-only; writes opencti_* to OpenSearch under scoped role |
+| `opencti-mcp` | EXTERNAL (setup-addon.sh) | `cti_*` (8, query-only) | GraphQL query-only to the OpenCTI platform; the `opencti_*` indices live in the add-on's OWN isolated `opencti-opensearch` cluster (`docker-compose.opencti.yml`), NOT the SIFT forensic cluster |
 
 ---
 
@@ -280,6 +293,8 @@ OpenSearch ingest specifically fans out to **N least-privilege opensearch worker
 **opensearch_\*:** `search` `count` `aggregate` `timeline` `get_event` `field_values`
 `case_summary` `status` `shard_status` `list_detections` `inspect_container`
 `ingest` `ingest_status` `enrich_intel` `fix_host_mapping` `host_fix`
+(indicative subset — the typed contract also exposes `*_catalog`, `*_cluster_*`, and `_resource`
+variants; the authoritative surface is the golden snapshot `test_opensearch_mcp_surface_snapshot.py`)
 
 **kb_\*:** `kb_search_knowledge` · `kb_list_knowledge_sources` · `kb_get_knowledge_stats`
 
@@ -294,7 +309,8 @@ OpenSearch ingest specifically fans out to **N least-privilege opensearch worker
 `opensearch_provenance` → `rag_pgvector` → `report_metadata` → `investigation_authority` →
 `host_identity` → `investigation_iocs_content_hash` → `evidence_reacquire` →
 `rag_search_filters` → `rag_knowledge_only` → `force_rls_app_tables` →
-`approval_ledger_db` → `harden_append_only_chains` → `opensearch_worker_status`
+`approval_ledger_db` → `harden_append_only_chains` → `opensearch_worker_status` →
+`evidence_unseal`
 
 ---
 
@@ -311,7 +327,7 @@ OpenSearch ingest specifically fans out to **N least-privilege opensearch worker
 | **Audit** | Pre-dispatch DB audit, fail-closed for write tools; append-only | AuditEnvelopeMiddleware |
 | **Re-auth (humans)** | case activation, evidence seal/ignore/retire, finding approval, report inclusion/export, credential issuance → Supabase fail-closed re-verify | CL3a/b, approval_ledger_db |
 | **DB authority** | Postgres authoritative; OpenSearch derived; no env/pointer active-case | active_case_authority, RLS |
-| **Evidence immutability** | Operator-mounted only; `chattr +i`; append-only custody chains | evidence_chain, audit rules |
-| **Execution confinement** | Landlock v4 + seccomp=kill + cgroup + AppArmor=enforce; runtime-user fail-closed | dfir_exec_launcher, worker |
+| **Evidence immutability** | Operator-mounted only; FS immutable flag via in-process `ioctl(FS_IOC_SETFLAGS)` (≡ `chattr +i`); append-only custody chains | evidence_chain, audit rules |
+| **Execution confinement** | Landlock v4 + seccomp=kill + cgroup + AppArmor=enforce (hardened posture; code default is seccomp=log / AppArmor=complain, flipped by `--apparmor-enforce` / `harden.sh`); runtime-user fail-closed | dfir_exec_launcher, worker |
 | **Knowledge isolation** | Shared pgvector = knowledge/reference only; case evidence never auto-embedded | rag_knowledge_only |
 ```

@@ -25,7 +25,7 @@ from sift_core.agent_tools import core_tool_names
 
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
 from sift_gateway.audit_helpers import (
-    _extract_audit_id,
+    _extract_all_audit_ids_from_result,
     _extract_run_command_detail,
     redact_for_audit,
 )
@@ -85,6 +85,7 @@ class GatewayProtocol(Protocol):
     def addon_authority_for_tool(self, tool_name: str) -> Mapping[str, Any] | None: ...
     def is_case_scoped_tool(self, tool_name: str) -> bool: ...
     def safe_case_argument_names(self, tool_name: str) -> Iterable[str] | None: ...
+    def case_bound_argument_names(self, tool_name: str) -> Iterable[str]: ...
 
 
 @contextmanager
@@ -227,6 +228,39 @@ def _safe_case_args(gateway: GatewayProtocol, name: str) -> set[str] | None:
     if result is None:
         return None
     return set(result)
+
+
+def _case_bound_args(gateway: GatewayProtocol, name: str) -> set[str]:
+    """SEC-2: free-form, agent-settable args (e.g. the OpenSearch ``index``) whose
+    value must be VALIDATED to stay within the active case — not injected/
+    overwritten like the safe case args. Mirrors :func:`_safe_case_args`; returns
+    an empty set when none are declared (the common case)."""
+    fn = getattr(gateway, "case_bound_argument_names", None)
+    if not callable(fn):
+        return set()
+    result = cast(Iterable[str] | None, fn(name))
+    return set(result) if result else set()
+
+
+def _active_case_index_prefix(gateway: GatewayProtocol, case: ActiveCase) -> str | None:
+    """SEC-2: the authoritative active-case OpenSearch index prefix
+    (``case-{key}-``), or None when it cannot be determined (no artifact_path or
+    the gateway helper is absent), in which case the caller skips binding and the
+    backend ``_validate_index`` remains the defense-in-depth guard.
+
+    Reuses :meth:`Gateway._active_case_index_prefix` (defensive getattr) so the
+    middleware agrees with the backend resolver without re-deriving the prefix."""
+    if not getattr(case, "artifact_path", None):
+        return None
+    fn = getattr(gateway, "_active_case_index_prefix", None)
+    if not callable(fn):
+        return None
+    try:
+        prefix = cast(str | None, fn(case))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("case_bound: active-case prefix lookup failed: %s", exc)
+        return None
+    return prefix if prefix else None
 
 
 def _is_gateway_local_tool(gateway: GatewayProtocol, name: str) -> bool:
@@ -819,6 +853,57 @@ class ProxyActiveCaseMiddleware(Middleware):
         case = _current_gateway_active_case()
         if case is None:
             return await call_next(context)
+        # SEC-2 (agent path): bind free-form case-bound args (the OpenSearch
+        # ``index``) to the active case BEFORE dispatch, for EVERY case-scoped
+        # tool — including those with empty safe_case_argument_names
+        # (opensearch_get_event carries no injected case_dir, so the backend
+        # cannot bind it). This runs ahead of the safe_args branch so it also
+        # covers tools that pass through without injection. The agent caller may
+        # narrow WITHIN its own case (case-{key}-evtx-*) but a value naming
+        # another case (case-*, another case's pattern, an exact other-case index)
+        # or a blank comma segment is denied here at the policy boundary — the
+        # authoritative home for case isolation. The backend _validate_index is
+        # defense-in-depth.
+        bound_args = _case_bound_args(self.gateway, name)
+        if bound_args:
+            prefix = _active_case_index_prefix(self.gateway, case)
+            args = _tool_args(context)
+            for key in bound_args:
+                supplied = args.get(key)
+                if not supplied:
+                    continue
+                # Fail closed: a case_bound value was supplied but the active-case
+                # prefix cannot be resolved (abnormal — an active case with no
+                # artifact_path). Deny rather than fall through to the backend
+                # guard, which cannot bind tools that receive no injected case_dir
+                # (opensearch_get_event). A security gate that cannot evaluate
+                # must deny, not skip.
+                if not prefix:
+                    await self._audit_denial(name, case, "case_bound_prefix_unresolved")
+                    return _error_result(
+                        "invalid_input",
+                        f"client-supplied {key} cannot be bound to the active case "
+                        "(cross-case access denied)",
+                        tool=name,
+                    )
+                for segment in str(supplied).split(","):
+                    segment = segment.strip()
+                    if not segment:
+                        await self._audit_denial(name, case, "case_bound_empty_segment")
+                        return _error_result(
+                            "invalid_input",
+                            f"client-supplied {key} contains an empty segment "
+                            "(cross-case access denied)",
+                            tool=name,
+                        )
+                    if not segment.startswith(prefix):
+                        await self._audit_denial(name, case, "case_bound_cross_case")
+                        return _error_result(
+                            "invalid_input",
+                            f"client-supplied {key} segment '{segment}' is outside "
+                            "the DB active case (cross-case access denied)",
+                            tool=name,
+                        )
         safe_args = _safe_case_args(self.gateway, name)
         # OS2: safe_args == None means the tool's case-arg contract is unknown
         # (no manifest declaration and no schema property found) — deny
@@ -919,7 +1004,11 @@ class AuditEnvelopeMiddleware(Middleware):
         case_dir = case.artifact_path if case is not None else None
 
         request_id = self._request_id()
-        envelope_event_id: str | None = None
+        # §9.3: always generate a local fallback so the canonical id is never
+        # None even when db_audit is absent (no-DSN or pre-dispatch DB miss).
+        # The DB-persisted uuid overwrites this when the pre-dispatch record
+        # succeeds; the fallback is used as-is otherwise.
+        envelope_event_id: str = str(uuid.uuid4())
 
         # Capture the tool's REDACTED arguments for the operator audit trail.
         # This applies uniformly to core and proxied add-on tools, so e.g.
@@ -979,11 +1068,90 @@ class AuditEnvelopeMiddleware(Middleware):
         status = "ok"
         backend_audit_id: str | None = None
         result: ToolResult | None = None
+        native_ids: list[str] = []
         try:
             result = await call_next(context)
             if result.is_error:
                 status = "error"
-            backend_audit_id = _extract_audit_id(list(result.content or []))
+            # §9.3 (Option B): canonical id selection — core vs proxied add-on.
+            #
+            # CORE tools (backend_name == "sift-core", in-process, gateway-trusted):
+            #   canonical = native_ids[0] if present, else envelope_event_id.
+            #   Preserves existing siftgateway-* readability and finding citations.
+            #
+            # PROXIED add-on tools (everything else):
+            #   canonical = envelope_event_id ALWAYS.
+            #   A backend-supplied id MUST NOT control what the agent cites:
+            #   it could collide with another row's PK via the id::text resolver
+            #   predicate, or be forged by a compromised backend.  The gateway
+            #   owns the canonical — backends contribute only to the aliases list.
+            #
+            # ALIASES (both cases): unique(native_ids + [envelope_event_id]).
+            #   UUID-shaped native ids from proxied backends are filtered out:
+            #   they are untrustworthy and could collide with real PK rows via the
+            #   id::text resolver predicate.  Scheme-formatted ids (e.g.
+            #   "opensearch-sift-service-*") are kept and resolve via audit_aliases.
+            #
+            # backend_audit_id = canonical (the id stamped into the DB result row).
+            #
+            # §9.5 response stamping: inject canonical into both:
+            #   (a) content[0].text — JSON dict, audit_id set if absent
+            #   (b) structured_content — dict, audit_id set if absent
+            # Two-plane stamping so both MCP content renderers see the same id.
+            # Fully fail-soft: any error in the stamp block leaves result unchanged.
+            native_ids = _extract_all_audit_ids_from_result(result)
+            is_core = backend_name == "sift-core"
+            if is_core:
+                canonical = native_ids[0] if native_ids else envelope_event_id
+            else:
+                canonical = envelope_event_id
+            backend_audit_id = canonical
+            try:
+                content_list = list(result.content or [])
+                if content_list and isinstance(content_list[0], TextContent):
+                    first_text = content_list[0].text or ""
+                    try:
+                        parsed = json.loads(first_text)
+                        # For core tools: preserve any existing audit_id (don't overwrite).
+                        # For proxied tools: always stamp the canonical so the agent
+                        # sees the gateway-owned envelope uuid, not the backend's id.
+                        if isinstance(parsed, dict) and (not is_core or "audit_id" not in parsed):
+                            # copy-before-mutate: don't alias the decoded dict
+                            stamped = {**parsed, "audit_id": canonical}
+                            result.content = [
+                                content_list[0].model_copy(
+                                    update={"text": json.dumps(stamped, ensure_ascii=False)}
+                                )
+                            ] + list(content_list[1:])
+                    except (json.JSONDecodeError, TypeError):
+                        # Root is not a JSON object — stash in meta as best-effort.
+                        result.meta = dict(result.meta or {})
+                        result.meta.setdefault("audit_id", canonical)
+                        logger.debug(
+                            "mcp_envelope: %s response root is not a JSON object; "
+                            "audit_id stored in meta only",
+                            name,
+                        )
+                elif not content_list:
+                    result.meta = dict(result.meta or {})
+                    result.meta.setdefault("audit_id", canonical)
+                # (b) stamp structured_content so MCP clients that render it over
+                # content also see the audit_id (covers the capped envelope case and
+                # any add-on that populates structured_content directly).
+                # For proxied tools, always write the canonical (envelope uuid) even if
+                # the cap path already injected the native id — the canonical governs.
+                # For core tools, only inject if the key is absent (preserve native).
+                if isinstance(result.structured_content, dict):
+                    sc = result.structured_content
+                    if not is_core or "audit_id" not in sc:
+                        # copy-before-mutate: don't modify the backend's original dict
+                        result.structured_content = {**sc, "audit_id": canonical}
+            except Exception as stamp_exc:
+                logger.debug(
+                    "mcp_envelope: response stamping failed for %s (non-fatal): %s",
+                    name,
+                    stamp_exc,
+                )
             return result
         except Exception:
             status = "error"
@@ -996,6 +1164,7 @@ class AuditEnvelopeMiddleware(Middleware):
             # redacted + bounded so no secret or host path lands in the row.
             result_content = list(result.content or []) if result is not None else []
             result_detail: dict[str, Any] = {}
+            audit_aliases: list[str] = []
             try:
                 summary = _summarize_audit_result(result_content)
                 if summary:
@@ -1007,6 +1176,32 @@ class AuditEnvelopeMiddleware(Middleware):
                 )
                 if rc_detail:
                     result_detail["detail"] = rc_detail
+                # §9.3 aliases: all native ids + envelope uuid, deduped.
+                # For proxied add-ons, drop any native id that looks like a bare
+                # UUID (matches the uuid4 pattern) and is not our own envelope_event_id
+                # — a uuid-shaped id from an untrusted backend could collide with
+                # another row's PK via the id::text resolver predicate.
+                # Scheme-formatted ids (e.g. "opensearch-*") are kept as-is.
+                # envelope_event_id is always included as the resolver backstop.
+                _uuid_pat = (
+                    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                )
+                import re as _re  # already in stdlib; local import avoids hoisting
+                def _keep_native(nid: str) -> bool:
+                    if is_core:
+                        return True
+                    # proxied: drop bare uuid-shaped ids (not our envelope)
+                    if nid == envelope_event_id:
+                        return True
+                    return not bool(_re.match(_uuid_pat, nid, _re.IGNORECASE))
+                all_native = native_ids if result is not None else []
+                raw_aliases: list[str] = list(
+                    dict.fromkeys(
+                        [nid for nid in all_native if _keep_native(nid)]
+                        + [envelope_event_id]
+                    )
+                )
+                audit_aliases = redact_for_audit(raw_aliases, case_dir=case_dir)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning(
                     "mcp_envelope: result detail extraction failed for %s: %s",
@@ -1031,7 +1226,13 @@ class AuditEnvelopeMiddleware(Middleware):
                             "phase": "result",
                             "status": status,
                             "elapsed_ms": elapsed_ms,
+                            # canonical id (§9.3 Option B): gateway uuid for proxied
+                            # add-ons (envelope_event_id); native id for core tools.
+                            # Always non-None and always stamped into the response.
                             "backend_audit_id": backend_audit_id,
+                            # audit_aliases: native ids + envelope uuid (uuid-shaped
+                            # proxied ids excluded); resolver matches any cited alias.
+                            "audit_aliases": audit_aliases,
                             "envelope_event_id": envelope_event_id,
                             "principal": effective_principal,
                             **result_detail,
@@ -1086,10 +1287,21 @@ class AuditEnvelopeMiddleware(Middleware):
         return not _tool_read_only(self.gateway, name)
 
     def _backend_name(self, tool_name: str) -> str:
-        if tool_name in core_tool_names() or tool_name == "capability_guide":
+        if (
+            tool_name in core_tool_names()
+            or tool_name == "capability_guide"
+            # §9.7: durable-lane tools are gateway-embedded core tools; they are
+            # NOT registered as add-on backends so _tool_map misses them and they
+            # fall through to "unknown".  Tag them sift-core explicitly.
+            or tool_name in _CORE_DURABLE_LANE_TOOLS
+        ):
             return "sift-core"
         return getattr(self.gateway, "_tool_map", {}).get(tool_name, "unknown")
 
+
+# §9.7 (backend-tagging fix): gateway-embedded durable-lane tools that are NOT
+# registered as add-on backends (so _tool_map misses them) but belong to sift-core.
+_CORE_DURABLE_LANE_TOOLS = frozenset({"run_command_job", "running_commands_status"})
 
 _OPENSEARCH_JOB_DISPATCH_TOOLS = frozenset({"opensearch_ingest", "opensearch_enrich_intel"})
 
@@ -1118,6 +1330,176 @@ def _str_list(value: Any) -> list[str]:
 
 def _drop_empty(data: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in data.items() if v not in (None, "", [], False)}
+
+
+def _first_text(result: ToolResult) -> str | None:
+    """Extract the first text content from a ToolResult, or None."""
+    for item in result.content or []:
+        text = getattr(item, "text", None)
+        if isinstance(text, str):
+            return text
+    return None
+
+
+class OpenSearchIngestStatusAugmentMiddleware(Middleware):
+    """M-INGSTATUS: augment opensearch_ingest_status with durable job rows at the gateway.
+
+    Root cause: the opensearch backend (a stdio subprocess spawned by the gateway
+    plugin system) has no control-plane DSN by design — DB creds must not leave the
+    gateway process.  The backend's DB-active handler therefore returns ingests=[] and
+    a redirect message.  The fix lives HERE, in the gateway, which owns the DSN and
+    can call JobService.list_ingest_jobs_for_case(case.case_id) to populate ingests[].
+
+    Pattern: call_next() to get the backend's authority envelope (message, authority,
+    last_completed, next_step), then merge durable job rows into ingests[].  Fail-
+    closed: any DB error or JSON parse error → preserve the backend's original result
+    (ingests=[] + authority redirect) unchanged.
+
+    Placement: alongside OpenSearchJobDispatchMiddleware (innermost pair). By the time
+    this runs the call has passed auth, active-case injection, audit, and evidence gate.
+    The result still passes through ResponseGuardMiddleware (outermost) above us.
+    """
+
+    def __init__(self, gateway: GatewayProtocol) -> None:
+        self.gateway = gateway
+
+    async def on_call_tool(self, context, call_next):
+        if _tool_name(context) != "opensearch_ingest_status":
+            return await call_next(context)
+        job_service = getattr(self.gateway, "job_service", None)
+        case = _current_gateway_active_case()
+        # If no job_service or no active case, fall through unmodified.
+        if job_service is None or case is None:
+            return await call_next(context)
+        # Proxy to the backend first to obtain the authority envelope.
+        result = await call_next(context)
+        if result.is_error:
+            return result
+        try:
+            return await asyncio.to_thread(
+                self._augment, result, job_service, case
+            )
+        except Exception as exc:  # fail-closed: never let augmentation break the call
+            logger.warning(
+                "opensearch_ingest_status augment failed (degrading to backend result): %s",
+                exc,
+            )
+            return result
+
+    def _augment(
+        self, result: ToolResult, job_service: Any, case: Any
+    ) -> ToolResult:
+        """Synchronous augmentation: fetch durable rows from DB and merge into ingests[].
+
+        Runs in a thread (asyncio.to_thread) so the blocking DB call doesn't stall
+        the event loop.  Fail-closed: any exception propagates to the caller, which
+        returns the original result.
+        """
+        text = _first_text(result)
+        if text is None:
+            return result
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return result
+        if not isinstance(payload, dict):
+            return result
+
+        # Query durable job rows for this case using the gateway's DSN.
+        # case.case_id is the UUID that app.job_status_public stores as case_id
+        # (the same UUID the dispatch middleware stores in the job row).
+        durable_rows = job_service.list_ingest_jobs_for_case(case.case_id)
+
+        # Build the ingests[] entries matching IngestRun's expected shape
+        # (the same shape server.py's DB-active block produces when _JOB_STATUS_LISTER
+        # is wired — now produced here at the gateway instead).
+        _STATUS_MAP = {
+            "pending": "starting",
+            "running": "running",
+            "retrying": "running",
+            "succeeded": "complete",
+            "failed": "failed",
+            "expired": "failed",
+        }
+        ingest_runs = []
+        for row in durable_rows:
+            job_status_val = str(row.get("status") or "unknown")
+            ingest_status = _STATUS_MAP.get(job_status_val, "unknown")
+            step = row.get("current_step") or {}
+            result_pub = row.get("result_public") or {}
+            job_id_str = str(row.get("job_id") or "")
+            ingest_runs.append(
+                {
+                    "case_id": row.get("case_id"),
+                    "status": ingest_status,
+                    "pid": None,
+                    "elapsed": "",
+                    "total_indexed": int(result_pub.get("indexed_docs") or 0),
+                    "bulk_failed": 0,
+                    "hosts_complete": int(result_pub.get("hosts_complete") or 0),
+                    "hosts_total": int(result_pub.get("hosts_total") or 0),
+                    "artifacts_complete": int(result_pub.get("artifacts_complete") or 0),
+                    "artifacts_total": int(result_pub.get("artifacts_total") or 0),
+                    "log_file": "",
+                    "checklist": [],
+                    "message": (
+                        f"Worker-dispatched {row.get('job_type', 'ingest')} job "
+                        f"({job_status_val}). Poll "
+                        f"running_commands_status(job_id='{job_id_str}') "
+                        "for realtime worker_label, current_step, and terminal result_public."
+                    ),
+                    "halt_reason": None,
+                    "errors": [],
+                    "next_steps": [],
+                    "warnings": [],
+                    # details: flat dict — job_id and friends live HERE, not nested
+                    "details": {
+                        "job_id": row.get("job_id"),
+                        "job_type": row.get("job_type"),
+                        "worker_label": row.get("worker_label"),
+                        "current_step": step,
+                        "result_public": result_pub,
+                        "error_summary": row.get("error_summary"),
+                        "created_at": row.get("created_at"),
+                        "started_at": row.get("started_at"),
+                        "finished_at": row.get("finished_at"),
+                        "updated_at": row.get("updated_at"),
+                        "step_label": str(step.get("detail") or ""),
+                    },
+                }
+            )
+
+        payload["ingests"] = ingest_runs
+        # Update the summary message to reflect whether rows were found.
+        n = len(ingest_runs)
+        payload["message"] = (
+            "Durable job authority is active. "
+            + (
+                f"{n} ingest/enrich job(s) found for this case. "
+                "For per-job realtime detail poll "
+                "running_commands_status(job_id=<job_id from details>)."
+                if ingest_runs
+                else (
+                    "No active or recent ingest/enrich jobs found for this case. "
+                    "If your opensearch_ingest returned a job_id (status='queued'), "
+                    "poll running_commands_status(job_id=<that job_id>) directly. "
+                    "Confirm a completed ingest with opensearch_count / "
+                    "opensearch_case_summary on the target indices."
+                )
+            )
+        )
+        new_text = json.dumps(payload)
+        new_content = [TextContent(type="text", text=new_text)]
+        # structured_content MUST be populated: opensearch_ingest_status declares an
+        # outputSchema (IngestStatusOut).  FastMCP's live output validator rejects a
+        # ToolResult whose structured_content is None when outputSchema is defined,
+        # raising "outputSchema defined but no structured output returned".
+        # Mutate from the backend's existing structured_content (a dict) so any extra
+        # envelope fields the backend set (last_completed, next_step, job_id, …) are
+        # preserved alongside our augmented ingests[]/message.
+        base_sc = result.structured_content if isinstance(result.structured_content, dict) else {}
+        new_sc = {**base_sc, **payload}
+        return ToolResult(content=new_content, structured_content=new_sc, is_error=False)
 
 
 class OpenSearchJobDispatchMiddleware(Middleware):
@@ -1182,6 +1564,23 @@ class OpenSearchJobDispatchMiddleware(Middleware):
             "examiner": getattr(identity, "principal", None) or "agent",
             "tool": name,
         }
+        # B-D1: carry the audit-write DSN into the worker so the ingest
+        # subprocess can forward-write per-artifact provenance rows to
+        # app.audit_events (Gap B). spec_internal NEVER reaches the agent
+        # (the jobs view excludes it). Only inject when non-empty; never log it.
+        #
+        # L-1b: prefer the least-privilege SIFT_AUDIT_WRITER_DSN when configured;
+        # fall back to the full control-plane DSN otherwise (non-breaking
+        # rollout — least-privilege activates the moment the operator sets the
+        # secret). audit_forward_write_dsn() logs a debug note on fallback. The
+        # subprocess still reads it from SIFT_CONTROL_PLANE_DSN (ingest_job.py
+        # binds spec_internal["control_plane_dsn"] -> that env var), so only the
+        # injected *value* narrows — the plumbing is unchanged.
+        from sift_core.investigation_store import audit_forward_write_dsn
+
+        forward_write_dsn = (audit_forward_write_dsn() or "").strip()
+        if forward_write_dsn:
+            spec_internal["control_plane_dsn"] = forward_write_dsn
         job_service = self.gateway.job_service
         if job_service is None:  # pragma: no cover - guarded by on_call_tool
             raise RuntimeError("job service unavailable")
@@ -1271,6 +1670,12 @@ def gateway_policy_middlewares(
         ProxyActiveCaseMiddleware(gateway),
         EvidenceGateMiddleware(gateway),
         ResponseGuardMiddleware(gateway),
+        # M-INGSTATUS: augment opensearch_ingest_status with durable job rows
+        # from app.job_status_public via the gateway's own DSN (the only process
+        # that has DB credentials — the opensearch backend stdio subprocess does
+        # not).  Runs before the dispatch middleware so the augmented result still
+        # passes through ResponseGuardMiddleware above.
+        OpenSearchIngestStatusAugmentMiddleware(gateway),
         # feat/opensearch-workers: INNERMOST — runs only after the call has
         # cleared auth, active-case injection, audit, and the evidence gate.
         # Redirects opensearch_ingest/opensearch_enrich_intel to a durable worker

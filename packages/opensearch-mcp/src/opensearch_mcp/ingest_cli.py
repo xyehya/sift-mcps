@@ -11,6 +11,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NoReturn
 
 import yaml
 from sift_common.audit import AuditWriter
@@ -21,7 +22,7 @@ from opensearch_mcp.ingest import discover, ingest
 from opensearch_mcp.ingest_status import write_status
 from opensearch_mcp.manifest import sha256_file
 from opensearch_mcp.parse_csv import ingest_csv
-from opensearch_mcp.paths import sift_dir, sanitize_index_component
+from opensearch_mcp.paths import build_index_pattern, sanitize_index_component, sift_dir
 from opensearch_mcp.tools import TOOLS
 
 logger = logging.getLogger(__name__)
@@ -109,7 +110,7 @@ def _ensure_host_id_keyword_mapping(case_id: str) -> dict:
     except Exception as e:
         return {"status": "skipped", "reason": f"client unavailable: {type(e).__name__}"}
 
-    index_pattern = f"case-{case_id.lower()}-*"
+    index_pattern = build_index_pattern(case_id)
     try:
         mappings = client.indices.get_mapping(index=index_pattern, allow_no_indices=True)
     except Exception as e:
@@ -424,6 +425,7 @@ def _write_bg_status(
     files_done=0,
     files_total=0,
     error="",
+    intel_backend="",
 ):
     """Write status for background ingest (delimited/json/accesslog/enrich).
 
@@ -444,19 +446,26 @@ def _write_bg_status(
     if files_done:
         art["files_done"] = files_done
     done = 1 if status == "complete" else 0
+    totals = {
+        "indexed": indexed,
+        "artifacts_complete": done,
+        "artifacts_total": 1,
+        "hosts_total": 1,
+        "hosts_complete": done,
+    }
+    # F8: carry the intel-backend-unavailable signal through the status record's
+    # totals (a free-form dict already read by ingest_job._aggregate) so the
+    # worker envelope can surface it in result_public — without marking the job
+    # failed.
+    if intel_backend:
+        totals["intel_backend"] = intel_backend
     write_status(
         case_id=case_id,
         pid=os.getpid(),
         run_id=run_id,
         status=status,
         hosts=[{"hostname": hostname, "artifacts": [art]}],
-        totals={
-            "indexed": indexed,
-            "artifacts_complete": done,
-            "artifacts_total": 1,
-            "hosts_total": 1,
-            "hosts_complete": done,
-        },
+        totals=totals,
         started=started,
         error=error,
         elapsed_seconds=elapsed,
@@ -642,6 +651,34 @@ def _merge_config(args: argparse.Namespace, config: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _fail_archive_rejected(case_id: str, reason: str) -> NoReturn:
+    """Write a terminal ``failed`` status carrying a SEC-8 rejection and exit.
+
+    The reason rides the status ``error`` field with the HALT_ARCHIVE_REJECTED
+    prefix so ``opensearch_ingest_status`` / the worker ``result_public`` surface
+    a typed reason (per the MCP fix-surfacing lesson) instead of letting the
+    rejection masquerade as a generic ``process_died_unexpectedly`` crash.
+    """
+    from opensearch_mcp.ingest_status import HALT_ARCHIVE_REJECTED
+
+    run_id = os.environ.get("SIFT_INGEST_RUN_ID", "")
+    try:
+        write_status(
+            case_id=case_id,
+            pid=os.getpid(),
+            run_id=run_id,
+            status="failed",
+            hosts=[],
+            totals={},
+            started=datetime.now(timezone.utc).isoformat(),
+            error=f"{HALT_ARCHIVE_REJECTED}: {reason}",
+        )
+    except Exception as exc:  # noqa: BLE001 — never let status writing mask the abort
+        logger.debug("archive-rejected status write failed: %s", exc)
+    print(f"ABORT: {HALT_ARCHIVE_REJECTED}: {reason}", file=sys.stderr)
+    sys.exit(1)
+
+
 def cmd_scan(args: argparse.Namespace) -> None:
     """Scan a directory for artifacts, run EZ tools, index."""
     from opensearch_mcp.containers import (
@@ -664,9 +701,8 @@ def cmd_scan(args: argparse.Namespace) -> None:
     hostname = getattr(args, "hostname", None)
 
     if getattr(args, "clean", False) and hostname:
-        safe_case = sanitize_index_component(case_id)
         safe_host = sanitize_index_component(hostname)
-        pattern = f"case-{safe_case}-*-{safe_host}"
+        pattern = build_index_pattern(case_id, f"*-{safe_host}")
         try:
             client = get_client()
             existing = client.cat.indices(index=pattern, format="json", h="index") or []
@@ -735,7 +771,16 @@ def cmd_scan(args: argparse.Namespace) -> None:
         if container_type == "archive":
             tmpdir = make_ingest_tmpdir(case_id)
             print(f"Extracting {input_path.name}...")
-            extract_container(input_path, tmpdir, password=password)
+            from opensearch_mcp.containers import ArchiveRejected
+
+            try:
+                extract_container(input_path, tmpdir, password=password)
+            except ArchiveRejected as exc:
+                # SEC-8: surface the typed rejection reason on the failed
+                # envelope and clean up the partial tmpdir before exiting.
+                cleanup_tmpdir(tmpdir, force=False)
+                tmpdir = None
+                _fail_archive_rejected(case_id, str(exc))
 
             # Check for Velociraptor offline collector
             if is_velociraptor_collection(tmpdir):
@@ -773,27 +818,32 @@ def cmd_scan(args: argparse.Namespace) -> None:
                         if vss_volumes:
                             print(f"  Found {len(vss_volumes)} volume shadow copies")
 
-                    # Priority-2 registry detect — reads ComputerName+Domain
-                    # from the mounted volume's SYSTEM hive. Replaces the
-                    # removed archive-basename fallback with a grounded
-                    # source of truth. When it fails, warn the operator
-                    # explicitly — control falls through to discover()
-                    # which derives hostname from directory/mount names,
-                    # a weaker signal that can still pollute host.name
-                    # (silently-wrong of a different shape). C1 closes
-                    # this via batch-discovery + host-unmapped.yaml.
-                    if not hostname and volumes:
+                    # M-HOSTNAME fix: derivation is authoritative — always attempt
+                    # registry ComputerName detection first regardless of whether
+                    # a hostname was passed in. A derived value wins; the
+                    # passed-in value is a last-resort fallback only when
+                    # detection returns nothing. opensearch_fix_host_mapping is
+                    # the intentional rename path (host-identity spec).
+                    if volumes:
                         from opensearch_mcp.hostname import detect_hostname_from_volume
 
                         detected = detect_hostname_from_volume(volumes[0])
                         if detected:
+                            if hostname and detected != hostname:
+                                print(
+                                    f"  Hostname from volume registry ({detected!r}) "
+                                    f"overrides caller-supplied value ({hostname!r}). "
+                                    "Use opensearch_fix_host_mapping for intentional renames.",
+                                    file=sys.stderr,
+                                )
                             hostname = detected
                             print(f"  Hostname from volume registry: {hostname}")
                         else:
                             print(
                                 "  WARNING: could not detect hostname from registry; "
                                 "falling back to directory-scan (weaker signal — "
-                                "consider passing --hostname <canonical> explicitly)",
+                                "verify host.name after ingest and correct with "
+                                "opensearch_fix_host_mapping if needed)",
                                 file=sys.stderr,
                             )
 
@@ -816,24 +866,32 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 sys.exit(1)
             print(f"  Mounted {len(volumes)} volume(s)")
 
-            # Priority-2 registry detect on the mounted volume. Takes
-            # precedence over the previous input_path.stem fallback so
-            # disk images get the real ComputerName, not the filename.
-            # Warn on miss — see the archive-path block above for why.
-            if not hostname:
-                from opensearch_mcp.hostname import detect_hostname_from_volume
+            # M-HOSTNAME fix: derivation is authoritative — always attempt
+            # registry ComputerName detection first regardless of whether a
+            # hostname was passed in. A derived value wins; the passed-in
+            # value is a last-resort fallback only when detection returns
+            # nothing. opensearch_fix_host_mapping is the intentional rename.
+            from opensearch_mcp.hostname import detect_hostname_from_volume
 
-                detected = detect_hostname_from_volume(volumes[0])
-                if detected:
-                    hostname = detected
-                    print(f"  Hostname from volume registry: {hostname}")
-                else:
+            detected = detect_hostname_from_volume(volumes[0])
+            if detected:
+                if hostname and detected != hostname:
                     print(
-                        "  WARNING: could not detect hostname from registry; "
-                        "falling back to directory-scan (weaker signal — "
-                        "consider passing --hostname <canonical> explicitly)",
+                        f"  Hostname from volume registry ({detected!r}) "
+                        f"overrides caller-supplied value ({hostname!r}). "
+                        "Use opensearch_fix_host_mapping for intentional renames.",
                         file=sys.stderr,
                     )
+                hostname = detected
+                print(f"  Hostname from volume registry: {hostname}")
+            else:
+                print(
+                    "  WARNING: could not detect hostname from registry; "
+                    "falling back to directory-scan (weaker signal — "
+                    "verify host.name after ingest and correct with "
+                    "opensearch_fix_host_mapping if needed)",
+                    file=sys.stderr,
+                )
 
             # VSS handling
             if vss_flag:
@@ -2103,14 +2161,12 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
     case_id = _resolve_case_id(getattr(args, "case", None))
     force = getattr(args, "force", False)
 
-    from opensearch_mcp.paths import sanitize_index_component
     from opensearch_mcp.threat_intel import enrich_case, extract_unique_iocs
 
     client = get_client()
 
     if getattr(args, "dry_run", False):
-        safe_case = sanitize_index_component(case_id)
-        iocs = extract_unique_iocs(client, f"case-{safe_case}-*", force=force)
+        iocs = extract_unique_iocs(client, build_index_pattern(case_id), force=force)
         print(f"Case: {case_id}")
         print(f"  External IPs: {len(iocs['ip'])}")
         print(f"  Hashes: {len(iocs['hash'])}")
@@ -2125,7 +2181,9 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
     start_mono = time.monotonic()
     started_ts = datetime.now(timezone.utc).isoformat()
 
-    def _write_enrich_status(status, indexed=0, files_done=0, files_total=0, error=""):
+    def _write_enrich_status(
+        status, indexed=0, files_done=0, files_total=0, error="", intel_backend=""
+    ):
         """Write enrichment status record. No-op if not running under run_id."""
         if not run_id:
             return
@@ -2141,6 +2199,7 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
             files_done=files_done,
             files_total=files_total,
             error=error,
+            intel_backend=intel_backend,
         )
 
     # Initial "running" write — idempotent under monotonic protection
@@ -2192,6 +2251,24 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
         _write_enrich_status("complete")
         return
 
+    # F8: enrich_case reports "unavailable" when IOCs were extracted but no
+    # intel backend processed the lookups. Its dict carries NONE of the
+    # documents_updated/malicious/suspicious keys, so handle it BEFORE the
+    # access below (which would otherwise KeyError → terminal "failed", hiding
+    # the real signal). Write a terminal-but-not-failed status that carries the
+    # unavailable marker so the worker envelope (ingest_job._aggregate) can
+    # surface intel_backend:"unavailable" in result_public without hanging or
+    # mislabelling the job as failed.
+    if result["status"] == "unavailable":
+        msg = str(result.get("message", "intel enrichment unavailable"))
+        print(f"\n{msg}")
+        _write_enrich_status(
+            "complete",
+            files_total=result.get("iocs_extracted", 0),
+            intel_backend="unavailable",
+        )
+        return
+
     print(f"\nDone. {result['documents_updated']} documents updated.")
     print(f"  MALICIOUS: {result['malicious']}")
     print(f"  SUSPICIOUS: {result['suspicious']}")
@@ -2230,37 +2307,57 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
     image_path = Path(args.path)
     _mem_extract_dir = None  # Track for cleanup
 
-    # Extract from archive if needed
+    case_id = _resolve_case_id(getattr(args, "case", None))
+
+    # Extract from archive if needed. SEC-8: route through the hardened
+    # extract_container chokepoint and land INSIDE the case jail (was /tmp,
+    # outside any containment) so a malicious member can't escape the case dir.
     if image_path.suffix.lower() in (".7z", ".zip"):
         import shutil
         import subprocess
-        import tempfile
 
-        _mem_extract_dir = Path(tempfile.mkdtemp(prefix="sift-mem-"))
+        from opensearch_mcp.containers import (
+            ArchiveRejected,
+            extract_container,
+            make_ingest_tmpdir,
+        )
+
+        _mem_extract_dir = make_ingest_tmpdir(case_id)
         try:
-            password = os.environ.get("SIFT_ARCHIVE_PASSWORD", "")
-            cmd = ["7z", "x", f"-o{_mem_extract_dir}", str(image_path)]
-            if password:
-                cmd.insert(2, f"-p{password}")
-            subprocess.run(cmd, check=True, capture_output=True, timeout=600)
-            memory_exts = {".img", ".raw", ".vmem", ".dmp", ".mem", ".bin", ".lime"}
-            extracted = [f for f in _mem_extract_dir.iterdir() if f.suffix.lower() in memory_exts]
-            if not extracted:
-                shutil.rmtree(_mem_extract_dir, ignore_errors=True)
-                print(f"Error: No memory image found in {image_path}", file=sys.stderr)
-                sys.exit(1)
-            image_path = extracted[0]
-            print(f"Extracted: {image_path} ({image_path.stat().st_size / (1024**3):.1f} GB)")
+            extract_container(
+                image_path,
+                _mem_extract_dir,
+                password=os.environ.get("SIFT_ARCHIVE_PASSWORD") or None,
+            )
+        except ArchiveRejected as exc:
+            shutil.rmtree(_mem_extract_dir, ignore_errors=True)
+            _fail_archive_rejected(case_id, str(exc))
         except subprocess.CalledProcessError as e:
             shutil.rmtree(_mem_extract_dir, ignore_errors=True)
             print(f"Error: Failed to extract {image_path}: {e}", file=sys.stderr)
             sys.exit(1)
 
+        memory_exts = {".img", ".raw", ".vmem", ".dmp", ".mem", ".bin", ".lime"}
+        jail = _mem_extract_dir.resolve()
+        extracted = [
+            f
+            for f in _mem_extract_dir.rglob("*")
+            if f.is_file()
+            and not f.is_symlink()
+            and f.suffix.lower() in memory_exts
+            and f.resolve().is_relative_to(jail)
+        ]
+        if not extracted:
+            shutil.rmtree(_mem_extract_dir, ignore_errors=True)
+            print(f"Error: No memory image found in {image_path}", file=sys.stderr)
+            sys.exit(1)
+        image_path = extracted[0]
+        print(f"Extracted: {image_path} ({image_path.stat().st_size / (1024**3):.1f} GB)")
+
     if not image_path.is_file():
         print(f"Error: {image_path} is not a file.", file=sys.stderr)
         sys.exit(1)
 
-    case_id = _resolve_case_id(getattr(args, "case", None))
     _ensure_case_active(case_id)
     hostname = args.hostname
     # XYE-11: when the server pre-derived the hostname it forwards the true
@@ -2279,6 +2376,16 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
         plugin_list = TIER_2
     else:
         plugin_list = TIER_1
+
+    # M-WORKER-DBDROP (worker plane): RAM preflight warning.  Computed here,
+    # after plugin_list is resolved, so it can be threaded into every
+    # _write_mem_status totals write and surfaced via result_public.warning.
+    # Fail-safe: None on any error; never refuses the ingest.
+    from opensearch_mcp.parse_memory import memory_ram_preflight as _ram_preflight
+
+    _mem_warning: str | None = _ram_preflight(image_path)
+    if _mem_warning:
+        print(f"WARNING: {_mem_warning}", file=sys.stderr)
 
     print(f"Memory image: {image_path.name}")
     print(f"Hostname: {hostname}")
@@ -2317,19 +2424,25 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
 
         total_indexed = sum(r.get("indexed", 0) for r in _plugin_results.values())
         n_done = sum(1 for a in status_plugins if a["status"] == "complete")
+        totals: dict = {
+            "indexed": total_indexed,
+            "artifacts_total": len(status_plugins),
+            "artifacts_complete": n_done,
+            "hosts_total": 1,
+            "hosts_complete": 1 if n_done == len(status_plugins) else 0,
+        }
+        # M-WORKER-DBDROP: carry the RAM preflight warning through the status
+        # record's totals (mirrors the F8 intel_backend lift) so _aggregate in
+        # ingest_job.py can surface it in result_public.warning.
+        if _mem_warning:
+            totals["mem_warning"] = _mem_warning
         write_status(
             case_id,
             os.getpid(),
             run_id,
             status,
             [status_host],
-            {
-                "indexed": total_indexed,
-                "artifacts_total": len(status_plugins),
-                "artifacts_complete": n_done,
-                "hosts_total": 1,
-                "hosts_complete": 1 if n_done == len(status_plugins) else 0,
-            },
+            totals,
             started_ts,
             error=error,
             elapsed_seconds=time.monotonic() - start_mono,
@@ -2439,7 +2552,11 @@ def cmd_ingest_memory(args: argparse.Namespace, examiner: str = "unknown") -> No
             "run_id": run_id,
             "bulk_failed": total_bulk_failed,
         },
-        result_summary=(f"{total} indexed, {len(failed)} failed, {total_bulk_failed} bulk failed"),
+        result_summary=(
+            f"{total} submitted to bulk indexer (duplicates collapse on write; "
+            f"final unique count may be lower — use opensearch_count to verify), "
+            f"{len(failed)} failed, {total_bulk_failed} bulk failed"
+        ),
         input_files=[str(image_path)],
     )
 

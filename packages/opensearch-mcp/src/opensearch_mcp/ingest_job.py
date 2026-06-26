@@ -31,7 +31,7 @@ These handlers run *inside the worker process* (shared mount namespace). They:
    FUSE mount succeeds;
 3. mirror the existing ``ingest_status`` progress (path-free counts: indexed
    docs, artifacts/hosts complete, hayabusa alerts) into durable per-job steps
-   so ``job_status`` surfaces realtime ``worker_label`` / ``current_step``;
+   so ``running_commands_status`` surfaces realtime ``worker_label`` / ``current_step``;
 4. block until the run reaches a terminal state, then return a path-free
    ``result_public``.
 
@@ -111,6 +111,20 @@ def _run_pipeline_job(job: ClaimedJob, ctx: JobContext, *, kind: str) -> JobResu
     # SIFT_CASE_DIR. Bind both so the worker child mounts/indexes the right case.
     prev_env = os.environ.get("SIFT_CASE_DIR")
     os.environ["SIFT_CASE_DIR"] = case_dir
+    # B-D1 + B-D2: bind the gateway-injected control-plane DSN and the case UUID
+    # into the subprocess env so the ingest_cli child can forward-write one
+    # app.audit_events row per artifact (Gap B). Both are read from the
+    # anti-spoofed spec_internal / job.case_id (never client-supplied); the
+    # child inherits them. Mirror the same save/set/finally-restore discipline
+    # as SIFT_CASE_DIR so the worker's own env is left untouched between jobs.
+    dsn = str(job.spec_internal.get("control_plane_dsn") or "").strip()
+    case_uuid = str(job.case_id or "").strip()
+    prev_dsn = os.environ.get("SIFT_CONTROL_PLANE_DSN")
+    prev_case_uuid = os.environ.get("SIFT_CASE_UUID")
+    if dsn:
+        os.environ["SIFT_CONTROL_PLANE_DSN"] = dsn
+    if case_uuid:
+        os.environ["SIFT_CASE_UUID"] = case_uuid
     try:
         with use_active_case_context(context):
             launch = _launch(kind, spec, case_dir)
@@ -119,6 +133,14 @@ def _run_pipeline_job(job: ClaimedJob, ctx: JobContext, *, kind: str) -> JobResu
             os.environ.pop("SIFT_CASE_DIR", None)
         else:
             os.environ["SIFT_CASE_DIR"] = prev_env
+        if prev_dsn is None:
+            os.environ.pop("SIFT_CONTROL_PLANE_DSN", None)
+        else:
+            os.environ["SIFT_CONTROL_PLANE_DSN"] = prev_dsn
+        if prev_case_uuid is None:
+            os.environ.pop("SIFT_CASE_UUID", None)
+        else:
+            os.environ["SIFT_CASE_UUID"] = prev_case_uuid
 
     launch = launch if isinstance(launch, dict) else {"status": "unknown"}
 
@@ -293,6 +315,8 @@ def _aggregate(latest_by_run: dict[str, dict[str, Any]], run_ids: set[str]) -> d
     hosts_total = 0
     statuses: list[str] = []
     errors: list[str] = []
+    intel_backend = ""  # F8: enrich-unavailable signal carried in totals
+    mem_warning = ""   # M-WORKER-DBDROP: RAM preflight warning carried in totals
 
     for rid in run_ids:
         rec = latest_by_run.get(rid)
@@ -301,6 +325,10 @@ def _aggregate(latest_by_run: dict[str, dict[str, Any]], run_ids: set[str]) -> d
             continue
         statuses.append(str(rec.get("status") or "running"))
         totals = rec.get("totals") or {}
+        if totals.get("intel_backend"):
+            intel_backend = str(totals.get("intel_backend"))
+        if totals.get("mem_warning"):
+            mem_warning = str(totals.get("mem_warning"))
         indexed += int(totals.get("indexed") or 0)
         artifacts_complete += int(totals.get("artifacts_complete") or 0)
         artifacts_total += int(totals.get("artifacts_total") or 0)
@@ -335,6 +363,15 @@ def _aggregate(latest_by_run: dict[str, dict[str, Any]], run_ids: set[str]) -> d
     }
     if hayabusa_alerts:
         detail["hayabusa_alerts"] = hayabusa_alerts
+    # F8: surface the intel-backend-unavailable signal so result_public carries
+    # it (the agent polling running_commands_status sees the true condition
+    # instead of a clean "complete" with 0 indexed docs).
+    if intel_backend:
+        detail["intel_backend"] = intel_backend
+    # M-WORKER-DBDROP: surface the RAM preflight warning in result_public so
+    # the agent polling running_commands_status sees the low-RAM advisory.
+    if mem_warning:
+        detail["warning"] = mem_warning
     out: dict[str, Any] = {"terminal": terminal, "failed": failed, "detail": detail}
     if errors:
         out["error"] = "; ".join(errors[:3])

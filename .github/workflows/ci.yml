@@ -19,10 +19,10 @@ env:
   UV_NO_PROGRESS: "1"
 
 jobs:
-  python:
-    name: Ruff and pytest
+  lint:
+    name: Ruff lint
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -64,18 +64,180 @@ jobs:
             packages/forensic-knowledge/src \
             packages/sift-common/src
 
+  typecheck:
+    name: Pyright typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            packages/*/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          uv sync --locked \
+            --extra full \
+            --extra opencti \
+            --extra windows-triage \
+            --extra dev
+
       - name: Pyright sift-gateway policy layer
         run: uv run --locked --extra full --extra dev pyright -p pyrightconfig.json
 
-      - name: Docs freshness
-        run: uv run --locked --extra full --extra dev python scripts/check_newdocs_refs.py
+  test:
+    name: Pytest full suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
-      - name: Test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            packages/*/pyproject.toml
+
+      - name: Install dependencies
         run: |
-          uv run --locked --extra full --extra dev pytest tests
+          uv sync --locked \
+            --extra full \
+            --extra opencti \
+            --extra windows-triage \
+            --extra dev
+
+      - name: Test (per-package — a single root pytest can't collect this monorepo in one pass)
+        # Bare `pytest` with testpaths=['tests','packages'] hits 101 collection errors
+        # (duplicate-module collisions across packages). Run root tests + each package
+        # separately. Accumulate failures (|| rc=1) so one bad package doesn't hide
+        # later ones. Exclude integration tests (live DB/OpenSearch) — no services in CI.
+        run: |
+          UVR="uv run --locked --extra full --extra opencti --extra windows-triage --extra dev"
+          rc=0
+          echo "::group::pytest tests (root)"; $UVR pytest tests -m "not integration" || rc=1; echo "::endgroup::"
+          for d in packages/*/tests; do
+            pkg=$(dirname "$d")
+            echo "::group::pytest $pkg"
+            $UVR pytest "$d" -m "not integration" || rc=1
+            echo "::endgroup::"
+          done
+          exit $rc
+
+  coverage:
+    name: Package coverage floors
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            packages/*/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          uv sync --locked \
+            --extra full \
+            --extra opencti \
+            --extra windows-triage \
+            --extra dev
+
+      - name: Check per-package coverage floors
+        run: |
           uv run --locked \
             --extra full \
             --extra opencti \
             --extra windows-triage \
             --extra dev \
             python scripts/check_package_coverage.py
+
+  docs:
+    name: Docs freshness
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            packages/*/pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          uv sync --locked \
+            --extra full \
+            --extra opencti \
+            --extra windows-triage \
+            --extra dev
+
+      - name: Check new-docs cross-references
+        run: uv run --locked --extra full --extra dev python scripts/check_newdocs_refs.py
+
+  portal-dist:
+    # G8: the gateway mounts a COMMITTED frontend build (no node on the install
+    # VM). Guard against a stale dist by rebuilding from source and failing if
+    # the committed static/v2 differs from a fresh build.
+    name: Portal dist freshness
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: packages/case-dashboard/frontend/package.json
+          cache: npm
+          cache-dependency-path: packages/case-dashboard/frontend/package-lock.json
+
+      - name: Check committed portal dist is fresh
+        run: bash scripts/check-portal-dist.sh

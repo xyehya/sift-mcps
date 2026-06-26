@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Portal v3 — Ops Tracker</title>
+<style>
+  :root{
+    --void:#0A0A0C; --base:#0E0F12; --surface:#16171B; --raised:#1C1D22; --overlay:#232429;
+    --bd-faint:#1E1F24; --bd-soft:#2A2B31; --bd-hard:#3A3C44;
+    --bright:#F2EFEA; --txt:#CFCCC6; --muted:#9D9A94; --ghost:#74716C;
+    --orange:#F4754B; --orange-bright:#FF8A5E; --orange-dim:rgba(244,117,75,.12);
+    --jade:#5FB87E; --amber:#E0A23E; --violet:#A795BD; --crimson:#E2554C; --steel:#6E8BB0;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:linear-gradient(168deg,#141013 0%,var(--void) 34%,#08080a 100%);
+    color:var(--txt); font:14px/1.55 ui-sans-serif,system-ui,Inter,sans-serif;
+    -webkit-font-smoothing:antialiased; padding:28px clamp(16px,4vw,56px) 80px; max-width:1280px; margin:0 auto;
+  }
+  h1{font-size:24px;font-weight:700;letter-spacing:-.4px;color:var(--bright);margin:0 0 2px}
+  h2{font-size:12px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;color:var(--orange);
+     margin:34px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--bd-soft)}
+  .sub{color:var(--muted);font-size:12.5px;margin:0 0 4px}
+  .mono{font-family:ui-monospace,"JetBrains Mono",SFMono-Regular,monospace}
+  .card{background:var(--surface);border:1px solid var(--bd-soft);border-radius:12px;
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.04);padding:16px 18px;margin:0 0 14px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--bd-faint);vertical-align:top}
+  th{color:var(--ghost);font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:600}
+  td.path{font-family:ui-monospace,monospace;font-size:11px;color:var(--steel);word-break:break-all}
+  tr:hover td{background:rgba(255,255,255,.015)}
+  .pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:600;
+        letter-spacing:.04em;border:1px solid transparent;white-space:nowrap}
+  .done{background:rgba(95,184,126,.13);color:var(--jade);border-color:rgba(95,184,126,.3)}
+  .now{background:var(--orange-dim);color:var(--orange-bright);border-color:rgba(244,117,75,.34)}
+  .pend{background:rgba(110,139,176,.13);color:var(--steel);border-color:rgba(110,139,176,.3)}
+  .rej{background:rgba(226,85,76,.13);color:var(--crimson);border-color:rgba(226,85,76,.3)}
+  .wait{background:rgba(224,162,62,.13);color:var(--amber);border-color:rgba(224,162,62,.3)}
+  .tier{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:600}
+  .durable{color:var(--jade)} .wt{color:var(--amber)} .git{color:var(--steel)}
+  code,.kbd{font-family:ui-monospace,monospace;background:var(--raised);border:1px solid var(--bd-soft);
+            border-radius:5px;padding:1px 6px;font-size:11.5px;color:var(--bright)}
+  pre{background:var(--base);border:1px solid var(--bd-soft);border-radius:10px;padding:14px 16px;
+      overflow:auto;font-size:11.5px;line-height:1.5;color:var(--txt);position:relative;white-space:pre-wrap}
+  button{font:inherit;cursor:pointer;background:var(--raised);color:var(--bright);
+         border:1px solid var(--bd-hard);border-radius:8px;padding:6px 12px;font-size:12px}
+  button:hover{border-color:var(--orange);color:var(--orange-bright)}
+  .copybtn{position:absolute;top:8px;right:8px;padding:3px 9px;font-size:10.5px}
+  .note{font-size:11.5px;color:var(--ghost);margin-top:6px}
+  a{color:var(--steel)}
+  .legend span{margin-right:16px;font-size:11px}
+  .scratch textarea{width:100%;min-height:70px;background:var(--base);color:var(--txt);
+    border:1px solid var(--bd-soft);border-radius:8px;padding:10px;font:12px ui-monospace,monospace;resize:vertical}
+  .scratchrow{font-size:11.5px;border-bottom:1px solid var(--bd-faint);padding:6px 0}
+  .scratchrow .t{color:var(--ghost);font-family:ui-monospace,monospace;font-size:10.5px}
+</style>
+</head>
+<body>
+
+<h1>Protocol SIFT Gateway — Portal v3 · Ops Tracker</h1>
+<p class="sub">Single control sheet for the portal rebuild: references, phases, session log, approvals. <span class="mono" id="upd"></span></p>
+<p class="note">Maintained by the orchestrator each session. The <b>Scratch log</b> at the bottom is yours — it saves to this browser and exports so you can paste notes back to merge. Mac paths: swap <code>/home/yk/AI/SIFTHACK</code> → <code>/Users/yk/Fedora</code>.</p>
+
+<h2>1 · References (where everything lives)</h2>
+<div class="card">
+<p class="legend"><span class="tier durable">● DURABLE</span> survives worktree removal (git branch / main / memory) &nbsp;
+<span class="tier wt">● WORKTREE</span> lives in the build worktree — gone if it's removed &nbsp;
+<span class="tier git">● GIT</span> committed code</p>
+<table>
+<thead><tr><th>What</th><th>Tier</th><th>Path</th></tr></thead>
+<tbody>
+<tr><td><b>Agent contract</b> — CANONICAL (operating model; §§1-12: rules, tokens, scroll §8, guardrails §11, HITL+phases §12). Brief RETIRED→folded here.</td><td><span class="tier git">GIT portal-v3</span></td><td class="path">…/frontend/AGENTS.md  (= frontend/CLAUDE.md)  ·  source: SIFT-Design-System/AGENTS.md</td></tr>
+<tr><td><b>Build handoff</b> — HITL model flip, phases P0-P4, open items (folds old OPEN-ITEMS)</td><td><span class="tier durable">DESIGN PROJ</span></td><td class="path">~/Downloads/OperatingModel/SIFT-Design-System/04-handoff/RUN-PORTAL-V3-BUILD.md</td></tr>
+<tr><td><b>Operating model</b> — design system source of truth (00-brand·01-tokens·02-screens·03-components·04-handoff·05-changelog) → syncs to Claude Design via /design-sync</td><td><span class="tier durable">DESIGN PROJ</span></td><td class="path">~/Downloads/OperatingModel/SIFT-Design-System/</td></tr>
+<tr><td><b>Settled design — handoff README</b> (hi-fi: tokens dark+light, shell, both screens, interactions). UI ground truth.</td><td><span class="tier wt">WORKTREE</span></td><td class="path">…/SIFT-Design-System/design_handoff_sift_examiner_portal/README.md  (identical to claude-code-cli-redesign; canonical here)</td></tr>
+<tr><td>Settled design — prototype (measurements not in README; do NOT port support.js)</td><td><span class="tier wt">WORKTREE</span></td><td class="path">…/frontend/design/claude-code-cli-redesign/project/SIFT Examiner Portal.dc.html</td></tr>
+<tr><td><b>Rebuild spec</b> — security / contracts / process (precedence for crypto+store)</td><td><span class="tier durable">DURABLE</span></td><td class="path">.../portal-v3-spec/docs/new-docs/PORTAL_V3_REBUILD_SPEC.md  ·  git show worktree-portal-v3-spec:docs/new-docs/PORTAL_V3_REBUILD_SPEC.md</td></tr>
+<tr><td>Claude Design handover brief (what drove the Design rounds)</td><td><span class="tier durable">DURABLE</span></td><td class="path">.../portal-v3-spec/docs/new-docs/PORTAL_V3_CLAUDE_DESIGN_BRIEF.md</td></tr>
+<tr><td>Frozen Phase-0 record — MASTER + COVERAGE (sev-spec + HITL queue SUPERSEDED; durable for token/layout)</td><td><span class="tier wt">WORKTREE</span></td><td class="path">…/frontend/design-system/MASTER.md  ·  COVERAGE.md</td></tr>
+<tr><td>Open items / known regressions — FOLDED into build handoff</td><td><span class="tier durable">DESIGN PROJ</span></td><td class="path">SIFT-Design-System/04-handoff/RUN-PORTAL-V3-BUILD.md §4</td></tr>
+<tr><td>Current-state snapshot</td><td><span class="tier wt">WORKTREE</span></td><td class="path">…/frontend/design/claude-design-export/CURRENT-STATE.md</td></tr>
+<tr><td>Design tokens (single source, both themes)</td><td><span class="tier git">GIT</span></td><td class="path">…/frontend/src/styles/tokens.css</td></tr>
+<tr><td>Built code (current HEAD 445827b · <b>PUSHED to origin</b>)</td><td><span class="tier git">GIT</span></td><td class="path">branch portal-v3/p0-foundation · origin/portal-v3/p0-foundation @ 445827b (97 ahead of main)</td></tr>
+<tr><td><b>Current ops hub</b> — status, runbooks, trackers, B1/P35-8 record</td><td><span class="tier durable">DURABLE</span></td><td class="path">/home/yk/AI/SIFTHACK/sift-portal-ops/</td></tr>
+<tr><td>Cross-session memory (loads every session)</td><td><span class="tier durable">DURABLE</span></td><td class="path">/home/yk/.claude/projects/-home-yk-AI-SIFTHACK-sift-mcps/memory/project_portal_v3_rebuild.md</td></tr>
+<tr><td><b>This tracker</b></td><td><span class="tier durable">DURABLE</span></td><td class="path">/home/yk/AI/SIFTHACK/sift-mcps/docs/new-docs/PORTAL_V3_OPS_TRACKER.html</td></tr>
+</tbody>
+</table>
+<p class="note"><b>Task list:</b> the harness task list is ephemeral (wiped on crash). Canonical phase/task state = §2 below + brief §6 + memory.</p>
+</div>
+
+<h2>2 · Phase tracker</h2>
+<div class="card">
+<table>
+<thead><tr><th>Phase</th><th>Scope</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>P0 foundation</td><td>tokens · theme · shadcn · shell · data port · reference Overview+Findings · MASTER freeze</td><td><span class="pill done">DONE (257d20e)</span></td></tr>
+<tr><td>P0 re-implement (settled design)</td><td>token re-port + shadcn bridge · Mission Control + Findings 1:1 · HITL flip · sev-spec dropped · scroll model</td><td><span class="pill done">DONE (2a47bac)</span></td></tr>
+<tr><td>P0 sign-off gate</td><td>operator visual approval (dark+light), live-verified</td><td><span class="pill done">SIGNED OFF · tag p0-signoff (2a47bac) 06-21</span></td></tr>
+<tr><td>P1 feature tabs</td><td>9 tabs · functional parity w/ original portal then re-skin · live VM validation</td><td><span class="pill done">DONE · LIVE-PROVEN</span></td></tr>
+<tr><td>P2 integration + CSP</td><td>integrate · CSP hardened at gateway layer · full validation</td><td><span class="pill done">DONE</span></td></tr>
+<tr><td>P3 security verdict</td><td>security-expert consolidated pass → verdict (auth/crypto/CSP/deps/XSS)</td><td><span class="pill done">PASS-WITH-FIXES</span></td></tr>
+<tr><td>P3.5 tuning/backwiring</td><td>live ROCBA regressions · trust-surface fixes · placeholder→real wiring</td><td><span class="pill now">IN PROGRESS · B1 DONE</span></td></tr>
+<tr><td>P4 closeout</td><td>PR + (Linear paused)</td><td><span class="pill pend">PENDING</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>3 · Session log</h2>
+<div class="card">
+<table>
+<thead><tr><th>Session / run</th><th>Date</th><th>Scope</th><th>Commit</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>RUN-1</td><td>06-20</td><td>design system · TW4 · tokens · fonts · 24 shadcn primitives</td><td class="mono">8d1e15f</td><td><span class="pill done">DONE</span></td></tr>
+<tr><td>RUN-2</td><td>06-20</td><td>app shell + data port</td><td class="mono">615115d</td><td><span class="pill done">DONE</span></td></tr>
+<tr><td>RUN-3</td><td>06-20</td><td>reference Overview+Findings · MASTER freeze</td><td class="mono">2dd7cfd</td><td><span class="pill done">DONE</span></td></tr>
+<tr><td>RUN-4a</td><td>06-20</td><td>identity relock (graphite+orange tokens, both themes)</td><td class="mono">6ca77e7</td><td><span class="pill done">DONE</span></td></tr>
+<tr><td>RUN-4b</td><td>06-20</td><td>agent C2 features (hero, auth queue, MITRE, confidence)</td><td class="mono">afc7ad7</td><td><span class="pill done">DONE</span></td></tr>
+<tr><td>RUN-4c</td><td>06-20</td><td>review polish (9 items) · sidebar zoom · light parity</td><td class="mono">257d20e</td><td><span class="pill done">DONE</span></td></tr>
+<tr><td>P0 re-impl U1–U4</td><td>06-21</td><td>token re-port+bridge (sev-spec out) · Overview IA 1:1 · Findings 1:1 · identity</td><td class="mono">16a2668→2a47bac</td><td><span class="pill done">DONE · signed off</span></td></tr>
+<tr><td>P1 Evidence pilot</td><td>06-21</td><td>chain-of-custody registry</td><td class="mono">6033bea/5eec27c</td><td><span class="pill rej">REJECTED (parity)</span></td></tr>
+<tr><td>Operating model + contracts</td><td>06-21</td><td>SIFT Design System model · contract+tracker relocated to portal branch (main kept clean = origin/main) · token a11y fixes · canonical DESIGN-SYSTEM · 3 named agents created</td><td class="mono">portal b4c0cc5 · main b995491</td><td><span class="pill done">DONE</span></td></tr>
+<tr><td>P1→P3 completion</td><td>06-22</td><td>functional-parity tabs · gateway CSP · P3 security gate · live ROCBA validation baseline</td><td class="mono">see ops hub</td><td><span class="pill done">DONE</span></td></tr>
+<tr><td>P3.5 wave 1/2</td><td>06-23</td><td>P35-1/2/5/6/7/9/10/11/12 · confidence vocabulary · audit trail · backend cards</td><td class="mono">dd34c49→7bc3699</td><td><span class="pill done">DONE · live</span></td></tr>
+<tr><td>B1 / P35-8</td><td>06-23</td><td>real DB-backed Agent Activity feed · synthetic POOL/counters/IP removed · Chrome smoke clean</td><td class="mono">6529d7d</td><td><span class="pill done">DONE · live</span></td></tr>
+<tr><td>B2</td><td>06-23</td><td>commit-to-record badge eager <code>/api/delta</code> refetch (drawer-open + stage/approve/reject/edit/unstage/commit); 15s poll unchanged</td><td class="mono">c04d744</td><td><span class="pill done">DONE · verifier · live</span></td></tr>
+<tr><td>B6 (audit-link chain)</td><td>06-23</td><td>finding audit trail unresolvable after file→DB authority migration — 4 layers: resolver SQL (backend_audit_id/audit_aliases) → security hardening → row→eid label → details projection → paired tool.call merge + Params-mislabel fix. Each layer caught by LIVE testing.</td><td class="mono">b385a59→7cc26ee→2f953a7→c73dc93→445827b</td><td><span class="pill done">DONE · security · verifier · browser-verified</span></td></tr>
+<tr><td>Push + cleanup</td><td>06-23</td><td>branch PUSHED to origin (first push); VM rollback snapshot removed; P35-3 deep-investigated → trackers/P35-3_AUDIT_ID_FLOW.md</td><td class="mono">445827b</td><td><span class="pill done">DONE</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>4 · Approval log</h2>
+<div class="card">
+<table>
+<thead><tr><th>Gate</th><th>Date</th><th>Verdict</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td>P0 sign-off (Graphite Emerald palette)</td><td>06-20</td><td><span class="pill rej">REJECTED</span></td><td>colors rejected; layout/shell/density ACCEPTED → pivot to Claude Design</td></tr>
+<tr><td>Claude Design — settled design</td><td>06-20/21</td><td><span class="pill done">APPROVED</span></td><td>"Mission Control" graphite+orange, round-2; operator drove it ("we settled on this")</td></tr>
+<tr><td>P0 re-implementation sign-off</td><td>06-21</td><td><span class="pill done">APPROVED</span></td><td>Overview+Findings 1:1 settled design; live-verified; tag p0-signoff (2a47bac)</td></tr>
+<tr><td>P1 Evidence pilot</td><td>06-21</td><td><span class="pill rej">REJECTED</span></td><td>"only a VIEW, no actions/parity" → P1 = functional parity w/ original THEN re-skin</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>5 · Next-session launch</h2>
+<div class="card">
+<p class="sub">Launch dir — <b>cd into the worktree</b> (that folder IS branch portal-v3/p0-foundation, HEAD 445827b, PUSHED to origin). NOT the main checkout. Confirm <code>/mcp</code> shows Siftmcp + claude-in-chrome before live validation:</p>
+<pre id="launch">cd /home/yk/AI/SIFTHACK/sift-mcps/.claude/worktrees/portal-v3-p0-foundation && claude<button class="copybtn" onclick="cp('launch',this)">copy</button></pre>
+<p class="sub">First message (orchestrator kickoff — next candidate is P35-3, a BACKEND gateway unit):</p>
+<pre id="kick">Orchestrator kickoff — SIFT Examiner Portal v3, P3.5 tuning/backwiring.
+
+You are ORCHESTRATOR. Working dir = this worktree (branch portal-v3/p0-foundation,
+HEAD 445827b, already PUSHED to origin). NEVER touch the main checkout. You read /
+verify / gate / dispatch — you do NOT write code yourself. Read first:
+/home/yk/AI/SIFTHACK/sift-portal-ops/STATUS.md (forward brief) and its trackers/.
+
+Agents — dispatch via the Agent tool, ONE writer at a time, fresh context, self-contained:
+- frontend-coder   → SOLE WRITER for FRONTEND units (packages/case-dashboard/frontend).
+- general-purpose  → use for BACKEND units (gateway / sift-core / case_dashboard routes);
+                     give it the same sole-writer + commit-in-worktree discipline.
+- verifier-griller → READ-ONLY. After each unit, disprove claims vs COMMITTED state.
+- security-expert  → READ-ONLY. ONE consolidated pass when an auth/audit feature LANDS.
+
+Deploy+verify loop proven this session (NON-frontend changes = Python, no rebuild):
+1) coder commits in worktree (no push, no deploy).
+2) verifier reproduces tests + (for DB/audit work) runs the real SQL against the live VM DB
+   read-only (sshpass -p forensics ssh sansforensics@192.168.122.81; DSN from
+   /var/lib/sift/.sift/control-plane.env; active case beda8702-…bf0f7).
+3) security gate if it touches auth/audit/case-scoping.
+4) deploy: rsync the worktree tree to VM /opt/sift-mcps (--delete, exclude .git/.venv/
+   node_modules/__pycache__/.claude) then `sudo systemctl restart sift-gateway`; poll
+   /api/v1/health. FRONTEND changes also need `npm run build` first (commit the dist).
+   CAUTION: do NOT hard-reload the browser DURING the restart — the CSS fetch aborts and
+   the tab renders unstyled; wait for health OK, then reload (or use a fresh tab).
+5) live-verify in Chrome (examiner CAN ACT session) + record SHA + proof in the tracker.
+
+State (DONE + live): P0/P1/P2/P3; P35-1/2/5/6/7/8/9/10/11/12; Severity→Confidence; B1;
+B2 (c04d744); B6 audit-link chain (b385a59→7cc26ee→2f953a7→c73dc93→445827b) — finding
+audit trail now resolves+renders for core/run_command ids, browser-verified.
+
+NEXT CANDIDATE — P35-3 (BACKEND, gateway-only, no add-on backend churn). Full actionable
+spec: /home/yk/AI/SIFTHACK/sift-portal-ops/trackers/P35-3_AUDIT_ID_FLOW.md. Add-on backends
+(opensearch/kb/wintriage) give the agent no citable audit_id → grounding WEAK. Recommended
+Option A: gateway injects envelope_event_id into the response when none present (~15 lines in
+sift-gateway/src/sift_gateway/policy_middleware.py:~986 + :1034) + companion
+`details->>'envelope_event_id'` match in InvestigationService.audit_events() (B6 resolver) +
+extend _extract_audit_id/_extract_all_audit_ids to read ToolResult.meta (recovers wintriage).
+Confirm scope with operator, then dispatch a general-purpose backend coder; verifier + security
+gate; deploy; live-verify by citing an add-on tool's id in a new finding and confirming the
+audit panel resolves it + grounding improves.
+
+Also OPEN: B5 (frontend — surface real commit re-auth error/status instead of generic
+"check your password"); P35-4 (LOW); pre-existing red test src/test/agentState.test.js (LOW).
+Housekeeping: operator to reject probes F-…-005/006 (password-gated; review staged set).
+
+Discovery: codebase-memory-mcp (project home-yk-AI-SIFTHACK-sift-mcps), not grep.
+Live portal: https://192.168.122.81:4508/portal/   Runbook: sift-portal-ops/runbooks/.
+
+Start: confirm HEAD + clean tree + /mcp wired, read STATUS.md + trackers/P35-3_AUDIT_ID_FLOW.md,
+confirm P35-3 scope with the operator, then dispatch the backend coder — unless redirected.<button class="copybtn" onclick="cp('kick',this)">copy</button></pre>
+</div>
+
+<h2>6 · Open items / known issues</h2>
+<div class="card">
+<table>
+<thead><tr><th>Item</th><th>Where</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td><b>B2</b> — Commit-to-record badge eager delta refetch.</td><td>extension backlog B2</td><td><span class="pill done">DONE · live</span></td></tr>
+<tr><td><b>B6</b> — finding audit trail unresolvable after file→DB migration (4-layer fix).</td><td>extension backlog B6</td><td><span class="pill done">DONE · browser-verified</span></td></tr>
+<tr><td><b>B5</b> — Commit drawer masks real re-auth failure (429 lockout / 503 / 403 → "check password").</td><td>extension backlog B5</td><td><span class="pill pend">OPEN (frontend, small)</span></td></tr>
+<tr><td><b>P35-3</b> — add-on backends give no citable audit_id (grounding WEAK). <b>Deep-investigated; Option A (gateway-only) spec ready.</b></td><td><b>trackers/P35-3_AUDIT_ID_FLOW.md</b></td><td><span class="pill now">NEXT (coder)</span></td></tr>
+<tr><td><b>P35-4</b> — only type:finding auto-mints timeline events; confirm by-design or document/fix.</td><td>P3.5 live-validation tracker</td><td><span class="pill pend">OPEN (LOW)</span></td></tr>
+<tr><td>Pre-existing red test — <code>src/test/agentState.test.js</code> (unrelated to B2/B6; present on branch).</td><td>frontend test suite</td><td><span class="pill pend">OPEN (LOW)</span></td></tr>
+<tr><td>Housekeeping — reject probes <code>F-…-005</code> + <code>F-…-006</code> (password-gated; commit drawer also holds agent's awaiting-auth item — review staged set first).</td><td>STATUS.md</td><td><span class="pill wait">OPERATOR</span></td></tr>
+<tr><td>Release path — fresh-install validation, then P4 PR only on explicit operator ask.</td><td>VM deploy/test runbooks</td><td><span class="pill pend">PENDING</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>7 · Scratch log (yours — saves to this browser)</h2>
+<div class="card scratch">
+<textarea id="sn" placeholder="e.g. 06-21 14:00 launched P0 re-impl session / approved findings layout / blocked on X"></textarea>
+<div style="margin-top:8px"><button onclick="addnote()">+ add note</button> <button onclick="exportnotes()">export all</button> <button onclick="if(confirm('clear all scratch notes?')){localStorage.removeItem('p3notes');render()}">clear</button></div>
+<div id="notes" style="margin-top:12px"></div>
+<p class="note">Notes persist only in this browser at this file path. "Export all" copies them so you can paste back to the orchestrator to merge into §3/§4 above.</p>
+</div>
+
+<script>
+document.getElementById('upd').textContent='· tracker updated 2026-06-23 (evening) · HEAD 445827b · PUSHED';
+function cp(id,btn){var el=document.getElementById(id);var t=el.childNodes[0].nodeValue||el.textContent;navigator.clipboard.writeText(t.trim()).then(function(){var o=btn.textContent;btn.textContent='copied';setTimeout(function(){btn.textContent=o},1200)})}
+function getnotes(){try{return JSON.parse(localStorage.getItem('p3notes')||'[]')}catch(e){return[]}}
+function render(){var n=getnotes(),h='';for(var i=n.length-1;i>=0;i--){h+='<div class="scratchrow"><span class="t">'+n[i].t+'</span> — '+n[i].x.replace(/</g,'&lt;')+'</div>'}document.getElementById('notes').innerHTML=h||'<span class="note">no notes yet</span>'}
+function addnote(){var ta=document.getElementById('sn');var v=ta.value.trim();if(!v)return;var n=getnotes();n.push({t:new Date().toISOString().slice(0,16).replace('T',' '),x:v});localStorage.setItem('p3notes',JSON.stringify(n));ta.value='';render()}
+function exportnotes(){var n=getnotes();var s=n.map(function(r){return r.t+'  '+r.x}).join('\n');navigator.clipboard.writeText(s).then(function(){alert('copied '+n.length+' notes to clipboard')})}
+render();
+</script>
+</body>
+</html>

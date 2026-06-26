@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -22,6 +23,117 @@ from opensearch_mcp.results import ArtifactResult, HostResult, IngestResult
 from opensearch_mcp.tools import TOOLS, get_active_tools, run_and_ingest
 
 _PIPELINE_VERSION = f"opensearch-mcp-{__version__}"
+
+logger = logging.getLogger(__name__)
+
+# B-D2: bound length for the result_summary stored in the forward-written
+# app.audit_events row so a degenerate summary can never bloat the row.
+_INGEST_AUDIT_SUMMARY_MAX = 500
+
+
+def _persist_ingest_audit_event(
+    audit_id: str | None,
+    *,
+    tool: str,
+    status: str,
+    run_id: str = "",
+    mcp_name: str = "",
+    hostname: str = "",
+    index_name: str = "",
+    result_summary: str = "",
+    case_id: str | None = None,
+    input_files: list[str] | None = None,
+) -> None:
+    """Forward-write ONE ``app.audit_events`` row for an ingest artifact (B-D2).
+
+    The per-artifact ``opensearchingest*`` ids are minted inside this ingest
+    subprocess and are NEVER seen by the gateway envelope, so a finding that
+    cites one would otherwise dangle in the DB-mode portal provenance panel.
+    This helper persists a citable row keyed by that id as
+    ``details.backend_audit_id`` (the exact column the §9.6 case-scoped resolver
+    matches), so the citation resolves.
+
+    Fail-soft by contract: this MUST NEVER raise, block, or fail ingest. It is a
+    no-op when:
+      * ``SIFT_CONTROL_PLANE_DSN`` is absent/empty (file-authority mode), or
+      * the case UUID cannot be determined (a wrong/NULL ``case_id`` would never
+        resolve — better no row than a dangling one), or
+      * ``audit_id`` is empty.
+    Any DSN / psycopg / insert error is swallowed (logged at debug) so the
+    artifact's own indexing is unaffected.
+
+    NB: no secrets are stored — only the opaque artifact id, tool name, run id,
+    mcp name, hostname, index name, a bounded summary, and (CONF-1-IDX) the
+    ingested artifact path(s) in ``input_files``.  The ingested artifact path is
+    the SAME evidence path the control plane already holds in
+    ``app.evidence_objects.display_path``; recording it here lets the DB-mode
+    opensearch-indirect provenance resolver trace an ``idx_`` citation back to the
+    sealed source evidence (it requires a non-empty ``input_files`` on the ingest
+    audit row — fail-closed: no path ⇒ no FULL grade).  Callers pass the relative
+    evidence path where available.
+    """
+    if not audit_id:
+        return
+    dsn = os.environ.get("SIFT_CONTROL_PLANE_DSN", "").strip()
+    if not dsn:
+        return
+    # The resolver ANDs every match with case_id = <uuid>; an ingest subprocess
+    # natively knows only SIFT_CASE_DIR (a path). The worker binds the case UUID
+    # into SIFT_CASE_UUID (from the anti-spoofed job.case_id). No UUID => no-op.
+    resolved_case_id = (case_id or os.environ.get("SIFT_CASE_UUID", "")).strip()
+    if not resolved_case_id:
+        return
+    try:
+        from psycopg.types.json import Jsonb
+        from sift_core.investigation_store import (
+            borrow_audit_write_connection,
+            evict_audit_write_connection,
+        )
+
+        summary = str(result_summary or "")
+        if len(summary) > _INGEST_AUDIT_SUMMARY_MAX:
+            summary = summary[:_INGEST_AUDIT_SUMMARY_MAX] + "...[truncated]"
+        details = {
+            "backend_audit_id": str(audit_id),
+            "tool": str(tool or ""),
+            "run_id": str(run_id or ""),
+            "mcp_name": str(mcp_name or ""),
+            "hostname": str(hostname or ""),
+            "index_name": str(index_name or ""),
+            "result_summary": summary,
+            "input_files": [str(f) for f in (input_files or []) if f],
+        }
+        sql = (
+            "insert into app.audit_events "
+            "(event_type, actor_type, source, status, case_id, summary, details) "
+            "values (%s, %s, %s, %s, %s, %s, %s)"
+        )
+        values = [
+            "opensearch.ingest.artifact",
+            "service",
+            "opensearch-ingest",
+            "success" if status == "success" else "failure",
+            resolved_case_id,
+            f"ingest {tool}".strip()[:_INGEST_AUDIT_SUMMARY_MAX],
+            Jsonb(details),
+        ]
+        # C4: reuse one cached write connection per (pid, dsn) — same E1-methodology
+        # as the case-store read cache. Any error evicts the connection so the next
+        # call gets a fresh socket; fail-soft contract preserved.
+        conn = borrow_audit_write_connection(dsn)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, values)
+            conn.commit()
+        except Exception:
+            evict_audit_write_connection(dsn)
+            raise
+    except Exception as exc:  # noqa: BLE001 — fail-soft: never block ingest
+        logger.debug(
+            "ingest audit_events forward-write skipped for %s: %s",
+            audit_id,
+            type(exc).__name__,
+        )
 
 
 def _write_ingest_manifest(
@@ -402,7 +514,7 @@ def run_hayabusa_batch(
         rules_dir = _resolve_hayabusa_rules_dir()
         if rules_dir is None:
             if audit is not None:
-                audit.log(
+                _hb_aid = audit.log(
                     tool="ingest_hayabusa",
                     params={"hostname": host.hostname},
                     result_summary=(
@@ -410,6 +522,14 @@ def run_hayabusa_batch(
                         "Set HAYABUSA_RULES_DIR env var or install rules "
                         "to /usr/local/share/hayabusa-rules or /opt/hayabusa*."
                     ),
+                )
+                _persist_ingest_audit_event(
+                    _hb_aid,
+                    tool="ingest_hayabusa",
+                    status="failure",
+                    mcp_name=getattr(audit, "mcp_name", ""),
+                    hostname=host.hostname,
+                    result_summary="SKIPPED: hayabusa rules directory not found",
                 )
             if callable(on_progress):
                 on_progress(
@@ -487,9 +607,18 @@ def run_hayabusa_batch(
                     error=f"ingest failed: {e}",
                 )
         if audit and host.hostname in results:
-            audit.log(
+            _hb_aid = audit.log(
                 tool="ingest_hayabusa",
                 params={"hostname": host.hostname, "evtx_dir": str(host.evtx_dir)},
+                result_summary=f"{cnt} alerts indexed",
+            )
+            _persist_ingest_audit_event(
+                _hb_aid,
+                tool="ingest_hayabusa",
+                status="success",
+                mcp_name=getattr(audit, "mcp_name", ""),
+                hostname=host.hostname,
+                index_name=index_name,
                 result_summary=f"{cnt} alerts indexed",
             )
 
@@ -618,6 +747,9 @@ def _ingest_hosts(
                             sha256=file_hash,
                             doc_count=cnt,
                         )
+                        _evtx_summary = f"{cnt} indexed, {sk} skipped" + (
+                            f", {bf} bulk failed" if bf else ""
+                        )
                         audit.log(
                             tool="ingest_evtx",
                             audit_id=aid,
@@ -628,11 +760,21 @@ def _ingest_hosts(
                                 "run_id": run_id,
                                 "bulk_failed": bf,
                             },
-                            result_summary=f"{cnt} indexed, {sk} skipped"
-                            + (f", {bf} bulk failed" if bf else ""),
+                            result_summary=_evtx_summary,
                             input_files=[str(evtx_file)],
                             input_sha256s=[file_hash],
                             source_evidence=str(evtx_file),
+                        )
+                        _persist_ingest_audit_event(
+                            aid,
+                            tool="ingest_evtx",
+                            status="success",
+                            run_id=run_id,
+                            mcp_name=getattr(audit, "mcp_name", ""),
+                            hostname=host.hostname,
+                            index_name=index_name,
+                            result_summary=_evtx_summary,
+                            input_files=[str(evtx_file)],
                         )
                         # Per-file status update
                         if evtx_status:
@@ -661,6 +803,18 @@ def _ingest_hosts(
                             result_summary=f"FAILED: {e}",
                             input_files=[str(evtx_file)],
                             input_sha256s=[file_hash],
+                        )
+                        # Path-free summary only: the raw exception text may carry
+                        # an absolute path; the row's details must stay path-free.
+                        _persist_ingest_audit_event(
+                            aid,
+                            tool="ingest_evtx",
+                            status="failure",
+                            run_id=run_id,
+                            mcp_name=getattr(audit, "mcp_name", ""),
+                            hostname=host.hostname,
+                            index_name=index_name,
+                            result_summary=f"FAILED: {type(e).__name__}",
                         )
 
                 if evtx_status:
@@ -799,6 +953,11 @@ def _ingest_hosts(
                     sha256=file_hash,
                     doc_count=cnt,
                 )
+                _ez_summary = (
+                    f"{cnt} indexed"
+                    + (f", {sk} skipped" if sk else "")
+                    + (f", {bf} bulk failed" if bf else "")
+                )
                 audit.log(
                     tool=f"ingest_{tool_name}",
                     audit_id=aid,
@@ -809,12 +968,21 @@ def _ingest_hosts(
                         "run_id": run_id,
                         "bulk_failed": bf,
                     },
-                    result_summary=f"{cnt} indexed"
-                    + (f", {sk} skipped" if sk else "")
-                    + (f", {bf} bulk failed" if bf else ""),
+                    result_summary=_ez_summary,
                     input_files=[str(artifact_path)],
                     input_sha256s=[file_hash] if file_hash else [],
                     source_evidence=str(artifact_path),
+                )
+                _persist_ingest_audit_event(
+                    aid,
+                    tool=f"ingest_{tool_name}",
+                    status="success",
+                    run_id=run_id,
+                    mcp_name=getattr(audit, "mcp_name", ""),
+                    hostname=host.hostname,
+                    index_name=index_name,
+                    result_summary=_ez_summary,
+                    input_files=[str(artifact_path)],
                 )
                 if tool_status:
                     tool_status["status"] = "complete"
@@ -838,6 +1006,16 @@ def _ingest_hosts(
                     result_summary=f"FAILED: {e}",
                     input_files=[str(artifact_path)],
                     input_sha256s=[file_hash] if file_hash else [],
+                )
+                _persist_ingest_audit_event(
+                    aid,
+                    tool=f"ingest_{tool_name}",
+                    status="failure",
+                    run_id=run_id,
+                    mcp_name=getattr(audit, "mcp_name", ""),
+                    hostname=host.hostname,
+                    index_name=index_name,
+                    result_summary=f"FAILED: {type(e).__name__}",
                 )
                 if tool_status:
                     tool_status["status"] = "failed"
@@ -928,6 +1106,7 @@ def _ingest_plaso_artifact(
         if _note:
             ar.note = _note
         _write_ingest_manifest(str(artifact_path), host.hostname, tool_name, doc_count=cnt)
+        _plaso_summary = f"{cnt} indexed" + (f", {bf} bulk failed" if bf else "")
         audit.log(
             tool=f"ingest_{tool_name}",
             audit_id=aid,
@@ -938,10 +1117,21 @@ def _ingest_plaso_artifact(
                 "run_id": run_id,
                 "bulk_failed": bf,
             },
-            result_summary=f"{cnt} indexed" + (f", {bf} bulk failed" if bf else ""),
+            result_summary=_plaso_summary,
             input_files=[str(artifact_path)],
             input_sha256s=[plaso_hash] if plaso_hash else [],
             source_evidence=str(artifact_path),
+        )
+        _persist_ingest_audit_event(
+            aid,
+            tool=f"ingest_{tool_name}",
+            status="success",
+            run_id=run_id,
+            mcp_name=getattr(audit, "mcp_name", ""),
+            hostname=host.hostname,
+            index_name=index_name,
+            result_summary=_plaso_summary,
+            input_files=[str(artifact_path)],
         )
         if tool_status:
             tool_status["status"] = "complete"
@@ -964,6 +1154,16 @@ def _ingest_plaso_artifact(
             result_summary=f"FAILED: {e}",
             input_files=[str(artifact_path)],
             input_sha256s=[plaso_hash] if plaso_hash else [],
+        )
+        _persist_ingest_audit_event(
+            aid,
+            tool=f"ingest_{tool_name}",
+            status="failure",
+            run_id=run_id,
+            mcp_name=getattr(audit, "mcp_name", ""),
+            hostname=host.hostname,
+            index_name=index_name,
+            result_summary=f"FAILED: {type(e).__name__}",
         )
         if tool_status:
             tool_status["status"] = "failed"
@@ -1033,6 +1233,11 @@ def _ingest_custom_artifact(
         ar.skipped = sk
         ar.bulk_failed = bf
         _write_ingest_manifest(str(artifact_path), host.hostname, tool_name, doc_count=cnt)
+        _custom_summary = (
+            f"{cnt} indexed"
+            + (f", {sk} skipped" if sk else "")
+            + (f", {bf} bulk failed" if bf else "")
+        )
         audit.log(
             tool=f"ingest_{tool_name}",
             audit_id=aid,
@@ -1042,12 +1247,21 @@ def _ingest_custom_artifact(
                 "run_id": run_id,
                 "bulk_failed": bf,
             },
-            result_summary=f"{cnt} indexed"
-            + (f", {sk} skipped" if sk else "")
-            + (f", {bf} bulk failed" if bf else ""),
+            result_summary=_custom_summary,
             input_files=[str(artifact_path)],
             input_sha256s=[file_hash] if file_hash else [],
             source_evidence=str(artifact_path),
+        )
+        _persist_ingest_audit_event(
+            aid,
+            tool=f"ingest_{tool_name}",
+            status="success",
+            run_id=run_id,
+            mcp_name=getattr(audit, "mcp_name", ""),
+            hostname=host.hostname,
+            index_name=index_name,
+            result_summary=_custom_summary,
+            input_files=[str(artifact_path)],
         )
         if tool_status:
             tool_status["status"] = "complete"
@@ -1070,6 +1284,16 @@ def _ingest_custom_artifact(
             result_summary=f"FAILED: {e}",
             input_files=[str(artifact_path)],
             input_sha256s=[file_hash] if file_hash else [],
+        )
+        _persist_ingest_audit_event(
+            aid,
+            tool=f"ingest_{tool_name}",
+            status="failure",
+            run_id=run_id,
+            mcp_name=getattr(audit, "mcp_name", ""),
+            hostname=host.hostname,
+            index_name=index_name,
+            result_summary=f"FAILED: {type(e).__name__}",
         )
         if tool_status:
             tool_status["status"] = "failed"

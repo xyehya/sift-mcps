@@ -717,3 +717,236 @@ def test_core_installer_seeds_no_opencti_or_windows_triage():
     # Positive control: the two real core add-ons are seeded.
     assert "opensearch-mcp" in body
     assert "forensic-rag-mcp" in body
+
+
+# ---------------------------------------------------------------------------
+# 11. SEC-2 — Gateway boundary binds caller-supplied OpenSearch `index` to the
+#     DB-active case (cross-case read primitive denied at the policy boundary).
+# ---------------------------------------------------------------------------
+
+
+def _active_case_service(case_key: str, artifact_path: str):
+    from sift_gateway.active_case import ActiveCase
+
+    class _Svc:
+        def require_active_case_for_principal(self, principal):
+            return ActiveCase(
+                case_id="11111111-1111-1111-1111-111111111111",
+                case_key=case_key,
+                title="A",
+                description=None,
+                status="open",
+                artifact_path=artifact_path,
+                metadata={},
+                membership_role="examiner",
+            )
+
+    return _Svc()
+
+
+def _opensearch_query_manifest() -> dict:
+    """A minimal first-party opensearch manifest with case-bound `index` query
+    tools, exercising the real Gateway.case_bound_argument_names path. Includes
+    opensearch_get_event (empty safe_case_argument_names → no injected case_dir),
+    the exact tool whose cross-case read slipped past the backend live."""
+    return {
+        "spec_version": "1.0",
+        "name": "opensearch-mcp",
+        "version": "1.0.0",
+        "tier": "addon",
+        "transport": "stdio",
+        "namespace": "opensearch",
+        "default_case_scoped": True,
+        "capabilities": {"provides": ["search"], "requires": [], "enriches_responses": False},
+        "tools": [
+            {
+                **_tool("opensearch_search", category="search-analysis"),
+                "recommended_phase": "ANALYZE",
+                "safe_case_argument_names": ["case_id", "case_dir"],
+                "case_bound_argument_names": ["index"],
+            },
+            {
+                # get_event is bound ONLY at the policy boundary: it carries no
+                # injected case_dir, so the backend cannot bind it.
+                **_tool("opensearch_get_event", category="search-analysis"),
+                "recommended_phase": "ANALYZE",
+                "safe_case_argument_names": [],
+                "case_bound_argument_names": ["index"],
+            },
+            {
+                **_tool("opensearch_health", health=True, category="search-analysis"),
+                "recommended_phase": "ANALYZE",
+            },
+        ],
+        "health": "opensearch_health",
+    }
+
+
+def _server_with_index_tools(gateway: Gateway, *names: str) -> FastMCP:
+    """Register index-accepting stub tools behind the full agent policy chain.
+
+    The stub accepts the args the chain may inject (case_id/case_dir) plus the
+    free-form index/event_id so a NON-denied call dispatches cleanly."""
+    mcp = FastMCP("parent", middleware=gateway_policy_middlewares(gateway, auth_enabled=True))
+    for tool_name in names:
+        @mcp.tool(name=tool_name)
+        async def _idx_tool(
+            index: str = "",
+            case_id: str = "",
+            case_dir: str = "",
+            event_id: str = "",
+            query: str = "*",
+        ):
+            return "dispatched"
+
+    return mcp
+
+
+async def _agent_call(gateway: Gateway, tool: str, args: dict):
+    """Drive a tool through the AGENT path (policy_middleware chain) with an
+    active case set — the real surface agents use, NOT Gateway.call_tool."""
+    mcp = _server_with_index_tools(gateway, tool)
+    identity = _identity("namespace:opensearch")
+    with patch(
+        "sift_gateway.policy_middleware.current_mcp_identity", return_value=identity
+    ), patch(
+        "sift_gateway.policy_middleware.check_evidence_gate_db", return_value=_OPEN_GATE
+    ):
+        return await mcp.call_tool(tool, args)
+
+
+async def test_agent_path_denies_cross_case_index():
+    """SEC-2: on the AGENT path (ProxyActiveCaseMiddleware, gate ⑥) a caller
+    `index` naming another case is denied before dispatch."""
+    gateway = await _async_gateway_with_backends(_opensearch_query_manifest())
+    gateway.active_case_service = _active_case_service("case-a-1234", "/cases/case-a-1234")
+
+    for cross in ("case-*", "case-b-9999-*", "case-b-9999-evtx-host"):
+        result = await _agent_call(gateway, "opensearch_search", {"index": cross})
+        assert result.is_error, f"{cross!r} must be denied on the agent path"
+        payload = json.loads(result.content[0].text)
+        assert payload["error"] == "invalid_input"
+        assert "cross-case access denied" in payload["detail"]
+
+
+async def test_agent_path_denies_empty_index_segment():
+    """SEC-2 hardening on the agent path: a blank comma segment is rejected
+    fail-closed, not skipped."""
+    gateway = await _async_gateway_with_backends(_opensearch_query_manifest())
+    gateway.active_case_service = _active_case_service("case-a-1234", "/cases/case-a-1234")
+
+    for bad in ("case-a-1234-evtx-*,", ",case-a-1234-*", "case-a-1234-*,,case-a-1234-evtx-*"):
+        result = await _agent_call(gateway, "opensearch_search", {"index": bad})
+        assert result.is_error, f"{bad!r} must be denied on the agent path"
+        payload = json.loads(result.content[0].text)
+        assert payload["error"] == "invalid_input"
+        assert "cross-case access denied" in payload["detail"]
+
+
+async def test_agent_path_denies_get_event_cross_case_exact_index():
+    """SEC-2 fail-on-revert for the LIVE-CAUGHT gap: opensearch_get_event has
+    empty safe_case_argument_names (no injected case_dir → the backend cannot
+    bind it), so the cross-case exact index MUST be denied at the policy boundary
+    on the agent path. This is the exact call that returned not_found (i.e. was
+    accepted) on the VM before the relocation."""
+    gateway = await _async_gateway_with_backends(_opensearch_query_manifest())
+    gateway.active_case_service = _active_case_service("case-a-1234", "/cases/case-a-1234")
+
+    result = await _agent_call(
+        gateway, "opensearch_get_event",
+        {"event_id": "e1", "index": "case-b-9999-evtx-host"},
+    )
+    assert result.is_error, "get_event cross-case exact index must be denied on the agent path"
+    payload = json.loads(result.content[0].text)
+    assert payload["error"] == "invalid_input"
+    assert "cross-case access denied" in payload["detail"]
+
+
+async def test_agent_path_allows_intra_case_index():
+    """SEC-2: an `index` that narrows WITHIN the active case passes the boundary
+    check on the agent path (search + get_event) and dispatches."""
+    gateway = await _async_gateway_with_backends(_opensearch_query_manifest())
+    gateway.active_case_service = _active_case_service("case-a-1234", "/cases/case-a-1234")
+
+    for inside in ("case-a-1234-*", "case-a-1234-evtx-*", ""):
+        result = await _agent_call(gateway, "opensearch_search", {"index": inside})
+        assert not result.is_error, f"intra-case {inside!r} must pass; got {result.content}"
+
+    # get_event with an exact in-case index must also pass (positive control).
+    result = await _agent_call(
+        gateway, "opensearch_get_event",
+        {"event_id": "e1", "index": "case-a-1234-evtx-host"},
+    )
+    assert not result.is_error, f"intra-case get_event must pass; got {result.content}"
+
+
+# ---------------------------------------------------------------------------
+# 12. SEC-12 — enrichment:intel is enforced AUTHORITATIVELY at the gateway
+#     (AddonAuthorityMiddleware); the inert in-process env gate was removed.
+# ---------------------------------------------------------------------------
+
+
+async def test_enrich_intel_requires_enrichment_scope_at_gateway():
+    """SEC-12 / DSS-CAN-012: opensearch_enrich_intel carries
+    required_scopes=['enrichment:intel']; an identity that can reach the
+    opensearch namespace but lacks that scope is denied BEFORE dispatch by
+    AddonAuthorityMiddleware. This is the real gate the removed in-process env
+    check was a fail-open shadow of."""
+    manifest = _addon_manifest(
+        name="opensearch-mcp",
+        namespace="opensearch",
+        tools=[
+            {
+                **_tool("opensearch_enrich_intel", read_only=False, category="enrichment"),
+                "required_scopes": ["enrichment:intel"],
+            },
+            _tool("opensearch_health", health=True, required_scopes=["search:read"]),
+        ],
+        non_authoritative=False,
+    )
+    gateway = await _async_gateway_with_backends(manifest)
+    mcp = _server_with_tool(gateway, "opensearch_enrich_intel")
+    # Reaches the tool (namespace grant) but lacks enrichment:intel.
+    identity = _identity("namespace:opensearch")
+
+    with patch(
+        "sift_gateway.policy_middleware.current_mcp_identity", return_value=identity
+    ), patch(
+        "sift_gateway.policy_middleware.check_evidence_gate_db", return_value=_OPEN_GATE
+    ):
+        result = await mcp.call_tool("opensearch_enrich_intel", {})
+
+    assert result.is_error
+    payload = json.loads(result.content[0].text)
+    assert payload["error"] == "addon_scope_missing"
+    assert payload["missing_scopes"] == ["enrichment:intel"]
+
+
+# ---------------------------------------------------------------------------
+# 13. SEC-2 — the gateway's replicated active-case prefix MUST match the
+#     OpenSearch backend's build_index_pattern (no drift between the two layers).
+# ---------------------------------------------------------------------------
+
+
+def test_gateway_index_prefix_matches_backend_build_index_pattern():
+    """SEC-2 drift guard: Gateway._active_case_index_prefix replicates
+    opensearch_mcp.paths.build_index_pattern(key, tail='') (the gateway does not
+    import the add-on). Pin them in lock-step so the boundary check agrees with
+    the backend resolver across representative case keys."""
+    from opensearch_mcp.paths import build_index_pattern
+
+    for basename in (
+        "case-a-1234",
+        "case-rocba-3-06171852",
+        "case-Mixed_Case-01",
+        "plainkey-99",
+    ):
+        gw_prefix = Gateway._active_case_index_prefix(
+            _active_case_service(basename, f"/cases/{basename}")
+            .require_active_case_for_principal(None)
+        )
+        backend_prefix = build_index_pattern(basename.lower(), tail="")
+        assert gw_prefix == backend_prefix, (
+            f"prefix drift for {basename!r}: gateway={gw_prefix!r} "
+            f"backend={backend_prefix!r}"
+        )

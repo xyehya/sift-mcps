@@ -69,6 +69,7 @@ def build_handlers(dsn: str, *, job_types: list[str] | None = None):
             logger.warning("Failed to wire host_identity_recorder to opensearch server: %s", exc)
     except ImportError:
         pass
+
     return handlers
 
 

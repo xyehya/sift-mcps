@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import unquote
 
 import yaml
+from sift_common.identifiers import is_valid_examiner_slug
 from sift_core.case_io import (
     _protected_write,
     case_approvals_path,
@@ -42,6 +43,19 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
+from case_dashboard.backends_routes import (
+    get_backends_route,
+    get_health_route,
+    register_backend_route,
+    reload_backends_route,
+    restart_service_route,
+    set_backend_enabled_route,
+    start_service_route,
+    stop_service_route,
+    unregister_backend_route,
+    validate_backend_route,
+)
+from case_dashboard.file_io import _load_json, _load_jsonl, _load_yaml
 from case_dashboard.session_jwt import (
     SESSION_ENVELOPE_COOKIE_NAME,
     SESSION_ENVELOPE_COOKIE_PATH,
@@ -255,51 +269,9 @@ def _no_case_response() -> JSONResponse:
     )
 
 
-def _load_json(path: Path) -> list | dict | None:
-    """Load a JSON file, return None on missing/corrupt."""
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        logger.warning("Corrupt JSON file: %s", path)
-        return None
-    except OSError as e:
-        logger.warning("Failed to read %s: %s", path, e)
-        return None
-
-
-def _load_yaml(path: Path) -> dict | None:
-    """Load a YAML file. Returns None if missing. Raises ValueError on corrupt/unreadable."""
-    if not path.exists():
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except yaml.YAMLError as e:
-        raise ValueError(f"Corrupt YAML: {path}: {e}") from e
-    except OSError as e:
-        raise ValueError(f"Cannot read YAML: {path}: {e}") from e
-
-
-def _load_jsonl(path: Path) -> list[dict]:
-    """Load a JSONL file, skipping corrupt lines."""
-    if not path.exists():
-        return []
-    entries = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-    except OSError:
-        pass
-    return entries
+# _load_json, _load_yaml, _load_jsonl are imported from case_dashboard.file_io
+# (D4 / XYE-72 extraction).  The names remain available here via the module-level
+# import above so all intra-module call sites keep working without changes.
 
 
 def _verify_items(case_dir: Path, items: list[dict]) -> list[dict]:
@@ -350,15 +322,12 @@ def _verify_items(case_dir: Path, items: list[dict]) -> list[dict]:
 # --- Commit helpers ---
 
 
-_EXAMINER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,19}$")
-
-
 def _resolve_examiner(request: Request) -> str | None:
     """Get examiner from auth middleware state. R9: always use getattr, never direct access."""
     examiner = getattr(request.state, "examiner", None)
     if not examiner or examiner == "anonymous":
         return None
-    if not _EXAMINER_RE.match(examiner):
+    if not is_valid_examiner_slug(examiner):
         return None
     return examiner
 
@@ -2528,6 +2497,43 @@ async def get_evidence(request: Request) -> JSONResponse:
     return JSONResponse([])
 
 
+def _query_int_clamped(request: Request, name: str, default: int, *, min_value: int, max_value: int) -> int:
+    raw = request.query_params.get(name)
+    try:
+        value = int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(value, max_value))
+
+
+async def get_agent_activity(request: Request) -> JSONResponse:
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    role_err = _require_portal_role(request)
+    if role_err:
+        return role_err
+
+    case_id = _active_case_id()
+    if not case_id or _INVESTIGATION_DB is None:
+        return JSONResponse({"events": []})
+
+    reader = getattr(_INVESTIGATION_DB, "audit_events_recent", None)
+    if not callable(reader):
+        return JSONResponse({"events": []})
+
+    limit = _query_int_clamped(request, "limit", 30, min_value=1, max_value=100)
+    try:
+        events = reader(case_id, limit=limit)
+    except Exception:
+        logger.exception("DB agent activity read failed")
+        return JSONResponse(
+            {"error": "Agent activity unavailable — check gateway logs"},
+            status_code=500,
+        )
+    return JSONResponse({"events": events if isinstance(events, list) else []})
+
+
 async def get_audit_for_finding(request: Request) -> JSONResponse:
     examiner = _resolve_examiner(request)
     if not examiner:
@@ -2565,6 +2571,99 @@ async def get_audit_for_finding(request: Request) -> JSONResponse:
         events = reader(case_id, sorted(audit_ids))
         for ev in events:
             ev["_backend"] = ev.get("source", "db")
+            # Project nested fields up to the top-level shape AuditEntry reads.
+            # Guards are setdefault-style: never overwrite existing top-level
+            # values; ev["details"] is kept intact for any future consumers.
+            det = ev.get("details") or {}
+            if isinstance(det, dict):
+                # W2: shape per tier, keyed off event_type/source. The two
+                # non-gateway tiers (shell self-report, opensearch ingest) write
+                # their own details schema that the gateway-envelope projection
+                # below does not read, so they previously rendered dead (shell)
+                # or 500'd the whole panel (ingest — see the result_summary note
+                # below). These branches populate the SAME top-level fields the
+                # panel already reads (tool / params / result_summary) and use
+                # `is None` guards so they never clobber a value the gateway path
+                # set. Gateway rows (source == "gateway_mcp_envelope") match
+                # neither branch and fall straight through unchanged.
+                src = ev.get("source") or ""
+                etype = ev.get("event_type") or ""
+
+                # Shell tier (B-D3): finding.supporting_command / shell_self_report.
+                # details carries the redacted command + analyst purpose. isShell
+                # is already true on the frontend (source contains "shell"); it
+                # reads entry.params?.command for the Command block, so project
+                # both into params.
+                if src == "shell_self_report" or etype == "finding.supporting_command":
+                    if ev.get("params") is None:
+                        ev["params"] = {
+                            "command": det.get("command"),
+                            "purpose": det.get("purpose"),
+                        }
+
+                # Ingest tier (B-D2): opensearch.ingest.artifact. details carries
+                # structured context + a STRING result_summary. Project the
+                # context into params and pass the string summary through (the
+                # frontend ResultSummary already renders a string). NOTE: do NOT
+                # dict() result_summary for this tier — it is a str; dict("...")
+                # raises ValueError. The string-safe handling below also fixes
+                # that panel-poisoning 500.
+                elif etype == "opensearch.ingest.artifact":
+                    if ev.get("tool") is None and det.get("tool") is not None:
+                        ev["tool"] = det["tool"]
+                    if ev.get("params") is None:
+                        ctx = {
+                            k: det.get(k)
+                            for k in ("tool", "run_id", "mcp_name", "hostname", "index_name")
+                            if det.get(k) is not None
+                        }
+                        if ctx:
+                            ev["params"] = ctx
+                    if ev.get("result_summary") is None:
+                        rs = det.get("result_summary")
+                        if isinstance(rs, str) and rs:
+                            ev["result_summary"] = rs
+
+                # Tool name — always project from details.tool (gateway path).
+                if ev.get("tool") is None and det.get("tool") is not None:
+                    ev["tool"] = det["tool"]
+                # Params — prefer the real call arguments (command / purpose /
+                # preview_lines) fetched from the paired mcp.tool.call event and
+                # attached by the reader as ev["arguments"].  Fall back to
+                # details.detail (exit_code/provenance) only when absent so
+                # hasProvenance stays true even for non-envelope sources.
+                if ev.get("params") is None:
+                    args = ev.get("arguments")
+                    if args is not None:
+                        ev["params"] = args
+                    elif det.get("detail") is not None:
+                        ev["params"] = det["detail"]
+                # Result summary — start from details.result_summary then layer
+                # in exit_code (and output keys) from details.detail so the
+                # frontend ResultSummary can render "Exit: 0".  String-safe:
+                # only dict()-merge when result_summary is itself a dict (the
+                # gateway tier); a non-empty string summary (ingest tier) is
+                # carried through verbatim instead of crashing dict("<string>").
+                if ev.get("result_summary") is None:
+                    raw_rs = det.get("result_summary")
+                    if isinstance(raw_rs, str):
+                        if raw_rs:
+                            ev["result_summary"] = raw_rs
+                    else:
+                        # dict-merge ONLY when result_summary is itself a dict.
+                        # A non-dict, non-str value (JSON list / number / bool)
+                        # must NOT reach dict(raw_rs) — dict([1, 2]) raises
+                        # TypeError out of this un-try/except'd loop and 500s the
+                        # whole /audit response (same crash class as the string
+                        # bug). Anything else → empty base, no crash.
+                        base: dict[str, Any] = dict(raw_rs) if isinstance(raw_rs, dict) else {}
+                        detail_block = det.get("detail")
+                        if isinstance(detail_block, dict):
+                            for key in ("exit_code", "output_file", "output_sha256", "stdout_head"):
+                                if key in detail_block and key not in base:
+                                    base[key] = detail_block[key]
+                        if base:
+                            ev["result_summary"] = base
         return JSONResponse(events)
 
     case_dir = _resolve_case_dir()
@@ -3880,13 +3979,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
+        # Portal v3 self-hosts fonts (@fontsource → /portal/assets/*.woff2), so
+        # font-src must be 'self' (the old gstatic-only value blocked them) and the
+        # Google origins are dropped. 'unsafe-inline' is retained for style-src ONLY
+        # because a few data-driven numeric styles (progress/ring/severity-bar widths,
+        # grid ratio — AGENTS §11-sanctioned, token-var values, never untrusted) emit
+        # inline style attributes; a per-request nonce is the path to pure 'self'.
         response.headers["Content-Security-Policy"] = (
             "default-src 'none'; "
             "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src https://fonts.gstatic.com; "
-            "img-src 'self'; "
-            "connect-src 'self'"
+            "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "base-uri 'none'; "
+            "form-action 'self'; "
+            "frame-ancestors 'none'; "
+            "object-src 'none'"
         )
         return response
 
@@ -3901,379 +4010,15 @@ _TOKEN_LABEL_RE = re.compile(r"^[\w\s.,:/@-]{1,80}$")
 _AGENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
-def _token_config_write(updates: dict[str, dict | None]) -> None:
-    """Atomically persist api_keys updates to gateway.yaml and _API_KEYS.
-
-    ``updates`` maps raw_token → key_info dict (None = mark revoked_at).
-    Caller must hold _GATEWAY_CONFIG_LOCK.
-
-    Raises:
-        RuntimeError: If gateway config path is not configured.
-        OSError: If the disk write fails.
-    """
-    if _GATEWAY_CONFIG_PATH is None:
-        raise RuntimeError("Gateway config path not configured")
-
-    # Load current config from disk
-    try:
-        with open(_GATEWAY_CONFIG_PATH, encoding="utf-8") as f:
-            import yaml as _yaml
-
-            config = _yaml.safe_load(f) or {}
-    except (OSError, Exception) as e:
-        raise OSError(f"Cannot read gateway config: {e}") from e
-
-    if "api_keys" not in config or not isinstance(config["api_keys"], dict):
-        config["api_keys"] = {}
-
-    # Apply updates
-    for raw_token, info in updates.items():
-        if info is None:
-            # Should not happen — callers always pass a full dict
-            continue
-        config["api_keys"][raw_token] = info
-
-    # Atomic write
-    import yaml as _yaml
-
-    config_dir = _GATEWAY_CONFIG_PATH.parent
-    config_dir.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=str(config_dir), suffix=".tmp")
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            _yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, str(_GATEWAY_CONFIG_PATH))
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-    # Mirror to live in-memory dict so auth middleware sees new state immediately
-    for raw_token, info in updates.items():
-        _API_KEYS[raw_token] = info
-
-
-def _token_metadata(info: dict) -> dict:
-    """Return public metadata fields for a token; strip the raw token value."""
-    return {
-        "token_id": info.get("token_id", ""),
-        "agent_id": info.get("agent_id"),
-        "label": info.get("label", ""),
-        "role": info.get("role", "agent"),
-        "created_by": info.get("created_by"),
-        "created_at": info.get("created_at"),
-        "expires_at": info.get("expires_at"),
-        "revoked_at": info.get("revoked_at"),
-        "last_used_at": info.get("last_used_at"),
-        "last_used_ip": info.get("last_used_ip"),
-    }
-
-
-async def list_tokens(request: Request) -> JSONResponse:
-    """GET /api/tokens — list service token metadata. Examiner or readonly.
-
-    Never returns raw token values.
-    """
-    examiner = getattr(request.state, "examiner", None)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-
-    if _TOKEN_REGISTRY is not None:
-        try:
-            tokens = _TOKEN_REGISTRY.list_tokens()
-        except Exception as e:
-            logger.error("Failed to list DB-backed tokens: %s", e)
-            return JSONResponse({"error": "Failed to list tokens"}, status_code=500)
-        return JSONResponse({"tokens": tokens, "count": len(tokens)})
-
-    tokens = []
-    for _raw_token, info in _API_KEYS.items():
-        if not isinstance(info, dict):
-            continue
-        if info.get("role") not in ("agent", "readonly"):
-            continue  # Skip examiner gateway tokens from this view
-        tokens.append(_token_metadata(info))
-
-    # Sort by created_at for stable output
-    tokens.sort(key=lambda t: t.get("created_at") or "")
-    return JSONResponse({"tokens": tokens, "count": len(tokens)})
-
-
-async def create_token(request: Request) -> JSONResponse:
-    """POST /api/tokens — create a new sift_svc_* service token.
-
-    Required examiner role + must_reset check.
-    Raw token value is returned exactly once and never stored in plaintext.
-
-    Request body:
-        agent_id: str     (required) — machine/agent identifier
-        label: str        (required) — human description
-        expires_at: str   (optional) — ISO datetime
-        role: str         (optional) — "agent" (default) or "readonly"
-    """
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    must_err = _must_reset_check(request)
-    if must_err:
-        return must_err
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
-    agent_id = str(body.get("agent_id", "")).strip()
-    label = str(body.get("label", "")).strip()
-    expires_at = body.get("expires_at")  # ISO string or null
-    token_role = str(body.get("role", "agent")).strip()
-
-    if not agent_id:
-        return JSONResponse({"error": "agent_id is required"}, status_code=400)
-    if not _AGENT_ID_RE.match(agent_id):
-        return JSONResponse(
-            {"error": "agent_id must match [a-z0-9][a-z0-9_-]{0,63}"},
-            status_code=400,
-        )
-    if not label:
-        return JSONResponse({"error": "label is required"}, status_code=400)
-    if not _TOKEN_LABEL_RE.match(label):
-        return JSONResponse({"error": "label contains disallowed characters"}, status_code=400)
-    if token_role not in ("agent", "readonly"):
-        return JSONResponse(
-            {"error": "role must be 'agent' or 'readonly'"}, status_code=400
-        )
-    case_id = body.get("case_id")
-    if case_id is not None:
-        case_id = str(case_id).strip() or None
-    if token_role == "agent" and case_id is None and _ACTIVE_CASES is not None:
-        case_id = _active_case_id()
-        if not case_id:
-            return JSONResponse(
-                {"error": "An active DB case is required before issuing an agent token"},
-                status_code=409,
-            )
-    if expires_at is not None:
-        try:
-            datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
-        except ValueError:
-            return JSONResponse({"error": "expires_at must be an ISO datetime"}, status_code=400)
-
-    if _TOKEN_REGISTRY is None:
-        return JSONResponse(
-            {"error": "Token management unavailable: token registry not configured"},
-            status_code=503,
-        )
-
-    from sift_gateway.token_gen import generate_service_token
-
-    raw_token = generate_service_token()
-    now_iso = _iso_now()
-
-    try:
-        record = _TOKEN_REGISTRY.create_token(
-            raw_token=raw_token,
-            agent_id=agent_id,
-            label=label,
-            role=token_role,
-            created_by=examiner,
-            expires_at=expires_at,
-            case_id=case_id,
-        )
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=409)
-    except Exception as e:
-        logger.error("Failed to write token to DB registry: %s", e)
-        return JSONResponse(
-            {"error": "Failed to persist token — check gateway logs"},
-            status_code=500,
-        )
-
-    logger.info(
-        "Service token created: token_id=%s agent_id=%s by=%s",
-        record.id,
-        agent_id,
-        examiner,
-    )
-    return JSONResponse(
-        {
-            "ok": True,
-            "token": raw_token,  # returned exactly once
-            "token_id": record.id,
-            "token_fingerprint": record.token_fingerprint,
-            "agent_id": agent_id,
-            "role": token_role,
-            "label": label,
-            "case_id": record.case_id,
-            "created_at": now_iso,
-            "expires_at": record.expires_at.isoformat(),
-        },
-        status_code=201,
-    )
-
-
-async def revoke_token(request: Request) -> JSONResponse:
-    """DELETE /api/tokens/{token_id} — revoke a service token.
-
-    Requires examiner role + must_reset check.
-    Sets revoked_at; the token is immediately rejected by verify_api_key().
-    """
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    must_err = _must_reset_check(request)
-    if must_err:
-        return must_err
-
-    if _TOKEN_REGISTRY is None:
-        return JSONResponse(
-            {"error": "Token management unavailable: token registry not configured"},
-            status_code=503,
-        )
-
-    token_id = request.path_params["token_id"]
-
-    try:
-        revoked_at = _TOKEN_REGISTRY.revoke_token(token_id, revoked_by=examiner)
-    except Exception as e:
-        logger.error("Failed to revoke token %s: %s", token_id, e)
-        return JSONResponse(
-            {"error": "Failed to revoke token — check gateway logs"},
-            status_code=500,
-        )
-    if revoked_at is None:
-        return JSONResponse({"error": "Token not found or already revoked"}, status_code=404)
-
-    logger.info("Service token revoked: token_id=%s by=%s", token_id, examiner)
-    return JSONResponse({"ok": True, "token_id": token_id, "revoked_at": revoked_at})
-
-
-async def rotate_token(request: Request) -> JSONResponse:
-    """POST /api/tokens/{token_id}/rotate — revoke old token, issue replacement.
-
-    Requires examiner role + must_reset check.
-    Returns the new raw token exactly once. Old token is immediately revoked.
-    """
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    must_err = _must_reset_check(request)
-    if must_err:
-        return must_err
-
-    if _TOKEN_REGISTRY is None:
-        return JSONResponse(
-            {"error": "Token management unavailable: token registry not configured"},
-            status_code=503,
-        )
-
-    token_id = request.path_params["token_id"]
-
-    from sift_gateway.token_gen import generate_service_token
-
-    now_iso = _iso_now()
-    new_raw_token = generate_service_token()
-
-    try:
-        record = _TOKEN_REGISTRY.rotate_token(
-            token_id,
-            new_raw_token=new_raw_token,
-            rotated_by=examiner,
-        )
-    except Exception as e:
-        logger.error("Failed to rotate token %s: %s", token_id, e)
-        return JSONResponse(
-            {"error": "Failed to rotate token — check gateway logs"},
-            status_code=500,
-        )
-    if record is None:
-        return JSONResponse({"error": "Token not found or already revoked"}, status_code=404)
-
-    logger.info(
-        "Service token rotated: old_token_id=%s new_token_id=%s by=%s",
-        token_id,
-        record.id,
-        examiner,
-    )
-    return JSONResponse(
-        {
-            "ok": True,
-            "revoked_token_id": token_id,
-            "token": new_raw_token,  # returned exactly once
-            "token_id": record.id,
-            "token_fingerprint": record.token_fingerprint,
-            "agent_id": record.agent_id,
-            "role": record.role,
-            "label": record.label,
-            "case_id": record.case_id,
-            "created_at": now_iso,
-            "expires_at": record.expires_at.isoformat(),
-        },
-        status_code=201,
-    )
-
-
-async def reactivate_token(request: Request) -> JSONResponse:
-    """POST /api/tokens/{token_id}/reactivate — reactivate a revoked service token."""
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    must_err = _must_reset_check(request)
-    if must_err:
-        return must_err
-
-    if _TOKEN_REGISTRY is None:
-        return JSONResponse(
-            {"error": "Token management unavailable: token registry not configured"},
-            status_code=503,
-        )
-
-    token_id = request.path_params["token_id"]
-
-    try:
-        changed = _TOKEN_REGISTRY.reactivate_token(token_id)
-    except Exception as e:
-        logger.error("Failed to reactivate token %s: %s", token_id, e)
-        return JSONResponse(
-            {"error": "Failed to reactivate token — check gateway logs"},
-            status_code=500,
-        )
-    if not changed:
-        return JSONResponse({"error": "Token not found or already active"}, status_code=404)
-
-    logger.info("Service token reactivated: token_id=%s by=%s", token_id, examiner)
-    return JSONResponse({"ok": True, "token_id": token_id})
-
-
 # ---------------------------------------------------------------------------
 # PR03A — Agent/service principal (Supabase JWT) lifecycle
 # ---------------------------------------------------------------------------
 #
 # These endpoints replace the operator-facing "agent token" target with
 # "agent JWT/session" issuance. They call the Gateway-injected supabase_auth
-# callbacks; case_dashboard never imports sift_gateway. PR02 token-lifecycle
-# endpoints (/api/tokens/*) remain as a legacy compatibility surface.
+# callbacks; case_dashboard never imports sift_gateway. SEC-6: the legacy PR02
+# token-lifecycle endpoints (/api/tokens/*) have been removed — agent/service
+# credentials are issued solely through the Supabase principal lifecycle below.
 
 _PRINCIPAL_KINDS = {"agent", "service"}
 _SYSTEM_ROLE_VALUES = {"readonly", "operator", "lead", "owner", "admin"}
@@ -4510,16 +4255,6 @@ async def revoke_principal(request: Request) -> JSONResponse:
     return JSONResponse(
         {"ok": True, "principal_type": principal_type, "principal_id": principal_id}
     )
-
-
-def _resolve_gateway(request: Request):
-    """Retrieve gateway reference from application state."""
-    root_app = request.scope.get("app")
-    if root_app and hasattr(root_app, "state") and hasattr(root_app.state, "gateway"):
-        return root_app.state.gateway
-    if hasattr(request.app, "state") and hasattr(request.app.state, "gateway"):
-        return request.app.state.gateway
-    return None
 
 
 def _case_config_write(case_dir: str) -> None:
@@ -5774,7 +5509,7 @@ async def get_portal_state(request: Request) -> JSONResponse:
 
 
 def _dashboard_api_routes() -> list[Route]:
-    """API routes shared by v1 and v2 dashboard apps."""
+    """API routes for the v2 dashboard app."""
     return [
         Route("/api/portal/state", get_portal_state, methods=["GET"]),
         Route("/api/jobs/{job_id}", get_job_status, methods=["GET"]),
@@ -5787,6 +5522,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/findings/{id}", get_finding_by_id, methods=["GET"]),
         Route("/api/timeline", get_timeline, methods=["GET"]),
         Route("/api/evidence", get_evidence, methods=["GET"]),
+        Route("/api/agent/activity", get_agent_activity, methods=["GET"]),
         Route("/api/audit/{finding_id}", get_audit_for_finding, methods=["GET"]),
         Route("/api/delta", get_delta, methods=["GET"]),
         Route("/api/delta", post_delta, methods=["POST"]),
@@ -5835,11 +5571,6 @@ def _dashboard_api_routes() -> list[Route]:
             methods=["DELETE"],
         ),
         # Phase 13f: service-token lifecycle
-        Route("/api/tokens", list_tokens, methods=["GET"]),
-        Route("/api/tokens", create_token, methods=["POST"]),
-        Route("/api/tokens/{token_id}", revoke_token, methods=["DELETE"]),
-        Route("/api/tokens/{token_id}/rotate", rotate_token, methods=["POST"]),
-        Route("/api/tokens/{token_id}/reactivate", reactivate_token, methods=["POST"]),
         Route("/api/case/create", post_case_create, methods=["POST"]),
         Route("/api/cases", get_cases, methods=["GET"]),
         Route("/api/case/activate/challenge", get_case_activate_challenge, methods=["GET"]),
@@ -5857,323 +5588,6 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/services/{name}/stop", stop_service_route, methods=["POST"]),
         Route("/api/services/{name}/restart", restart_service_route, methods=["POST"]),
     ]
-
-
-def _verify_origin(request: Request) -> JSONResponse | None:
-    origin = request.headers.get("origin")
-    if not origin:
-        return JSONResponse({"error": "Missing Origin header"}, status_code=400)
-    host = request.headers.get("host")
-    from urllib.parse import urlparse
-    parsed_origin = urlparse(origin)
-    origin_host = parsed_origin.netloc
-    if not origin_host or origin_host != host:
-        if origin_host.replace("localhost", "127.0.0.1") != host.replace("localhost", "127.0.0.1"):
-            return JSONResponse({"error": f"Origin mismatch: {origin_host} vs {host}"}, status_code=400)
-    return None
-
-
-async def get_backends_route(request: Request) -> JSONResponse:
-    examiner = getattr(request.state, "examiner", None)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    role_err = _require_portal_role(request)
-    if role_err:
-        return role_err
-    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
-    if not gateway:
-        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
-    from sift_gateway.rest import list_backends
-    request.app.state.gateway = gateway
-    return await list_backends(request)
-
-
-async def get_health_route(request: Request) -> JSONResponse:
-    """PT1/WI4 — operator health panel feed.
-
-    Proxies the Gateway's own ``/health`` probe (the single source of truth for
-    backend/Supabase/evidence-root health) so the portal panel does not have to
-    reach a second origin. Idle mounted stdio backends are normalized to ``ok``
-    by ``health_endpoint`` (sift_gateway.health._operator_backend_health), so the
-    panel shows them as ready rather than "stopped". Operator/readonly only; the
-    response carries no token, key, or DSN material.
-    """
-    examiner = getattr(request.state, "examiner", None)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    role_err = _require_portal_role(request)
-    if role_err:
-        return role_err
-    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
-    if not gateway:
-        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
-    from sift_gateway.health import health_endpoint
-    request.app.state.gateway = gateway
-    return await health_endpoint(request)
-
-
-async def validate_backend_route(request: Request) -> JSONResponse:
-    examiner = getattr(request.state, "examiner", None)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-    origin_err = _verify_origin(request)
-    if origin_err:
-        return origin_err
-    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
-    if not gateway:
-        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-
-    from sift_gateway.rest import validate_backend_logic
-    response, status_code = validate_backend_logic(gateway, body)
-    return JSONResponse(response, status_code=status_code)
-
-
-async def register_backend_route(request: Request) -> JSONResponse:
-    examiner = getattr(request.state, "examiner", None)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-    origin_err = _verify_origin(request)
-    if origin_err:
-        return origin_err
-    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
-    if not gateway:
-        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-
-    examiner_name = _resolve_examiner(request)
-    if not examiner_name:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    # CL3a (B-MVP-017): re-verify the operator password against Supabase
-    # (fail closed) instead of the local file-HMAC challenge.
-    challenge_err = await _supabase_reverify(request, body)
-    if challenge_err:
-        return challenge_err
-
-    actor = getattr(request.state, "principal", None) or getattr(request.state, "identity", None)
-    from sift_gateway.rest import register_backend_logic
-    response, status_code = await register_backend_logic(gateway, body, actor=actor)
-    return JSONResponse(response, status_code=status_code)
-
-
-async def unregister_backend_route(request: Request) -> JSONResponse:
-    examiner = getattr(request.state, "examiner", None)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-    origin_err = _verify_origin(request)
-    if origin_err:
-        return origin_err
-    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
-    if not gateway:
-        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
-
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    examiner_name = _resolve_examiner(request)
-    if not examiner_name:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    # CL3a (B-MVP-017): re-verify the operator password against Supabase
-    # (fail closed) instead of the local file-HMAC challenge.
-    challenge_err = await _supabase_reverify(request, body)
-    if challenge_err:
-        return challenge_err
-
-    from sift_gateway.rest import unregister_backend
-
-    request.app.state.gateway = gateway
-    return await unregister_backend(request)
-
-
-async def reload_backends_route(request: Request) -> JSONResponse:
-    examiner = getattr(request.state, "examiner", None)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-    origin_err = _verify_origin(request)
-    if origin_err:
-        return origin_err
-    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
-    if not gateway:
-        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-
-    examiner_name = _resolve_examiner(request)
-    if not examiner_name:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    # CL3a (B-MVP-017): re-verify the operator password against Supabase
-    # (fail closed) instead of the local file-HMAC challenge.
-    challenge_err = await _supabase_reverify(request, body)
-    if challenge_err:
-        return challenge_err
-
-    from sift_gateway.rest import reload_backends
-    request.app.state.gateway = gateway
-    return await reload_backends(request)
-
-
-async def set_backend_enabled_route(request: Request) -> JSONResponse:
-    """PT1/WI5 — operator enable/disable of an add-on backend (re-auth gated).
-
-    Proxies the registry ``set_enabled`` write via the gateway REST helper. Never
-    edits the DB directly from the frontend; the registry owns the write and the
-    change applies to the served /mcp catalog on Gateway restart.
-    """
-    examiner = getattr(request.state, "examiner", None)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-    origin_err = _verify_origin(request)
-    if origin_err:
-        return origin_err
-    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
-    if not gateway:
-        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-
-    examiner_name = _resolve_examiner(request)
-    if not examiner_name:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    # CL3a (B-MVP-017): re-verify the operator password against Supabase
-    # (fail closed) instead of the local file-HMAC challenge.
-    challenge_err = await _supabase_reverify(request, body)
-    if challenge_err:
-        return challenge_err
-
-    from sift_gateway.rest import set_backend_enabled
-    request.app.state.gateway = gateway
-    return await set_backend_enabled(request)
-
-
-async def start_service_route(request: Request) -> JSONResponse:
-    examiner = getattr(request.state, "examiner", None)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-    origin_err = _verify_origin(request)
-    if origin_err:
-        return origin_err
-    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
-    if not gateway:
-        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-
-    examiner_name = _resolve_examiner(request)
-    if not examiner_name:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    # CL3a (B-MVP-017): re-verify the operator password against Supabase
-    # (fail closed) instead of the local file-HMAC challenge.
-    challenge_err = await _supabase_reverify(request, body)
-    if challenge_err:
-        return challenge_err
-
-    from sift_gateway.rest import start_service
-    request.app.state.gateway = gateway
-    return await start_service(request)
-
-
-async def stop_service_route(request: Request) -> JSONResponse:
-    examiner = getattr(request.state, "examiner", None)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-    origin_err = _verify_origin(request)
-    if origin_err:
-        return origin_err
-    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
-    if not gateway:
-        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-
-    examiner_name = _resolve_examiner(request)
-    if not examiner_name:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    # CL3a (B-MVP-017): re-verify the operator password against Supabase
-    # (fail closed) instead of the local file-HMAC challenge.
-    challenge_err = await _supabase_reverify(request, body)
-    if challenge_err:
-        return challenge_err
-
-    from sift_gateway.rest import stop_service
-    request.app.state.gateway = gateway
-    return await stop_service(request)
-
-
-async def restart_service_route(request: Request) -> JSONResponse:
-    examiner = getattr(request.state, "examiner", None)
-    if not examiner:
-        return JSONResponse({"error": "Authentication required"}, status_code=401)
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-    origin_err = _verify_origin(request)
-    if origin_err:
-        return origin_err
-    gateway = getattr(request.app.state, "gateway", None) or _resolve_gateway(request)
-    if not gateway:
-        return JSONResponse({"error": "Gateway reference not found"}, status_code=503)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-
-    examiner_name = _resolve_examiner(request)
-    if not examiner_name:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    # CL3a (B-MVP-017): re-verify the operator password against Supabase
-    # (fail closed) instead of the local file-HMAC challenge.
-    challenge_err = await _supabase_reverify(request, body)
-    if challenge_err:
-        return challenge_err
-
-    from sift_gateway.rest import restart_service
-    request.app.state.gateway = gateway
-    return await restart_service(request)
-
 
 
 async def serve_v2_static(request: Request) -> Response:

@@ -75,8 +75,11 @@ class CaseScopedQueryBase(BaseModel):
     index: str = Field(
         "",
         description=(
-            "Index pattern; every segment MUST start with 'case-'. Overrides case_id "
-            "when set. Leave empty to derive from case_id/active case."
+            "Index pattern to narrow WITHIN the active case (e.g. "
+            "'case-<key>-evtx-*'). Every segment must stay inside the active "
+            "case; a cross-case value (case-*, another case's pattern, or an "
+            "exact other-case index) is rejected. Leave empty to query the whole "
+            "active case."
         ),
     )
     case_id: str = Field(
@@ -313,10 +316,24 @@ class FieldValuesOut(BaseModel):
     field: str = Field(..., description="Field enumerated.")
     values: list[FieldValue] = Field(..., description="Distinct values with counts.")
     truncated: bool = Field(..., description="True when more distinct values exist than returned.")
+    advisory: str | None = Field(
+        None,
+        description="Set when an empty result is due to the field being absent from the index "
+        "mapping (i.e. 'field not mapped', not 'no values'); names available fields.",
+    )
 
 
 class StatusIn(BaseModel):
-    pass
+    # SEC-7: status binds its per-case index catalog to the DB-active case. The
+    # served *In model MUST advertise case_id/case_dir so the Gateway's
+    # schema-gated injection (gate-⑥ ProxyActiveCase) can pass the
+    # DB-authoritative active case through; without the fields the proxy drops the
+    # injected kwargs and the backend would resolve no active case (empty catalog).
+    case_id: str = Field(
+        default="",
+        description="Case id; empty resolves to the active portal case (case_dir).",
+    )
+    case_dir: str = _case_dir_field()
 
 
 class IndexInfo(BaseModel):
@@ -341,8 +358,17 @@ class StatusOut(BaseModel):
     cluster_status: str = Field(
         ..., description="Cluster health status; single-node yellow may be annotated normal."
     )
-    indices: list[IndexInfo] = Field(..., description="All case-* indices, sorted by name.")
-    total_indices: int = Field(..., description="Number of case-* indices returned.")
+    indices: list[IndexInfo] = Field(
+        ...,
+        description=(
+            "Indices for the ACTIVE case only (case-{key}-*), sorted by name; "
+            "cluster-wide enumeration is not exposed to the agent (SEC-7). Empty "
+            "when no active case resolves."
+        ),
+    )
+    total_indices: int = Field(
+        ..., description="Number of active-case indices returned (0 with no active case)."
+    )
     hayabusa: HayabusaHealth | None = Field(
         None,
         description=(
@@ -353,7 +379,14 @@ class StatusOut(BaseModel):
 
 
 class ShardStatusIn(BaseModel):
-    pass
+    # SEC-7: cluster capacity stays cluster-wide, but the top-indices catalog is
+    # bound to the DB-active case. The *In model advertises case_id/case_dir so the
+    # Gateway's gate-⑥ injection reaches the backend (see StatusIn).
+    case_id: str = Field(
+        default="",
+        description="Case id; empty resolves to the active portal case (case_dir).",
+    )
+    case_dir: str = _case_dir_field()
 
 
 class TopIndexShards(BaseModel):
@@ -374,7 +407,12 @@ class ShardStatusOut(BaseModel):
         ..., description="ok>=10%, warning>=2%, critical<2% headroom."
     )
     top_indices_by_shard_count: list[TopIndexShards] = Field(
-        ..., description="Top visible indices by shard count."
+        ...,
+        description=(
+            "Top indices by shard count, filtered to the ACTIVE case only (SEC-7); "
+            "other cases' indices are not exposed. Empty when no active case "
+            "resolves. Cluster capacity fields above remain cluster-wide."
+        ),
     )
 
 
@@ -483,6 +521,13 @@ class InspectContainerOut(BaseModel):
         None, description="E01 acquisition metadata from ewfinfo."
     )
     raw_info: str | None = Field(None, description="Truncated fdisk/img_stat output.")
+    partition_note: str | None = Field(
+        None,
+        description=(
+            "Guidance when no partition table (single-volume image) — use "
+            "fls -i ewf -f ntfs directly."
+        ),
+    )
 
 
 class IngestFormat(str, Enum):
@@ -505,8 +550,10 @@ class IngestIn(BaseModel):
     hostname: str = Field(
         "",
         description=(
-            "Source hostname. Required for json/accesslog/memory and most delimited. "
-            "'auto' detects from filenames for flat delimited dirs."
+            "Only used for formats with no derivable host (json, accesslog, "
+            "non-recursive delimited). IGNORED for auto/memory/e01-disk/recursive-"
+            "delimited, where the true host is derived from the registry ComputerName "
+            "/ parser. Correct a wrong derived host with opensearch_fix_host_mapping."
         ),
     )
     index_suffix: str = Field("", description="Optional index suffix.")
@@ -554,7 +601,7 @@ class IngestOut(BaseModel):
     ] = Field(..., description="Ingest response status.")
     case_id: str | None = Field(None, description="Resolved active case id.")
     job_id: str | None = Field(
-        None, description="Durable job id for a queued (worker-dispatched) ingest; poll job_status."
+        None, description="Durable job id for a queued (worker-dispatched) ingest; poll running_commands_status(job_id)."
     )
     job_type: str | None = Field(None, description="Dispatched job type (ingest/enrich) when queued.")
     dispatched_to: str | None = Field(
@@ -598,7 +645,14 @@ class IngestRun(BaseModel):
     )
     pid: int | None = Field(None, description="Worker process id.")
     elapsed: str = Field(..., description="Elapsed time display.")
-    total_indexed: int = Field(..., description="Total submitted documents.")
+    total_indexed: int = Field(
+        ...,
+        description=(
+            "Documents submitted to the bulk indexer (duplicate _ids from "
+            "multi-timestamp rows — e.g. timeliner — collapse on write; final "
+            "unique count may be lower; confirm with opensearch_count)."
+        ),
+    )
     bulk_failed: int = Field(..., description="Bulk write failures.")
     hosts_complete: int = Field(..., description="Completed host count.")
     hosts_total: int = Field(..., description="Total host count.")
@@ -646,48 +700,34 @@ class EnrichIntelIn(BaseModel):
 
 
 class EnrichIntelOut(BaseModel):
-    status: Literal["preview", "started"] = Field(..., description="Enrichment response status.")
-    case_id: str = Field(..., description="Resolved case id.")
+    status: Literal[
+        "preview",
+        "started",
+        # feat/opensearch-workers: privileged enrich is dispatched (non-blocking)
+        # to a dedicated sift-opensearch-worker@ via the durable job queue; the
+        # gateway returns this immediately instead of running the pipeline inline.
+        "queued",
+    ] = Field(..., description="Enrichment response status.")
+    # Optional (mirrors IngestOut): the gateway's worker-dispatch payload for a
+    # queued enrich is {job_id,status,job_type,dispatched_to,next_step} and omits
+    # case_id, so a required case_id would reject the legitimate queued response.
+    case_id: str | None = Field(None, description="Resolved case id.")
     ips: int | None = Field(None, description="Unique IP indicators in preview.")
     hashes: int | None = Field(None, description="Unique hash indicators in preview.")
     domains: int | None = Field(None, description="Unique domain indicators in preview.")
     total_iocs: int | None = Field(None, description="Total unique IOCs in preview.")
+    job_id: str | None = Field(
+        None, description="Durable job id for a queued (worker-dispatched) enrich; poll running_commands_status(job_id)."
+    )
+    job_type: str | None = Field(None, description="Dispatched job type (enrich) when queued.")
+    dispatched_to: str | None = Field(
+        None, description="Worker lane a queued enrich was dispatched to."
+    )
+    next_step: str | None = Field(None, description="Operator guidance for a queued dispatch.")
     pid: int | None = Field(None, description="Background process id.")
     run_id: str | None = Field(None, description="Background run id.")
     log_file: str | None = Field(None, description="Background run log file.")
     note: str | None = Field(None, description="Polling note.")
-
-
-class ListDetectionsIn(BaseModel):
-    severity: Literal["", "critical", "high", "medium", "low"] = Field(
-        "", description="Severity filter; empty returns all severities."
-    )
-    detector_type: str = Field("", description="Detector type filter; empty returns all.")
-    limit: int = Field(50, ge=1, le=500, description="Max findings. Hard cap 500.")
-    offset: int = Field(0, ge=0, description="Pagination start.")
-
-
-class DetectionRuleRef(BaseModel):
-    name: str | None = Field(None, description="Detection rule name.")
-    tags: list[str] = Field(default_factory=list, description="Rule tags.")
-
-
-class Detection(BaseModel):
-    id: str | None = Field(None, description="Finding id.")
-    timestamp: str | int | None = Field(None, description="Finding timestamp.")
-    index: str | None = Field(None, description="Source index.")
-    rules: list[DetectionRuleRef] = Field(default_factory=list, description="Matched rules.")
-    matched_docs: int = Field(..., description="Related document count.")
-
-
-class ListDetectionsOut(BaseModel):
-    findings: list[Detection] = Field(..., description="Detection findings.")
-    total: int = Field(..., description="Total findings reported by upstream.")
-    returned: int = Field(..., description="Findings returned after filtering.")
-    offset: int = Field(..., description="Pagination offset.")
-    suggestion: str | None = Field(
-        None, description="Hayabusa fallback query when Sigma is unavailable or empty."
-    )
 
 
 class FixHostMappingIn(BaseModel):
@@ -889,7 +929,35 @@ def _impl_search_hit(hit: dict[str, Any]) -> SearchHit:
 
 
 async def run_opensearch_search(params: SearchIn) -> ToolResult:
-    raw = _impl_server().opensearch_search(**params.model_dump())
+    # M-QUERYERR fix: intercept query-parse errors (OpenSearch 400 /
+    # query_shard_exception / parsing_exception) BEFORE they reach the generic
+    # except-Exception wrapper at registry.py:2518, which collapses them to an
+    # opaque "internal / check backend logs" message.
+    #
+    # _os_call (server.py) already catches RequestError (400-class) and
+    # re-raises it as ValueError("Query error: <reason>") — that specific
+    # prefix is the signal we detect here. Genuine 5xx errors (RuntimeError
+    # from ConnectionTimeout/ConnectionError/AuthorizationException) propagate
+    # unchanged to the generic wrapper, which remains correct for backend errors.
+    try:
+        raw = _impl_server().opensearch_search(**params.model_dump())
+    except ValueError as exc:  # noqa: BLE001 — narrow: only query-parse ValueErrors
+        msg = str(exc)
+        if msg.startswith("Query error:"):
+            # Strip the "Query error: " prefix — the reason is already user-readable.
+            reason = msg[len("Query error:"):].strip()
+            return _tool_error_result(
+                ErrorCode.invalid_input,
+                f"query_string parse error: {reason}",
+                (
+                    "Fix the query syntax and retry. Tips: quote values with special "
+                    "characters (source.ip:\"::1\"), use wildcards for partial matches "
+                    "(*ServiceUpdater*), avoid unmatched parentheses or unescaped "
+                    "reserved chars (+ - = && || > < ! ( ) { } [ ] ^ \" ~ * ? : \\ /)."
+                ),
+                retryable=True,
+            )
+        raise  # not a query-parse error; let the generic wrapper handle it
     if "error" in raw:
         return _impl_error(raw)
     meta = _meta_from_raw(raw)
@@ -997,13 +1065,16 @@ async def run_opensearch_field_values(params: FieldValuesIn) -> ToolResult:
         field=str(raw.get("field", params.field)),
         values=values,
         truncated=bool(raw.get("truncated", False)),
+        advisory=raw.get("advisory"),
     )
     return _success_tool_result(out, meta)
 
 
 async def run_opensearch_status(_params: StatusIn) -> ToolResult:
     try:
-        raw = _impl_server().opensearch_status()
+        # SEC-7: forward the Gateway-injected active case so the backend scopes
+        # the index catalog to it (empty when none resolves).
+        raw = _impl_server().opensearch_status(**_params.model_dump())
     except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
         return _tool_error_result(
             ErrorCode.upstream_unavailable,
@@ -1030,7 +1101,8 @@ async def opensearch_cluster_status_resource() -> str:
 
 async def run_opensearch_shard_status(_params: ShardStatusIn) -> ToolResult:
     try:
-        raw = _impl_server().opensearch_shard_status()
+        # SEC-7: forward the Gateway-injected active case so top_indices is scoped.
+        raw = _impl_server().opensearch_shard_status(**_params.model_dump())
     except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
         return _tool_error_result(
             ErrorCode.upstream_unavailable,
@@ -1123,6 +1195,7 @@ async def run_opensearch_inspect_container(params: InspectContainerIn) -> ToolRe
         partitions=list(raw.get("partitions") or []),
         acquiry_info=raw.get("acquiry_info") or raw.get("acquiry"),
         raw_info=raw.get("raw_info"),
+        partition_note=raw.get("partition_note"),
     )
     return _success_tool_result(out, meta)
 
@@ -1197,30 +1270,35 @@ async def run_opensearch_ingest_status(params: IngestStatusIn) -> ToolResult:
     meta = _meta_from_raw(raw)
     runs: list[IngestRun] = []
     for item in raw.get("ingests", []):
-        details = {
-            key: value
-            for key, value in item.items()
-            if key
-            not in {
-                "case_id",
-                "status",
-                "pid",
-                "elapsed",
-                "total_indexed",
-                "bulk_failed",
-                "hosts_complete",
-                "hosts_total",
-                "artifacts_complete",
-                "artifacts_total",
-                "log_file",
-                "checklist",
-                "message",
-                "halt_reason",
-                "errors",
-                "next_steps",
-                "warnings",
-            }
+        # Collect any extra fields NOT explicitly mapped below into the overflow bag.
+        # "details" is excluded here because it is already an explicit named field
+        # on the item dict (server.py puts durable-job fields there directly) — we
+        # wire it through to IngestRun.details below.  Excluding it prevents the
+        # double-nesting bug where the agent would see ingests[].details.details.*
+        _named_fields = {
+            "case_id",
+            "status",
+            "pid",
+            "elapsed",
+            "total_indexed",
+            "bulk_failed",
+            "hosts_complete",
+            "hosts_total",
+            "artifacts_complete",
+            "artifacts_total",
+            "log_file",
+            "checklist",
+            "message",
+            "halt_reason",
+            "errors",
+            "next_steps",
+            "warnings",
+            "details",  # explicit — wired directly below, not via overflow
         }
+        overflow = {key: value for key, value in item.items() if key not in _named_fields}
+        # Merge named details dict (from server.py) with any overflow keys so the
+        # agent surface is a flat IngestRun.details dict with all extra fields.
+        details: dict = {**(item.get("details") or {}), **overflow}
         runs.append(
             IngestRun(
                 case_id=item.get("case_id"),
@@ -1285,36 +1363,6 @@ async def run_opensearch_enrich_intel(params: EnrichIntelIn) -> ToolResult:
     return _success_tool_result(out, meta)
 
 
-async def run_opensearch_list_detections(params: ListDetectionsIn) -> ToolResult:
-    try:
-        raw = _impl_server().opensearch_list_detections(**params.model_dump())
-    except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
-        return _tool_error_result(
-            ErrorCode.upstream_unavailable,
-            f"{type(exc).__name__}: detection lookup failed.",
-            "Check OpenSearch Security Analytics availability, then retry.",
-            retryable=True,
-        )
-    if "error" in raw and "Security Analytics plugin not available" not in str(raw.get("error")):
-        return _impl_error(raw, default_code=ErrorCode.upstream_unavailable)
-    raw.pop("error", None)
-    meta = _meta_from_raw(raw)
-    out = ListDetectionsOut(
-        findings=[Detection.model_validate(item) for item in raw.get("findings", [])],
-        total=int(raw.get("total", 0)),
-        returned=int(raw.get("returned", 0)),
-        offset=int(raw.get("offset", params.offset)),
-        suggestion=raw.get("suggestion"),
-    )
-    return _success_tool_result(out, meta)
-
-
-async def opensearch_case_detections_resource(case_id: str) -> str:
-    _ = case_id
-    result = await run_opensearch_list_detections(ListDetectionsIn())
-    return _json_from_tool_result(result)
-
-
 def triage_host_prompt(host: str, case_id: str = "") -> str:
     case_arg = f", case_id={case_id!r}" if case_id else ""
     return (
@@ -1345,7 +1393,7 @@ def ioc_sweep_prompt(case_id: str = "") -> str:
         f"opensearch_enrich_intel({case_arg}dry_run=True) to size the IOC corpus. "
         "If appropriate, run the enrichment asynchronously, poll "
         "opensearch_ingest_status, then search for "
-        "threat_intel.verdict:MALICIOUS and review opensearch_list_detections."
+        "threat_intel.verdict:MALICIOUS with opensearch_search."
     )
 
 
@@ -1402,41 +1450,6 @@ async def opensearch_field_catalog_resource(artifact_type: str) -> str:
                 "artifact_type": artifact_type,
                 "fields": [],
                 "error": f"{type(exc).__name__}: field catalog unavailable.",
-            }
-        )
-
-
-async def opensearch_detection_catalog_resource() -> str:
-    try:
-        client = _impl_server()._get_os()
-        response = client.transport.perform_request(
-            "GET",
-            "/_plugins/_security_analytics/detectors/_search",
-            params={"size": 1000},
-        )
-        detectors = response.get("detectors") or response.get("hits", {}).get("hits", [])
-        by_type: dict[str, int] = {}
-        for detector in detectors:
-            source = detector.get("_source", detector) if isinstance(detector, dict) else {}
-            dtype = str(source.get("detector_type") or source.get("detectorType") or "unknown")
-            by_type[dtype] = by_type.get(dtype, 0) + 1
-        return _json_text(
-            {
-                "total_detectors": len(detectors),
-                "detectors_by_type": by_type,
-                "hayabusa_note": "Hayabusa alerts use case-*-hayabusa-* when available.",
-            }
-        )
-    except Exception as exc:  # noqa: BLE001 - Sigma is often unavailable on OpenSearch 3.5
-        return _json_text(
-            {
-                "total_detectors": 0,
-                "detectors_by_type": {},
-                "hayabusa_note": (
-                    "Security Analytics detector catalog unavailable; query "
-                    "case-*-hayabusa-* for Hayabusa alerts when evtx ingest ran."
-                ),
-                "error": f"{type(exc).__name__}: detection catalog unavailable.",
             }
         )
 
@@ -1791,7 +1804,8 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
         "output_shape": (
             "InspectContainerOut: path, resolved_path, container_type "
             "(e01|raw|file|unknown), tool_available, size_bytes, size_human, hashes{}, "
-            "partitions[], acquiry_info{}, raw_info (truncated)."
+            "partitions[], acquiry_info{}, raw_info (truncated), partition_note "
+            "(guidance when no partition table — use fls -i ewf -f ntfs directly)."
         ),
         "response_shaping": (
             "raw_info is truncated fdisk/img_stat text — a preview, not the full tool "
@@ -1816,12 +1830,16 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
             "Discover and ingest forensic artifacts into OpenSearch after examiner "
             "approval. dry_run=True (default) previews the plan; set dry_run=False to "
             "write. Supports container/artifact-dir auto-detect, format override, "
-            "include/exclude artifact filters, memory tiers/plugins, and VSS."
+            "include/exclude artifact filters, memory tiers/plugins, and VSS. "
+            "Host is auto-derived from the evidence (registry ComputerName for disk/"
+            "archive images, vol3 for memory); correct a wrong mapping with "
+            "opensearch_fix_host_mapping after ingest."
         ),
         "avoid_when": (
             "Do NOT set dry_run=False until the target evidence and plan are clear. "
             "Use force=True only for an intentional re-ingest when the case already "
-            "has docs."
+            "has docs. Do NOT pass hostname — host is auto-derived; use "
+            "opensearch_fix_host_mapping to correct a wrong mapping after ingest."
         ),
         "output_shape": (
             "IngestOut: status (preview|started|containers_detected|multi_started|"
@@ -1829,7 +1847,7 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
             "next_step, plan{}, container{}, already_indexed{}, suggested_hostname, "
             "warning, pid, run_id, log_file, note, details{}. Disk/E01 ingest returns "
             "status=queued + job_id (non-blocking, dispatched to a sift-opensearch-worker@); "
-            "poll job_status(job_id) for realtime worker_label/current_step."
+            "poll running_commands_status(job_id) for realtime worker_label/current_step."
         ),
         "response_shaping": (
             "Returns a plan/run reference (run_id, log_file) rather than streaming "
@@ -1843,18 +1861,16 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
                 format="auto"
             ),
             _example(
-                "Ingest a specific delimited artifact set for one host",
+                "Ingest a specific delimited artifact set (host derived from evidence)",
                 path="evidence/triage/wksn01",
                 format="delimited",
-                hostname="wksn01",
                 include=["amcache", "shimcache"],
                 dry_run=False,
             ),
             _example(
-                "Deep memory analysis, write",
+                "Deep memory analysis, write (host auto-derived via vol3)",
                 path="evidence/memdump.raw",
                 format="memory",
-                hostname="wksn01",
                 tier=3,
                 dry_run=False,
             ),
@@ -1913,10 +1929,13 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
             "dry_run=True first to size the IOC corpus."
         ),
         "output_shape": (
-            "EnrichIntelOut: status (preview|started), case_id, ips, hashes, domains, "
-            "total_iocs (preview counts), pid, run_id, log_file, note. ASYNC on write "
-            "— returns a run reference; poll opensearch_ingest_status "
-            "(artifact_name=='intel')."
+            "EnrichIntelOut: status (preview|started|queued), case_id, ips, hashes, domains, "
+            "total_iocs (preview counts), job_id, job_type, dispatched_to, next_step, "
+            "pid, run_id, log_file, note. "
+            "Disk/E01 enrich returns status=queued + job_id (non-blocking, dispatched to "
+            "sift-opensearch-worker@); poll running_commands_status(job_id) for realtime "
+            "worker_label/current_step. ASYNC on write — returns a run reference; "
+            "poll opensearch_ingest_status (artifact_name=='intel')."
         ),
         "response_shaping": (
             "Returns counts + a run reference, never IOC dumps or OpenCTI/OpenSearch "
@@ -1934,37 +1953,6 @@ _ADVANCED_META: dict[str, dict[str, Any]] = {
         "defer_loading_rationale": (
             "CORRELATE-phase, scope-gated, add-on-dependent (OpenCTI); Tool-Search "
             "`defer_loading` candidate."
-        ),
-    },
-    "opensearch_list_detections": {
-        "category": "search-analysis",
-        "recommended_for_phase": "ANALYZE",
-        "when_to_use": (
-            "List Security Analytics (Sigma) detection findings for triage pivots, "
-            "filtered by severity/detector_type; falls back to a Hayabusa query "
-            "suggestion when the Sigma plugin is unavailable or empty."
-        ),
-        "avoid_when": (
-            "Detection hits are leads, not conclusions — validate against source events "
-            "and surrounding context before recording a finding."
-        ),
-        "output_shape": (
-            "ListDetectionsOut: findings[] of Detection{id, timestamp, index, rules[] "
-            "of {name, tags[]}, matched_docs}, total, returned, offset, suggestion "
-            "(Hayabusa fallback when present)."
-        ),
-        "response_shaping": (
-            "Paginate with limit/offset; the per-finding payload references matched "
-            "docs by count, not by embedding them."
-        ),
-        "usage_examples": [
-            _example("All detections, first page", ),
-            _example("High-severity detections only", severity="high"),
-        ],
-        "defer_loading": True,
-        "defer_loading_rationale": (
-            "Depends on the optional Security Analytics plugin; lower-frequency. "
-            "Tool-Search `defer_loading` candidate."
         ),
     },
     "opensearch_fix_host_mapping": {
@@ -2107,33 +2095,6 @@ REGISTRY.append(
     )
 )
 
-REGISTRY.append(
-    ToolDef(
-        name="opensearch_list_detections",
-        fn=run_opensearch_list_detections,
-        in_model=ListDetectionsIn,
-        out_model=ListDetectionsOut,
-        annotations=_read_annotations("Security Analytics Detections"),
-        title="Security Analytics Detections",
-        description=(
-            "List Security Analytics detection findings, or suggest a Hayabusa "
-            "query when Sigma is unavailable or empty. Use to triage rule-based "
-            "detections; severity filtering is applied behavior-compatibly. "
-            "Example: opensearch_list_detections(severity='high')."
-        ),
-    )
-)
-
-RESOURCE_REGISTRY.append(
-    ResourceDef(
-        uri="opensearch://case/{case_id}/detections",
-        fn=opensearch_case_detections_resource,
-        name="opensearch_case_detections",
-        title="Case Detection Findings",
-        description="Unfiltered resource view of detection findings for case-oriented clients.",
-    )
-)
-
 PROMPT_REGISTRY.extend(
     [
         PromptDef(
@@ -2172,13 +2133,6 @@ RESOURCE_REGISTRY.extend(
             name="opensearch_field_catalog",
             title="Field Mapping Dictionary",
             description="Flattened field-to-type mapping for an artifact type.",
-        ),
-        ResourceDef(
-            uri="opensearch://catalog/detections",
-            fn=opensearch_detection_catalog_resource,
-            name="opensearch_detection_catalog",
-            title="Detection Rule Catalog",
-            description="Installed Sigma detector counts, with Hayabusa fallback guidance.",
         ),
     ]
 )

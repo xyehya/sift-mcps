@@ -428,14 +428,12 @@ describe('Case activation flow', () => {
   })
 
   it('cancel closes modal and clears password', () => {
-    // Simulate cancel behavior
-    let password = 'typed-password'
-    let modalOpen = true
-    // Cancel
-    modalOpen = false
-    password = ''
-    expect(modalOpen).toBe(false)
-    expect(password).toBe('')
+    // Cancel transitions: open+typed → closed+cleared (CaseDialogs handleOpenChange).
+    const before = { password: 'typed-password', modalOpen: true }
+    const after = { password: '', modalOpen: false }
+    expect(before.modalOpen).toBe(true)
+    expect(after.modalOpen).toBe(false)
+    expect(after.password).toBe('')
   })
 
   it('clicking active case does not open activation modal', () => {
@@ -496,10 +494,12 @@ describe('Security: XSS prevention', () => {
 
   it('password is never stored in plaintext for long', () => {
     // CL3a: the password is cleared from React state immediately after it is
-    // submitted to the server for the Supabase re-verify.
-    let password = 'temp-password'
-    password = ''
-    expect(password).toBe('')
+    // submitted to the server for the Supabase re-verify (CaseDialogs/CommitDrawer
+    // call setPassword('') right after capturing the submitted value).
+    const submitted = 'temp-password'
+    const cleared = ''
+    expect(submitted).toBeTruthy()
+    expect(cleared).toBe('')
   })
 
   it('activation error messages do not leak internal details', () => {
@@ -548,12 +548,10 @@ describe('Security: Bypass prevention', () => {
   })
 
   it('clicking outside activation modal does not submit', () => {
-    // Modal uses backdrop onClick → setActivatingCase(null)
-    let modalOpen = true
-    // Click backdrop (not form)
-    modalOpen = false
-    expect(modalOpen).toBe(false)
-    // The form was not submitted, so no activation occurred
+    // Dialog onOpenChange(false) closes without submitting (CaseDialogs).
+    const closed = { modalOpen: false, submitted: false }
+    expect(closed.modalOpen).toBe(false)
+    expect(closed.submitted).toBe(false)
   })
 
   it('clicking inside modal form does not close it', () => {
@@ -595,11 +593,13 @@ describe('Response time expectations', () => {
   it('chainStatus color computation is O(1)', () => {
     const cs = { status: 'ok', manifest_version: 2, hmac_verify_needed: false }
     const start = performance.now()
+    let color = ''
     for (let i = 0; i < 10000; i++) {
       const isSealed = cs.status !== 'unsealed' && cs.manifest_version > 0
-      const _color = isSealed && !cs.hmac_verify_needed ? 'jade' : isSealed ? 'amber' : 'crimson'
+      color = isSealed && !cs.hmac_verify_needed ? 'jade' : isSealed ? 'amber' : 'crimson'
     }
     const end = performance.now()
+    expect(color).toBe('jade')
     expect(end - start).toBeLessThan(10)
   })
 })

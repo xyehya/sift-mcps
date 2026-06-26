@@ -167,16 +167,190 @@ class DbAuditWriter:
 
 
 def _extract_audit_id(result: list) -> str | None:
-    """Extract audit_id from backend response content."""
+    """Extract audit_id from backend response content (content-list overload).
+
+    Scans result.content[].text only.  The full-result overload
+    ``_extract_audit_id_from_result`` should be preferred when a ``ToolResult``
+    object is available — it additionally inspects ``structured_content`` and
+    ``meta`` so proxied add-on ids are not lost.
+    """
     for item in result:
         text = getattr(item, "text", None)
         if text:
             try:
                 data = json.loads(text)
-                return data.get("audit_id")
+                if isinstance(data, dict):
+                    val = data.get("audit_id")
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
             except (json.JSONDecodeError, AttributeError):
                 pass
     return None
+
+
+def _extract_audit_id_from_result(result: Any) -> str | None:
+    """Return the first audit_id visible in a ToolResult, checking all surfaces.
+
+    Scanning order (stops at first hit):
+    1. ``result.content[].text`` parsed as JSON — covers core tools and
+       proxied add-ons whose response lands in content.
+    2. ``result.structured_content`` — covers large proxied responses where
+       the response guard may have capped and replaced content text.
+    3. ``result.meta`` — covers add-ons that store ``audit_id`` in
+       ``ResultMeta`` (mapped to FastMCP ``ToolResult.meta``).
+
+    Fail-soft: any attribute miss or parse error returns None, never raises.
+    """
+    try:
+        aid = _extract_audit_id(list(getattr(result, "content", None) or []))
+        if aid:
+            return aid
+        sc = getattr(result, "structured_content", None)
+        if isinstance(sc, dict):
+            val = sc.get("audit_id")
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        meta = getattr(result, "meta", None)
+        if isinstance(meta, dict):
+            val = meta.get("audit_id")
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    except Exception:
+        pass
+    return None
+
+
+# Maximum nesting depth explored by _collect_audit_ids_from_obj.  Prevents
+# pathologically deep responses (e.g. {"a":{"a":{…2000 deep…}}}) from
+# exhausting the Python call stack before the count budget is hit.
+_AUDIT_MAX_DEPTH = 64
+
+
+def _collect_audit_ids_from_obj(
+    obj: Any, out: list[str], budget: list[int], depth: int = 0
+) -> None:
+    """Recursively collect values under ``audit_id``/``audit_ids`` keys.
+
+    Conservative: only follows dict and list nodes; collects non-empty strings
+    under keys whose name is exactly ``audit_id`` or ``audit_ids``.  Bounded by
+    ``budget[0]`` (item count) and ``depth`` (nesting level, capped at
+    ``_AUDIT_MAX_DEPTH``) so neither the output list nor the call stack can grow
+    unbounded regardless of response shape.
+    """
+    if budget[0] <= 0 or depth > _AUDIT_MAX_DEPTH:
+        return
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            if key in ("audit_id", "audit_ids"):
+                if isinstance(val, str) and val.strip():
+                    out.append(val.strip())
+                    budget[0] -= 1
+                elif isinstance(val, (list, tuple)):
+                    for item in val:
+                        if budget[0] <= 0:
+                            break
+                        if isinstance(item, str) and item.strip():
+                            out.append(item.strip())
+                            budget[0] -= 1
+            else:
+                # Recurse into nested dicts/lists (e.g. provenance, stages)
+                _collect_audit_ids_from_obj(val, out, budget, depth + 1)
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            if budget[0] <= 0:
+                break
+            _collect_audit_ids_from_obj(item, out, budget, depth + 1)
+
+
+def _extract_all_audit_ids(result: list) -> list[str]:
+    """Return every audit-id string visible in *result* content, deduped.
+
+    Collects values found under ``audit_id`` or ``audit_ids`` keys anywhere in
+    the parsed JSON response (top-level, nested ``provenance``, ``stages``,
+    ingest provenance, etc.).  Only string values that appear under those exact
+    key names are gathered — no arbitrary strings.  The output list is bounded
+    by ``_AUDIT_MAX_ITEMS`` and deduplicated while preserving first-seen order.
+
+    This overload accepts a raw content list.  Use
+    ``_extract_all_audit_ids_from_result`` when a full ``ToolResult`` is
+    available so ``structured_content`` and ``meta`` are also scanned.
+    """
+    seen: set[str] = set()
+    collected: list[str] = []
+    budget = [_AUDIT_MAX_ITEMS]
+    for item in result:
+        text = getattr(item, "text", None)
+        if not text:
+            continue
+        try:
+            data = json.loads(text)
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            continue
+        _collect_audit_ids_from_obj(data, collected, budget)
+    # Deduplicate preserving first-seen order.
+    out: list[str] = []
+    for aid in collected:
+        if aid not in seen:
+            seen.add(aid)
+            out.append(aid)
+    return out
+
+
+def _extract_all_audit_ids_from_result(result: Any) -> list[str]:
+    """Return every audit-id string visible in a ToolResult, all surfaces, deduped.
+
+    Extends ``_extract_all_audit_ids`` (content-only) by additionally scanning
+    ``result.structured_content`` and ``result.meta``.  Scanning order:
+    1. ``content[].text`` — JSON-parsed, recursive collect.
+    2. ``structured_content`` — direct recursive collect (dict/list).
+    3. ``meta`` — direct recursive collect (dict/list).
+
+    Preserves existing depth-64 / 200-item bounds and first-seen dedup order.
+    Fail-soft: attribute misses or errors are silently skipped.
+    """
+    seen: set[str] = set()
+    collected: list[str] = []
+    budget = [_AUDIT_MAX_ITEMS]
+
+    # 1. content text
+    try:
+        for item in list(getattr(result, "content", None) or []):
+            if budget[0] <= 0:
+                break
+            text = getattr(item, "text", None)
+            if not text:
+                continue
+            try:
+                data = json.loads(text)
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                continue
+            _collect_audit_ids_from_obj(data, collected, budget)
+    except Exception:
+        pass
+
+    # 2. structured_content (dict — may contain audit_id even after content capping)
+    try:
+        sc = getattr(result, "structured_content", None)
+        if isinstance(sc, (dict, list)) and budget[0] > 0:
+            _collect_audit_ids_from_obj(sc, collected, budget)
+    except Exception:
+        pass
+
+    # 3. meta (dict — add-ons using ResultMeta store audit_id here)
+    try:
+        meta = getattr(result, "meta", None)
+        if isinstance(meta, (dict, list)) and budget[0] > 0:
+            _collect_audit_ids_from_obj(meta, collected, budget)
+    except Exception:
+        pass
+
+    # Deduplicate preserving first-seen order.
+    out: list[str] = []
+    for aid in collected:
+        if aid not in seen:
+            seen.add(aid)
+            out.append(aid)
+    return out
 
 
 # ---------------------------------------------------------------------------

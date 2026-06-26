@@ -297,14 +297,23 @@ class TestDeriveFailure:
 
 
 class TestIngestMemoryHostnameWiring:
-    """Test that ingest_memory calls _derive_hostname_from_image when hostname is empty."""
+    """Test that ingest_memory calls _derive_hostname_from_image — derivation is authoritative.
+
+    M-HOSTNAME fix: derivation ALWAYS runs first. When it succeeds the derived
+    hostname wins regardless of any caller-supplied value. The caller-supplied
+    value is only a last-resort fallback when derivation returns nothing.
+    """
 
     def _make_client(self):
         """Return a mock OpenSearch client."""
         return MagicMock()
 
-    def test_explicit_hostname_bypasses_derivation(self, monkeypatch, tmp_path):
-        """Operator-supplied hostname= must never trigger the deriver."""
+    def test_derivation_wins_over_explicit_hostname(self, monkeypatch, tmp_path):
+        """M-HOSTNAME: derivation ALWAYS runs and its result overrides an explicit hostname.
+
+        Previously operator-supplied hostname bypassed derivation; now derivation is
+        authoritative. opensearch_fix_host_mapping is the intentional-rename path.
+        """
         image = tmp_path / "test.raw"
         image.write_bytes(b"x")
 
@@ -312,7 +321,7 @@ class TestIngestMemoryHostnameWiring:
 
         def _spy_derive(path, timeout=60):
             derive_called["n"] += 1
-            return ("DERIVED", "registry")
+            return ("DERIVED-FROM-REGISTRY", "registry")
 
         monkeypatch.setattr(_pm, "_derive_hostname_from_image", _spy_derive)
 
@@ -333,7 +342,35 @@ class TestIngestMemoryHostnameWiring:
             plugins=["windows.pslist"],
         )
 
-        assert derive_called["n"] == 0, "Deriver must NOT be called when hostname is supplied"
+        assert derive_called["n"] == 1, "Deriver MUST always be called (derivation is authoritative)"
+
+    def test_explicit_hostname_used_as_fallback_when_derivation_fails(self, monkeypatch, tmp_path):
+        """When derivation returns nothing, the explicit hostname is the last-resort fallback."""
+        image = tmp_path / "test.raw"
+        image.write_bytes(b"x")
+
+        def _fail_derive(path, timeout=60):
+            return (None, None)
+
+        monkeypatch.setattr(_pm, "_derive_hostname_from_image", _fail_derive)
+        monkeypatch.setattr(_pm, "_find_vol3", lambda: "/bin/true")
+        import subprocess as _sp
+        monkeypatch.setattr(
+            _sp,
+            "run",
+            lambda *a, **kw: MagicMock(returncode=0, stdout="", stderr=""),
+        )
+
+        # Should NOT raise / return an error when explicit hostname is available as fallback
+        result = _pm.ingest_memory(
+            image_path=image,
+            client=self._make_client(),
+            case_id="test-case",
+            hostname="FALLBACK-HOST",
+            plugins=["windows.pslist"],
+        )
+        # No error key — the fallback hostname was used
+        assert "error" not in result, f"Should not error when fallback hostname available: {result}"
 
     def test_empty_hostname_triggers_derivation(self, monkeypatch, tmp_path):
         """When hostname='', _derive_hostname_from_image is called."""

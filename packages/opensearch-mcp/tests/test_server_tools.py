@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio as _asyncio
 import json as _json
 from pathlib import Path as _Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opensearchpy.exceptions import RequestError as _OSRequestError
 
+import opensearch_mcp.server as _srv_mod
 import opensearch_mcp.server as srv
+from opensearch_mcp.registry import (
+    IngestIn,
+    IngestStatusIn,
+    SearchIn,
+    run_opensearch_ingest_status,
+    run_opensearch_search,
+)
 from opensearch_mcp.server import (
     _get_os,
     _os_call,
@@ -47,27 +57,30 @@ def mock_client():
 
 
 class TestResolveIndexB1:
-    """B1: default index-pattern resolution must agree with index naming.
+    """B1 + XYE-10: default index-pattern resolution must agree with index naming.
 
     Indices are named ``case-<case_key>-<type>-<host>`` where ``case_key`` is
     the case directory basename — which itself already starts with ``case-``
-    (e.g. ``case-rocba-case-06132304``), so real indices carry a doubled
-    ``case-case-`` prefix. The default query pattern MUST reproduce that exact
-    prefix, and must NOT be built from the opaque DB UUID the Gateway injects.
+    (e.g. ``case-rocba-case-06132304``). The indexer normalizes that key so the
+    ``case-`` prefix is applied exactly ONCE (XYE-10): the canonical name is
+    ``case-rocba-case-06132304-<type>-<host>``, NOT a doubled ``case-case-``
+    form. The default query pattern MUST reproduce that single-prefix name, and
+    must NOT be built from the opaque DB UUID the Gateway injects.
     """
 
-    def test_case_key_starting_with_case_prefix_keeps_doubled_prefix(self, monkeypatch):
+    def test_case_key_starting_with_case_prefix_is_not_doubled(self, monkeypatch):
         # Active case dir basename already starts with 'case-' (real-world key).
         monkeypatch.setattr(srv, "_get_active_case", lambda: "case-rocba-case-06132304")
         # No explicit index, no explicit case_id -> derive from active case.
         pattern = srv._resolve_index("", "")
-        # Must match the actually-created indices, e.g.
-        # case-case-rocba-case-06132304-evtx-srl-forge
-        assert pattern == "case-case-rocba-case-06132304-*"
+        # Single-prefix: the redundant leading 'case-' is stripped from the key
+        # before the canonical prefix is applied (XYE-10).
+        assert pattern == "case-rocba-case-06132304-*"
+        assert "case-case-" not in pattern
 
     def test_explicit_case_id_with_case_prefix_resolves_correctly(self):
         pattern = srv._resolve_index("", "case-rocba-case-06132304")
-        assert pattern == "case-case-rocba-case-06132304-*"
+        assert pattern == "case-rocba-case-06132304-*"
 
     def test_uuid_case_id_is_ignored_in_favour_of_active_case(self, monkeypatch):
         # The Gateway injects the opaque DB UUID into case_id; building
@@ -75,13 +88,14 @@ class TestResolveIndexB1:
         monkeypatch.setattr(srv, "_get_active_case", lambda: "case-rocba-case-06132304")
         uuid = "674425ae-78ea-4c9c-9a14-3c9d0b6f900c"
         pattern = srv._resolve_index("", uuid)
-        assert pattern == "case-case-rocba-case-06132304-*"
+        assert pattern == "case-rocba-case-06132304-*"
         assert uuid not in pattern
 
     def test_explicit_index_always_wins(self):
+        # Explicit caller-supplied index is returned verbatim, untouched.
         assert (
-            srv._resolve_index("case-case-x-evtx-*", "case-y")
-            == "case-case-x-evtx-*"
+            srv._resolve_index("case-x-evtx-*", "case-y")
+            == "case-x-evtx-*"
         )
 
     def test_no_case_falls_back_to_wildcard(self, monkeypatch):
@@ -91,7 +105,7 @@ class TestResolveIndexB1:
     def test_count_uses_injected_case_dir_basename_as_key(self, mock_client, tmp_path):
         # Simulate the Gateway injecting the authoritative case_dir (whose
         # basename is the case_key) while also injecting the opaque UUID into
-        # case_id. The query must target the doubled-prefix indices.
+        # case_id. The query must target the single-prefix indices.
         case_dir = tmp_path / "case-rocba-case-06132304"
         case_dir.mkdir()
         mock_client.count.return_value = {"count": 7}
@@ -102,7 +116,44 @@ class TestResolveIndexB1:
         )
         # Inspect the index the client was actually asked to count.
         _, kwargs = mock_client.count.call_args
-        assert kwargs["index"] == "case-case-rocba-case-06132304-*"
+        assert kwargs["index"] == "case-rocba-case-06132304-*"
+        assert "case-case-" not in kwargs["index"]
+
+
+class TestIndexPrefixNormalizationXYE10:
+    """XYE-10: the ``case-`` index prefix is applied exactly once.
+
+    Write path (``build_index_name``) and read path (``build_index_pattern``)
+    must produce matching single-prefix names so a fresh ingest is queryable by
+    the default resolver.
+    """
+
+    def test_normalize_case_key_strips_one_leading_case_prefix(self):
+        from opensearch_mcp.paths import normalize_case_key
+
+        # Real-world key (dir basename) -> redundant leading 'case-' removed.
+        assert normalize_case_key("case-rocba-3-06171852") == "rocba-3-06171852"
+        # Only ONE leading prefix is stripped; inner 'case' tokens are kept.
+        assert normalize_case_key("case-rocba-case-06132304") == "rocba-case-06132304"
+        # Idempotent: a key without the prefix is unchanged.
+        assert normalize_case_key("rocba-3-06171852") == "rocba-3-06171852"
+
+    def test_build_index_name_single_prefix_for_case_prefixed_key(self):
+        from opensearch_mcp.paths import build_index_name
+
+        name = build_index_name("case-rocba-3-06171852", "amcache", "SRL-FORGE")
+        assert name == "case-rocba-3-06171852-amcache-srl-forge"
+        assert "case-case-" not in name
+
+    def test_build_index_name_and_pattern_agree(self):
+        from opensearch_mcp.paths import build_index_name, build_index_pattern
+
+        # The pattern the reader derives must match the name the writer creates.
+        name = build_index_name("case-rocba-3-06171852", "evtx", "host1")
+        pattern = build_index_pattern("case-rocba-3-06171852")
+        prefix = pattern[: -len("*")]  # strip trailing wildcard
+        assert name.startswith(prefix)
+        assert "case-case-" not in pattern
 
 
 def _served_tools() -> dict:
@@ -151,7 +202,6 @@ class TestToolRegistry:
             "opensearch_status",
             "opensearch_shard_status",
             "opensearch_case_summary",
-            "opensearch_list_detections",
         ]
         tools = _served_tools()
 
@@ -648,28 +698,85 @@ class TestIdxFieldValues:
 
 
 class TestIdxStatus:
-    def test_filters_to_case_indices_only(self, mock_client):
-        mock_client.cat.indices.return_value = [
-            {
-                "index": "case-test-evtx-host1",
-                "docs.count": "1000",
-                "store.size": "5mb",
-                "status": "open",
-            },
-            {"index": ".kibana_1", "docs.count": "10", "store.size": "1mb", "status": "open"},
-            {
-                "index": "case-inc2-amcache-host2",
-                "docs.count": "50",
-                "store.size": "100kb",
-                "status": "open",
-            },
-        ]
+    # SEC-7: the multi-case fixture below is the recon corpus a malicious agent
+    # would try to enumerate. The active case is ``case-aaa`` (key ``aaa`` →
+    # prefix ``case-aaa-``); ``case-bbb-*`` is another case, ``case-aaab-evtx`` is
+    # a sibling whose name shares the ``case-aaa`` text but NOT the ``case-aaa-``
+    # boundary, and ``.kibana_1`` is a system index.
+    _MULTI_CASE_INDICES = [
+        {
+            "index": "case-aaa-evtx-host1",
+            "docs.count": "1000",
+            "store.size": "5mb",
+            "status": "open",
+        },
+        {
+            "index": "case-aaa-prefetch",
+            "docs.count": "20",
+            "store.size": "1mb",
+            "status": "open",
+        },
+        {
+            "index": "case-bbb-evtx-host1",
+            "docs.count": "50",
+            "store.size": "100kb",
+            "status": "open",
+        },
+        # Prefix-boundary decoy: ``case-aaab-evtx``.startswith("case-aaa")
+        # is True, but startswith("case-aaa-") is False (the trailing dash
+        # stops ``case-aaa`` from matching the longer ``case-aaab`` key).
+        {
+            "index": "case-aaab-evtx",
+            "docs.count": "7",
+            "store.size": "50kb",
+            "status": "open",
+        },
+        {"index": ".kibana_1", "docs.count": "10", "store.size": "1mb", "status": "open"},
+    ]
+
+    def test_scopes_index_catalog_to_active_case(self, mock_client):
+        # SEC-7 fail-on-revert: with case A active, opensearch_status must
+        # return ONLY case A's indices — never the cluster-wide ``case-*`` set,
+        # which is a cross-case targeting map. Reverting the filter to
+        # ``.startswith("case-")`` re-admits ``case-bbb-*`` and breaks this.
+        mock_client.cat.indices.return_value = list(self._MULTI_CASE_INDICES)
+        mock_client.cluster.health.return_value = {"status": "green"}
+        # The Gateway injects the opaque DB UUID into case_id and the
+        # authoritative case directory into case_dir; the dir basename
+        # (``case-aaa``) is the case key the indices are named from.
+        resp = opensearch_status(
+            case_id="674425ae-78ea-4c9c-9a14-3c9d0b6f900c",
+            case_dir="/cases/case-aaa",
+        )
+        index_names = [i["index"] for i in resp["indices"]]
+        assert index_names == ["case-aaa-evtx-host1", "case-aaa-prefetch"]
+        assert resp["total_indices"] == 2
+        # Other case + boundary decoy + system index are all excluded.
+        assert "case-bbb-evtx-host1" not in index_names
+        assert "case-aaab-evtx" not in index_names
+        assert ".kibana_1" not in index_names
+
+    def test_prefix_boundary_excludes_sibling_case(self, mock_client):
+        # SEC-7: the trailing-dash boundary is load-bearing — a missing dash
+        # would let active case ``aaa`` leak the sibling ``case-aaab-*``.
+        mock_client.cat.indices.return_value = list(self._MULTI_CASE_INDICES)
+        mock_client.cluster.health.return_value = {"status": "green"}
+        resp = opensearch_status(case_dir="/cases/case-aaa")
+        index_names = [i["index"] for i in resp["indices"]]
+        assert "case-aaab-evtx" not in index_names
+
+    def test_no_active_case_returns_empty_catalog(self, mock_client, monkeypatch):
+        # SEC-7: with no resolvable active case the index catalog is EMPTY
+        # (never the cluster-wide ``case-*`` enumeration), but cluster health
+        # still reports — the standalone health-probe path must not error and
+        # must not leak the cross-case index list.
+        monkeypatch.setattr(srv, "_get_active_case", lambda: None)
+        mock_client.cat.indices.return_value = list(self._MULTI_CASE_INDICES)
         mock_client.cluster.health.return_value = {"status": "green"}
         resp = opensearch_status()
-        assert resp["total_indices"] == 2
-        index_names = [i["index"] for i in resp["indices"]]
-        assert ".kibana_1" not in index_names
-        assert "case-test-evtx-host1" in index_names
+        assert resp["cluster_status"] == "green"
+        assert resp["indices"] == []
+        assert resp["total_indices"] == 0
 
     def test_includes_cluster_status(self, mock_client):
         mock_client.cat.indices.return_value = []
@@ -886,6 +993,7 @@ class TestEnrichIntelAsync:
         # Run the background helper against mocked _spawn_ingest and
         # write_status so nothing real forks.
         with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
             patch("opensearch_mcp.server._spawn_ingest", return_value=fake_proc),
             patch("opensearch_mcp.ingest_status.write_status"),
             patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
@@ -924,6 +1032,7 @@ class TestEnrichIntelAsync:
             return fake_proc
 
         with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
             patch("opensearch_mcp.server._spawn_ingest", side_effect=_capture_spawn),
             patch("opensearch_mcp.ingest_status.write_status"),
             patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
@@ -951,6 +1060,7 @@ class TestEnrichIntelAsync:
             return fake_proc
 
         with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
             patch("opensearch_mcp.server._spawn_ingest", side_effect=_capture_spawn),
             patch("opensearch_mcp.ingest_status.write_status"),
             patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
@@ -971,10 +1081,170 @@ class TestEnrichIntelAsync:
             {"status": "running", "case_id": f"C{i}", "pid": 1000 + i}
             for i in range(_MAX_CONCURRENT_INGESTS)
         ]
-        with patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=full_roster):
+        with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
+            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=full_roster),
+        ):
             resp = opensearch_enrich_intel(dry_run=False)
         assert "error" in resp
         assert "Too many concurrent" in resp["error"]
+
+
+class TestEnrichIntelBackendUnavailable:
+    """F8: when no OpenCTI/intel backend is registered, the tool must surface a
+    clear unavailable signal instead of a misleading success/started."""
+
+    def test_dry_run_flags_unavailable_backend(self, mock_client, monkeypatch):
+        """dry_run still previews IOCs but annotates that enrichment can't run."""
+        from opensearch_mcp.server import opensearch_enrich_intel
+
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
+        fake_iocs = {"ip": {"1.2.3.4"}, "hash": {"abc"}, "domain": set()}
+        with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=False),
+            patch("opensearch_mcp.threat_intel.extract_unique_iocs", return_value=fake_iocs),
+        ):
+            resp = opensearch_enrich_intel(dry_run=True)
+        # Preview still works (IOC extraction is independent of the backend).
+        assert resp["status"] == "preview"
+        assert resp["total_iocs"] == 2
+        # But the unavailability is now explicit, not silent.
+        assert resp["intel_backend"] == "unavailable"
+        assert "unavailable" in resp["intel_backend_message"].lower()
+        assert "setup-addon" in resp["intel_backend_message"]
+
+    def test_dry_run_flags_available_backend(self, mock_client, monkeypatch):
+        """When a backend is present, dry_run marks intel_backend available."""
+        from opensearch_mcp.server import opensearch_enrich_intel
+
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
+        fake_iocs = {"ip": {"1.2.3.4"}, "hash": set(), "domain": set()}
+        with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
+            patch("opensearch_mcp.threat_intel.extract_unique_iocs", return_value=fake_iocs),
+        ):
+            resp = opensearch_enrich_intel(dry_run=True)
+        assert resp["status"] == "preview"
+        assert resp["intel_backend"] == "available"
+        assert "intel_backend_message" not in resp
+
+    def test_execute_returns_unavailable_not_started(self, mock_client, monkeypatch):
+        """dry_run=False with no backend must NOT launch — returns unavailable."""
+        from opensearch_mcp.server import opensearch_enrich_intel
+
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
+        spawn_called = []
+
+        def _spy_spawn(*a, **k):
+            spawn_called.append(True)
+            return MagicMock(pid=1)
+
+        with (
+            patch("opensearch_mcp.gateway.gateway_available", return_value=False),
+            patch("opensearch_mcp.server._spawn_ingest", side_effect=_spy_spawn),
+            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
+        ):
+            resp = opensearch_enrich_intel(dry_run=False)
+        assert resp["status"] == "unavailable"
+        assert resp["intel_backend"] == "unavailable"
+        assert "setup-addon" in resp["error"]
+        # Critically: no background enrichment was launched.
+        assert spawn_called == []
+
+
+# ---------------------------------------------------------------------------
+# EnrichIntelOut — output model validation (P35-5 queued status)
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichIntelOutModel:
+    """EnrichIntelOut.status must accept all three legitimate values so the
+    gateway's worker-dispatch path (which returns status='queued' + job_id)
+    passes MCP output validation instead of raising 'queued not in enum'."""
+
+    def test_accepts_preview(self):
+        """dry_run=True preview path: status='preview' must be valid."""
+        from opensearch_mcp.registry import EnrichIntelOut
+
+        out = EnrichIntelOut(status="preview", case_id="test-case", ips=2, total_iocs=2)
+        assert out.status == "preview"
+
+    def test_accepts_started(self):
+        """Background launch path: status='started' must be valid."""
+        from opensearch_mcp.registry import EnrichIntelOut
+
+        out = EnrichIntelOut(status="started", case_id="test-case", pid=54321, run_id="r1")
+        assert out.status == "started"
+
+    def test_accepts_queued(self):
+        """Worker-dispatch path: status='queued' must be valid (P35-5 fix).
+
+        The gateway's OpenSearchJobDispatchMiddleware returns this status when
+        opensearch_enrich_intel is redirected to a durable sift-opensearch-worker@
+        job. Before this fix, 'queued' was not in the Literal enum so the MCP
+        output validator rejected the response with 'queued is not one of
+        [preview, started]'.
+        """
+        from opensearch_mcp.registry import EnrichIntelOut
+
+        out = EnrichIntelOut(
+            status="queued",
+            case_id="test-case",
+            job_id="job-enrich-001",
+            job_type="enrich",
+            dispatched_to="opensearch-worker",
+            next_step="Poll running_commands_status(job_id) for progress.",
+        )
+        assert out.status == "queued"
+        assert out.job_id == "job-enrich-001"
+        assert out.job_type == "enrich"
+        assert out.dispatched_to == "opensearch-worker"
+
+    def test_accepts_exact_gateway_dispatch_payload(self):
+        """Regression (live P35-5): the gateway's _enqueue payload OMITS case_id.
+
+        OpenSearchJobDispatchMiddleware._enqueue returns exactly
+        {job_id,status,job_type,dispatched_to,next_step} for both ingest and
+        enrich — no case_id. EnrichIntelOut.case_id must therefore be optional
+        (IngestOut already is). The earlier test_accepts_queued passed only
+        because it supplied case_id; the real worker-dispatch response does not,
+        and a required case_id rejected the legitimate queued response live.
+        """
+        from opensearch_mcp.registry import EnrichIntelOut
+
+        # Byte-for-byte the shape policy_middleware._enqueue emits (no case_id).
+        payload = {
+            "job_id": "7b62ef54-3884-4baf-ade1-89954e22f4ea",
+            "status": "queued",
+            "job_type": "enrich",
+            "dispatched_to": "opensearch-worker",
+            "next_step": "Dispatched to a dedicated OpenSearch worker (non-blocking).",
+        }
+        out = EnrichIntelOut.model_validate(payload)
+        assert out.status == "queued"
+        assert out.case_id is None
+        assert out.job_id == payload["job_id"]
+
+    def test_rejects_invalid_status(self):
+        """Invalid status values must still fail validation."""
+        import pytest
+        from pydantic import ValidationError
+
+        from opensearch_mcp.registry import EnrichIntelOut
+
+        with pytest.raises(ValidationError):
+            EnrichIntelOut(status="running", case_id="test-case")
+
+    def test_queued_schema_enum_contains_all_three(self):
+        """JSON Schema for EnrichIntelOut.status must list all three values so
+        schema-validating MCP clients accept queued worker-dispatch responses."""
+        from opensearch_mcp.registry import EnrichIntelOut
+
+        schema = EnrichIntelOut.model_json_schema()
+        status_enum = schema["properties"]["status"]["enum"]
+        assert "preview" in status_enum
+        assert "started" in status_enum
+        assert "queued" in status_enum
 
 
 # ---------------------------------------------------------------------------
@@ -1428,12 +1698,69 @@ class TestCaseDirArgInjectionInvariant:
         )
 
 
+class TestSEC7StatusCaseScopeSurface:
+    """SEC-7 fail-on-revert surface: bind status/shard_status to the active case.
+
+    The recon half of SEC-2: ``opensearch_status`` and ``opensearch_shard_status``
+    scope their per-case index catalogs (``indices[]`` /
+    ``top_indices_by_shard_count``) to the DB-active case so an agent cannot
+    enumerate other cases' indices. For the Gateway's gate-⑥ injection to reach
+    the backend, three surfaces must agree (the MCP-fix-surfacing lesson):
+      1. the manifest declares ``case_id``/``case_dir`` in
+         ``safe_case_argument_names`` (so the gateway injects them), and
+      2. the served ``*In`` model advertises both fields (so the FastMCP proxy
+         does not drop the injected kwargs), and
+      3. the impl forwards them.
+    Reverting the manifest's ``safe_case_argument_names`` back to ``[]`` (which
+    would silently re-open the cross-case catalog) fails (1); reverting the
+    registry ``*In`` model fails (2)/(3).
+    """
+
+    _SEC7_TOOLS = ("opensearch_status", "opensearch_shard_status")
+
+    @pytest.mark.parametrize("tool_name", _SEC7_TOOLS)
+    def test_manifest_declares_both_case_args(self, tool_name):
+        manifest = _json.loads(_MANIFEST_PATH.read_text())
+        entry = next((t for t in manifest["tools"] if t["name"] == tool_name), None)
+        assert entry is not None, f"{tool_name} missing from manifest"
+        names = entry.get("safe_case_argument_names", [])
+        # Both must be present so the gateway injects the DB-active case; a revert
+        # to [] re-opens the cluster-wide enumeration (SEC-7 regression).
+        assert "case_id" in names and "case_dir" in names, (
+            f"{tool_name} must declare case_id AND case_dir in "
+            f"safe_case_argument_names (SEC-7); got {names!r}"
+        )
+
+    @pytest.mark.parametrize("tool_name", _SEC7_TOOLS)
+    def test_in_model_and_served_schema_expose_both_case_args(self, tool_name):
+        from opensearch_mcp.registry import REGISTRY
+
+        tool_def = next((td for td in REGISTRY if td.name == tool_name), None)
+        assert tool_def is not None, f"{tool_name} not in REGISTRY"
+        fields = tool_def.in_model.model_fields
+        assert "case_id" in fields and "case_dir" in fields, (
+            f"{tool_name}'s served *In model must expose case_id AND case_dir "
+            f"(SEC-7); got {sorted(fields)!r}"
+        )
+        props = _SERVED_TOOL_SCHEMAS[tool_name].get("properties", {})
+        assert "case_id" in props and "case_dir" in props, (
+            f"{tool_name} does not ADVERTISE both case args in its served input "
+            "schema — the gateway's FastMCP proxy would drop the injected kwargs "
+            "and the backend would resolve no active case (empty catalog)."
+        )
+
+
 class TestCaseDirKwargNoRaiseLive:
     """Read-path tools must behave identically with and without injected case_dir.
 
     Mirrors test_count_uses_injected_case_dir_basename_as_key but pins the
     no-raise / parity invariant across the easily-mockable query tools. The
     fixed tool (opensearch_count) is the lead case; the rest guard regressions.
+
+    SEC-2 note: the supplied ``index`` must stay WITHIN the injected case (the
+    gateway injects case_dir = the active case, and the index narrows within it).
+    Each pair therefore uses an index matching its case_dir; a deliberately
+    cross-case index is covered by the denial tests in test_security.py.
     """
 
     @pytest.fixture(autouse=True)
@@ -1454,16 +1781,17 @@ class TestCaseDirKwargNoRaiseLive:
         case_dir.mkdir()
         mock_client.count.return_value = {"count": 11}
 
-        plain = opensearch_count(query="event.code:4624", index="case-x-*")
+        idx = "case-rocba-case-06132304-*"  # within case_dir's case
+        plain = opensearch_count(query="event.code:4624", index=idx)
         injected = opensearch_count(
-            query="event.code:4624", index="case-x-*", case_dir=str(case_dir)
+            query="event.code:4624", index=idx, case_dir=str(case_dir)
         )
         assert plain["count"] == injected["count"] == 11
 
     def test_search_with_case_dir_matches_without(self, mock_client):
         mock_client.search.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
-        plain = opensearch_search(query="*", index="case-x-*")
-        injected = opensearch_search(query="*", index="case-x-*", case_dir="/cases/c1")
+        plain = opensearch_search(query="*", index="case-c1-*")
+        injected = opensearch_search(query="*", index="case-c1-*", case_dir="/cases/c1")
         assert plain["total"] == injected["total"] == 0
 
     def test_aggregate_with_case_dir_matches_without(self, mock_client):
@@ -1471,9 +1799,9 @@ class TestCaseDirKwargNoRaiseLive:
             "hits": {"total": {"value": 0}},
             "aggregations": {"agg": {"buckets": []}},
         }
-        plain = opensearch_aggregate(field="host.name", index="case-x-*")
+        plain = opensearch_aggregate(field="host.name", index="case-c1-*")
         injected = opensearch_aggregate(
-            field="host.name", index="case-x-*", case_dir="/cases/c1"
+            field="host.name", index="case-c1-*", case_dir="/cases/c1"
         )
         assert plain["buckets"] == injected["buckets"] == []
 
@@ -1482,9 +1810,9 @@ class TestCaseDirKwargNoRaiseLive:
             "hits": {"total": {"value": 0}},
             "aggregations": {"timeline": {"buckets": []}},
         }
-        plain = opensearch_timeline(query="*", index="case-x-*", interval="1h")
+        plain = opensearch_timeline(query="*", index="case-c1-*", interval="1h")
         injected = opensearch_timeline(
-            query="*", index="case-x-*", interval="1h", case_dir="/cases/c1"
+            query="*", index="case-c1-*", interval="1h", case_dir="/cases/c1"
         )
         assert plain.get("buckets") == injected.get("buckets")
         assert "error" not in plain and "error" not in injected
@@ -1493,8 +1821,292 @@ class TestCaseDirKwargNoRaiseLive:
         mock_client.search.return_value = {
             "aggregations": {"values": {"buckets": []}},
         }
-        plain = opensearch_field_values(field="user.name", index="case-x-*")
+        plain = opensearch_field_values(field="user.name", index="case-c1-*")
         injected = opensearch_field_values(
-            field="user.name", index="case-x-*", case_dir="/cases/c1"
+            field="user.name", index="case-c1-*", case_dir="/cases/c1"
         )
         assert plain["values"] == injected["values"] == []
+
+
+_FAKE_DURABLE_ROW = {
+    "job_id": "aabb-1234-ccdd-5678",
+    "job_type": "ingest",
+    "status": "running",
+    "case_id": "case-surface-test",
+    "evidence_id": None,
+    "priority": 100,
+    "attempts": 1,
+    "max_attempts": 3,
+    "spec_public": {"path": "evidence/test.e01"},
+    "result_public": {"indexed_docs": 8000},
+    "error_summary": None,
+    "provenance_id": None,
+    "created_at": "2026-06-25T10:00:00Z",
+    "started_at": "2026-06-25T10:01:00Z",
+    "finished_at": None,
+    "updated_at": "2026-06-25T10:05:00Z",
+    "step_count": 3,
+    "steps_succeeded": 2,
+    "worker_label": "osw-ingest-5678",
+    "current_step": {"name": "evtx", "detail": "8000 indexed"},
+}
+
+
+class TestMIngestStatusRegistrySurface:
+    """M-INGSTATUS: registry surface (run_opensearch_ingest_status) envelope in DB-active mode.
+
+    Architecture: the backend always returns ingests=[] + authority='postgres-durable-jobs'
+    in DB-active mode. The gateway's OpenSearchIngestStatusAugmentMiddleware
+    (policy_middleware.py) intercepts the result and populates ingests[] using its own DSN.
+    These tests pin the backend's stable envelope shape at the registry surface layer.
+    """
+
+    def _run(self, coro):
+        loop = _asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def test_backend_returns_empty_ingests_and_authority_in_db_active_mode(self, monkeypatch):
+        """Backend registry surface must return ingests=[] + authority in DB-active mode.
+
+        The gateway augments ingests[] — the backend provides only the authority envelope.
+        K4-compliant: no local mirror files consulted.
+        """
+        monkeypatch.setattr(_srv_mod, "_get_active_case", lambda: "case-surface-test")
+
+        with (
+            patch("opensearch_mcp.ingest_status.db_status_active", return_value=True),
+            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
+        ):
+            params = IngestStatusIn(case_id="case-surface-test")
+            result = self._run(run_opensearch_ingest_status(params))
+
+        assert not result.is_error, f"Expected success, got error: {result}"
+        payload = _json.loads(result.content[0].text)
+
+        # Backend envelope: ingests=[] always (gateway fills it via augment middleware).
+        assert payload.get("ingests") == [], (
+            "Backend must return ingests=[] in DB-active mode; "
+            "gateway OpenSearchIngestStatusAugmentMiddleware populates it"
+        )
+        assert payload.get("authority") == "postgres-durable-jobs", (
+            f"Expected postgres-durable-jobs authority, got: {payload.get('authority')!r}"
+        )
+        # Message must reference running_commands_status (not the removed job_status).
+        msg = payload.get("message", "")
+        assert "running_commands_status" in msg, (
+            f"Backend message must reference running_commands_status: {msg!r}"
+        )
+
+    def test_backend_has_no_job_status_lister(self):
+        """Backend server module must NOT expose _JOB_STATUS_LISTER.
+
+        The injectable-lister approach was inert (subprocess never received the injection)
+        and has been superseded by the gateway-side augment middleware.
+        """
+        assert not hasattr(_srv_mod, "_JOB_STATUS_LISTER"), (
+            "_JOB_STATUS_LISTER must be removed from the backend server module — "
+            "use the gateway's OpenSearchIngestStatusAugmentMiddleware instead"
+        )
+        assert not hasattr(_srv_mod, "set_job_status_lister"), (
+            "set_job_status_lister must be removed from the backend server module"
+        )
+
+
+class TestMHostnameIngestInSurface:
+    """M-HOSTNAME: registry surface (IngestIn model) must advertise optional hostname.
+
+    Operator decision: derive-first — auto/memory/e01-disk derivation wins even
+    when caller passes hostname.  json/accesslog/non-recursive-delimited must still
+    accept a caller-supplied hostname since those formats have no derivable host.
+    """
+
+    def test_hostname_is_optional_in_ingest_in_schema(self):
+        """hostname field must exist in IngestIn but be optional (default='')."""
+        schema = IngestIn.model_json_schema()
+        props = schema.get("properties", {})
+        assert "hostname" in props, (
+            "hostname must be present in IngestIn schema so json/accesslog/delimited "
+            "callers can supply it"
+        )
+        # Optional means it's not in the 'required' list
+        required = schema.get("required", [])
+        assert "hostname" not in required, (
+            "hostname must NOT be required in IngestIn — only used for hostless formats"
+        )
+
+    def test_hostname_default_is_empty_string(self):
+        """IngestIn.hostname defaults to '' so callers don't need to supply it."""
+        m = IngestIn(path="evidence/test.e01")
+        assert m.hostname == "", f"Default hostname must be '', got {m.hostname!r}"
+
+    def test_memory_format_description_says_ignored(self):
+        """hostname field description must say it is IGNORED for memory/e01-disk formats."""
+        schema = IngestIn.model_json_schema()
+        desc = schema["properties"]["hostname"].get("description", "")
+        assert "IGNORED" in desc, (
+            f"hostname description must say IGNORED for memory/e01-disk, got: {desc!r}"
+        )
+        assert "json" in desc.lower() or "accesslog" in desc.lower(), (
+            f"hostname description must mention the hostless formats, got: {desc!r}"
+        )
+
+    def test_hostname_in_served_tool_schema(self):
+        """The served tool schema (what the Gateway sees) must include hostname."""
+        schemas = _served_tool_schemas()
+        assert "opensearch_ingest" in schemas, "opensearch_ingest must be in served schemas"
+        props = schemas["opensearch_ingest"].get("properties", {})
+        assert "hostname" in props, (
+            "hostname must be in the served opensearch_ingest schema — missing means "
+            "json/accesslog callers can't pass it through the Gateway"
+        )
+
+    def test_memory_ingest_derivation_wins_over_passed_hostname(self, monkeypatch, tmp_path):
+        """memory format: _derive_hostname_from_image is called even when hostname passed.
+
+        Tests the idx_ingest_memory path in server.py via opensearch_ingest.
+        The image must live inside the case evidence dir (path-containment gate).
+        """
+        case_dir = tmp_path / "case-derive-test"
+        evidence_dir = case_dir / "evidence"
+        evidence_dir.mkdir(parents=True)
+        image = evidence_dir / "memdump.raw"
+        image.write_bytes(b"\x00" * 16)
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+
+        derive_called = {"n": 0}
+
+        def _spy_derive(path, timeout=120):
+            derive_called["n"] += 1
+            return ("REGISTRY-DERIVED", "registry")
+
+        # Patch the module attribute — server.py does a local `from … import`
+        # inside idx_ingest_memory at call time, which reads from the module
+        # object, so patching opensearch_mcp.parse_memory._derive_hostname_from_image
+        # is the correct intercept point.
+        with patch(
+            "opensearch_mcp.parse_memory._derive_hostname_from_image",
+            side_effect=_spy_derive,
+        ):
+            opensearch_ingest(
+                path="evidence/memdump.raw",
+                format="memory",
+                hostname="EXPLICIT-WRONG-HOST",  # should be ignored — derive wins
+                dry_run=True,
+            )
+
+        assert derive_called["n"] >= 1, (
+            "Derivation must be called even when explicit hostname is passed "
+            "(M-HOSTNAME: derive-first is authoritative for memory format)"
+        )
+
+    def test_json_ingest_passes_hostname_to_server(self, mock_client, monkeypatch, tmp_path):
+        """json format: caller-supplied hostname is passed through to idx_ingest_json.
+
+        For formats with no derivable host (json/accesslog/delimited), the
+        agent-supplied hostname must reach the server function.
+        """
+        case_dir = tmp_path / "case-json-test"
+        (case_dir / "evidence").mkdir(parents=True)
+        monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+        monkeypatch.setattr(srv, "_get_active_case", lambda: "case-json-test")
+
+        captured_hostname = []
+
+        def _capture_json(path, hostname, *args, **kwargs):
+            captured_hostname.append(hostname)
+            return {"status": "preview", "format": "json"}
+
+        with patch("opensearch_mcp.server.idx_ingest_json", side_effect=_capture_json):
+            opensearch_ingest(
+                path="evidence/events.jsonl",
+                format="json",
+                hostname="WEB-SRV01",
+                dry_run=True,
+            )
+
+        assert captured_hostname, "idx_ingest_json was not called"
+        assert captured_hostname[0] == "WEB-SRV01", (
+            f"hostname must be passed to idx_ingest_json for json format, "
+            f"got: {captured_hostname[0]!r}"
+        )
+
+def _make_request_error(reason: str) -> _OSRequestError:
+    """Construct a RequestError mimicking a 400 query_shard_exception."""
+    info = {"error": {"type": "query_shard_exception", "reason": reason}}
+    return _OSRequestError(400, "query_shard_exception", info)
+
+
+class TestMQueryErrSurface:
+    """M-QUERYERR: run_opensearch_search must surface query-parse errors as typed
+    user-input errors (not internal/opaque messages) at the registry surface."""
+
+    def _run(self, coro):
+        loop = _asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def test_bad_query_string_returns_invalid_input_not_internal(self, mock_client):
+        """A query_shard_exception / parsing_exception from OpenSearch must produce
+        error='invalid_input' (not 'internal') with a query-parse message."""
+        mock_client.search.side_effect = _make_request_error(
+            "Failed to parse query [... AND (broken]"
+        )
+        params = SearchIn(query="... AND (broken", index="case-test-*")
+        result = self._run(run_opensearch_search(params))
+
+        assert result.is_error, "Bad query must return a ToolResult with is_error=True"
+        import json as _json
+        payload = _json.loads(result.content[0].text)
+        assert payload.get("error") == "invalid_input", (
+            f"Expected invalid_input, got {payload.get('error')!r}. "
+            "Must NOT be 'internal'."
+        )
+        msg = payload.get("message", "")
+        assert "parse error" in msg.lower() or "query" in msg.lower(), (
+            f"Message must mention parse error, got: {msg!r}"
+        )
+        # Must NOT say 'check backend logs' (that's the opaque internal message)
+        assert "check backend logs" not in payload.get("remediation", ""), (
+            "Remediation must not say 'check backend logs' for a user-caused parse error"
+        )
+        # Must give a quoting/syntax hint
+        remediation = payload.get("remediation", "")
+        assert remediation, "Remediation must not be empty for a parse error"
+
+    def test_valid_query_still_works(self, mock_client):
+        """A syntactically valid query must succeed normally (no regression)."""
+        mock_client.search.return_value = {
+            "hits": {"total": {"value": 0, "relation": "eq"}, "hits": []},
+        }
+        params = SearchIn(query="event.code:4624", index="case-test-*")
+        result = self._run(run_opensearch_search(params))
+
+        assert not result.is_error, "Valid query must not return an error"
+
+    def test_genuine_backend_error_propagates_for_dispatch_wrapper(self, mock_client):
+        """A non-parse RuntimeError (backend/connection failure) must NOT be caught
+        by the query-parse ValueError handler — it must propagate so the generic
+        dispatch wrapper (registry.py:2518) can label it 'internal'.
+
+        run_opensearch_search only catches ValueError with "Query error:" prefix.
+        A connection RuntimeError must re-raise so it reaches the generic except-
+        Exception at registry.py:2518 → 'internal' ErrorCode (verified by the live
+        agent surface, not this unit test which calls run_opensearch_search directly).
+        """
+        from opensearchpy.exceptions import ConnectionError as _OSConnErr
+        # Simulate a genuine backend connection failure (not a query-parse error)
+        mock_client.search.side_effect = _OSConnErr("N/A", "Connection refused")
+        params = SearchIn(query="event.code:4624", index="case-test-*")
+        # run_opensearch_search must raise RuntimeError (not catch it as invalid_input).
+        # The generic dispatch wrapper catches it and returns 'internal'.
+        with pytest.raises(RuntimeError, match="connection") as exc_info:
+            self._run(run_opensearch_search(params))
+        # Confirm it's a connection/backend error, not a query-parse ValueError
+        assert not isinstance(exc_info.value, ValueError), (
+            "Backend RuntimeError must not be converted to a user-input ValueError"
+        )

@@ -1,49 +1,47 @@
-import { useState, useEffect, useCallback } from 'react'
-import { getHealth } from '../../api/endpoints'
+import { useCallback, useEffect, useState } from 'react'
+import { Activity } from 'lucide-react'
 
-// PT1/WI4 — dense operator health panel. Feeds off the gateway /health probe
-// (proxied at /portal/api/health). Mounted idle stdio backends are already
-// normalized to "ok" server-side, so OpenSearch/RAG/add-on rows show as ready
-// rather than "stopped". No secrets, tokens, or DSNs are rendered.
+import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { getHealth } from '@/api/endpoints'
+import { healthDotClass, healthToneClass } from './backends-utils'
 
-const STATUS_COLOR = {
-  ok: 'var(--jade)',
-  disabled: 'var(--text-muted)',
-  gated: 'var(--amber)',
-  warning: 'var(--amber)',
-  stopped: 'var(--text-muted)',
-  error: 'var(--crimson)',
-  invalid_manifest: 'var(--crimson)',
-  unknown: 'var(--text-muted)',
-}
-
-function statusColor(status) {
-  return STATUS_COLOR[status] || 'var(--text-muted)'
-}
+// ─────────────────────────────────────────────────────────────────────────
+// HealthPanel — dense operator system-health panel (PT1/WI4; legacy IA parity
+// §3). Feeds off the gateway /health probe (proxied at /portal/api/health;
+// mock-served in ?mock=1). Shows overall status, control-plane rows (gateway +
+// tools_count · Supabase auth · evidence root), and a per-backend health grid.
+// Own refresh + 15s poll + loading/error. No secrets, tokens, or DSNs rendered.
+// Reskinned to orange/graphite tokens, lucide icons, shadcn Button.
+// ─────────────────────────────────────────────────────────────────────────
 
 function StatusDot({ status }) {
   return (
     <span
-      className="inline-block w-2 h-2 rounded-full shrink-0"
-      style={{ background: statusColor(status) }}
+      className={cn('inline-block size-2 shrink-0 rounded-full', healthDotClass(status))}
+      aria-hidden
     />
   )
 }
 
 function Row({ label, status, detail }) {
   return (
-    <div className="flex items-center justify-between gap-3 py-1.5 border-b" style={{ borderColor: 'var(--border-faint)' }}>
-      <div className="flex items-center gap-2 min-w-0">
+    <div className="flex items-center justify-between gap-3 border-b border-border-faint py-1.5">
+      <div className="flex min-w-0 items-center gap-2">
         <StatusDot status={status} />
-        <span className="font-mono text-[11px] text-text-bright truncate">{label}</span>
+        <span className="mono truncate text-[11px] text-foreground">{label}</span>
       </div>
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex shrink-0 items-center gap-2">
         {detail && (
-          <span className="font-sans text-[10px] text-text-muted truncate max-w-[220px]" title={detail}>{detail}</span>
+          <span className="max-w-[220px] truncate text-[10px] text-muted-foreground" title={detail}>
+            {detail}
+          </span>
         )}
         <span
-          className="font-mono text-[10px] font-semibold uppercase tracking-wider"
-          style={{ color: statusColor(status) }}
+          className={cn(
+            'mono text-[10px] font-semibold uppercase tracking-wider',
+            healthToneClass(status),
+          )}
         >
           {status || 'unknown'}
         </span>
@@ -71,6 +69,7 @@ export function HealthPanel() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchHealth()
     const t = setInterval(fetchHealth, 15000)
     return () => clearInterval(t)
@@ -82,36 +81,43 @@ export function HealthPanel() {
   const evidence = health?.evidence_root || {}
 
   return (
-    <div className="p-4 rounded border" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-faint)' }}>
-      <div className="flex items-center justify-between mb-3">
+    <section className="rounded-lg border border-border-soft bg-card p-4">
+      <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <p className="text-[10px] font-sans font-semibold uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>
+          <Activity className="size-3.5 text-muted-foreground" aria-hidden />
+          <h2 className="mono text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
             System Health
-          </p>
+          </h2>
           <span
-            className="px-1.5 py-0.5 rounded font-mono text-[9px] font-semibold uppercase"
-            style={{ background: overall === 'ok' ? 'var(--jade-dim)' : 'var(--amber-dim)', color: overall === 'ok' ? 'var(--jade)' : 'var(--amber)' }}
+            className={cn(
+              'mono rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase',
+              overall === 'ok'
+                ? 'bg-status-approved/10 text-status-approved'
+                : 'bg-status-pending/10 text-status-pending',
+            )}
           >
             {overall}
           </span>
         </div>
-        <button
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
           onClick={fetchHealth}
           disabled={loading}
-          className="px-2 py-0.5 rounded text-[10px] font-sans font-semibold border hover:opacity-85 disabled:opacity-50 transition-opacity"
-          style={{ background: 'var(--bg-raised)', color: 'var(--text-primary)', borderColor: 'var(--border-soft)' }}
+          className="mono text-[10px]"
         >
           {loading ? 'Refreshing…' : 'Refresh'}
-        </button>
+        </Button>
       </div>
 
-      {err && (
-        <p className="text-[11px] font-mono mb-2" style={{ color: 'var(--crimson)' }}>{err}</p>
-      )}
+      {err && <p className="mono mb-2 text-[11px] text-destructive">{err}</p>}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6">
+      <div className="grid grid-cols-1 gap-x-6 lg:grid-cols-2">
         <div>
-          <p className="text-[9px] font-mono uppercase tracking-widest mb-1 mt-1" style={{ color: 'var(--text-ghost)' }}>Control plane</p>
+          <p className="mono mb-1 mt-1 text-[9px] uppercase tracking-widest text-text-ghost">
+            Control plane
+          </p>
           <Row
             label="Gateway"
             status={health ? 'ok' : 'unknown'}
@@ -129,20 +135,26 @@ export function HealthPanel() {
               evidence.status
                 ? [
                     evidence.path,
-                    evidence.write_protected ? 'write-blocked (ro)' : (evidence.writable ? 'writable' : 'read-only'),
+                    evidence.write_protected
+                      ? 'write-blocked (ro)'
+                      : evidence.writable
+                        ? 'writable'
+                        : 'read-only',
                     evidence.case_count != null ? `${evidence.case_count} cases` : null,
-                  ].filter(Boolean).join(' · ')
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
                 : ''
             }
           />
         </div>
 
         <div>
-          <p className="text-[9px] font-mono uppercase tracking-widest mb-1 mt-1" style={{ color: 'var(--text-ghost)' }}>
+          <p className="mono mb-1 mt-1 text-[9px] uppercase tracking-widest text-text-ghost">
             Backends (OpenSearch · RAG · worker · add-ons)
           </p>
           {backends.length === 0 ? (
-            <p className="py-2 text-[11px] font-mono text-text-muted">
+            <p className="mono py-2 text-[11px] text-muted-foreground">
               {loading ? 'Loading…' : 'No backends reported.'}
             </p>
           ) : (
@@ -157,6 +169,6 @@ export function HealthPanel() {
           )}
         </div>
       </div>
-    </div>
+    </section>
   )
 }

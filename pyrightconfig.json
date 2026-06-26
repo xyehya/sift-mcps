@@ -1,6 +1,8 @@
 {
   "include": [
-    "packages/sift-gateway/src/sift_gateway/policy_middleware.py"
+    "packages/sift-gateway/src/sift_gateway/policy_middleware.py",
+    "packages/sift-gateway/src/sift_gateway/token_gen.py",
+    "packages/sift-gateway/src/sift_gateway/health.py"
   ],
   "exclude": [
     "**/__pycache__",

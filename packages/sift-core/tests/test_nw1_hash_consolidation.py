@@ -181,14 +181,21 @@ class TestNoRedundantExcludeKeySets:
             "investigation_store — it is a separate local implementation"
         )
 
-    def test_authority_exclude_set_has_19_keys(self):
-        """The authority set must have exactly 19 keys (wide set)."""
+    def test_authority_exclude_set_has_20_keys(self):
+        """The authority set must have exactly 20 keys.
+
+        Was 19 (wide provenance set); W3 added ``confidence_derivation`` (the
+        cap-hint reasoning metadata — excluded from the hash; ``confidence``
+        itself stays IN the hash as the recorded fact).
+        """
         from sift_core.investigation_store import HASH_EXCLUDE_KEYS
 
-        assert len(HASH_EXCLUDE_KEYS) == 19, (
-            f"Expected 19 keys in HASH_EXCLUDE_KEYS, got {len(HASH_EXCLUDE_KEYS)}: "
+        assert len(HASH_EXCLUDE_KEYS) == 20, (
+            f"Expected 20 keys in HASH_EXCLUDE_KEYS, got {len(HASH_EXCLUDE_KEYS)}: "
             f"{sorted(HASH_EXCLUDE_KEYS)}"
         )
+        assert "confidence_derivation" in HASH_EXCLUDE_KEYS
+        assert "confidence" not in HASH_EXCLUDE_KEYS
 
     def test_authority_set_contains_wide_provenance_keys(self):
         """Wide provenance keys must be present (these were missing from old narrow sets)."""

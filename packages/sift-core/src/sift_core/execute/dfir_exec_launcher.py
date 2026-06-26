@@ -436,8 +436,23 @@ def _install_landlock(policy: dict[str, Any]) -> int:
         os.close(ruleset_fd)
 
 
-_X86_64_LOG_SYSCALLS = {
-    41,  # socket; LOG all socket use in Wave 1, enforce AF-specific in Wave 2.
+# SEC-16: socket() is ALWAYS logged, never killed — even when the global action
+# is KILL. curl/wget read-only fetches and AF_UNIX local IPC legitimately call
+# socket(), and egress is already enforced at the network layer by the systemd
+# cgroup scope (IPAddressDeny=any). The ideal would be AF-family splitting (kill
+# AF_PACKET/AF_NETLINK/raw, allow AF_INET/AF_INET6/AF_UNIX), but that requires
+# inspecting socket()'s domain argument (seccomp_data.args[0]); this flat,
+# nr-only BPF builder cannot express an arg-dependent action cleanly. So we keep
+# socket as LOG-only telemetry (preserving the Wave-1 signal) rather than make
+# the kill action crash legitimate fetches. The remaining denylisted syscalls
+# below are zero-false-positive for forensic parsers, so they are safe to KILL.
+_X86_64_ALWAYS_LOG_SYSCALLS = {
+    41,  # socket — see SEC-16 note above; never killed.
+}
+
+# Denylisted syscalls that receive the configured action (KILL under enforce,
+# LOG under the phased-rollout mode). socket() is intentionally NOT here.
+_X86_64_DENY_SYSCALLS = {
     101,  # ptrace
     155,  # pivot_root
     161,  # chroot
@@ -477,6 +492,27 @@ def _seccomp_action(policy: dict[str, Any]) -> int:
     return SECCOMP_RET_KILL_PROCESS if mode.strip().lower() == "kill" else SECCOMP_RET_LOG
 
 
+def _build_seccomp_filters(action: int) -> list[_SockFilter]:
+    """Build the BPF program for the per-tool seccomp filter.
+
+    ``action`` is the configured denylist action (KILL under enforce, LOG under
+    the phased-rollout mode). socket() is matched first and ALWAYS returns LOG so
+    the flip to KILL never crashes legitimate curl/wget/AF_UNIX use (SEC-16);
+    every other denylisted syscall gets ``action``; anything unmatched is ALLOW.
+    """
+    filters: list[_SockFilter] = [_SockFilter(BPF_LD | BPF_W | BPF_ABS, 0, 0, 0)]
+    # Always-log syscalls (socket) are matched FIRST and return LOG regardless of
+    # the global action, so flipping to KILL never crashes curl/wget/AF_UNIX.
+    for syscall_nr in sorted(_X86_64_ALWAYS_LOG_SYSCALLS):
+        filters.append(_SockFilter(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, syscall_nr))
+        filters.append(_SockFilter(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_LOG))
+    for syscall_nr in sorted(_X86_64_DENY_SYSCALLS):
+        filters.append(_SockFilter(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, syscall_nr))
+        filters.append(_SockFilter(BPF_RET | BPF_K, 0, 0, action))
+    filters.append(_SockFilter(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_ALLOW))
+    return filters
+
+
 def _install_seccomp(policy: dict[str, Any]) -> None:
     machine = platform.machine().lower()
     if machine not in {"x86_64", "amd64"}:
@@ -485,11 +521,7 @@ def _install_seccomp(policy: dict[str, Any]) -> None:
         return
 
     action = _seccomp_action(policy)
-    filters: list[_SockFilter] = [_SockFilter(BPF_LD | BPF_W | BPF_ABS, 0, 0, 0)]
-    for syscall_nr in sorted(_X86_64_LOG_SYSCALLS):
-        filters.append(_SockFilter(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, syscall_nr))
-        filters.append(_SockFilter(BPF_RET | BPF_K, 0, 0, action))
-    filters.append(_SockFilter(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_ALLOW))
+    filters = _build_seccomp_filters(action)
 
     filter_array = (_SockFilter * len(filters))(*filters)
     program = _SockFprog(len=len(filters), filter=filter_array)

@@ -77,6 +77,11 @@ line-length = 88
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = [
+    # E501 (line length) is advisory only (XYE-76 / D8 decision). line-length=88
+    # below is the target for new code and drives import sorting, but E501 is not
+    # enforced: there are ~1600 legacy long lines and no auto-formatter
+    # (ruff format / black) is adopted, so enforcing it now would be mass churn
+    # for little value. Revisit if/when `ruff format` is adopted.
     "E501",
     "E402",
     "SIM102",
@@ -102,3 +107,8 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.coverage.run]
 source = ["packages/*/src"]
 branch = true
+# Test-support helpers are exercised by OTHER packages' tests (e.g. the surfacing
+# conformance harness in sift_common.testing is used by opensearch-mcp/sift-gateway
+# tests), so they read as uncovered in their own package's coverage run. Omit them
+# from product coverage rather than counting test-infra as uncovered product code.
+omit = ["*/sift_common/testing/*"]

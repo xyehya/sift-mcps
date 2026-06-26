@@ -1,257 +1,127 @@
-import { useMemo } from 'react'
-import { useStoreSlice } from '../../store/useStore'
-import { SkeletonBlock } from '../common/Skeleton'
+import { useMemo, useState } from 'react'
+import { MonitorSmartphone } from 'lucide-react'
 
-const CONF_COLOR = {
-  HIGH:        'var(--crimson)',
-  MEDIUM:      'var(--amber)',
-  LOW:         'var(--cyan)',
-  SPECULATIVE: 'var(--violet)',
-}
+import { useStoreSlice } from '@/store/useStore'
+import { SkeletonBlock } from '@/components/common/Skeleton'
+import { sortBy, displayHost } from '@/components/common/entity-utils'
+import { EntityShell, EntityEmptyState } from '@/components/common/EntityShell'
+import { EntityTable } from '@/components/common/EntityTable'
+import { ConfidenceBadge, StatusSummary } from '@/components/common/EntityBadges'
+import { useHostsData } from './useHostsData'
 
-const displayHost = (h) => (h ? h.toUpperCase() : 'UNKNOWN');
+// ─────────────────────────────────────────────────────────────────────────
+// HostsTab — "Hosts in Scope" registry (Mission-Control reskin of the legacy
+// hosts view, full functional parity). One scroll owner (EntityShell). Each row
+// aggregates a host's findings: counts, distinct accounts, best confidence,
+// event time-range, status summary. Clicking a row sets the Findings host
+// filter and jumps to Findings (legacy behaviour preserved).
+//
+// Parity + enhancement: legacy columns reproduced 1:1; columns are now sortable
+// via the shared EntityTable (default by findings count, desc).
+// Decomposed: useHostsData (derivation) · shared common/* primitives.
+// ─────────────────────────────────────────────────────────────────────────
 
-function ConfidenceIcon({ confidence }) {
-  const size = "w-3 h-3 inline-block mr-1 align-middle";
-  if (confidence === 'HIGH') {
-    return (
-      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 2L2 22h20L12 2z" />
-      </svg>
-    )
-  }
-  if (confidence === 'MEDIUM') {
-    return (
-      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 2L2 12l10 10 10-10L12 2z" />
-      </svg>
-    )
-  }
-  if (confidence === 'LOW') {
-    return (
-      <svg className={size} viewBox="0 0 24 24" fill="currentColor">
-        <circle cx="12" cy="12" r="10" />
-      </svg>
-    )
-  }
-  return (
-    <svg className={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-      <path d="M12 2L2 12l10 10 10-10L12 2z" />
-    </svg>
-  )
-}
+const COLUMNS = [
+  { key: 'host', label: 'Host', sortable: true, nowrap: true },
+  { key: 'findingsCount', label: 'Findings', sortable: true, align: 'right' },
+  { key: 'accountsCount', label: 'Accounts', sortable: true, align: 'right' },
+  { key: 'bestConfidence', label: 'Best Confidence', sortable: true },
+  { key: 'timeRange', label: 'Time Range', sortable: true, nowrap: true },
+  { key: 'statuses', label: 'Status Summary' },
+]
 
-function getAccountsForFinding(f) {
-  const raw = f.affected_account || f.account
-  if (!raw) return []
-  if (Array.isArray(raw)) {
-    return raw.map(a => typeof a === 'string' ? a.trim() : (a.value ?? '')).filter(Boolean)
-  }
-  if (typeof raw === 'string') {
-    return raw.split(',').map(s => s.trim()).filter(Boolean)
-  }
-  return []
+const SORT_VALUE = {
+  host: (r) => r.host,
+  findingsCount: (r) => r.findingsCount,
+  accountsCount: (r) => r.accountsCount,
+  bestConfidence: (r) => r.bestConfidence,
+  timeRange: (r) => r.timeRange,
 }
 
 export function HostsTab() {
-  const { findings, setActiveTab, setFindingsHostFilter, isLoading } = useStoreSlice((state) => ({
-    findings: state.findings,
-    setActiveTab: state.setActiveTab,
-    setFindingsHostFilter: state.setFindingsHostFilter,
-    isLoading: state.isLoading,
+  const { findings, setActiveTab, setFindingsHostFilter, isLoading } = useStoreSlice((s) => ({
+    findings: s.findings,
+    setActiveTab: s.setActiveTab,
+    setFindingsHostFilter: s.setFindingsHostFilter,
+    isLoading: s.isLoading,
   }))
 
-  const hostsData = useMemo(() => {
-    const groups = {}
-    for (const f of findings) {
-      const rawHost = f.host
-      if (!rawHost) continue
-      const host = displayHost(rawHost)
-      if (!groups[host]) {
-        groups[host] = []
-      }
-      groups[host].push(f)
+  const hostsData = useHostsData(findings)
+  const [sortKey, setSortKey] = useState('findingsCount')
+  const [sortAsc, setSortAsc] = useState(false)
+
+  const rows = useMemo(
+    () => sortBy(hostsData, SORT_VALUE[sortKey] ?? SORT_VALUE.host, sortAsc),
+    [hostsData, sortKey, sortAsc],
+  )
+
+  function handleSort(key) {
+    if (key === sortKey) setSortAsc((v) => !v)
+    else {
+      setSortKey(key)
+      setSortAsc(true)
     }
+  }
 
-    return Object.entries(groups).map(([host, list]) => {
-      const findingsCount = list.length
-
-      const accountsSet = new Set()
-      for (const f of list) {
-        const accs = getAccountsForFinding(f)
-        for (const a of accs) {
-          accountsSet.add(a)
-        }
-      }
-      const accountsCount = accountsSet.size
-
-      const CONF_WEIGHTS = { HIGH: 4, MEDIUM: 3, LOW: 2, SPECULATIVE: 1 }
-      let bestConf = 'SPECULATIVE'
-      let maxWeight = 0
-      for (const f of list) {
-        const conf = (f.confidence ?? '').toUpperCase()
-        const weight = CONF_WEIGHTS[conf] ?? 0
-        if (weight > maxWeight) {
-          maxWeight = weight
-          bestConf = f.confidence
-        }
-      }
-
-      let minMs = Infinity
-      let maxMs = -Infinity
-      let hasValidTime = false
-      for (const f of list) {
-        const rawTs = f.event_timestamp || f.timestamp
-        if (rawTs) {
-          const ms = new Date(rawTs).getTime()
-          if (!isNaN(ms)) {
-            hasValidTime = true
-            if (ms < minMs) minMs = ms
-            if (ms > maxMs) maxMs = ms
-          }
-        }
-      }
-
-      let timeRange = '—'
-      if (hasValidTime) {
-        const minStr = new Date(minMs).toISOString().replace('T', ' ').substring(0, 19)
-        const maxStr = new Date(maxMs).toISOString().replace('T', ' ').substring(0, 19)
-        timeRange = minStr === maxStr ? minStr : `${minStr} to ${maxStr}`
-      }
-
-      const statuses = { draft: 0, approved: 0, rejected: 0 }
-      for (const f of list) {
-        const st = (f.status ?? 'draft').toLowerCase()
-        if (st === 'draft') statuses.draft++
-        else if (st === 'approved') statuses.approved++
-        else if (st === 'rejected') statuses.rejected++
-        else statuses.draft++
-      }
-
-      return {
-        host,
-        findingsCount,
-        accountsCount,
-        bestConfidence: bestConf,
-        timeRange,
-        statuses,
-      }
-    })
-  }, [findings])
-
-  function handleRowClick(host) {
-    setFindingsHostFilter(host)
+  function handleRowClick(row) {
+    setFindingsHostFilter(row.host)
     setActiveTab('findings')
   }
 
   if (isLoading) {
     return (
-      <div className="h-full overflow-y-auto p-5 space-y-4" style={{ background: 'var(--bg-base)' }}>
-        <div className="pb-2 border-b" style={{ borderColor: 'var(--border-faint)' }}>
-          <h1 className="font-display font-bold text-lg" style={{ color: 'var(--text-bright)' }}>Hosts</h1>
-        </div>
+      <EntityShell title="Hosts in Scope" subtitle="Systems attributed in this case" ariaLabel="Hosts in scope">
         <SkeletonBlock rows={8} gap={12} />
-      </div>
+      </EntityShell>
     )
   }
 
-  return (
-    <div className="h-full overflow-y-auto p-5 space-y-4 flex flex-col" style={{ background: 'var(--bg-base)' }}>
-      {/* Header */}
-      <div className="shrink-0 flex justify-between items-center pb-2 border-b" style={{ borderColor: 'var(--border-faint)' }}>
-        <div className="flex items-baseline gap-2">
-          <h1 className="font-display font-bold text-lg" style={{ color: 'var(--text-bright)' }}>Hosts in Scope</h1>
-          <span className="font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
-            ({hostsData.length} total)
-          </span>
-        </div>
-      </div>
+  function renderCell(row, key) {
+    switch (key) {
+      case 'host':
+        return <span className="mono text-[13px] font-medium text-foreground">{displayHost(row.host)}</span>
+      case 'findingsCount':
+        return <span className="mono text-foreground">{row.findingsCount}</span>
+      case 'accountsCount':
+        return <span className="mono text-foreground">{row.accountsCount}</span>
+      case 'bestConfidence':
+        return <ConfidenceBadge confidence={row.bestConfidence} />
+      case 'timeRange':
+        return <span className="mono text-[11px] text-muted-foreground">{row.timeRange}</span>
+      case 'statuses':
+        return <StatusSummary statuses={row.statuses} />
+      default:
+        return null
+    }
+  }
 
-      {/* Main Content Area Card */}
-      <div className="rounded border bg-bg-surface border-border-soft p-4 overflow-x-auto">
-        {hostsData.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center" style={{ color: 'var(--text-muted)' }}>
-            <svg className="w-12 h-12 mb-3 opacity-40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <rect x="2" y="3" width="20" height="14" rx="2" />
-              <line x1="8" y1="21" x2="16" y2="21" />
-              <line x1="12" y1="17" x2="12" y2="21" />
-            </svg>
-            <p className="font-mono text-sm">No hosts in scope yet.</p>
-          </div>
-        ) : (
-          <table className="w-full text-left text-xs" style={{ borderCollapse: 'collapse' }}>
-            <thead>
-              <tr className="border-b" style={{ borderColor: 'var(--border-soft)', color: 'var(--text-muted)' }}>
-                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Host</th>
-                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px] text-right">Findings</th>
-                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px] text-right">Accounts</th>
-                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Best Confidence</th>
-                <th className="py-2.5 pr-4 font-sans font-semibold uppercase tracking-wider text-[10px]">Time Range</th>
-                <th className="py-2.5 font-sans font-semibold uppercase tracking-wider text-[10px]">Status Summary</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y" style={{ divideColor: 'var(--border-faint)' }}>
-              {hostsData.map(({ host, findingsCount, accountsCount, bestConfidence, timeRange, statuses }) => {
-                const confColor = CONF_COLOR[bestConfidence] ?? 'var(--text-muted)'
-                return (
-                  <tr
-                    key={host}
-                    onClick={() => handleRowClick(host)}
-                    className="hover:bg-bg-raised transition-colors cursor-pointer"
-                    style={{ color: 'var(--text-primary)' }}
-                  >
-                    <td className="py-3 pr-4 font-mono font-semibold" style={{ color: 'var(--text-bright)' }}>
-                      {displayHost(host)}
-                    </td>
-                    <td className="py-3 pr-4 font-mono text-right" style={{ color: 'var(--text-primary)' }}>
-                      {findingsCount}
-                    </td>
-                    <td className="py-3 pr-4 font-mono text-right" style={{ color: 'var(--text-primary)' }}>
-                      {accountsCount}
-                    </td>
-                    <td className="py-3 pr-4">
-                      <Badge color={confColor}>
-                        <ConfidenceIcon confidence={bestConfidence} /> {bestConfidence}
-                      </Badge>
-                    </td>
-                    <td className="py-3 pr-4 font-mono text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      {timeRange}
-                    </td>
-                    <td className="py-3">
-                      <div className="flex flex-wrap gap-1.5">
-                        {statuses.approved > 0 && (
-                          <Badge color="var(--jade)">{statuses.approved} Approved</Badge>
-                        )}
-                        {statuses.draft > 0 && (
-                          <Badge color="var(--amber)">{statuses.draft} Draft</Badge>
-                        )}
-                        {statuses.rejected > 0 && (
-                          <Badge color="var(--crimson)">{statuses.rejected} Rejected</Badge>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function Badge({ color, children }) {
   return (
-    <span
-      className="px-1.5 py-0.5 rounded font-mono text-[10px] tracking-wider uppercase inline-flex items-center"
-      style={{
-        color,
-        background: color + '1a',
-        border: `1px solid ${color}33`,
-      }}
+    <EntityShell
+      title="Hosts in Scope"
+      subtitle="Systems attributed in this case"
+      shownCount={rows.length}
+      totalCount={hostsData.length}
+      ariaLabel="Hosts in scope"
     >
-      {children}
-    </span>
+      {hostsData.length === 0 ? (
+        <EntityEmptyState
+          icon={MonitorSmartphone}
+          title="No hosts in scope yet."
+          hint="Hosts appear here as findings are attributed to systems in the case."
+        />
+      ) : (
+        <EntityTable
+          caption="Hosts in scope"
+          columns={COLUMNS}
+          rows={rows}
+          rowKey={(r) => r.host}
+          renderCell={renderCell}
+          sortKey={sortKey}
+          sortAsc={sortAsc}
+          onSort={handleSort}
+          onRowClick={handleRowClick}
+        />
+      )}
+    </EntityShell>
   )
 }

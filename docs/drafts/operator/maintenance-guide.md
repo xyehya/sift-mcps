@@ -444,9 +444,17 @@ re-run-safe (idempotent). No flags are required for a normal install.
 | `--offline` | Air-gapped: attempt **no** network downloads; each download step fails loudly pointing at the staged-artifact path it expects (uv, hayabusa, HF model cache, Supabase CLI). | `SIFT_OFFLINE=1` |
 | `--enable-geoip` | Enable the OpenSearch ip2geo datasource (off by default; it fetches from a live endpoint). | `SIFT_GEOIP_ENABLED=1` |
 | `--apparmor-enforce` | Load the SIFT AppArmor profiles in **enforce** mode (default is complain). Same posture as `./harden.sh`. | `SIFT_APPARMOR_ENFORCE=1` |
-| `--uninstall` / `--remove` | Reverse the install (service, venv, `~/.sift`, auditd/AppArmor, hayabusa symlink, containers). **Preserves** `/var/lib/sift`, `/cases`, docker volumes. The fuller teardown is `scripts/uninstall.sh` (§14). | — |
-| `--purge-data` | With `--uninstall`, ALSO delete `/var/lib/sift` + `/cases` (EVIDENCE) + docker volumes. Irreversible; prompts unless `-y`. | — |
-| `-y`, `--yes` | Assume yes to destructive prompts (non-interactive purge). | — |
+| `--uninstall` / `--remove` | Reverse the **software** install. Delegates to `scripts/uninstall.sh` (the single, gated teardown): removes the service + service users, venv, `~/.sift` (config/TLS/secrets/hayabusa), and auditd/AppArmor configs. **Preserves all data** — `/var/lib/sift` state, docker volumes, and `/cases` EVIDENCE are never touched. Dry-run unless `-y`. | — |
+| `-y`, `--yes` | Proceed non-interactively (otherwise `--uninstall` is a dry-run). | — |
+
+> **D5 invariant (evidence is append-only / immutable):** `install.sh` has **no**
+> code path that can delete case evidence. The old `--purge-data` flag was removed
+> (issue #16). To remove forensic **state** or docker data, run
+> `scripts/uninstall.sh` directly with non-evidence components, e.g.
+> `scripts/uninstall.sh --components state,cache,opensearch,supabase --yes --i-understand`.
+> Removing `/cases` evidence is only ever possible by invoking `scripts/uninstall.sh`
+> itself with its multi-gated evidence-removal flags + a typed `DELETE EVIDENCE`
+> confirmation (§14) — never through `install.sh`.
 
 > OpenSearch has no dedicated install flag: it is on by default and registered
 > only if the cluster comes up healthy. Disable it with
@@ -789,14 +797,17 @@ be deleted before committing.
 ### `scripts/uninstall.sh` is the single canonical teardown path
 
 `scripts/uninstall.sh` is the one supported uninstall/reset script. (The older
-`scripts/reset-vm-test.sh` was a stale duplicate and has been **removed**.) For
-convenience, `install.sh` also ships a lighter built-in teardown —
-`./install.sh --uninstall` (software only) and
-`./install.sh --uninstall --purge-data` (also wipes `/var/lib/sift` state and
-`/cases`) — but `scripts/uninstall.sh` is the **recommended, comprehensive**
-path: it is component-selectable, dry-run by default, gated, and tears down the
-OpenSearch ingest/enrich workers, the Supabase data volume, and residual
-per-case state that the built-in path does not.
+`scripts/reset-vm-test.sh` was a stale duplicate and has been **removed**.)
+`./install.sh --uninstall` is now a thin **delegating shim** that calls
+`scripts/uninstall.sh` for the software-only teardown (service, venv, `~/.sift`,
+auditd/AppArmor) and **never** removes data or evidence — there is no
+`--purge-data` flag on `install.sh` anymore (issue #16, D5: the installer has no
+evidence-deletion code path). Use `scripts/uninstall.sh` directly for the
+**comprehensive** path: it is component-selectable, dry-run by default, gated,
+and tears down the OpenSearch ingest/enrich workers, the Supabase data volume,
+and residual per-case state. Evidence under `/cases` is removable **only** by
+`scripts/uninstall.sh` with its multi-gated evidence-removal flags + typed
+`DELETE EVIDENCE` confirmation.
 
 ### Evidence is NEVER removed by default
 

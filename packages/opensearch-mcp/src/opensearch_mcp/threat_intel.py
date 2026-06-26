@@ -606,10 +606,9 @@ def enrich_case(
 
     Returns summary dict.
     """
-    from opensearch_mcp.paths import sanitize_index_component
+    from opensearch_mcp.paths import build_index_pattern
 
-    safe_case = sanitize_index_component(case_id)
-    index_pattern = f"case-{safe_case}-*"
+    index_pattern = build_index_pattern(case_id)
 
     if on_progress:
         on_progress("extracting", message="Extracting unique IOCs from indexed data")
@@ -633,6 +632,26 @@ def enrich_case(
     if on_progress:
         on_progress("looking_up", total=total_iocs)
     results = batch_lookup(iocs, on_progress=on_progress)
+
+    # F8 (deploy-mode worker path): batch_lookup returns a bare {} ONLY when no
+    # intel backend processed the lookups (gateway not configured / OpenCTI not
+    # registered).  When a backend DID run it always attaches an "_intel_coverage"
+    # key, so results is non-empty even if nothing matched.  Distinguish the two:
+    # IOCs were extracted but NOTHING was processed ⇒ the intel backend was
+    # unavailable.  Surface that as a clear unavailable status through the worker
+    # result_public, instead of a misleading "complete" with documents_updated:0.
+    if total_iocs > 0 and not results:
+        if on_progress:
+            on_progress("unavailable", iocs_extracted=total_iocs)
+        return {
+            "status": "unavailable",
+            "message": (
+                "intel enrichment unavailable — no OpenCTI/intel backend processed "
+                "lookups; register OpenCTI via setup-addon"
+            ),
+            "iocs_extracted": total_iocs,
+            "iocs_looked_up": 0,
+        }
 
     malicious = sum(1 for r in results.values() if r.get("threat_intel.verdict") == "MALICIOUS")
     suspicious = sum(1 for r in results.values() if r.get("threat_intel.verdict") == "SUSPICIOUS")

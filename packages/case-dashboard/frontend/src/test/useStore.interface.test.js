@@ -4,6 +4,7 @@ import { useStore, useStoreSlice } from '../store/useStore'
 const STATE_KEYS = [
   'activeCase',
   'activeTab',
+  'agentActivity',
   'cases',
   'chainStatus',
   'commandPaletteOpen',
@@ -31,6 +32,7 @@ const ACTION_KEYS = [
   'dismissToast',
   'setActiveCase',
   'setActiveTab',
+  'setAgentActivity',
   'setCases',
   'setChainStatus',
   'setCommandPaletteOpen',
