@@ -86,7 +86,7 @@ def generate_join_code() -> str:
 
 
 def store_join_code(
-    code: str, expires_hours: int = 2, *, bound_host: str | None = None
+    code: str, expires_hours: int | float = 2, *, bound_host: str | None = None
 ) -> None:
     """Hash and store a join code with expiry.
 

@@ -9,7 +9,6 @@ import os
 from collections.abc import Callable
 from typing import Any
 
-import httpx
 from fastmcp import FastMCP
 from fastmcp.client import Client
 from fastmcp.client.transports import StdioTransport, StreamableHttpTransport
