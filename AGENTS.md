@@ -52,6 +52,17 @@ re-run the exact repro live and diff before/after. If the live setup can't repro
 never imply a live proof that didn't happen. VM coords + live-MCP connection: see the recalled
 `reference_harness_mcp_live_connection` / VM-coordinates memories.
 
+## Security model (read before any gateway / security / execution work)
+
+The canonical security architecture is **`docs/architecture/SIFT-GATEWAY-SECURITY-MODEL.md`**
+(condensed C4 + STRIDE viewpoints; rendered diagrams in
+`docs/drafts/architecture/sift-architecture.html`). It defines the single-policy-boundary
+gateway, the 9 fail-closed tool-call gates, the Postgres-authoritative / OpenSearch-derived
+split, the seven STRIDE trust boundaries, and the `run_command` ceiling+floor sandbox. **Read
+it before touching auth, the policy chain, backends, evidence/audit, or execution.** It is the
+DESIGN model — where it conflicts with the code, the **code wins; flag the drift**. Live
+opensearch-mcp wiring: `docs/drafts/architecture/OPENSEARCH-INTEGRATION-SPEC.md`.
+
 ## Code Discovery
 
 This project uses `codebase-memory-mcp` to maintain a knowledge graph. Prefer MCP
@@ -91,6 +102,12 @@ the explicit prompt text is the required fallback:
    pre-existing debt, fix only what you introduced, and do NOT expand
    `pyrightconfig.json`. Full guide: `docs/new-docs/LSP_AGENT_WORKFLOW.md`. A
    fresh worktree's uv env may miss dev deps — fall back to repo-root tooling.
+4. **Security model** — read `docs/architecture/SIFT-GATEWAY-SECURITY-MODEL.md` to
+   understand the single-policy-boundary gateway, the 9 fail-closed gates, the
+   Postgres-authoritative / OpenSearch-derived split, the STRIDE boundaries, and the
+   `run_command` jail before reasoning about security / policy / backends / evidence /
+   execution. The orchestrator MUST point agents to it by name in their prompts. Code wins
+   on conflict — flag drift.
 
 LSP/diagnostics catch import/signature/optional-value/rename slips early; they do
 NOT prove policy/runtime/DB/live-VM behavior. codebase-memory is first for
