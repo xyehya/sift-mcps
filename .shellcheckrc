@@ -1,0 +1,16 @@
+# ShellCheck configuration for the sift-mcps installer (#18 modularization).
+#
+# install.sh is a thin entrypoint that `source`s lib/*.sh. Enable
+# external-sources so `shellcheck -x install.sh` follows those sources and lints
+# the whole installer as one logical unit (matching how it runs at runtime).
+external-sources=true
+
+# SC2034 ("appears unused"): main() in install.sh sets status/result GLOBALS
+# (ASSUME_YES, DB_MIGRATIONS_RESULT, OPENSEARCH_SEEDED, RAG_SEEDED,
+# SUPABASE_OPERATOR_*) that are CONSUMED by functions defined in other sourced
+# modules (lib/handoff.sh, lib/teardown.sh, lib/examiner.sh). ShellCheck cannot
+# trace a global written in one function and read in another across the
+# source-boundary, so it false-positives on every such assignment. The same
+# warning existed pre-modularization (e.g. RAG_SEEDED). Disabling SC2034 only;
+# every other check (quoting, cd-guards, array misuse, etc.) stays ACTIVE.
+disable=SC2034

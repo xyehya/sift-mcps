@@ -37,7 +37,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
+from fastmcp import FastMCP
 from sift_core.evidence_chain import ChainStatus
 from sift_gateway.backends import load_and_validate_manifest
 from sift_gateway.identity import Identity
@@ -48,9 +48,6 @@ from sift_gateway.mcp_backends_registry import (
 )
 from sift_gateway.policy_middleware import gateway_policy_middlewares
 from sift_gateway.server import Gateway
-
-from fastmcp import FastMCP
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures: minimal conformant add-on manifests and a fake backend.
@@ -708,9 +705,9 @@ def test_core_installer_seeds_no_opencti_or_windows_triage():
     """AD1 documented that install.sh seed_addon_backends seeds only
     opensearch-mcp and forensic-rag-mcp. Make that regression-proof: OpenCTI and
     windows-triage must never appear in the seed function body."""
-    install_sh = (_repo_root() / "install.sh").read_text(encoding="utf-8")
-    start = install_sh.index("seed_addon_backends() {")
-    body = install_sh[start : start + 2000]
+    examiner_sh = (_repo_root() / "lib" / "examiner.sh").read_text(encoding="utf-8")
+    start = examiner_sh.index("seed_addon_backends() {")
+    body = examiner_sh[start : start + 2000]
     lowered = body.lower()
     assert "opencti" not in lowered, "core seed must not reference opencti"
     assert "windows-triage" not in lowered and "wintriage" not in lowered

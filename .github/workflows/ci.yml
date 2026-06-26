@@ -241,3 +241,37 @@ jobs:
 
       - name: Check committed portal dist is fresh
         run: bash scripts/check-portal-dist.sh
+
+  shell-lint:
+    # I-PS4 (#18): the installer is a thin install.sh entrypoint that sources
+    # lib/*.sh. Gate it with `bash -n` (parse) on every shell unit + ShellCheck
+    # on the modular installer. `shellcheck -x` follows install.sh's `source`
+    # statements so the entrypoint + all lib/*.sh are linted as one logical unit
+    # (matching runtime); .shellcheckrc enables external-sources. setup-addon.sh
+    # is linted the same way because it sources install.sh as a function library.
+    name: Shell lint (install.sh + lib)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck --version
+
+      - name: bash -n (parse) every shell unit
+        run: |
+          bash -n install.sh
+          for f in lib/*.sh scripts/*.sh; do
+            echo "bash -n $f"
+            bash -n "$f"
+          done
+
+      - name: ShellCheck the modular installer (entrypoint + sourced lib/*.sh)
+        run: |
+          shellcheck -x install.sh
+          shellcheck -x scripts/setup-addon.sh

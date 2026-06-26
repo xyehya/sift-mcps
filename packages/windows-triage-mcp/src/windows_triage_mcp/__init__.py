@@ -4,7 +4,9 @@ Provides offline forensic file/hash/indicator triage capabilities
 for Claude Code via the Model Context Protocol.
 """
 
-__version__ = "0.6.1"
+from importlib.metadata import version
+
+__version__ = version("windows-triage-mcp")
 
 from .config import Config, get_config, reset_config, set_config
 from .exceptions import (
