@@ -71,6 +71,7 @@ MODULE_TO_DIST = (
     ("opensearch_mcp", "opensearch-mcp"),
     ("sift_gateway", "sift-gateway"),
     ("sift_core", "sift-core"),
+    ("windows_triage_mcp", "windows-triage-mcp"),
 )
 
 
@@ -101,21 +102,29 @@ def test_dist_version_resolves_and_is_not_a_stale_literal(dist: str) -> None:
 
 @pytest.mark.parametrize("module_name,dist", MODULE_TO_DIST)
 def test_module_version_matches_dist_metadata(module_name: str, dist: str) -> None:
+    # Gate on DIST METADATA presence first: the modules now guard version() with
+    # a PackageNotFoundError fallback ("0.0.0+unknown"), so importing them no
+    # longer raises when uninstalled — without this gate the module would resolve
+    # to its sentinel and spuriously mismatch.
+    try:
+        dist_version = version(dist)
+    except PackageNotFoundError:
+        pytest.skip(
+            f"{dist!r} not installed in this env (optional add-on); static "
+            "no-literal gate still covers it"
+        )
     try:
         mod = importlib.import_module(module_name)
     except ModuleNotFoundError:
-        # Same rationale as above: optional add-on not installed in this env.
-        # The static guard test_no_module_version_literals still proves this
-        # module carries no hand-edited literal.
         pytest.skip(
             f"{module_name!r} not importable in this env (optional add-on); "
             "static no-literal gate still covers it"
         )
     mod_version = getattr(mod, "__version__", None)
     assert mod_version is not None, f"{module_name}.__version__ is missing"
-    assert mod_version == version(dist), (
+    assert mod_version == dist_version, (
         f"{module_name}.__version__ ({mod_version!r}) != dist metadata for "
-        f"{dist!r} ({version(dist)!r}); the module is not reading the single "
+        f"{dist!r} ({dist_version!r}); the module is not reading the single "
         "source via importlib.metadata"
     )
     assert mod_version not in STALE_LITERALS, (
@@ -167,4 +176,30 @@ def test_no_module_version_literals() -> None:
     assert not offenders, (
         "module __version__ literal(s) reintroduced (must read "
         f"importlib.metadata.version instead): {offenders}"
+    )
+
+
+_FALLBACK_VERSION = re.compile(r'^fallback-version\s*=\s*"([^"]+)"', re.MULTILINE)
+
+
+def test_fallback_versions_are_consistent() -> None:
+    # hatch-vcs `fallback-version` is a hand-edited per-package literal used when
+    # there is no .git (e.g. an sdist install). It is the ONE place #15 could
+    # silently re-introduce the cross-package version drift it set out to kill, so
+    # assert every member (and the root meta) declares the SAME fallback-version.
+    # The [tool.hatch.version] block is necessarily duplicated per package (TOML
+    # has no include) — but its VALUE must not diverge.
+    found: dict[str, str] = {}
+    for pp in [*_MEMBER_PYPROJECTS, _REPO_ROOT / "pyproject.toml"]:
+        m = _FALLBACK_VERSION.search(pp.read_text(encoding="utf-8"))
+        assert m is not None, (
+            f"{pp.relative_to(_REPO_ROOT)} declares no `fallback-version` in "
+            "[tool.hatch.version] — hatch-vcs would have no deterministic version "
+            "for a no-.git (sdist) install"
+        )
+        found[str(pp.relative_to(_REPO_ROOT))] = m.group(1)
+    distinct = set(found.values())
+    assert len(distinct) == 1, (
+        f"fallback-version drifted across packages: {found} — every member must "
+        "declare the same fallback-version (single source of truth)"
     )

@@ -14,9 +14,12 @@ Usage:
     python -m opencti_mcp
 """
 
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 
-__version__ = version("opencti-mcp")
+try:
+    __version__ = version("opencti-mcp")
+except PackageNotFoundError:  # source tree / dist not installed — avoid import-time crash
+    __version__ = "0.0.0.dev0"
 __author__ = "AppliedIncidentResponse.com"
 
 from .adaptive import (

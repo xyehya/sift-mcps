@@ -24,10 +24,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-INSTALL_SH = REPO_ROOT / "install.sh"
-LIB_DIR = REPO_ROOT / "lib"
+from _installer_support import INSTALL_SH, LIB_DIR, REPO_ROOT
+from _installer_support import run_bash as _run_bash
 
 # Functions that MUST remain available after `source install.sh`. Mix of #17/#11
 # carry-overs, the OpenCTI add-on helpers (consumed by setup-addon.sh), and one
@@ -79,19 +77,6 @@ REQUIRED_FUNCS = (
     # the orchestrator itself
     "main",
 )
-
-
-def _run_bash(script: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    full_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "/tmp")}
-    if env:
-        full_env.update(env)
-    return subprocess.run(
-        ["bash", "-c", script],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        env=full_env,
-    )
 
 
 # ---------------------------------------------------------------------------

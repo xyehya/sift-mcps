@@ -32,9 +32,12 @@ Usage:
     from rag_mcp.pgvector_store import PgVectorRagStore
 """
 
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 
-__version__ = version("rag-mcp")
+try:
+    __version__ = version("rag-mcp")
+except PackageNotFoundError:  # source tree / dist not installed — avoid import-time crash
+    __version__ = "0.0.0.dev0"
 
 # NOTE: ``pgvector_store`` is dependency-light and is intentionally NOT eagerly
 # imported so it can be used without loading ChromaDB. Import it directly:
