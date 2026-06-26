@@ -176,19 +176,37 @@ class AuditWriter:
         """
         if fcntl is None:
             return None
+        # Fast path: fd already open (no lock needed for a plain pointer read).
         if self._lock_fd is not None:
             return self._lock_fd
         audit_dir = self._get_audit_dir()
         if not audit_dir:
             return None
         lock_path = audit_dir / f"{self.mcp_name}.lock"
-        try:
-            # O_CREAT so the lockfile exists; the fd content is never read.
-            self._lock_fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
-        except OSError as e:
-            logger.warning("Cannot open audit lockfile %s: %s", lock_path, e)
-            self._lock_fd = None
-        return self._lock_fd
+        # Atomic check-and-open under self._lock: without it two threads that
+        # both observe ``self._lock_fd is None`` would each os.open the lockfile,
+        # leaking an fd AND — since flock is per-open-file-description — handing
+        # the two callers DIFFERENT fds from the same process that block each
+        # other. Reusing self._lock is deadlock-free: the sole caller chain
+        # (_get_lock_fd <- _acquire_xproc_lock <- log()) acquires the flock
+        # BEFORE taking self._lock for the in-memory mint, so self._lock is never
+        # held when this runs. Holding the same lock here also keeps every
+        # mutation of self._lock_fd (here and in close()) serialized under one
+        # lock.
+        with self._lock:
+            # Re-check inside the lock: another thread may have opened it while
+            # we waited.
+            if self._lock_fd is not None:
+                return self._lock_fd
+            try:
+                # O_CREAT so the lockfile exists; the fd content is never read.
+                self._lock_fd = os.open(
+                    str(lock_path), os.O_RDWR | os.O_CREAT, 0o644
+                )
+            except OSError as e:
+                logger.warning("Cannot open audit lockfile %s: %s", lock_path, e)
+                self._lock_fd = None
+            return self._lock_fd
 
     def _acquire_xproc_lock(self) -> int | None:
         """Acquire the exclusive cross-process advisory lock; return the fd.
@@ -352,7 +370,9 @@ class AuditWriter:
         if not audit_dir:
             return
         seq_file = audit_dir / f"{self.mcp_name}.seq"
-        tmp_file = seq_file.with_name(seq_file.name + f".tmp.{os.getpid()}")
+        tmp_file = seq_file.with_name(
+            seq_file.name + f".tmp.{os.getpid()}.{threading.get_ident()}"
+        )
         payload = json.dumps({"date": date_str, "seq": seq})
         try:
             with open(tmp_file, "w", encoding="utf-8") as f:

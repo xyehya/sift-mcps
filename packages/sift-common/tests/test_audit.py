@@ -1105,3 +1105,151 @@ class TestAuditWriterAtomicSidecar:
         assert aid2 != aid1
         seq2 = int(aid2.rsplit("-", 1)[-1])
         assert seq2 == 2, f"Expected seq=2 after crash-window resume, got {seq2}"
+
+
+# ---------------------------------------------------------------------------
+# In-process thread-safety (review #27): lock-fd init + per-thread sidecar temp
+# ---------------------------------------------------------------------------
+
+
+class TestThreadSafety:
+    def test_concurrent_log_unique_ids_single_lock_fd(self, tmp_path):
+        """Many threads in one process minting IDs concurrently on one writer.
+
+        Asserts: no exception, every minted audit_id is unique, and the
+        lazy lock-fd is opened EXACTLY ONCE (no fd leak from a check-then-open
+        race in ``_get_lock_fd``). The os.open count is measured only on the
+        ``.lock`` path so unrelated opens (JSONL/sidecar) are not counted.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "race-mcp"
+        lock_path = str(audit_dir / f"{mcp}.lock")
+
+        real_open = os.open
+        lock_open_count = 0
+        count_lock = threading.Lock()
+
+        def counting_open(path, *args, **kwargs):
+            nonlocal lock_open_count
+            if path == lock_path:
+                with count_lock:
+                    lock_open_count += 1
+            return real_open(path, *args, **kwargs)
+
+        n_threads = 16
+        per_thread = 25
+        ids: list[str] = []
+        ids_lock = threading.Lock()
+        errors: list[BaseException] = []
+        start = threading.Barrier(n_threads)
+
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        def worker():
+            try:
+                start.wait()
+                local: list[str] = []
+                for i in range(per_thread):
+                    aid = w.log("t", {"i": i}, "ok", examiner_override="analyst")
+                    assert aid is not None
+                    local.append(aid)
+                with ids_lock:
+                    ids.extend(local)
+            except BaseException as e:  # noqa: BLE001 - surface in assertion
+                errors.append(e)
+
+        with mock.patch("sift_common.audit.os.open", side_effect=counting_open):
+            threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        assert not errors, f"worker threads raised: {errors!r}"
+        assert len(ids) == n_threads * per_thread
+        assert len(set(ids)) == len(ids), "duplicate audit IDs minted under contention"
+        # The whole point: the lock fd is opened once and reused, never racing
+        # two os.open calls on the lockfile (which would leak an fd and create
+        # mutually-blocking flock fds in one process).
+        assert lock_open_count == 1, (
+            f"lock fd opened {lock_open_count} times; expected exactly 1 "
+            "(check-then-open race in _get_lock_fd)"
+        )
+        assert isinstance(w._lock_fd, int)
+        w.close()
+
+    def test_concurrent_sidecar_writes_no_residue_no_fnf(self, tmp_path):
+        """Two+ threads writing the sidecar concurrently must not collide.
+
+        Before the fix the temp path used only ``os.getpid()`` so two threads in
+        one process computed the SAME ``.tmp.<pid>`` path → truncation /
+        interleaved writes / FileNotFoundError on ``os.replace``. With the
+        thread-id in the temp name each thread uses a distinct temp file. We
+        assert no exception, the sidecar ends valid, and no ``.tmp.*`` residue
+        remains.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "sidecar-mcp"
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        n_threads = 16
+        iters = 50
+        errors: list[BaseException] = []
+        start = threading.Barrier(n_threads)
+
+        def worker(tid: int):
+            try:
+                start.wait()
+                for k in range(iters):
+                    # Vary date/seq per call; the writer is the locked atomic path.
+                    w._write_seq_sidecar_locked("20260626", tid * 1000 + k)
+            except BaseException as e:  # noqa: BLE001 - surface in assertion
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=worker, args=(i,)) for i in range(n_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"sidecar writers raised: {errors!r}"
+        seq_file = audit_dir / f"{mcp}.seq"
+        assert seq_file.exists(), "sidecar missing after concurrent writes"
+        # Final sidecar must be a complete, valid JSON document (no torn write).
+        data = json.loads(seq_file.read_text())
+        assert data["date"] == "20260626"
+        # No leftover temp files from any thread.
+        assert not list(audit_dir.glob(f"{mcp}.seq.tmp.*")), "temp sidecar residue left"
+
+    def test_sidecar_temp_name_includes_thread_id(self, tmp_path):
+        """The temp sidecar path embeds both pid and thread id (regression guard).
+
+        Intercepts the open() used by ``_write_seq_sidecar_locked`` to capture
+        the temp path and assert it carries ``.tmp.<pid>.<ident>`` — a fail-on
+        -revert guard for the per-thread temp-name fix.
+        """
+        audit_dir = tmp_path / "audit"
+        audit_dir.mkdir()
+        mcp = "name-mcp"
+        w = AuditWriter(mcp, audit_dir=str(audit_dir))
+
+        captured: list[str] = []
+        real_builtin_open = open
+
+        def spy_open(file, *args, **kwargs):
+            captured.append(str(file))
+            return real_builtin_open(file, *args, **kwargs)
+
+        with mock.patch("builtins.open", side_effect=spy_open):
+            w._write_seq_sidecar_locked("20260626", 7)
+
+        ident = threading.get_ident()
+        expected_suffix = f".tmp.{os.getpid()}.{ident}"
+        assert any(p.endswith(expected_suffix) for p in captured), (
+            f"temp sidecar path missing per-thread suffix {expected_suffix!r}; "
+            f"captured opens: {captured!r}"
+        )
