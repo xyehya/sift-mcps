@@ -324,7 +324,16 @@ class FieldValuesOut(BaseModel):
 
 
 class StatusIn(BaseModel):
-    pass
+    # SEC-7: status binds its per-case index catalog to the DB-active case. The
+    # served *In model MUST advertise case_id/case_dir so the Gateway's
+    # schema-gated injection (gate-⑥ ProxyActiveCase) can pass the
+    # DB-authoritative active case through; without the fields the proxy drops the
+    # injected kwargs and the backend would resolve no active case (empty catalog).
+    case_id: str = Field(
+        default="",
+        description="Case id; empty resolves to the active portal case (case_dir).",
+    )
+    case_dir: str = _case_dir_field()
 
 
 class IndexInfo(BaseModel):
@@ -349,8 +358,17 @@ class StatusOut(BaseModel):
     cluster_status: str = Field(
         ..., description="Cluster health status; single-node yellow may be annotated normal."
     )
-    indices: list[IndexInfo] = Field(..., description="All case-* indices, sorted by name.")
-    total_indices: int = Field(..., description="Number of case-* indices returned.")
+    indices: list[IndexInfo] = Field(
+        ...,
+        description=(
+            "Indices for the ACTIVE case only (case-{key}-*), sorted by name; "
+            "cluster-wide enumeration is not exposed to the agent (SEC-7). Empty "
+            "when no active case resolves."
+        ),
+    )
+    total_indices: int = Field(
+        ..., description="Number of active-case indices returned (0 with no active case)."
+    )
     hayabusa: HayabusaHealth | None = Field(
         None,
         description=(
@@ -361,7 +379,14 @@ class StatusOut(BaseModel):
 
 
 class ShardStatusIn(BaseModel):
-    pass
+    # SEC-7: cluster capacity stays cluster-wide, but the top-indices catalog is
+    # bound to the DB-active case. The *In model advertises case_id/case_dir so the
+    # Gateway's gate-⑥ injection reaches the backend (see StatusIn).
+    case_id: str = Field(
+        default="",
+        description="Case id; empty resolves to the active portal case (case_dir).",
+    )
+    case_dir: str = _case_dir_field()
 
 
 class TopIndexShards(BaseModel):
@@ -382,7 +407,12 @@ class ShardStatusOut(BaseModel):
         ..., description="ok>=10%, warning>=2%, critical<2% headroom."
     )
     top_indices_by_shard_count: list[TopIndexShards] = Field(
-        ..., description="Top visible indices by shard count."
+        ...,
+        description=(
+            "Top indices by shard count, filtered to the ACTIVE case only (SEC-7); "
+            "other cases' indices are not exposed. Empty when no active case "
+            "resolves. Cluster capacity fields above remain cluster-wide."
+        ),
     )
 
 
@@ -1074,7 +1104,9 @@ async def run_opensearch_field_values(params: FieldValuesIn) -> ToolResult:
 
 async def run_opensearch_status(_params: StatusIn) -> ToolResult:
     try:
-        raw = _impl_server().opensearch_status()
+        # SEC-7: forward the Gateway-injected active case so the backend scopes
+        # the index catalog to it (empty when none resolves).
+        raw = _impl_server().opensearch_status(**_params.model_dump())
     except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
         return _tool_error_result(
             ErrorCode.upstream_unavailable,
@@ -1101,7 +1133,8 @@ async def opensearch_cluster_status_resource() -> str:
 
 async def run_opensearch_shard_status(_params: ShardStatusIn) -> ToolResult:
     try:
-        raw = _impl_server().opensearch_shard_status()
+        # SEC-7: forward the Gateway-injected active case so top_indices is scoped.
+        raw = _impl_server().opensearch_shard_status(**_params.model_dump())
     except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
         return _tool_error_result(
             ErrorCode.upstream_unavailable,

@@ -262,15 +262,15 @@
     },
     {
       "name": "opensearch_status",
-      "description": "Backend health/readiness check: OpenSearch cluster connectivity plus per-case index document counts. Deprecated tool form; prefer the opensearch://cluster/status resource.",
-      "when_to_use": "Use as the backend health/readiness check and to confirm per-case index state.",
+      "description": "Backend health/readiness check: OpenSearch cluster connectivity plus the ACTIVE case's index document counts. The index catalog is scoped to the active case (SEC-7); cluster health stays cluster-wide. Deprecated tool form; prefer the opensearch://cluster/status resource.",
+      "when_to_use": "Use as the backend health/readiness check and to confirm the active case's index state.",
       "avoid_when": "Deprecated tool form \u2014 prefer the resource opensearch://cluster/status. For one case's artifact/coverage breakdown use opensearch_case_summary.",
-      "output_notes": "Health/status output only; it is not case evidence.",
-      "output_shape": "StatusOut: cluster_status (single-node yellow may be annotated normal), indices[] of {index, docs, size, status}, total_indices.",
-      "response_shaping": "Compact cluster + index roll-up; also exposed as a read-only resource to keep it out of the tool budget.",
+      "output_notes": "Health/status output only; it is not case evidence. The indices[] catalog is bound to the active case \u2014 it never enumerates other cases' indices; cluster_status and hayabusa remain cluster/engine health.",
+      "output_shape": "StatusOut: cluster_status (single-node yellow may be annotated normal), indices[] of {index, docs, size, status} for the ACTIVE case only (empty with no active case), total_indices.",
+      "response_shaping": "Compact cluster + active-case index roll-up; also exposed as a read-only resource to keep it out of the tool budget.",
       "usage_examples": [
         {
-          "description": "Cluster + per-case index health",
+          "description": "Cluster health + the active case's index health",
           "arguments": {}
         }
       ],
@@ -282,16 +282,19 @@
       "category": "ingest",
       "recommended_phase": "INGEST",
       "health": true,
-      "safe_case_argument_names": []
+      "safe_case_argument_names": [
+        "case_id",
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_shard_status",
-      "description": "Report shard usage and capacity headroom across the cluster. Deprecated tool form; prefer the opensearch://cluster/shards resource.",
+      "description": "Report cluster-wide shard usage and capacity headroom, plus the ACTIVE case's top shard-heavy indices (SEC-7). Deprecated tool form; prefer the opensearch://cluster/shards resource.",
       "when_to_use": "Use for operational readiness before large ingest or when indexing fails.",
       "avoid_when": "Deprecated tool form \u2014 prefer the resource opensearch://cluster/shards. Administrative signal, not investigation evidence.",
-      "output_notes": "Administrative capacity signal; not investigation evidence.",
-      "output_shape": "ShardStatusOut: current_shards, max_shards_per_node, data_nodes, max_total, headroom_pct, status (ok>=10% | warning>=2% | critical<2%), top_indices_by_shard_count[].",
-      "response_shaping": "Capacity roll-up with only the top shard-heavy indices; also exposed as a read-only resource.",
+      "output_notes": "Administrative capacity signal; not investigation evidence. Cluster capacity (current_shards/max_total/headroom_pct/status) is cluster-wide; top_indices_by_shard_count is scoped to the active case and never lists other cases' indices.",
+      "output_shape": "ShardStatusOut: current_shards, max_shards_per_node, data_nodes, max_total, headroom_pct, status (ok>=10% | warning>=2% | critical<2%), top_indices_by_shard_count[] (active case only, empty with no active case).",
+      "response_shaping": "Cluster-wide capacity roll-up with only the active case's top shard-heavy indices; also exposed as a read-only resource.",
       "usage_examples": [
         {
           "description": "Check shard headroom before a large image ingest",
@@ -305,7 +308,10 @@
       "evidence_class": "read_only",
       "category": "admin",
       "recommended_phase": "INGEST",
-      "safe_case_argument_names": []
+      "safe_case_argument_names": [
+        "case_id",
+        "case_dir"
+      ]
     },
     {
       "name": "opensearch_case_summary",

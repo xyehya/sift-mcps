@@ -2986,7 +2986,20 @@
       },
       "description": "DEPRECATED tool form; prefer resource opensearch://cluster/status when available. Shows cluster health and per-case-index document counts. Use to confirm the cluster is reachable and see which cases have data; use opensearch_case_summary for one case's artifact and coverage breakdown.",
       "input_schema": {
-        "properties": {},
+        "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
+          "case_id": {
+            "default": "",
+            "description": "Case id; empty resolves to the active portal case (case_dir).",
+            "title": "Case Id",
+            "type": "string"
+          }
+        },
         "title": "StatusIn",
         "type": "object"
       },
@@ -3067,7 +3080,7 @@
                 "description": "Hayabusa detection-engine health (binary/rules_dir/rules_count). binary=null \u21d2 engine not installed; evtx ingest will skip Sigma detection."
               },
               "indices": {
-                "description": "All case-* indices, sorted by name.",
+                "description": "Indices for the ACTIVE case only (case-{key}-*), sorted by name; cluster-wide enumeration is not exposed to the agent (SEC-7). Empty when no active case resolves.",
                 "items": {
                   "properties": {
                     "docs": {
@@ -3104,7 +3117,7 @@
                 "type": "array"
               },
               "total_indices": {
-                "description": "Number of case-* indices returned.",
+                "description": "Number of active-case indices returned (0 with no active case).",
                 "title": "Total Indices",
                 "type": "integer"
               }
@@ -3753,7 +3766,20 @@
       },
       "description": "DEPRECATED tool form; prefer resource opensearch://cluster/shards when available. Reports shard usage and capacity headroom. Use before large ingests because a full disk image can add many shards.",
       "input_schema": {
-        "properties": {},
+        "properties": {
+          "case_dir": {
+            "default": "",
+            "description": "Gateway-injected authoritative case directory (from Postgres active_case_state). Do not set this; the Gateway populates it from the DB active case and rejects a mismatching client value.",
+            "title": "Case Dir",
+            "type": "string"
+          },
+          "case_id": {
+            "default": "",
+            "description": "Case id; empty resolves to the active portal case (case_dir).",
+            "title": "Case Id",
+            "type": "string"
+          }
+        },
         "title": "ShardStatusIn",
         "type": "object"
       },
@@ -3817,7 +3843,7 @@
                 "type": "string"
               },
               "top_indices_by_shard_count": {
-                "description": "Top visible indices by shard count.",
+                "description": "Top indices by shard count, filtered to the ACTIVE case only (SEC-7); other cases' indices are not exposed. Empty when no active case resolves. Cluster capacity fields above remain cluster-wide.",
                 "items": {
                   "properties": {
                     "doc_count": {
