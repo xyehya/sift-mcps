@@ -145,7 +145,7 @@ def _parse_srum_wintools(
     """
     from sift_common import resolve_case_dir
 
-    from opensearch_mcp.parse_csv import ingest_csv
+    from opensearch_mcp.parse_csv import ingest_csv, table_name_from_stem
     from opensearch_mcp.wintools import run_tool_and_get_csv
 
     case_dir_str = resolve_case_dir()
@@ -178,6 +178,11 @@ def _parse_srum_wintools(
     total_count = 0
     total_failed = 0
     for csv_file in csv_files:
+        # SrumECmd emits several sub-tables (NetworkUsages, AppResourceUseInfo,
+        # ...) into ONE index. Derive a per-CSV table_name so _doc_id folds the
+        # logical table into the content-hash seed — otherwise two sub-tables
+        # with identical raw columns collide on the same _id (silent overwrite).
+        table_name = table_name_from_stem(csv_file.stem)
         count, _sk, bf = ingest_csv(
             csv_path=csv_file,
             client=client,
@@ -186,6 +191,7 @@ def _parse_srum_wintools(
             source_file=source_file or str(srum_path),
             ingest_audit_id=ingest_audit_id,
             pipeline_version=pipeline_version,
+            table_name=table_name,
             vss_id=vss_id,
             parse_method="SrumECmd",
             host_dict=host_dict,

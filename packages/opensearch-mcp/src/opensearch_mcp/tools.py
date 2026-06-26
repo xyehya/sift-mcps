@@ -264,12 +264,9 @@ def run_and_ingest(
             if cfg.multi_csv:
                 # EZ tools prefix with timestamp: 20260329224802_Amcache_DeviceContainers
                 # Strip the timestamp prefix (digits + underscore) to get meaningful name
-                stem = csv_file.stem
-                parts = stem.split("_", 1)
-                if len(parts) > 1 and parts[0].isdigit():
-                    table_name = parts[1]
-                else:
-                    table_name = stem
+                from opensearch_mcp.parse_csv import table_name_from_stem
+
+                table_name = table_name_from_stem(csv_file.stem)
             count, sk, bf = ingest_csv(
                 csv_path=csv_file,
                 client=client,
