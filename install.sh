@@ -33,7 +33,12 @@ set -Eeuo pipefail
 # scripts/setup-addon.sh sources install.sh, REPO_DIR still resolves to the repo
 # root (not scripts/). lib/common.sh honours this pre-set value.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SIFT_INSTALL_LIB_DIR="${SIFT_INSTALL_LIB_DIR:-$REPO_DIR/lib}"
+# Security: install.sh is often run with elevated privileges. Do not allow an
+# operator/user-controlled SIFT_INSTALL_LIB_DIR to redirect the trusted module
+# source path to arbitrary shell files. Keep the variable exported for child
+# diagnostics, but canonicalize it to the repo-owned lib directory before any
+# `source` occurs.
+SIFT_INSTALL_LIB_DIR="$REPO_DIR/lib"
 
 # Source order: common defines all globals + early helpers FIRST; the rest are
 # pure function-definition modules (bash resolves globals at call time, so their

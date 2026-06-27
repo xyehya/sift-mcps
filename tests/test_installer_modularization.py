@@ -140,6 +140,26 @@ echo "OK_FUNCS_AVAILABLE"
     assert "OK_FUNCS_AVAILABLE" in res.stdout
 
 
+
+def test_install_lib_dir_env_cannot_redirect_module_sources(tmp_path: Path) -> None:
+    """install.sh may run via sudo/root, so an inherited SIFT_INSTALL_LIB_DIR
+    must not redirect module sourcing to attacker-controlled shell files."""
+    fake_lib = tmp_path / "fake-lib"
+    fake_lib.mkdir()
+    (fake_lib / "common.sh").write_text("echo MALICIOUS_LIB_SOURCED >&2; exit 77\n", encoding="utf-8")
+
+    script = f"""
+set -Eeuo pipefail
+export SIFT_INSTALL_LIB_DIR="{fake_lib}"
+source ./install.sh
+[[ "$SIFT_INSTALL_LIB_DIR" == "$REPO_DIR/lib" ]] || {{ echo "BAD_LIB_DIR:$SIFT_INSTALL_LIB_DIR" >&2; exit 2; }}
+echo "TRUSTED_LIB_DIR"
+"""
+    res = _run_bash(script)
+    assert res.returncode == 0, f"trusted lib-dir guard failed:\n{res.stdout}\n{res.stderr}"
+    assert "MALICIOUS_LIB_SOURCED" not in res.stderr
+    assert "TRUSTED_LIB_DIR" in res.stdout
+
 def test_dead_no_op_function_removed() -> None:
     """fix_volatility_permissions was a verified no-op (return 0) called once in
     main(); #18 removed the function AND its call site. It must not reappear."""
