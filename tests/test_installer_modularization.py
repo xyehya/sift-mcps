@@ -153,6 +153,7 @@ set -Eeuo pipefail
 export SIFT_INSTALL_LIB_DIR="{fake_lib}"
 source ./install.sh
 [[ "$SIFT_INSTALL_LIB_DIR" == "$REPO_DIR/lib" ]] || {{ echo "BAD_LIB_DIR:$SIFT_INSTALL_LIB_DIR" >&2; exit 2; }}
+bash -c '[[ "${{SIFT_INSTALL_LIB_DIR:-}}" == "$1" ]]' _ "$REPO_DIR/lib" || {{ echo "CHILD_LIB_DIR_NOT_EXPORTED" >&2; exit 3; }}
 echo "TRUSTED_LIB_DIR"
 """
     res = _run_bash(script)

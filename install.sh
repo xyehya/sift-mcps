@@ -38,7 +38,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # source path to arbitrary shell files. Keep the variable exported for child
 # diagnostics, but canonicalize it to the repo-owned lib directory before any
 # `source` occurs.
-SIFT_INSTALL_LIB_DIR="$REPO_DIR/lib"
+export SIFT_INSTALL_LIB_DIR="$REPO_DIR/lib"
 
 # Source order: common defines all globals + early helpers FIRST; the rest are
 # pure function-definition modules (bash resolves globals at call time, so their
