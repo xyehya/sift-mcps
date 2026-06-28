@@ -65,9 +65,6 @@ opencti = [
 windows-triage = [
     "windows-triage-mcp",
 ]
-chroma-import = [
-    "rag-mcp[chroma-import]",
-]
 dev = [
     "pytest>=9.0",
     "pytest-asyncio>=0.23",

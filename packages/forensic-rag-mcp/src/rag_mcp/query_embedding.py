@@ -4,7 +4,7 @@ Moved here from the gateway ``rag_bridge._embed_query``. This is the runtime
 query embedder for ``kb_search_knowledge``: it loads the allowlisted BGE model
 once and encodes a query string into the 768-dim vector that
 ``app.rag_search`` expects. ``sentence-transformers`` is a REQUIRED runtime
-dependency for this path (only ``chromadb`` is optional now).
+dependency for this path.
 
 Security:
   - Model allowlist (``ALLOWED_MODELS``) prevents arbitrary model loading.

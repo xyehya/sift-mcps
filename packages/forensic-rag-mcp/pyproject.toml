@@ -33,15 +33,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# chromadb is only needed for the legacy Chroma->pgvector import/seed CLI path,
-# not for the runtime pgvector knowledge tools. BATCH-OSX-RAG makes it optional.
-chroma-import = [
-    "chromadb>=1.0",
-]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
-    "chromadb>=1.0",
 ]
 
 [project.scripts]
