@@ -1,37 +1,23 @@
 # Agent Operating Contract
 
-Top-level contract for the `sift-mcps` monorepo. All agents (Claude, Codex,
-Gemini) read this first. On conflict, this file wins — except inside the portal
-frontend, where the frontend `AGENTS.md` (design-system contract) governs UI.
-
 ## Repo map & where to work
 
 - **`/home/yk/AI/SIFTHACK/sift-mcps` is the `main` checkout** — Python MCP gateway
-  + portal. **`main` is the single canonical line.** (The old two-track separation
-  is retired: `portal-v3/p0-foundation` was fast-forwarded into `main` 2026-06-26 and
-  that branch + its remote deleted. Do NOT recreate a separate portal track — commit
-  portal + gateway work on `main`; if launched on a stale linked worktree, treat its
-  branch as a local alias of `main` and push to `main`.)
+  + portal. **`main` is the single canonical line.** if launched on a stale linked worktree, treat its branch as a local alias of `main` and push to `main`.
 - **Portal frontend:** `packages/case-dashboard/frontend` — carries its own
   `AGENTS.md` / `DESIGN-SYSTEM.md` (design-system contract); read those before
-  touching UI. Inside the frontend, that `AGENTS.md` wins over this file.
+  touching UI. Inside the frontend, that `AGENTS.md` wins.
 - A worktree folder *is* its branch; one branch checks out in one worktree at a time.
-
-## Active focus
-
-Portal v3 frontend rebuild (design-first). Design source of truth = the SIFT
-Design System project (synced to Claude Design via `DesignSync` / `/design-sync`);
-the codebase is the consumer. Token sync is one-way: when `tokens.css` changes in
-the design project, copy it to `packages/case-dashboard/frontend/src/styles/tokens.css`.
-Severity is **High / Medium / Low only** — the old `--sev-spec`/violet tier is dropped.
 
 ## Operating model, trackers & lessons (read before substantive work)
 
 Internal ops hub lives **outside this repo** (local): `~/AI/SIFTHACK/sift-portal-ops/`.
-- **Start here:** `STATUS.md` (current state) + `trackers/OPEN_ITEMS_MASTER.md` (every
-  open / deferred item + pending decisions). Read it before "discovering" work — don't
-  re-scan the per-topic trackers. Friction history: `trackers/MCP_WORKFLOW_FRICTION_TRACKER.md`;
-  coder briefs: `briefs/`.
+- **Start there (only these two):** `STATUS.md` (narrative current state) +
+  `trackers/MASTER_TRACKER.md` (the single consolidated tracker — every open / decision-pending /
+  deferred item + the GitHub PR & issue board, in tables). Read it before "discovering" work. The old
+  per-topic trackers (OPEN_ITEMS_MASTER, MCP_WORKFLOW_FRICTION_TRACKER, P3.5_LIVE_VALIDATION_TRACKER,
+  AUDIT_STATE_VERIFICATION, P35-3_AUDIT_ID_FLOW, PORTAL_V3_EXTENSION_BACKLOG) were consolidated into it
+  on 2026-06-27 and archived under `_archive-trackers/` — do not cite them. Coder briefs: `briefs/`.
 - **Surfacing lesson (the #1 repeat bug):** a gateway/add-on fix is INERT live unless it
   lands at the **agent-facing surface** — the registry `*Out` Pydantic model + the worker
   `result_public` envelope + the DB-authority path — NOT the impl function. SDK `outputSchema`
@@ -46,22 +32,17 @@ Internal ops hub lives **outside this repo** (local): `~/AI/SIFTHACK/sift-portal
 ## Deploy-and-prove (standing rule)
 
 A green test is a hypothesis; the **live gateway is the proof for BEHAVIOR** (the harness covers
-plumbing only). VM deploy = rsync changed source to `/opt/sift-mcps/packages/.../` → clear
+plumbing only). VM deploy = rsync source to `/opt/sift-mcps/packages/.../` → clear
 `__pycache__` → restart `sift-gateway` + `sift-opensearch-worker@{1,2}` + `sift-job-worker` →
-re-run the exact repro live and diff before/after. If the live setup can't reproduce it, say so —
-never imply a live proof that didn't happen. VM coords + live-MCP connection: see the recalled
-`reference_harness_mcp_live_connection` / VM-coordinates memories.
+re-run the exact repro live and diff before/after. If the live setup can't reproduce it, say so — never imply a live proof that didn't happen. VM coords + live-MCP connection: see the recalled `reference_harness_mcp_live_connection` / VM-coordinates memories.
 
 ## Security model (read before any gateway / security / execution work)
 
 The canonical security architecture is **`docs/architecture/SIFT-GATEWAY-SECURITY-MODEL.md`**
-(condensed C4 + STRIDE viewpoints; rendered diagrams in
-`docs/drafts/architecture/sift-architecture.html`). It defines the single-policy-boundary
+(condensed C4 + STRIDE viewpoints; rendered diagrams in `docs/drafts/architecture/sift-architecture.html`). It defines the single-policy-boundary
 gateway, the 9 fail-closed tool-call gates, the Postgres-authoritative / OpenSearch-derived
 split, the seven STRIDE trust boundaries, and the `run_command` ceiling+floor sandbox. **Read
-it before touching auth, the policy chain, backends, evidence/audit, or execution.** It is the
-DESIGN model — where it conflicts with the code, the **code wins; flag the drift**. Live
-opensearch-mcp wiring: `docs/drafts/architecture/OPENSEARCH-INTEGRATION-SPEC.md`.
+it before touching auth, the policy chain, backends, evidence/audit, or execution.** It is the DESIGN model — where it conflicts with the code, the **code wins; flag the drift**.
 
 ## Code Discovery
 
@@ -139,6 +120,12 @@ isolation MANUALLY:
 
 Never run two writer agents in the same working tree.
 
+## Guardrails
+- Do not fabricate results or claim completion without verification.
+- Do not weaken auth, execution, or evidence-handling safeguards.
+- Do not change unrelated files or broaden scope without a clear reason.
+- If a task is ambiguous, ask for clarification before making a high-impact change.
+
 ## GitHub
 
 GitHub is for code review and merge proof.
@@ -164,9 +151,3 @@ Next action:
 Never paste secrets, raw tokens, DSNs, passwords, private keys, service-role
 keys, or sensitive full evidence paths into GitHub, docs, or any external service.
 
-## Linear (paused)
-
-The Linear `ProtocolSIFTGateway` issue queue is **paused** during the portal v3
-rebuild. The canonical operating model is preserved at
-`docs/new-docs/LINEAR_OPERATING_MODEL.md` (and `LINEAR_ORCHESTRATION_GUIDE.md`)
-for when the track resumes. Until then, do not gate work on Linear issues.
