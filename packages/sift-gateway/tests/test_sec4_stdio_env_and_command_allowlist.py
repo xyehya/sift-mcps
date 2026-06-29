@@ -60,6 +60,24 @@ def test_build_minimal_env_drops_secrets_keeps_case_context():
     assert env["LC_ALL"] == "C.UTF-8"
 
 
+def test_build_minimal_env_passes_only_memory_preflight_tuning():
+    base = {
+        "PATH": "/usr/bin",
+        "SIFT_MEM_PREFLIGHT_HEADROOM_GB": "2.5",
+        "SIFT_MEM_PREFLIGHT_MULTIPLIER": "1.25",
+        "SIFT_MEM_PREFLIGHT_TOKEN": "secret-looking",
+        "SIFT_MEM_PREFLIGHT_DSN": "postgres://example",
+        "SIFT_UNRELATED_TUNING": "drop-me",
+    }
+    env = _build_minimal_backend_env(base, {})
+
+    assert env["SIFT_MEM_PREFLIGHT_HEADROOM_GB"] == "2.5"
+    assert env["SIFT_MEM_PREFLIGHT_MULTIPLIER"] == "1.25"
+    assert "SIFT_MEM_PREFLIGHT_TOKEN" not in env
+    assert "SIFT_MEM_PREFLIGHT_DSN" not in env
+    assert "SIFT_UNRELATED_TUNING" not in env
+
+
 def test_build_minimal_env_overlay_is_the_only_secret_channel():
     """An approved env_ref (e.g. RAG's knowledge-corpus DSN) still reaches the
     child — but only because it is explicitly overlaid, not inherited."""

@@ -509,12 +509,13 @@ Agents use the `opensearch_search` tool from `opensearch-mcp`. The canonical
 query pattern for Hayabusa detections is:
 
 ```
-opensearch_search(query='Level:critical OR Level:high', index='case-*-hayabusa-*')
+opensearch_search(query='Level:critical OR Level:high', index='case-<active-key>-hayabusa-*')
 ```
 
-The `opensearch_list_detections` tool checks for OpenSearch Security Analytics
-(Sigma) first; if unavailable, it falls back to suggesting the Hayabusa index
-pattern (`server.py`, lines 3562–3621).
+Use `opensearch_search` against the active case's Hayabusa artifact-family
+index pattern for detection review. The gateway rejects cross-case index
+patterns on the agent path, so operators should narrow within the active case
+rather than using an all-case pattern.
 
 After `opensearch_ingest` completes, the ingest response includes a
 suggested follow-up query when Hayabusa data is present (`server.py`,
@@ -522,7 +523,7 @@ lines 2553–2558):
 
 ```
 Query Hayabusa alerts: opensearch_search(query='Level:critical OR Level:high',
-index='case-*-hayabusa-*')
+index='case-<active-key>-hayabusa-*')
 ```
 
 Source: `packages/opensearch-mcp/src/opensearch_mcp/server.py`.

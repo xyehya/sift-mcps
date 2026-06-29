@@ -10,7 +10,7 @@ of a real cross-case count leak — was a tool that issued an OpenSearch read
 against the *all-cases* glob ``case-*`` (e.g. ``client.count(index="case-*-hayabusa-*")``
 counted Hayabusa alerts across **every** case), or swept a cluster-wide Security
 Analytics plugin endpoint that takes no index scoping at all. That leak lived in
-``opensearch_list_detections``, which has since been removed.
+the removed detection-listing tool.
 
 This guard statically scans the backend source (no OpenSearch needed) for the two
 shapes that re-introduce a cross-case read, and fails CI if a new one appears:
@@ -34,18 +34,19 @@ sites MUST equal the allowlist exactly — a NEW cross-case site fails the test,
 and removing an allowlisted one (without updating the allowlist) also fails, so
 the allowlist cannot silently rot.
 
-After the removal of ``opensearch_list_detections`` and its detection resources,
-the only remaining flagged site is the pre-existing field-mapping catalog
-resource, which reads index *metadata* (a schema/field dictionary), not case
-documents — see its allowlist entry for the rationale and the Phase-2 follow-up.
-The data-bearing leak class (``count``/``search`` over ``case-*`` and the SA
-plugin sweeps) is now EMPTY.
+After the removal of the detection-listing tool and the field-catalog broad
+lookup, the leak class (``count``/``search``/``cat.indices`` over ``case-*`` and
+the SA plugin sweeps) is EMPTY.
 """
 
 from __future__ import annotations
 
 import ast
+import asyncio
+import json
 from pathlib import Path
+
+from opensearch_mcp import registry as reg
 
 _SRC = Path(__file__).resolve().parent.parent / "src" / "opensearch_mcp"
 _SCANNED_FILES = ("server.py", "registry.py")
@@ -56,18 +57,9 @@ _INDEX_CALL_ATTRS = {"count", "search"}  # client.<attr>(index=...)
 
 
 # A flagged call-site is identified by (enclosing_function, kind, literal_prefix)
-# so the allowlist survives line-number churn.
-#
-# The ONLY allowlisted site is the field-mapping catalog resource. It calls
-# `cat.indices(index="case-*-{artifact}-*", h="index")` to sample the first
-# matching index purely to read its field MAPPING (a deployment-uniform schema
-# dictionary), and returns field names — never case documents or per-case counts.
-# It is NOT a data read. Tightening it to the active-case prefix is a Phase-2
-# follow-up (see opensearch_mcp.case_scoped). It is allowlisted, not ignored, so
-# any *additional* cross-case site still fails this guard.
-ALLOWLIST: set[tuple[str, str, str]] = {
-    ("opensearch_field_catalog_resource", "cat.indices", "case-*-"),
-}
+# so any future exception must be reviewed explicitly. This set should stay
+# empty: catalog/resource paths are active-case scoped or fail closed.
+ALLOWLIST: set[tuple[str, str, str]] = set()
 
 
 def _leading_str_literal(node: ast.expr | None) -> str | None:
@@ -165,3 +157,73 @@ def test_no_data_bearing_cross_case_reads() -> None:
     assert not data_leaks, (
         f"Data-bearing cross-case OpenSearch read(s) detected: {sorted(data_leaks)}"
     )
+
+
+class _FieldCatalogCat:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def indices(self, *, index: str, params: dict[str, str]) -> list[dict[str, str]]:
+        self.calls.append(index)
+        assert params == {"format": "json", "h": "index"}
+        return [{"index": "case-alpha-evtx-host1"}]
+
+
+class _FieldCatalogIndices:
+    def get_mapping(self, *, index: str) -> dict:
+        assert index == "case-alpha-evtx-host1"
+        return {
+            index: {
+                "mappings": {
+                    "properties": {
+                        "@timestamp": {"type": "date"},
+                        "event": {"properties": {"code": {"type": "keyword"}}},
+                    }
+                }
+            }
+        }
+
+
+class _FieldCatalogClient:
+    def __init__(self) -> None:
+        self.cat = _FieldCatalogCat()
+        self.indices = _FieldCatalogIndices()
+
+
+class _FieldCatalogImpl:
+    def __init__(self, client: _FieldCatalogClient) -> None:
+        self._client = client
+
+    def _get_os(self) -> _FieldCatalogClient:
+        return self._client
+
+
+def test_field_catalog_resource_uses_active_case_artifact_pattern(monkeypatch) -> None:
+    client = _FieldCatalogClient()
+    monkeypatch.setattr(reg, "_impl_server", lambda: _FieldCatalogImpl(client))
+
+    payload = json.loads(
+        asyncio.run(
+            reg.opensearch_field_catalog_resource(
+                "evtx",
+                case_dir="/cases/case-alpha",
+            )
+        )
+    )
+
+    assert client.cat.calls == ["case-alpha-evtx-*"]
+    assert payload["sample_index"] == "case-alpha-evtx-host1"
+    assert payload["total_fields"] == 2
+
+
+def test_field_catalog_resource_fails_closed_without_active_case(monkeypatch) -> None:
+    def fail_impl() -> None:
+        raise AssertionError("field catalog must not touch OpenSearch without active case")
+
+    monkeypatch.setattr(reg, "_impl_server", fail_impl)
+
+    payload = json.loads(asyncio.run(reg.opensearch_field_catalog_resource("evtx")))
+
+    assert payload["fields"] == []
+    assert payload["total_fields"] == 0
+    assert "active case unavailable" in payload["error"]

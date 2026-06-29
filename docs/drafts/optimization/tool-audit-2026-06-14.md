@@ -45,7 +45,6 @@ Autosave-to-disk pattern CONFIRMED present on: `run_command` (`full_output_path`
 | opensearch_aggregate | buckets ok | **`total_docs:10000` is misleading** — it's the OpenSearch track_total_hits cap, not the real corpus (2.08M). Reads as "only 10k docs." Aggregation buckets ARE exact. Fix: label as `sampled_total`/`>=10000`, or set track_total_hits. | MED |
 | opensearch_timeline | `total_docs:0` | empty result for event.code:4688 (genuinely absent; Sysmon uses code:1). No guidance that 0 may mean wrong field/value → add a "verify field via field_values" hint on empty. | LOW |
 | opensearch_search (compact) | 2 hits | **(1) NO autosave/`full_path` for large result sets** — at limit=200 with full docs this is a context bomb (run_command/findings autosave; this doesn't). (2) per-hit constants repeated: `vhir.provenance_id`,`vhir.case_id`,`host.id`(==host.name),`winlog.provider_name`. (3) `winlog.event_data` is a single-quoted **Python-repr string, not JSON** → not parseable. | **HIGH** |
-| opensearch_list_detections | empty+suggestion | excellent fallback (exact Hayabusa query when Sigma absent). Model design. | — |
 | kb_search_knowledge | 3 results | per-result spam: 3 provenance UUIDs (chunk_id+provenance_id+document_provenance_id) + 2 always-null fields (case_id, evidence_object_id) + constant `kind:"knowledge"`. Signal = content+title+distance+source_ref. | MED |
 
 ### Highest-leverage so far
@@ -107,4 +106,3 @@ fixes below remain complementary (they slim the summaries that DO return).
 
 ### Top wins for Phase 2 (PTC) enablement
 The single highest-leverage change for the PTC/context goal: **#A2 opensearch_search autosave-and-return-path** + **#A1 run_command receipt slimming** + **#A6 constant-hoisting**. Together they make the "query → save → grep/transform/correlate on disk" loop cheap and keep raw bulk out of context.
-

@@ -30,10 +30,10 @@ So **no tool is "worker-only" as a whole**: ingest/enrich have a *cheap synchron
 
 ---
 
-## B. Complete tool catalog (15 tools)
+## B. Complete tool catalog (14 tools)
 
 Typed contract: `registry.py`. Impl engine: `server.py`. Case authority: `sift-backend.json` (mirrored into `app.mcp_backends`).
-All 15 inherit `default_case_scoped:true`; none set a per-tool `case_scoped`, so all are case-scoped. `safe` = injected/overwritten case args; `bound` = SEC-2 validated-not-overwritten.
+All 14 inherit `default_case_scoped:true`; none set a per-tool `case_scoped`, so all are case-scoped. `safe` = injected/overwritten case args; `bound` = SEC-2 validated-not-overwritten.
 
 | Tool | Plane | Sync/Job | safe (injected) | bound (validated) | required_scopes | Purpose | `registry.py` |
 |---|---|---|---|---|---|---|---|
@@ -50,7 +50,6 @@ All 15 inherit `default_case_scoped:true`; none set a per-tool `case_scoped`, so
 | `opensearch_ingest` | proxy (dry_run) / **worker** (write) | sync preview / **job** | `case_dir` | – | – | discover + index forensic artifacts | `:2362` |
 | `opensearch_ingest_status` | proxy + gateway augment | sync | `case_id, case_dir` | – | – | poll ingest/enrich progress | `:2345` |
 | `opensearch_enrich_intel` | proxy (dry_run) / **worker** (write) | sync preview / **job** | `case_id, case_dir` | – | `enrichment:intel` | extract IOCs → OpenCTI lookup → stamp docs | `:2327` |
-| `opensearch_list_detections` | proxy | sync | `[]` | – | – | Security-Analytics/Sigma findings (Hayabusa fallback) | `:2228` |
 | `opensearch_fix_host_mapping` | proxy | sync (mutating) | `case_dir` | – | – | correct a wrong host.id + reindex | `:2309` |
 
 Mutating (write annotations, `registry.py:780-792`): `opensearch_ingest`, `opensearch_enrich_intel`, `opensearch_fix_host_mapping`. All others read-only. `opensearch_status`/`opensearch_shard_status` are deprecated tool-forms mirrored as resources `opensearch://cluster/status` / `…/shards` (removal horizon "at/after D27b").
@@ -97,7 +96,7 @@ VP-3 (SECURITY-MODEL.md:50-72) defines **Identity (pre-chain) + 9 fail-closed ga
 
 **Gate ⑥ ProxyActiveCase — the chokepoint (`policy_middleware.py:839-949`):**
 - **SEC-2 case-bound validation** (`:857-907`): for every case-scoped tool, each `bound` arg (the opensearch `index`) is validated segment-by-segment against the active-case prefix `case-{key}-`. A value naming another case (`case-*`, another case's pattern, an exact other-case index) or a blank comma segment is **denied** (`case_bound_cross_case` / `case_bound_empty_segment`). Fail-closed if the prefix can't be resolved (`case_bound_prefix_unresolved`). Relocated to this agent-path gate by `563b851`/`d496b7d` so `opensearch_get_event` (no injected `case_dir`) is still bound.
-- **safe-arg injection** (`:908-949`): inject DB-authoritative `case_id`/`case_key`/`case_dir`; mismatching client value denied (`client_case_mismatch`). `None` ⇒ deny fail-closed (`proxy_requires_implicit_case`); empty set ⇒ pass through (the `get_event`/`list_detections` case).
+- **safe-arg injection** (`:908-949`): inject DB-authoritative `case_id`/`case_key`/`case_dir`; mismatching client value denied (`client_case_mismatch`). `None` ⇒ deny fail-closed (`proxy_requires_implicit_case`); empty set ⇒ pass through (the `get_event` case).
 
 **Gate ⑨ OpenSearchJobDispatch (`policy_middleware.py:1505-1611`):** dispatch set = `{opensearch_ingest, opensearch_enrich_intel}` (`policy_middleware.py:1306`). If a job service + active case exist and it's not a `dry_run` ingest preview, **enqueue a durable job and return `queued`+`job_id`** instead of proxying. `_spec_public` (`:1613-1644`) is path-free; the DB-authoritative `case_dir` travels only in `spec_internal` and never reaches the agent.
 
@@ -159,7 +158,7 @@ The worker→gateway client is `opensearch_mcp/gateway.py:call_tool` → `POST /
 ## G. Manifest / DB authority
 
 - **Runtime authority = the DB snapshot, not the file.** The gateway reads `app.mcp_backends` (`mcp_backends_registry.py:500`) and builds `_tool_map` + `_tool_manifest_meta` (`server.py:462` `_build_tool_map`). `is_case_scoped_tool` (`server.py:890`), `safe_case_argument_names` (`server.py:912`), `case_bound_argument_names` (`server.py:946`) all read `self._tool_surface.manifest_meta` first, falling back to the live schema only when the manifest is silent.
-- **`safe_case_argument_names` tri-state** (`server.py:912-944`): `set` (inject), empty `set` (case-scoped, no injection — pass through), `None` (unknown → middleware denies fail-closed). This is why `get_event`/`list_detections` (empty list) pass gate ⑥ without injection.
+- **`safe_case_argument_names` tri-state** (`server.py:912-944`): `set` (inject), empty `set` (case-scoped, no injection — pass through), `None` (unknown → middleware denies fail-closed). This is why `get_event` (empty list) passes gate ⑥ without injection.
 - **`case_bound_argument_names`** (`server.py:946-960`): SEC-2 free-form args validated-not-overwritten; for opensearch this is `["index"]` on the 6 query tools. Gateway active-case prefix from `_active_case_index_prefix` (`server.py:963`) mirrors `opensearch_mcp.paths.build_index_pattern(key, tail="")` = `case-{key}-`; the backend re-derives the same via `_resolve_active_prefix` (`server.py:1511`, SEC-7) and `_active_index_prefix` (`server.py:144`) so gateway and backend agree (a unit test pins them).
 - **manifest_sha drift:** a first-party backend whose on-disk manifest no longer matches the DB row is flagged (`mcp_backends_registry.py:142`); stale registration silently disables features until refreshed (recalled `reference_gateway_manifest_registration_drift`). Authority remains the DB snapshot.
 - **Env propagation to the stdio child:** `SIFT_DB_ACTIVE` (non-secret authority flag) is propagated so the child agrees on Postgres ingest-status authority; the control-plane DSN (secret) is **not** (`test_phase6.py:560-580`).

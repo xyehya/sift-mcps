@@ -40,6 +40,7 @@ from sift_common.registry_helpers import (
     register_all as _register_all,
 )
 
+from .case_scoped import artifact_index_pattern, resolve_active_case_prefix
 from .contracts import ErrorCode, ResultMeta, ToolDef, ToolError
 
 REGISTRY: list[ToolDef] = []
@@ -346,7 +347,10 @@ class IndexInfo(BaseModel):
 class HayabusaHealth(BaseModel):
     binary: str | None = Field(
         None,
-        description="Resolved hayabusa binary path, or null when NOT installed (Sigma detection will be skipped).",
+        description=(
+            "Resolved hayabusa binary path, or null when NOT installed "
+            "(Sigma detection will be skipped)."
+        ),
     )
     rules_dir: str | None = Field(
         None, description="Resolved hayabusa rules directory, or null when not found."
@@ -601,9 +605,15 @@ class IngestOut(BaseModel):
     ] = Field(..., description="Ingest response status.")
     case_id: str | None = Field(None, description="Resolved active case id.")
     job_id: str | None = Field(
-        None, description="Durable job id for a queued (worker-dispatched) ingest; poll running_commands_status(job_id)."
+        None,
+        description=(
+            "Durable job id for a queued (worker-dispatched) ingest; "
+            "poll running_commands_status(job_id)."
+        ),
     )
-    job_type: str | None = Field(None, description="Dispatched job type (ingest/enrich) when queued.")
+    job_type: str | None = Field(
+        None, description="Dispatched job type (ingest/enrich) when queued."
+    )
     dispatched_to: str | None = Field(
         None, description="Worker lane a queued ingest was dispatched to."
     )
@@ -689,7 +699,9 @@ class IngestStatusOut(BaseModel):
     job_id: str | None = Field(
         None, description="Echoed durable job_id when one was supplied for polling."
     )
-    next_step: str | None = Field(None, description="Suggested next polling step, when applicable.")
+    next_step: str | None = Field(
+        None, description="Suggested next polling step, when applicable."
+    )
 
 
 class EnrichIntelIn(BaseModel):
@@ -717,9 +729,15 @@ class EnrichIntelOut(BaseModel):
     domains: int | None = Field(None, description="Unique domain indicators in preview.")
     total_iocs: int | None = Field(None, description="Total unique IOCs in preview.")
     job_id: str | None = Field(
-        None, description="Durable job id for a queued (worker-dispatched) enrich; poll running_commands_status(job_id)."
+        None,
+        description=(
+            "Durable job id for a queued (worker-dispatched) enrich; "
+            "poll running_commands_status(job_id)."
+        ),
     )
-    job_type: str | None = Field(None, description="Dispatched job type (enrich) when queued.")
+    job_type: str | None = Field(
+        None, description="Dispatched job type (enrich) when queued."
+    )
     dispatched_to: str | None = Field(
         None, description="Worker lane a queued enrich was dispatched to."
     )
@@ -1414,7 +1432,10 @@ def _flatten_mapping_props(props: dict[str, Any], prefix: str = "") -> list[dict
     return fields
 
 
-async def opensearch_field_catalog_resource(artifact_type: str) -> str:
+async def opensearch_field_catalog_resource(
+    artifact_type: str,
+    case_dir: str = "",
+) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", artifact_type):
         return _json_text(
             {
@@ -1423,12 +1444,34 @@ async def opensearch_field_catalog_resource(artifact_type: str) -> str:
                 "error": "artifact_type contains unsupported characters.",
             }
         )
+    if not case_dir.strip():
+        return _json_text(
+            {
+                "artifact_type": artifact_type,
+                "fields": [],
+                "total_fields": 0,
+                "error": (
+                    "active case unavailable; field catalog requires "
+                    "gateway-injected active-case context."
+                ),
+            }
+        )
+    prefix = resolve_active_case_prefix(case_dir=case_dir)
+    if not prefix:
+        return _json_text(
+            {
+                "artifact_type": artifact_type,
+                "fields": [],
+                "total_fields": 0,
+                "error": "active case unavailable; field catalog is empty.",
+            }
+        )
     try:
         client = _impl_server()._get_os()
+        target = artifact_index_pattern(prefix, artifact_type)
         indices = client.cat.indices(
-            index=f"case-*-{artifact_type}-*",
-            format="json",
-            h="index",
+            index=target,
+            params={"format": "json", "h": "index"},
         )
         first = next((item.get("index") for item in indices or [] if item.get("index")), None)
         if not first:

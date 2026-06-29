@@ -1,8 +1,10 @@
 """Stdio-based MCP backend — launches a subprocess and communicates via MCP stdio transport."""
 
 import asyncio
+import builtins
 import logging
 import os
+from collections.abc import Mapping
 from contextlib import AsyncExitStack
 
 from mcp.client.session import ClientSession
@@ -12,6 +14,7 @@ from mcp.types import Tool
 from sift_gateway.backends.base import MCPBackend
 
 logger = logging.getLogger(__name__)
+_BASE_EXCEPTION_GROUP = getattr(builtins, "BaseExceptionGroup", Exception)
 
 # Timeout (seconds) for backend operations
 _TOOL_LIST_TIMEOUT = 30
@@ -69,10 +72,16 @@ _SIFT_CASE_CONTEXT_ALLOWLIST = frozenset(
         "SIFT_STATE_DIR",
     }
 )
+_SIFT_NON_SECRET_TUNING_ALLOWLIST = frozenset(
+    {
+        "SIFT_MEM_PREFLIGHT_HEADROOM_GB",
+        "SIFT_MEM_PREFLIGHT_MULTIPLIER",
+    }
+)
 
 
 def _build_minimal_backend_env(
-    base_environ: dict, configured_env: dict
+    base_environ: Mapping[str, str], configured_env: Mapping[str, str]
 ) -> dict[str, str]:
     """Build a stdio child env deny-by-default: minimal allowlist + approved overlay.
 
@@ -90,6 +99,10 @@ def _build_minimal_backend_env(
         if value:
             env[key] = value
     for key in _SIFT_CASE_CONTEXT_ALLOWLIST:
+        value = base_environ.get(key)
+        if value:
+            env[key] = value
+    for key in _SIFT_NON_SECRET_TUNING_ALLOWLIST:
         value = base_environ.get(key)
         if value:
             env[key] = value
@@ -285,7 +298,7 @@ class StdioMCPBackend(MCPBackend):
                 self._session.call_tool(name, arguments), timeout=_TOOL_CALL_TIMEOUT
             )
             return result.content
-        except (ConnectionError, OSError) as e:
+        except (ConnectionError, OSError):
             await self._safe_cleanup(context="call_tool cleanup after error")
             raise
         except Exception as e:
@@ -307,7 +320,7 @@ class StdioMCPBackend(MCPBackend):
                 "type": "stdio",
                 "tools": len(self._tools_cache or []),
             }
-        except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
+        except (Exception, asyncio.CancelledError, _BASE_EXCEPTION_GROUP) as exc:
             logger.warning(
                 "Backend %s health check failed: %s: %s",
                 self.name,

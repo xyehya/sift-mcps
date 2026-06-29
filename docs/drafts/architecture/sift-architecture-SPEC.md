@@ -291,7 +291,7 @@ OpenSearch ingest specifically fans out to **N least-privilege opensearch worker
 `run_command` · `run_command_job` · `running_commands_status`
 
 **opensearch_\*:** `search` `count` `aggregate` `timeline` `get_event` `field_values`
-`case_summary` `status` `shard_status` `list_detections` `inspect_container`
+`case_summary` `status` `shard_status` `inspect_container`
 `ingest` `ingest_status` `enrich_intel` `fix_host_mapping` `host_fix`
 (indicative subset — the typed contract also exposes `*_catalog`, `*_cluster_*`, and `_resource`
 variants; the authoritative surface is the golden snapshot `test_opensearch_mcp_surface_snapshot.py`)

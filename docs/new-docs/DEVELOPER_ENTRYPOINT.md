@@ -155,7 +155,7 @@ opensearch-mcp tools split into two execution routes. The split is one invariant
   - `opensearch_enrich_intel`
 - **Direct route** — fast, synchronous, proxied straight to the backend (no
   worker): every query (`search`, `count`, `aggregate`, `get_event`, `timeline`,
-  `field_values`, `case_summary`, `list_detections`), every read/status
+  `field_values`, `case_summary`), every read/status
   (`status`, `shard_status`, `ingest_status`, `inspect_container`), and the
   `opensearch_ingest(dry_run=True)` preview.
 
