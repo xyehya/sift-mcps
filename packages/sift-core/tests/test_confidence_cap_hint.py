@@ -1,270 +1,477 @@
-"""W3: confidence cap-hint — auto-derive a confidence CEILING from resolved
-provenance and clamp the agent-supplied value DOWN to it (never up).
+"""Two-axis confidence ceiling: clamp the agent-supplied confidence DOWN to a
+ceiling derived from the (evidence_engaged, grounding_count) axes — never up.
 
-Operator decision (AUDIT_HARDENING_SPEC §W3-DEC = CAP-HINT):
-``final = min(agent_confidence, derived_ceiling)`` by ``_CONF_RANKS`` rank order.
-Provenance may only LOWER the agent's value. NEW findings only (confidence is
-inside the content hash; backfilling would mutate existing hashes). A
-``confidence_derivation`` companion field records the reasoning and is EXCLUDED
-from the content hash; ``confidence`` itself stays IN the hash.
+Rebuild model (plan BE-1/BE-5/BE-6):
+  ceiling = HIGH  if evidence_engaged and grounding_count >= 2
+            MEDIUM if evidence_engaged and grounding_count >= 1
+            LOW    otherwise (floor; SPECULATIVE removed entirely)
+  final = min(agent_confidence, ceiling) by _CONF_RANKS rank order.
+
+These tests run in DB-authority mode (the only production mode): the audit trail
+(`list_audit_provenance_db`), the sealed registry (`list_sealed_evidence_db`) and
+the investigation store are all faked, and assertions are made on the captured
+`upsert_finding` payload — NOT a findings.json file (file mode no longer grades).
 """
 
 from __future__ import annotations
 
 import inspect
-import json
-from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
-
 import sift_core.case_manager as cm
-from sift_core.case_io import case_audit_dir, case_records_dir
 from sift_core.case_manager import CaseManager, _derive_confidence_ceiling
 from sift_core.investigation_store import HASH_EXCLUDE_KEYS, compute_content_hash
+from sift_core.ioc_helpers import _conf_rank, normalize_confidence
+
+CASE_UUID = "11111111-1111-1111-1111-111111111111"
+_KB = "forensic-rag-mcp"
+_WT = "windows-triage-mcp"
+_OCTI = "opencti-mcp"
+_REF_BACKENDS = [_KB, _WT, _OCTI]
 
 
 # --------------------------------------------------------------------------- #
-# 1. Pure helper: ceiling mapping across all four tiers (each branch).
+# 1. BE-1: the ONE tunable function — full ceiling truth table + single-source.
 # --------------------------------------------------------------------------- #
-class TestDeriveCeilingMapping:
-    def test_high_full_two_mcp_no_none(self):
-        prov = {"mcp": ["a", "b"], "hook": [], "shell": [], "none": []}
-        assert _derive_confidence_ceiling(prov, "FULL", "evidence/x", []) == "HIGH"
+class TestDeriveCeilingTable:
+    @pytest.mark.parametrize(
+        "engaged,count,expected",
+        [
+            (True, 0, "LOW"),
+            (True, 1, "MEDIUM"),
+            (True, 2, "HIGH"),
+            (True, 3, "HIGH"),
+            (False, 0, "LOW"),
+            (False, 1, "LOW"),
+            (False, 2, "LOW"),
+            (False, 9, "LOW"),
+        ],
+    )
+    def test_ceiling_truth_table(self, engaged, count, expected):
+        assert _derive_confidence_ceiling(engaged, count) == expected
 
-    def test_not_high_when_full_two_mcp_but_a_none_present(self):
-        prov = {"mcp": ["a", "b"], "hook": [], "shell": [], "none": ["bad"]}
-        # FULL + 2 MCP but a NONE id present -> drops to MEDIUM (>=1 MCP + FULL).
-        assert _derive_confidence_ceiling(prov, "FULL", "ev", []) == "MEDIUM"
+    def test_speculative_never_returned(self):
+        for engaged in (True, False):
+            for count in range(0, 5):
+                assert _derive_confidence_ceiling(engaged, count) in {
+                    "HIGH",
+                    "MEDIUM",
+                    "LOW",
+                }
 
-    def test_not_high_when_two_mcp_but_partial_grade(self):
-        prov = {"mcp": ["a", "b"], "hook": [], "shell": [], "none": []}
-        # PARTIAL grade -> not HIGH; 2 resolved + source -> MEDIUM.
-        assert _derive_confidence_ceiling(prov, "PARTIAL", "ev", []) == "MEDIUM"
-
-    def test_medium_full_one_mcp(self):
-        prov = {"mcp": ["a"], "hook": [], "shell": [], "none": []}
-        assert _derive_confidence_ceiling(prov, "FULL", None, []) == "MEDIUM"
-
-    def test_medium_two_resolved_with_source_partial(self):
-        prov = {"mcp": ["a"], "hook": ["b"], "shell": [], "none": []}
-        assert _derive_confidence_ceiling(prov, "PARTIAL", "ev", []) == "MEDIUM"
-
-    def test_low_two_resolved_without_source_partial(self):
-        prov = {"mcp": ["a"], "hook": ["b"], "shell": [], "none": []}
-        # 2 resolved but no source_evidence and not FULL -> below MEDIUM -> LOW.
-        assert _derive_confidence_ceiling(prov, "PARTIAL", None, []) == "LOW"
-
-    def test_low_single_resolved_partial(self):
-        prov = {"mcp": ["a"], "hook": [], "shell": [], "none": []}
-        assert _derive_confidence_ceiling(prov, "PARTIAL", None, []) == "LOW"
-
-    def test_low_shell_only_with_validated_commands(self):
-        prov = {"mcp": [], "hook": [], "shell": [], "none": []}
-        cmds = [{"command": "grep x", "purpose": "p"}]
-        assert _derive_confidence_ceiling(prov, "PARTIAL", None, cmds) == "LOW"
-
-    def test_speculative_only_none_ids(self):
-        prov = {"mcp": [], "hook": [], "shell": [], "none": ["x", "y"]}
-        assert _derive_confidence_ceiling(prov, "PARTIAL", None, []) == "SPECULATIVE"
-
-    def test_speculative_empty_no_commands(self):
-        prov = {"mcp": [], "hook": [], "shell": [], "none": []}
-        assert _derive_confidence_ceiling(prov, "PARTIAL", None, []) == "SPECULATIVE"
+    def test_mapping_lives_only_in_the_helper(self):
+        """The (engaged, count) -> tier thresholds live ONLY in the helper; the
+        hot path delegates and does not duplicate the table (anti-drift)."""
+        body = inspect.getsource(cm._derive_confidence_ceiling)
+        assert "grounding_count >= 2" in body
+        assert "grounding_count >= 1" in body
+        assert '"HIGH"' in body and '"MEDIUM"' in body
+        rf = inspect.getsource(cm.CaseManager.record_finding)
+        assert "_derive_confidence_ceiling(" in rf, "record_finding must delegate"
+        assert "grounding_count >= 2" not in rf, "thresholds must not be inlined"
 
 
 # --------------------------------------------------------------------------- #
-# Integration fixtures (file-mode CaseManager, mirrors the artifact-audit test).
+# Shared DB-mode fixture + helpers.
 # --------------------------------------------------------------------------- #
-AUDIT_ID = "siftcore-alice-20260610-001"
-AUDIT_ID2 = "siftcore-alice-20260610-002"
+class _CapturingStore:
+    """In-memory investigation store; captures persisted finding payloads."""
+
+    def __init__(self):
+        self.findings: dict = {}
+        self.timeline: dict = {}
+        self.iocs: dict = {}
+        self.todos: dict = {}
+        self.finding_order: list[str] = []
+
+    def upsert_finding(self, case_id, item_id, payload, *, actor=None):
+        if item_id not in self.findings:
+            self.finding_order.append(item_id)
+        self.findings[item_id] = dict(payload)
+        return {"applied": True}
+
+    def upsert_timeline_event(self, case_id, item_id, payload, *, actor=None):
+        self.timeline[item_id] = dict(payload)
+        return {"applied": True}
+
+    def upsert_ioc(self, case_id, item_id, payload, *, actor=None):
+        self.iocs[item_id] = dict(payload)
+        return {"applied": True}
+
+    def upsert_todo(self, case_id, item_id, payload, *, actor=None):
+        self.todos[item_id] = dict(payload)
+        return {"applied": True}
+
+    def list_findings(self, case_id):
+        return list(self.findings.values())
+
+    def list_timeline(self, case_id):
+        return list(self.timeline.values())
+
+    def list_iocs(self, case_id):
+        return list(self.iocs.values())
+
+    def list_todos(self, case_id):
+        return list(self.todos.values())
+
+    def last_finding(self) -> dict:
+        assert self.finding_order, "no finding was persisted"
+        return self.findings[self.finding_order[-1]]
 
 
-def _write_audit_entry(audit_dir: Path, audit_id: str, tool: str = "run_command") -> None:
-    audit_dir.mkdir(parents=True, exist_ok=True)
-    entry = {
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "mcp": "sift-core",
-        "tool": tool,
-        "audit_id": audit_id,
-        "examiner": "alice",
-    }
-    with open(audit_dir / "sift-core.jsonl", "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry) + "\n")
-
-
-def _register_evidence(case_dir: Path) -> None:
-    records = case_records_dir(case_dir)
-    records.mkdir(parents=True, exist_ok=True)
-    (case_dir / "evidence").mkdir(exist_ok=True)
-    (case_dir / "evidence" / "auth.log").write_text("log line\n")
-    manifest = {
-        "files": [
-            {"path": "evidence/auth.log", "sha256": "0" * 64, "status": "SEALED"}
-        ]
-    }
-    (records / "evidence-manifest.json").write_text(json.dumps(manifest))
-
-
-@pytest.fixture
-def file_manager(tmp_path, monkeypatch):
-    case_dir = tmp_path / "case-w3"
-    case_dir.mkdir()
-    (case_dir / "CASE.yaml").write_text("case_id: case-w3\nstatus: active\n")
-    _register_evidence(case_dir)
-    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
-    monkeypatch.delenv("SIFT_DB_ACTIVE", raising=False)
-    monkeypatch.delenv("SIFT_AUDIT_DIR", raising=False)
-    monkeypatch.delenv("SIFT_CONTROL_PLANE_DSN", raising=False)
-    return CaseManager(), case_dir
-
-
-def _shell_finding(confidence: str) -> dict:
-    """A shell-only analytical finding (no artifacts). Provenance grade=PARTIAL,
-    classify_provenance summary=NONE, but validated_commands present -> ceiling
-    LOW. Survives the hard gate via supporting_commands."""
+def _audit_row(
+    audit_id: str,
+    *,
+    tool: str = "run_command",
+    backend: str = "",
+    evidence_refs=None,
+    aliases=None,
+    envelope: str = "",
+) -> dict:
+    """Shape one list_audit_provenance_db row (gateway-written fields)."""
     return {
-        "title": "Shell-derived observation",
+        "audit_id": audit_id,
+        "tool": tool,
+        "backend": backend,
+        "evidence_refs": list(evidence_refs or []),
+        "audit_aliases": list(aliases or []),
+        "envelope_event_id": envelope,
+        "input_files": [],
+        "result_summary": {},
+        "params": {},
+        "case_id": CASE_UUID,
+    }
+
+
+def _finding(confidence: str, *, audit_ids=None, **extra) -> dict:
+    f = {
+        "title": "Observation",
         "type": "finding",
         "host": "WS01",
         "observation": "obs",
         "interpretation": "interp",
         "confidence": confidence,
-        "confidence_justification": "j",
+        "confidence_justification": "justified by cited evidence",
         "event_timestamp": "2026-06-10T00:00:00Z",
+        "audit_ids": list(audit_ids or []),
     }
+    f.update(extra)
+    return f
 
 
-SUPPORTING = [
-    {"command": "grep root /var/log/auth.log", "purpose": "find root logons",
-     "output_excerpt": "Accepted password for root"}
-]
+@pytest.fixture
+def db_manager(tmp_path, monkeypatch):
+    """CaseManager in DB-authority mode; Postgres never dialled.
+
+    `state["audit"]` / `state["sealed"]` are read live by the faked DB readers so
+    a test can stage its trail before calling record_finding.
+    """
+    from sift_core.active_case_context import AuthorityContext, use_active_case_context
+
+    case_dir = tmp_path / "case-w3-db"
+    case_dir.mkdir()
+    (case_dir / "CASE.yaml").write_text("case_id: case-w3-db\nstatus: active\n")
+    monkeypatch.delenv("SIFT_CASE_DIR", raising=False)
+    monkeypatch.delenv("SIFT_AUDIT_DIR", raising=False)
+    # No DSN: the shell-seq DB count + shell forward-write fail closed without a
+    # real connection (the faked DB readers below don't use the DSN).
+    monkeypatch.delenv("SIFT_CONTROL_PLANE_DSN", raising=False)
+    monkeypatch.setattr(
+        "sift_core.investigation_store.resolve_case_metadata",
+        lambda: {"case_id": "case-w3-db", "status": "open"},
+    )
+
+    state: dict = {"audit": [], "sealed": []}
+    store = _CapturingStore()
+    monkeypatch.setattr(cm.CaseManager, "_investigation_store", lambda self: store)
+    monkeypatch.setattr(
+        "sift_core.investigation_store.list_audit_provenance_db",
+        lambda cid: list(state["audit"]),
+    )
+    monkeypatch.setattr(
+        "sift_core.investigation_store.list_sealed_evidence_db",
+        lambda cid: list(state["sealed"]),
+    )
+    monkeypatch.setattr(cm, "_declared_reference_backends", lambda: list(_REF_BACKENDS))
+
+    ctx = AuthorityContext(
+        case_id=CASE_UUID,
+        case_key="case-w3-db",
+        artifact_path=str(case_dir),
+        db_active=True,
+    )
+    with use_active_case_context(ctx):
+        yield CaseManager(), store, state
 
 
 # --------------------------------------------------------------------------- #
-# 2. Clamp DOWN: agent HIGH on shell-only (ceiling LOW) -> final LOW, clamped,
-#    warning emitted, confidence_derivation recorded.
+# 2. HIGH: run_command (engages evidence) + 2 distinct grounding backends.
 # --------------------------------------------------------------------------- #
-class TestClampDown:
-    def test_agent_high_shell_only_clamped_to_low(self, file_manager):
-        mgr, case_dir = file_manager
+class TestHighCeiling:
+    def test_run_command_plus_two_grounding_high_not_clamped(self, db_manager):
+        mgr, store, state = db_manager
+        state["audit"] = [
+            _audit_row("rc-1", tool="run_command", backend="sift-core",
+                       evidence_refs=["ev-uuid-1"]),
+            _audit_row("kb-1", tool="kb_search_knowledge", backend=_KB),
+            _audit_row("wt-1", tool="wintriage_check_process_tree", backend=_WT),
+        ]
+        state["sealed"] = [
+            {"evidence_id": "ev-uuid-1", "path": "evidence/rocba.E01",
+             "sha256": "a" * 64, "status": "sealed"}
+        ]
         res = mgr.record_finding(
-            _shell_finding("HIGH"),
-            supporting_commands=SUPPORTING,
+            _finding("HIGH", audit_ids=["rc-1", "kb-1", "wt-1"]),
             examiner_override="alice",
         )
         assert res["status"] == "STAGED", res
-        f = json.loads((case_dir / "findings.json").read_text())[-1]
-        assert f["confidence"] == "LOW", f["confidence"]
+        f = store.last_finding()
+        assert f["confidence"] == "HIGH"
+        assert f["provenance_grade"] == "REFERENCED"
+        assert f["grounding"]["sources_count"] == 2
+        cd = f["confidence_derivation"]
+        assert cd["basis"]["evidence_engaged"] is True
+        assert cd["basis"]["grounding_count"] == 2
+        assert cd["derived_ceiling"] == "HIGH"
+        assert cd["clamped"] is False
+        # source_evidence resolves the run_command's sealed evidence_ref (display).
+        assert f.get("source_evidence") == "evidence/rocba.E01"
+
+    def test_opensearch_citation_engages_evidence(self, db_manager):
+        """An opensearch_* citation engages Axis A (indices exist only post-ingest)."""
+        mgr, store, state = db_manager
+        state["audit"] = [
+            _audit_row("os-1", tool="opensearch_search", backend="opensearch-mcp"),
+            _audit_row("kb-1", tool="kb_search_knowledge", backend=_KB),
+            _audit_row("wt-1", tool="wintriage_check_system", backend=_WT),
+        ]
+        res = mgr.record_finding(
+            _finding("HIGH", audit_ids=["os-1", "kb-1", "wt-1"]),
+            examiner_override="alice",
+        )
+        assert res["status"] == "STAGED", res
+        f = store.last_finding()
+        assert f["provenance_grade"] == "REFERENCED"
+        assert f["confidence"] == "HIGH"
+        assert f["confidence_derivation"]["basis"]["evidence_engaged"] is True
+
+
+# --------------------------------------------------------------------------- #
+# 3. Clamp DOWN: engaged but grounding 0 -> ceiling LOW; agent HIGH -> LOW.
+# --------------------------------------------------------------------------- #
+class TestClampDown:
+    def test_engaged_zero_grounding_caps_high_to_low(self, db_manager):
+        mgr, store, state = db_manager
+        state["audit"] = [
+            _audit_row("rc-1", tool="run_command", backend="sift-core",
+                       evidence_refs=["ev-uuid-1"]),
+        ]
+        state["sealed"] = [
+            {"evidence_id": "ev-uuid-1", "path": "evidence/x.E01",
+             "sha256": "a" * 64, "status": "sealed"}
+        ]
+        res = mgr.record_finding(
+            _finding("HIGH", audit_ids=["rc-1"]), examiner_override="alice"
+        )
+        assert res["status"] == "STAGED", res
+        f = store.last_finding()
+        assert f["confidence"] == "LOW"
+        assert f["provenance_grade"] == "REFERENCED"
         cd = f["confidence_derivation"]
         assert cd["agent"] == "HIGH"
         assert cd["derived_ceiling"] == "LOW"
-        assert cd["final"] == "LOW"
         assert cd["clamped"] is True
-        assert cd["basis"]["prov_grade"] == "PARTIAL"
-        # Downgrade surfaced through the existing warnings channel.
         assert "confidence capped HIGH->LOW" in res.get("warning", "")
 
-
-# --------------------------------------------------------------------------- #
-# 3. Humility preserved: agent LOW with strong (FULL/2-MCP) provenance stays LOW
-#    (never raised). Use the pure ceiling = HIGH but clamp keeps the weaker LOW.
-# --------------------------------------------------------------------------- #
-class TestHumilityPreserved:
-    def test_agent_low_strong_provenance_stays_low(self, file_manager, monkeypatch):
-        mgr, case_dir = file_manager
-        # Force a strong ceiling regardless of the achievable grade in this harness.
-        monkeypatch.setattr(cm, "_derive_confidence_ceiling", lambda *a, **k: "HIGH")
+    def test_engaged_one_grounding_caps_high_to_medium(self, db_manager):
+        mgr, store, state = db_manager
+        state["audit"] = [
+            _audit_row("rc-1", tool="run_command", backend="sift-core",
+                       evidence_refs=["ev-uuid-1"]),
+            _audit_row("kb-1", tool="kb_search_knowledge", backend=_KB),
+        ]
+        state["sealed"] = [
+            {"evidence_id": "ev-uuid-1", "path": "evidence/x.E01",
+             "sha256": "a" * 64, "status": "sealed"}
+        ]
         res = mgr.record_finding(
-            _shell_finding("LOW"),
-            supporting_commands=SUPPORTING,
+            _finding("HIGH", audit_ids=["rc-1", "kb-1"]), examiner_override="alice"
+        )
+        assert res["status"] == "STAGED", res
+        f = store.last_finding()
+        assert f["confidence"] == "MEDIUM"
+        assert f["confidence_derivation"]["derived_ceiling"] == "MEDIUM"
+        assert f["grounding"]["sources_count"] == 1
+
+    def test_run_command_without_evidence_refs_not_engaged(self, db_manager):
+        """A run_command that did NOT read sealed evidence (no evidence_refs) does
+        not engage Axis A — even cited with grounding it floors at LOW."""
+        mgr, store, state = db_manager
+        state["audit"] = [
+            _audit_row("rc-1", tool="run_command", backend="sift-core"),
+            _audit_row("kb-1", tool="kb_search_knowledge", backend=_KB),
+            _audit_row("wt-1", tool="wintriage_check_system", backend=_WT),
+        ]
+        res = mgr.record_finding(
+            _finding("HIGH", audit_ids=["rc-1", "kb-1", "wt-1"]),
             examiner_override="alice",
         )
         assert res["status"] == "STAGED", res
-        f = json.loads((case_dir / "findings.json").read_text())[-1]
+        f = store.last_finding()
+        assert f["provenance_grade"] == "UNREFERENCED"
+        assert f["confidence_derivation"]["basis"]["evidence_engaged"] is False
+        assert f["confidence"] == "LOW"  # not engaged -> floor
+
+
+# --------------------------------------------------------------------------- #
+# 4. Humility preserved: agent LOW with a HIGH ceiling stays LOW (never raised).
+# --------------------------------------------------------------------------- #
+class TestHumilityPreserved:
+    def test_agent_low_strong_provenance_stays_low(self, db_manager):
+        mgr, store, state = db_manager
+        state["audit"] = [
+            _audit_row("rc-1", tool="run_command", backend="sift-core",
+                       evidence_refs=["ev-uuid-1"]),
+            _audit_row("kb-1", tool="kb_search_knowledge", backend=_KB),
+            _audit_row("wt-1", tool="wintriage_check_system", backend=_WT),
+        ]
+        state["sealed"] = [
+            {"evidence_id": "ev-uuid-1", "path": "evidence/x.E01",
+             "sha256": "a" * 64, "status": "sealed"}
+        ]
+        res = mgr.record_finding(
+            _finding("LOW", audit_ids=["rc-1", "kb-1", "wt-1"]),
+            examiner_override="alice",
+        )
+        assert res["status"] == "STAGED", res
+        f = store.last_finding()
         assert f["confidence"] == "LOW"  # NOT raised to HIGH
         cd = f["confidence_derivation"]
         assert cd["agent"] == "LOW"
         assert cd["derived_ceiling"] == "HIGH"
-        assert cd["final"] == "LOW"
         assert cd["clamped"] is False
         assert "capped" not in res.get("warning", "")
 
 
 # --------------------------------------------------------------------------- #
-# 4. New-findings-only / hash: confidence is IN the hash (the clamped value is
-#    the recorded fact); confidence_derivation is EXCLUDED from the hash.
+# 5. Hard gate (DB form, fail-closed) + analytical floor.
 # --------------------------------------------------------------------------- #
-class TestHashSemantics:
-    def test_confidence_in_hash_derivation_excluded(self, file_manager):
-        mgr, case_dir = file_manager
+class TestHardGate:
+    def test_no_resolved_id_no_commands_rejected(self, db_manager):
+        """A cited id absent from the DB trail AND no supporting_commands -> REJECT."""
+        mgr, store, state = db_manager
+        state["audit"] = []  # nothing resolves
         res = mgr.record_finding(
-            _shell_finding("HIGH"),
-            supporting_commands=SUPPORTING,
+            _finding("HIGH", audit_ids=["forensicrag-deadbeef-20260101-001"]),
+            examiner_override="alice",
+        )
+        assert res["status"] == "REJECTED", res
+        assert "no evidence trail" in res["error"]
+
+    def test_analytical_supporting_command_floors_low(self, db_manager):
+        """No resolved id but a supporting_command survives the gate at LOW."""
+        mgr, store, state = db_manager
+        state["audit"] = []
+        res = mgr.record_finding(
+            _finding("HIGH", audit_ids=[]),
+            supporting_commands=[
+                {"command": "analytical reasoning", "purpose": "triage",
+                 "output_excerpt": "n/a"}
+            ],
             examiner_override="alice",
         )
         assert res["status"] == "STAGED", res
-        f = json.loads((case_dir / "findings.json").read_text())[-1]
-        stored_hash = f["content_hash"]
-
-        # Recompute as-stored -> matches (proves derivation excluded already).
-        assert compute_content_hash(f) == stored_hash
-
-        # Removing confidence_derivation does NOT change the hash (excluded).
-        without_deriv = {k: v for k, v in f.items() if k != "confidence_derivation"}
-        assert compute_content_hash(without_deriv) == stored_hash
-
-        # Mutating confidence_derivation does NOT change the hash (excluded).
-        mutated = dict(f)
-        mutated["confidence_derivation"] = {"agent": "ZZZ", "final": "ZZZ"}
-        assert compute_content_hash(mutated) == stored_hash
-
-        # Changing confidence ITSELF DOES change the hash (included = the fact).
-        changed_conf = dict(f)
-        changed_conf["confidence"] = "MEDIUM"
-        assert compute_content_hash(changed_conf) != stored_hash
-
-        # The persisted confidence is the clamped (final) value.
+        f = store.last_finding()
         assert f["confidence"] == "LOW"
-        assert compute_content_hash(f) == stored_hash  # final value is hashed
+        assert f["provenance_grade"] == "UNREFERENCED"
 
 
 # --------------------------------------------------------------------------- #
-# 5. IOC propagation reflects the CLAMPED confidence (not the agent's HIGH).
+# 6. Hash semantics: confidence IN the hash; grounding + derivation EXCLUDED.
+# --------------------------------------------------------------------------- #
+class TestHashSemantics:
+    def test_confidence_in_hash_grounding_and_derivation_excluded(self, db_manager):
+        mgr, store, state = db_manager
+        state["audit"] = [
+            _audit_row("rc-1", tool="run_command", backend="sift-core",
+                       evidence_refs=["ev-uuid-1"]),
+        ]
+        state["sealed"] = [
+            {"evidence_id": "ev-uuid-1", "path": "evidence/x.E01",
+             "sha256": "a" * 64, "status": "sealed"}
+        ]
+        mgr.record_finding(_finding("HIGH", audit_ids=["rc-1"]),
+                           examiner_override="alice")
+        f = store.last_finding()
+        stored = f["content_hash"]
+
+        assert "grounding" in HASH_EXCLUDE_KEYS
+        assert "confidence_derivation" in HASH_EXCLUDE_KEYS
+        assert "confidence" not in HASH_EXCLUDE_KEYS
+
+        assert compute_content_hash(f) == stored
+        # Mutating grounding / derivation does NOT change the hash.
+        mutated = dict(f)
+        mutated["grounding"] = {"level": "ZZZ", "sources_count": 99}
+        mutated["confidence_derivation"] = {"agent": "ZZZ"}
+        assert compute_content_hash(mutated) == stored
+        # Changing confidence ITSELF DOES change the hash (it is the recorded fact).
+        changed = dict(f)
+        changed["confidence"] = "MEDIUM"
+        assert compute_content_hash(changed) != stored
+
+
+# --------------------------------------------------------------------------- #
+# 7. IOC propagation inherits the CLAMPED confidence.
 # --------------------------------------------------------------------------- #
 class TestIocPropagation:
-    def test_extracted_ioc_inherits_clamped_confidence(self, file_manager):
-        mgr, case_dir = file_manager
-        finding = _shell_finding("HIGH")
+    def test_extracted_ioc_inherits_clamped_low(self, db_manager):
+        mgr, store, state = db_manager
+        state["audit"] = [
+            _audit_row("rc-1", tool="run_command", backend="sift-core",
+                       evidence_refs=["ev-uuid-1"]),
+        ]
+        state["sealed"] = [
+            {"evidence_id": "ev-uuid-1", "path": "evidence/x.E01",
+             "sha256": "a" * 64, "status": "sealed"}
+        ]
+        finding = _finding("HIGH", audit_ids=["rc-1"])
         finding["observation"] = "Beacon to 203.0.113.45 observed"
         finding["iocs"] = ["203.0.113.45"]
-        res = mgr.record_finding(
-            finding, supporting_commands=SUPPORTING, examiner_override="alice"
-        )
+        res = mgr.record_finding(finding, examiner_override="alice")
         assert res["status"] == "STAGED", res
-        iocs = json.loads((case_dir / "iocs.json").read_text())
-        assert iocs, "expected an extracted IOC"
-        ioc = next(i for i in iocs if i.get("value") == "203.0.113.45"
-                   or i.get("indicator") == "203.0.113.45")
-        # Propagated confidence is the clamped LOW, never the self-asserted HIGH.
+        ioc = next(i for i in store.iocs.values() if i.get("value") == "203.0.113.45")
+        # engaged + grounding 0 -> ceiling LOW; the IOC inherits the clamped LOW,
+        # never the self-asserted HIGH.
         assert (ioc.get("confidence") or "").upper() == "LOW", ioc
 
 
 # --------------------------------------------------------------------------- #
-# 6. Examiner delta-edit path is NOT clamped (human reviewer stays authoritative).
+# 8. BE-6: SPECULATIVE purged; legacy SPECULATIVE normalizes to LOW.
 # --------------------------------------------------------------------------- #
-class TestExaminerEditExempt:
-    def test_clamp_lives_only_in_record_finding(self):
-        # The cap-hint helper is invoked exclusively from record_finding (the
-        # agent path). The examiner delta-edit applies field values verbatim and
-        # recomputes the hash without re-deriving a ceiling — confidence is a
-        # delta-editable field that the human controls.
-        from case_dashboard import routes
+class TestSpeculativePurge:
+    def test_normalize_confidence_collapses_speculative(self):
+        assert normalize_confidence("SPECULATIVE") == "LOW"
+        assert normalize_confidence("speculative") == "LOW"
+        assert normalize_confidence("HIGH") == "HIGH"
+        assert normalize_confidence("") == ""
 
-        assert "confidence" in routes._DELTA_EDITABLE_FIELDS
-        edit_src = inspect.getsource(routes)
-        assert "_derive_confidence_ceiling" not in edit_src, (
-            "examiner edit path must not invoke the cap-hint clamp"
-        )
+    def test_conf_rank_treats_legacy_speculative_as_low(self):
+        assert _conf_rank("SPECULATIVE") == _conf_rank("LOW")
+        assert _conf_rank("LOW") > _conf_rank("MEDIUM") > _conf_rank("HIGH")
+
+    def test_conf_ranks_has_no_speculative(self):
+        from sift_core.ioc_helpers import _CONF_RANKS
+
+        assert set(_CONF_RANKS) == {"HIGH", "MEDIUM", "LOW"}
+
+
+# --------------------------------------------------------------------------- #
+# 9. Clamp lives ONLY in record_finding (the agent path).
+# --------------------------------------------------------------------------- #
+class TestClampScope:
+    def test_clamp_only_in_record_finding(self):
         rf_src = inspect.getsource(cm.CaseManager.record_finding)
         assert "_derive_confidence_ceiling" in rf_src
+        # The helper is module-level (a single mapping site), callable standalone.
+        assert _derive_confidence_ceiling(True, 0) == "LOW"

@@ -8,11 +8,6 @@ produce identical content hashes for the same input item.
 
 from __future__ import annotations
 
-import json
-
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -112,6 +107,7 @@ class TestAllCallSitesAgree:
     def _case_manager_hash(self, item: dict) -> str:
         # case_manager uses _compute_content_hash (imported from investigation_store)
         from sift_core import case_manager  # noqa: F401
+
         # The private alias _compute_content_hash is imported inside the module;
         # we test it via its effect: import and call directly from the module.
         from sift_core.investigation_store import compute_content_hash
@@ -119,8 +115,10 @@ class TestAllCallSitesAgree:
 
     def _reporting_hash(self, item: dict) -> str:
         # reporting.py imports compute_content_hash from investigation_store
-        from sift_core.reporting import compute_content_hash  # noqa: F401 (verify import works)
         from sift_core.investigation_store import compute_content_hash as auth
+        from sift_core.reporting import (
+            compute_content_hash,  # noqa: F401 (verify import works)
+        )
         return auth(item)
 
     def test_case_io_matches_authority(self):
@@ -163,8 +161,7 @@ class TestNoRedundantExcludeKeySets:
 
     def test_case_io_has_no_local_exclude_set(self):
         """case_io.HASH_EXCLUDE_KEYS must be the investigation_store object, not a copy."""
-        from sift_core import case_io
-        from sift_core import investigation_store
+        from sift_core import case_io, investigation_store
 
         # If it's a re-export, it's the same frozenset object or at least equal.
         assert case_io.HASH_EXCLUDE_KEYS == investigation_store.HASH_EXCLUDE_KEYS, (
@@ -181,20 +178,22 @@ class TestNoRedundantExcludeKeySets:
             "investigation_store — it is a separate local implementation"
         )
 
-    def test_authority_exclude_set_has_20_keys(self):
-        """The authority set must have exactly 20 keys.
+    def test_authority_exclude_set_has_21_keys(self):
+        """The authority set must have exactly 21 keys.
 
-        Was 19 (wide provenance set); W3 added ``confidence_derivation`` (the
-        cap-hint reasoning metadata — excluded from the hash; ``confidence``
-        itself stays IN the hash as the recorded fact).
+        Was 19 (wide provenance set); W3 added ``confidence_derivation`` (20); the
+        two-axis confidence rebuild added ``grounding`` (21). Both are derived
+        metadata excluded from the hash; ``confidence`` itself stays IN the hash
+        as the recorded fact.
         """
         from sift_core.investigation_store import HASH_EXCLUDE_KEYS
 
-        assert len(HASH_EXCLUDE_KEYS) == 20, (
-            f"Expected 20 keys in HASH_EXCLUDE_KEYS, got {len(HASH_EXCLUDE_KEYS)}: "
+        assert len(HASH_EXCLUDE_KEYS) == 21, (
+            f"Expected 21 keys in HASH_EXCLUDE_KEYS, got {len(HASH_EXCLUDE_KEYS)}: "
             f"{sorted(HASH_EXCLUDE_KEYS)}"
         )
         assert "confidence_derivation" in HASH_EXCLUDE_KEYS
+        assert "grounding" in HASH_EXCLUDE_KEYS
         assert "confidence" not in HASH_EXCLUDE_KEYS
 
     def test_authority_set_contains_wide_provenance_keys(self):

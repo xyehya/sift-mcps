@@ -210,16 +210,20 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
         "mitre_ids, iocs, event_type, event_timestamp, artifact_ref, related_findings, "
         "supersedes (finding id(s) this finding corrects/replaces, for self-correction chains), "
         "affected_account.\n\n"
-        "CONFIDENCE RULES (C3/W3):\n"
-        "  (a) REQUIRED — must be exactly one of HIGH, MEDIUM, LOW, SPECULATIVE. "
+        "CONFIDENCE RULES (two-axis ceiling):\n"
+        "  (a) REQUIRED — must be exactly one of HIGH, MEDIUM, LOW. "
         "Missing or empty confidence is REJECTED.\n"
-        "  (b) AUTO-CLAMPED DOWN to a provenance-derived ceiling (W3 cap-hint): "
-        "final = min(agent_confidence, derived_ceiling). You CANNOT over-claim. "
-        "Only `artifacts[]` entries whose audit_id chains to sealed registered "
-        "evidence raise the provenance grade (and thus the confidence ceiling) "
-        "above LOW; bare `audit_ids` are recorded for traceability but do NOT "
-        "raise confidence. To support a higher confidence, cite structured "
-        "`artifacts[]` (source + audit_id) traceable to sealed evidence.\n\n"
+        "  (b) AUTO-CLAMPED DOWN to a provenance-derived ceiling: "
+        "final = min(agent_confidence, ceiling). You CANNOT over-claim. The ceiling "
+        "is a function of two axes the gateway records (you cannot forge either):\n"
+        "      Axis A evidence_engaged — you cite an audit_id from an opensearch "
+        "query OR a run_command that read sealed evidence (chain of custody).\n"
+        "      Axis B grounding_count — the number of DISTINCT external-knowledge "
+        "backends you cite (kb_/wintriage_/cti_ audit_ids; opensearch and "
+        "run_command are evidence, NOT grounding).\n"
+        "      ceiling = HIGH if engaged and grounding>=2; MEDIUM if engaged and "
+        "grounding>=1; else LOW. A finding with no resolvable audit_id AND no "
+        "supporting_commands is REJECTED.\n\n"
         "EXAMPLE: {\"finding\": {\"title\": \"Suspicious PowerShell Execution\", \"type\": \"finding\", "
         "\"host\": \"WEBSRV01\", \"observation\": \"Encoded PowerShell ran from outlook.exe — EventID 1, "
         "ParentImage: outlook.exe, Image: powershell.exe\", \"interpretation\": \"Likely initial access "
@@ -242,7 +246,7 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
                         "host": {"type": "string", "description": "Affected hostname"},
                         "observation": {"type": "string", "description": "Raw evidence observed"},
                         "interpretation": {"type": "string", "description": "Analytical interpretation of observation"},
-                        "confidence": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW", "SPECULATIVE"], "description": "REQUIRED. Exactly one of HIGH/MEDIUM/LOW/SPECULATIVE. Empty or invalid is REJECTED. Auto-clamped DOWN to a provenance ceiling (W3) — cite strong MCP audit_ids + evidence artifacts to support higher values."},
+                        "confidence": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"], "description": "REQUIRED. Exactly one of HIGH/MEDIUM/LOW. Empty or invalid is REJECTED. Auto-clamped DOWN to a two-axis ceiling: cite an opensearch/run_command evidence audit_id (Axis A) plus distinct knowledge-backend audit_ids (Axis B) to support higher values."},
                         "confidence_justification": {"type": "string", "description": "Why this confidence level is justified"},
                         "audit_ids": {"type": "array", "items": {"type": "string"}},
                         "mitre_ids": {"type": "array", "items": {"type": "string"}},
@@ -1251,14 +1255,18 @@ def _record_finding(args: dict, examiner: str, manager: CaseManager, audit: Audi
     if result.get("status") == "STAGED":
         result["finding_status"] = "DRAFT — requires human approval via the examiner portal"
         result["considerations"] = build_finding_considerations(finding)
-        grounding = manager._score_grounding(finding)
-        if grounding:
-            result["grounding"] = grounding
-        provenance = result.pop("provenance_detail", None)
-        if provenance:
-            result["provenance"] = provenance
-            if provenance["summary"] == "SHELL":
-                result["provenance_guidance"] = "For stronger provenance, re-run analysis through MCP tools."
+        # The two-axis grading (provenance_grade / grounding / confidence_derivation)
+        # is already on `result` from record_finding — the single surface seam. Do
+        # NOT recompute grounding here (a recompute without the shared DB audit
+        # entries would read an empty trail and silently differ from the persisted
+        # value — the exact MCP-fix-surfacing trap).
+        if result.get("confidence_derivation", {}).get("clamped"):
+            result["confidence_guidance"] = (
+                "Confidence was capped to a provenance-derived ceiling. To support a "
+                "higher value, cite an opensearch result or a run_command that read "
+                "sealed evidence (engages chain of custody), plus distinct "
+                "knowledge-backend audit_ids (kb_/wintriage_/cti_) for grounding."
+            )
     if result.get("status") == "VALIDATION_FAILED":
         result["guidance"] = _build_validation_guidance(result.get("errors", []))
     return result

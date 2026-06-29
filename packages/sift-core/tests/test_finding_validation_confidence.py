@@ -83,6 +83,7 @@ def test_low_is_accepted():
     assert result["valid"] is True, result
 
 
-def test_speculative_is_accepted():
+def test_speculative_is_rejected():
+    # SPECULATIVE tier was removed from the discipline; it is no longer valid.
     result = validate(_with_confidence("SPECULATIVE"))
-    assert result["valid"] is True, result
+    assert result["valid"] is False, result

@@ -186,6 +186,10 @@ HASH_EXCLUDE_KEYS: frozenset[str] = frozenset({
     # IN the hash as the recorded fact; this companion field is reasoning-about
     # that fact and would only bloat/destabilize the content hash.
     "confidence_derivation",
+    # Two-axis rebuild: the grounding display block (level/sources_count/...) is
+    # derived metadata, not the recorded fact — EXCLUDED for the same reason as
+    # confidence_derivation. `confidence` stays IN the hash (new-findings-only).
+    "grounding",
 })
 
 # Private alias kept for internal use within this module.
