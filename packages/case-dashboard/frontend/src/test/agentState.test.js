@@ -30,7 +30,8 @@ describe('deriveAgentState', () => {
     expect(a.label).toBe('Awaiting authorization')
     expect(a.glow).toBe(true)
     expect(a.queued).toBe(2)
-    expect(a.metrics.map((m) => m.value)).toEqual([1284402, 47, 3])
+    expect(a.metrics.map((m) => m.key)).toEqual(['findings_proposed'])
+    expect(a.metrics.map((m) => m.value)).toEqual([47])
   })
 
   it('falls back to chain violation → halt', () => {
