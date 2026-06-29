@@ -2286,7 +2286,7 @@ def _apply_delta(case_dir: Path, examiner: str) -> dict:
             # Recompute confidence from non-rejected sources
             active = [r for r in relevant if r.get("status") != "REJECTED"]
             if active:
-                conf_ranks = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "SPECULATIVE": 3}
+                conf_ranks = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
                 best = min(
                     active,
                     key=lambda r: conf_ranks.get(
