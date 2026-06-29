@@ -24,8 +24,9 @@ export function parseHashTab(hash) {
   return null
 }
 
-/** The confidence/severity values the Findings filter query may carry. */
-const HASH_SEVERITIES = new Set(['high', 'medium', 'low', 'speculative'])
+/** The confidence/severity values the Findings filter query may carry.
+   Three canonical tiers only — SPECULATIVE was purged from the model. */
+const HASH_SEVERITIES = new Set(['high', 'medium', 'low'])
 
 /**
  * parseHashFilters — extract the orthogonal Findings filter that rides the hash

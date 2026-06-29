@@ -27,15 +27,19 @@ describe('entity-utils — host + confidence + status', () => {
     expect(displayHost(null)).toBe('UNKNOWN')
   })
 
-  it('bestConfidence picks the highest-weighted label (SPECULATIVE floor)', () => {
+  it('bestConfidence picks the highest-weighted label (LOW floor)', () => {
     expect(bestConfidence([{ confidence: 'LOW' }, { confidence: 'HIGH' }, { confidence: 'MEDIUM' }])).toBe('HIGH')
     expect(bestConfidence([{ confidence: 'LOW' }, { confidence: 'MEDIUM' }])).toBe('MEDIUM')
-    expect(bestConfidence([])).toBe('SPECULATIVE')
-    expect(bestConfidence([{ confidence: 'bogus' }])).toBe('SPECULATIVE')
+    // Floor is LOW now (SPECULATIVE purged): empty / unrecognised / historical
+    // SPECULATIVE lists collapse to the lowest canonical tier, never a 4th tier.
+    expect(bestConfidence([])).toBe('LOW')
+    expect(bestConfidence([{ confidence: 'bogus' }])).toBe('LOW')
+    expect(bestConfidence([{ confidence: 'SPECULATIVE' }])).toBe('LOW')
   })
 
-  it('confClass maps SPECULATIVE → low/steel for backward compat', () => {
+  it('confClass folds historical SPECULATIVE → LOW/steel, muted for unknowns', () => {
     expect(confClass('SPECULATIVE').text).toBe('text-sev-low')
+    expect(confClass('SPECULATIVE').label).toBe('LOW')
     expect(confClass('HIGH').text).toBe('text-sev-high')
     expect(confClass('weird').text).toBe('text-muted-foreground')
   })

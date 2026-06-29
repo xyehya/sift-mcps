@@ -35,9 +35,13 @@ describe('filterFindings', () => {
     expect(filterFindings(F, { filter: 'all', account: '' }).map((f) => f.id)).toEqual(['F-3'])
   })
 
-  it('filters by confidence/severity (the deep-link dimension, case-insensitive)', () => {
+  it('filters by confidence/severity, folding historical SPECULATIVE → LOW', () => {
     expect(filterFindings(F, { filter: 'all', confidence: 'HIGH' }).map((f) => f.id)).toEqual(['F-1'])
-    expect(filterFindings(F, { filter: 'all', confidence: 'speculative' }).map((f) => f.id)).toEqual(['F-4'])
+    // The purged SPECULATIVE tier folds into LOW: the Low filter catches both the
+    // genuine LOW row (F-2) and the historical SPECULATIVE row (F-4).
+    expect(filterFindings(F, { filter: 'all', confidence: 'LOW' }).map((f) => f.id)).toEqual(['F-2', 'F-4'])
+    // A stale `speculative` filter value also folds to LOW (never its own tier).
+    expect(filterFindings(F, { filter: 'all', confidence: 'speculative' }).map((f) => f.id)).toEqual(['F-2', 'F-4'])
     expect(filterFindings(F, { filter: 'all', confidence: null })).toHaveLength(4)
     // composes with status: pending ∩ HIGH
     expect(filterFindings(F, { filter: 'pending', confidence: 'HIGH' }).map((f) => f.id)).toEqual(['F-1'])

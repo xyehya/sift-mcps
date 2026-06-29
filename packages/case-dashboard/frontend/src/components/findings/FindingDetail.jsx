@@ -7,7 +7,7 @@ import {
   normStatus,
   statusMeta,
 } from '@/components/findings/findings-utils'
-import { ConfChip, HashChip, AttChip, MitreChips } from '@/components/findings/FindingDetailChips'
+import { ConfChip, GroundingChip, HashChip, AttChip, MitreChips } from '@/components/findings/FindingDetailChips'
 import { AuditTrailPanel } from '@/components/findings/AuditTrailPanel'
 import { FieldSection } from '@/components/findings/FindingField'
 import { ObservationIcon, InterpretationIcon, CustodyIcon } from '@/components/findings/field-icons'
@@ -122,8 +122,14 @@ export function FindingDetail({
           {/* ATT&CK chip */}
           <AttChip attId={attId} />
 
-          {/* Confidence chip — categorical text (P35-11), no fabricated % */}
-          <ConfChip confidence={eff.confidence} />
+          {/* Confidence chip — categorical text (P35-11), no fabricated %;
+              shows a muted "capped" affordance when the provenance ceiling
+              clamped the agent's self-assessed confidence. */}
+          <ConfChip confidence={eff.confidence} derivation={eff.confidence_derivation} />
+
+          {/* Grounding chip — Axis-B external-knowledge corroboration count.
+              Renders nothing on legacy findings with no grounding block. */}
+          <GroundingChip grounding={eff.grounding} />
 
           {/* Hash chip */}
           <HashChip evId={evId} sha={sha} />

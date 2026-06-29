@@ -24,7 +24,10 @@ describe('parseHashTab tolerates the filter query (backward compatible)', () => 
 describe('parseHashFilters', () => {
   it('extracts a valid severity (UPPERCASE), ignores junk', () => {
     expect(parseHashFilters('#/findings?sev=high')).toEqual({ sev: 'HIGH' })
-    expect(parseHashFilters('#/findings?sev=SPECULATIVE')).toEqual({ sev: 'SPECULATIVE' })
+    expect(parseHashFilters('#/findings?sev=medium')).toEqual({ sev: 'MEDIUM' })
+    expect(parseHashFilters('#/findings?sev=low')).toEqual({ sev: 'LOW' })
+    // SPECULATIVE was purged — it is no longer a valid filter value.
+    expect(parseHashFilters('#/findings?sev=SPECULATIVE')).toEqual({})
     expect(parseHashFilters('#/findings')).toEqual({})
     expect(parseHashFilters('#/findings?sev=banana')).toEqual({})
     expect(parseHashFilters('')).toEqual({})
