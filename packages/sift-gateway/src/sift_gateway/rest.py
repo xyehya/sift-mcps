@@ -18,10 +18,8 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from sift_gateway.auth import (
-    is_agent_principal,
     require_control_plane_operator,
     require_recent_reauth,
-    resolve_examiner,
 )
 from sift_gateway.join import (
     check_join_rate_limit,
@@ -30,7 +28,6 @@ from sift_gateway.join import (
     store_join_code,
     validate_and_consume_join_code,
 )
-from sift_gateway.rate_limit import check_rate_limit
 from sift_gateway.token_gen import generate_gateway_token
 from sift_gateway.backends import (
     SCHEMA_PATH,
@@ -206,152 +203,6 @@ async def list_tools(request: Request) -> JSONResponse:
         )
 
     return JSONResponse({"tools": tools, "count": len(tools)})
-
-
-async def call_tool(request: Request) -> JSONResponse:
-    """POST /api/v1/tools/{tool_name} — call a tool.
-
-    Body:
-        {"arguments": {...}}
-    """
-    # Rate limit check (before any body processing)
-    # Trust X-Forwarded-For only from localhost (proxy on same machine)
-    client_ip = request.client.host if request.client else "unknown"
-    if client_ip in ("127.0.0.1", "::1"):
-        forwarded = request.headers.get("x-forwarded-for", "")
-        if forwarded:
-            client_ip = forwarded.split(",")[0].strip()
-    if not check_rate_limit(client_ip):
-        return JSONResponse(
-            {"error": "Rate limit exceeded"},
-            status_code=429,
-        )
-
-    gateway = request.app.state.gateway
-    tool_name = request.path_params["tool_name"]
-    identity = resolve_examiner(request)
-
-    # BATCH-B1 (F-MVP-3): REST tool execution is operator-only for the MVP.
-    # Agents must use the Gateway MCP surface (/mcp), which is the only path that
-    # enforces the SIFT policy middleware (tool authz + evidence gate + response
-    # guard + rate limit). Reject agent/service tokens here so they cannot use
-    # REST to bypass that MCP policy boundary.
-    if is_agent_principal(request):
-        logger.warning(
-            "Agent/service token blocked from REST tool execution: tool=%s principal=%s",
-            tool_name,
-            identity.get("examiner"),
-        )
-        return JSONResponse(
-            {
-                "error": "REST tool execution is operator-only; agents must use the Gateway MCP surface",
-                "tool": tool_name,
-            },
-            status_code=403,
-        )
-
-    # Read the raw body and enforce actual size limit.
-    # Checking Content-Length alone is insufficient because the header
-    # can be absent or spoofed; reading the body is authoritative.
-    raw_body = await request.body()
-    if len(raw_body) > _MAX_REQUEST_BYTES:
-        return JSONResponse(
-            {"error": f"Request body too large (max {_MAX_REQUEST_BYTES} bytes)"},
-            status_code=413,
-        )
-
-    try:
-        body = json.loads(raw_body)
-    except json.JSONDecodeError:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
-
-    arguments = body.get("arguments", {})
-    if not isinstance(arguments, dict):
-        return JSONResponse({"error": "arguments must be an object"}, status_code=400)
-
-    from sift_core.agent_tools import core_tool_names
-
-    if tool_name not in gateway._tool_map and tool_name not in core_tool_names():
-        return JSONResponse(
-            {"error": f"Tool not found: {tool_name}"},
-            status_code=404,
-        )
-
-    try:
-        try:
-            result = await gateway.call_tool(
-                tool_name,
-                arguments,
-                examiner=identity.get("examiner"),
-                identity=getattr(request.state, "identity", None),
-            )
-        except TypeError as exc:
-            if "identity" not in str(exc):
-                raise
-            result = await gateway.call_tool(
-                tool_name,
-                arguments,
-                examiner=identity.get("examiner"),
-            )
-        # Serialize content items
-        serialized = []
-        for item in result:
-            if hasattr(item, "model_dump"):
-                serialized.append(item.model_dump())
-            elif hasattr(item, "__dict__"):
-                serialized.append(item.__dict__)
-            else:
-                serialized.append(str(item))
-
-        return JSONResponse(
-            {
-                "tool": tool_name,
-                "backend": gateway._tool_map.get(tool_name, "sift-core"),
-                "result": serialized,
-            }
-        )
-    except KeyError as exc:
-        logger.error("Tool call failed — tool not in map: %s — %s", tool_name, exc)
-        return JSONResponse(
-            {"error": f"Tool not found: {tool_name}"},
-            status_code=404,
-        )
-    except (Exception, asyncio.CancelledError, BaseExceptionGroup) as exc:
-        try:
-            from sift_gateway.active_case import ActiveCaseError
-        except Exception:  # pragma: no cover - defensive import fallback
-            ActiveCaseError = ()  # type: ignore[assignment]
-        if isinstance(exc, ActiveCaseError):
-            return JSONResponse(
-                {"error": exc.reason, "tool": tool_name},
-                status_code=exc.http_status,
-            )
-        message = str(exc)
-        if message in {
-            "proxied case-scoped tool does not expose a safe case_id/case_key argument",
-            "client-supplied case_id does not match DB active case",
-            "client-supplied case_key does not match DB active case",
-            "Active case has no artifact path for case-scoped tool",
-        }:
-            return JSONResponse(
-                {"error": message, "tool": tool_name},
-                status_code=403,
-            )
-        logger.error(
-            "Tool call failed: %s — %s: %s",
-            tool_name,
-            type(exc).__name__,
-            exc,
-            exc_info=True,
-        )
-        return JSONResponse(
-            {
-                "error": "Tool call failed",
-                "tool": tool_name,
-                "error_type": type(exc).__name__,
-            },
-            status_code=500,
-        )
 
 
 async def list_backends(request: Request) -> JSONResponse:
@@ -1368,7 +1219,6 @@ def rest_routes() -> list[Route]:
     """Return REST API v1 routes."""
     return [
         Route("/api/v1/tools", list_tools, methods=["GET"]),
-        Route("/api/v1/tools/{tool_name}", call_tool, methods=["POST"]),
         Route("/api/v1/backends", list_backends, methods=["GET"]),
         Route("/api/v1/backends", register_backend, methods=["POST"]),
         Route("/api/v1/backends/{name}", unregister_backend, methods=["DELETE"]),

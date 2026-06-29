@@ -4,14 +4,9 @@ from unittest.mock import MagicMock, patch
 
 from fastmcp import FastMCP
 from fastmcp.server import create_proxy
-from sift_gateway.active_case import ActiveCase, ActiveCaseError
-from sift_gateway.auth import AuthMiddleware
+from sift_gateway.active_case import ActiveCase
 from sift_gateway.identity import Identity
 from sift_gateway.policy_middleware import gateway_policy_middlewares
-from sift_gateway.rest import rest_routes
-from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.testclient import TestClient
 
 
 def _identity() -> Identity:
@@ -172,28 +167,6 @@ async def test_client_supplied_mismatched_case_id_is_rejected(tmp_path):
     assert ran is False
     assert result.is_error
     assert "active_case_mismatch" in result.content[0].text
-
-
-def test_rest_tool_call_maps_active_case_denial_without_exception_detail():
-    class Gateway:
-        _tool_map = {}
-
-        async def call_tool(self, *args, **kwargs):
-            raise ActiveCaseError("active_case_membership_required", http_status=403)
-
-    app = Starlette(
-        routes=rest_routes(),
-        middleware=[Middleware(AuthMiddleware, api_keys={})],
-    )
-    app.state.gateway = Gateway()
-    client = TestClient(app)
-
-    response = client.post("/api/v1/tools/case_info", json={"arguments": {}})
-
-    assert response.status_code == 403
-    payload = response.json()
-    assert payload == {"error": "active_case_membership_required", "tool": "case_info"}
-    assert "detail" not in payload
 
 
 # ---------------------------------------------------------------------------

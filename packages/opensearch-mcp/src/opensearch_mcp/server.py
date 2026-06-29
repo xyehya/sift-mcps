@@ -3436,18 +3436,10 @@ def opensearch_enrich_intel(
         dry_run: Extract and count IOCs without lookup (default True).
         force: Re-enrich even if already enriched (default False).
 
-    Execute mode (dry_run=False) runs asynchronously. The tool returns
-    immediately with `{status: "started", pid, run_id, log_file}`; the
-    worker enriches in the background. For realistic corpora (1k–10k
-    IOCs × rate-limited OpenCTI), enrichment takes 15–60 minutes,
-    which is well past the gateway's 300-second synchronous tool
-    timeout — hence the async shape.
-
-    Progress is surfaced through the existing `opensearch_ingest_status`
-    tool. Enrichment runs appear alongside ingest runs with
-    `artifact_name="intel"` — use that to disambiguate.
-    Poll: opensearch_ingest_status(case_id=<case_id>) — look for
-    checklist entry with artifact=="intel".
+    Execute mode (dry_run=False) requires an intel-lookup backend. None is
+    currently wired in, so execute mode performs no lookups and reports
+    `{status: "unavailable"}` with guidance to register OpenCTI via
+    setup-addon. Dry-run still extracts and counts IOCs.
     """
     from opensearch_mcp.threat_intel import extract_unique_iocs
 
@@ -3485,26 +3477,16 @@ def opensearch_enrich_intel(
             "domains": len(iocs["domain"]),
             "total_iocs": sum(len(v) for v in iocs.values()),
         }
-        # F8: the dry-run extracts IOCs from OpenSearch but does NOT contact the
-        # intel backend, so it cannot tell the caller whether the *actual*
-        # enrichment (dry_run=False) would be able to run.  Without a registered
-        # OpenCTI/intel backend, execute-mode lookups are silently skipped
-        # (threat_intel.batch_lookup → gateway_available() guard), so an agent
-        # that sees a clean "preview" is misled into expecting enrichment to work.
-        # Surface a clear unavailable signal here instead.  This does NOT block
-        # the preview (IOC extraction is still useful) — it annotates it.
-        from opensearch_mcp.gateway import gateway_available
-
-        if not gateway_available():
-            resp["intel_backend"] = "unavailable"
-            resp["intel_backend_message"] = (
-                "intel enrichment unavailable — no OpenCTI/intel backend is "
-                "registered. IOC extraction succeeded, but running enrichment "
-                "(dry_run=False) would index 0 enriched docs. Register OpenCTI "
-                "via setup-addon, then re-run."
-            )
-        else:
-            resp["intel_backend"] = "available"
+        # There is no intel-lookup backend wired into enrichment, so a real run
+        # (dry_run=False) would index 0 enriched docs. IOC extraction is still
+        # useful, so annotate the preview as unavailable rather than blocking it.
+        resp["intel_backend"] = "unavailable"
+        resp["intel_backend_message"] = (
+            "intel enrichment unavailable — no OpenCTI/intel backend is "
+            "registered. IOC extraction succeeded, but running enrichment "
+            "(dry_run=False) would index 0 enriched docs. Register OpenCTI "
+            "via setup-addon, then re-run."
+        )
         aid = audit.log(
             tool="opensearch_enrich_intel",
             params={"case_id": cid, "dry_run": True, "force": force},
@@ -3517,42 +3499,28 @@ def opensearch_enrich_intel(
             resp["audit_id"] = aid
         return resp
 
-    # F8: execute mode — refuse to launch a background enrichment that would
-    # index 0 docs because no intel backend is registered.  Return a clear
-    # unavailable signal instead of a misleading "started".
-    from opensearch_mcp.gateway import gateway_available
-
-    if not gateway_available():
-        return {
-            "status": "unavailable",
-            "case_id": cid,
-            "error": (
-                "intel enrichment unavailable — no OpenCTI/intel backend is "
-                "registered. Register OpenCTI via setup-addon, then re-run."
-            ),
-            "intel_backend": "unavailable",
-            "guidance": (
-                "Run dry_run=True to extract and count IOCs without a backend; "
-                "register OpenCTI to enable lookups."
-            ),
-        }
-
-    resp = _launch_enrich_background(cid, force=force)
-    # BATCH-OS5: add poll guidance so callers know how to track enrichment status.
-    if resp.get("status") == "started":
-        resp["poll_via"] = "opensearch_ingest_status"
-        resp["poll_hint"] = (
-            "Call opensearch_ingest_status() to monitor enrichment progress. "
-            "Look for checklist entry with artifact=='intel'. "
-            "No OpenCTI credentials or OpenSearch passwords are returned by this tool."
-        )
-        resp["enrichment_type"] = "threat_intel"
-        resp["prohibited_operations"] = [
+    # Execute mode — there is no intel-lookup backend wired into enrichment, so a
+    # real run would index 0 enriched docs. Refuse to launch and report
+    # unavailable honestly instead of a misleading "started".
+    return {
+        "status": "unavailable",
+        "case_id": cid,
+        "error": (
+            "intel enrichment unavailable — no OpenCTI/intel backend is "
+            "registered. Register OpenCTI via setup-addon, then re-run."
+        ),
+        "intel_backend": "unavailable",
+        "enrichment_type": "threat_intel",
+        "guidance": (
+            "Run dry_run=True to extract and count IOCs without a backend; "
+            "register OpenCTI to enable lookups."
+        ),
+        "prohibited_operations": [
             "approve_findings",
             "alter_evidence",
             "decide_reports",
-        ]
-    return resp
+        ],
+    }
 
 _MAX_CONCURRENT_INGESTS = 3
 
@@ -3864,141 +3832,6 @@ def _launch_background(
         params={"path": path, "hostname": hostname},
         result_summary=f"Background ingest started (pid={proc.pid})",
         input_files=[path],
-    )
-    if aid:
-        resp["audit_id"] = aid
-    return resp
-
-
-def _launch_enrich_background(case_id: str, force: bool = False) -> dict:
-    """Launch opensearch_enrich_intel as a background subprocess.
-
-    Mirrors `_launch_background` but shaped for enrichment: no path
-    positional, no hostname, no shard-capacity preflight (enrichment
-    doesn't create new indices — it stamps existing docs). Returns
-    immediately with `{status: "started", pid, run_id, log_file}` so
-    the gateway's 300s synchronous tool timeout cannot kill a real
-    enrichment run (UAT 2026-04-23 B79: 5,426-IOC corpus × rate-limited
-    OpenCTI = 15–60 min, 3×–12× the timeout).
-
-    Status records use `artifact_name="intel"` so the sweep + monotonic
-    transition protection in `ingest_status` apply equally; operators
-    watch progress via `opensearch_ingest_status` (intel and ingest runs
-    interleave there — disambiguate on `artifact_name`).
-    """
-    import os as _os
-    import sys as _sys
-    import uuid as _uuid
-    from datetime import datetime, timezone
-
-    from opensearch_mcp.ingest_status import read_active_ingests, write_status
-
-    active_case_id = _get_active_case()
-    if not active_case_id:
-        return {
-            "error": "No active case.",
-            "action": "Create a case in the Examiner Portal first.",
-            "portal_hint": "Open https://<SIFT_VM>:4508/portal/ → New Case → complete intake → seal evidence.",
-        }
-    # An explicit case_id arg (not the active case) is respected: pass
-    # it through to the worker and use it for status-file keying.
-    status_case = case_id or active_case_id
-
-    # Concurrency gate — same cap as ingest. Enrichment is one-per-case
-    # and typically long; running multiple simultaneously would starve
-    # the rate limiter.
-    active = read_active_ingests()
-    running = [i for i in active if i.get("status") in ("running", "starting")]
-    if len(running) >= _MAX_CONCURRENT_INGESTS:
-        return {
-            "error": (
-                f"Too many concurrent ingest/enrich runs ({len(running)} "
-                f"running, max {_MAX_CONCURRENT_INGESTS}). Wait for "
-                "current runs to complete. Use opensearch_ingest_status() to check."
-            ),
-            "running": [{"case_id": r.get("case_id"), "pid": r.get("pid")} for r in running],
-        }
-
-    run_id = str(_uuid.uuid4())
-    env = _os.environ.copy()
-    env["SIFT_INGEST_RUN_ID"] = run_id
-    # Propagate the Gateway-injected authoritative case dir into the ingest
-    # worker child process. This is transient request-scoped propagation of the
-    # Gateway's DB authority into the child env, not a persistent/authoritative
-    # file resolution source. No-op for standalone CLI (env already carries it).
-    _acd_child = active_case_dir()
-    if _acd_child:
-        env["SIFT_CASE_DIR"] = _acd_child
-
-    cmd = [
-        _sys.executable,
-        "-m",
-        "opensearch_mcp.ingest_cli",
-        "enrich-intel",
-        "--case",
-        status_case,
-    ]
-    if force:
-        cmd.append("--force")
-
-    from opensearch_mcp.paths import sift_dir
-
-    log_dir = sift_dir() / "ingest-logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f"{run_id}.log"
-    log_fh = open(log_file, "w")
-
-    # Pre-spawn placeholder status so the TOCTOU window is closed.
-    started_ts = datetime.now(timezone.utc).isoformat()
-    write_status(
-        case_id=status_case,
-        pid=0,
-        run_id=run_id,
-        status="starting",
-        hosts=[{"hostname": "(enrich)", "artifacts": [{"name": "intel", "status": "starting"}]}],
-        totals={"indexed": 0, "artifacts_total": 1, "artifacts_complete": 0},
-        started=started_ts,
-        log_file=str(log_file),
-    )
-
-    proc = _spawn_ingest(cmd, env, log_fh, run_id)
-    log_fh.close()
-    # Remove orphaned PID-0 placeholder.
-    _safe_case = status_case.replace("/", "_").replace("\\", "_").replace("..", "_")
-    _pid0 = sift_dir() / "ingest-status" / f"{_safe_case}-0.json"
-    _pid0.unlink(missing_ok=True)
-    write_status(
-        case_id=status_case,
-        pid=proc.pid,
-        run_id=run_id,
-        status="running",
-        hosts=[{"hostname": "(enrich)", "artifacts": [{"name": "intel", "status": "running"}]}],
-        totals={"indexed": 0, "artifacts_total": 1, "artifacts_complete": 0},
-        started=started_ts,
-        log_file=str(log_file),
-    )
-
-    # F-MVP-2: never emit the absolute background-run log path to the agent
-    # (see _launch_background for the same handling). The absolute path is still
-    # persisted to the internal status file for the operator/worker.
-    _log_ref = _case_relative_ref(log_file)
-    if not _log_ref or _log_ref.startswith("/"):
-        _log_ref = f"ingest-logs/{run_id}.log"
-    resp = {
-        "status": "started",
-        "pid": proc.pid,
-        "run_id": run_id,
-        "case_id": status_case,
-        "log_file": _log_ref,
-        "message": (
-            "Intel enrichment started. Call opensearch_ingest_status() to monitor "
-            f"progress (artifact_name='intel', run_id={run_id})."
-        ),
-    }
-    aid = audit.log(
-        tool="opensearch_enrich_intel",
-        params={"case_id": status_case, "force": force},
-        result_summary=f"Background enrichment started (pid={proc.pid})",
     )
     if aid:
         resp["audit_id"] = aid

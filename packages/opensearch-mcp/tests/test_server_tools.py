@@ -955,12 +955,9 @@ class TestIdxIngest:
 # ---------------------------------------------------------------------------
 
 
-class TestEnrichIntelAsync:
-    """B79: opensearch_enrich_intel with dry_run=False must return immediately
-    with {status: started, pid, run_id, ...} so the gateway's 300s
-    synchronous tool timeout cannot kill a real enrichment run. The
-    worker runs under systemd-run scope and writes progress to the
-    shared ingest-status dir with artifact_name='intel'."""
+class TestEnrichIntelDryRun:
+    """opensearch_enrich_intel dry_run=True keeps the synchronous preview path so
+    operators can size the IOC corpus before deciding to run enrichment."""
 
     def test_dry_run_stays_synchronous(self, mock_client, monkeypatch):
         """dry_run=True must keep the synchronous preview path — operators
@@ -980,114 +977,6 @@ class TestEnrichIntelAsync:
         assert resp["hashes"] == 3
         assert resp["domains"] == 1
         assert resp["total_iocs"] == 6
-
-    def test_execute_launches_background(self, mock_client, monkeypatch, tmp_path):
-        """dry_run=False must return {status: started, pid, run_id}
-        immediately — does NOT block on enrich_case."""
-        from opensearch_mcp.server import opensearch_enrich_intel
-
-        monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
-
-        fake_proc = MagicMock()
-        fake_proc.pid = 54321
-        # Run the background helper against mocked _spawn_ingest and
-        # write_status so nothing real forks.
-        with (
-            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
-            patch("opensearch_mcp.server._spawn_ingest", return_value=fake_proc),
-            patch("opensearch_mcp.ingest_status.write_status"),
-            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
-            patch("opensearch_mcp.paths.sift_dir", return_value=tmp_path),
-        ):
-            resp = opensearch_enrich_intel(dry_run=False)
-
-        assert resp["status"] == "started"
-        assert resp["pid"] == 54321
-        assert "run_id" in resp
-        assert resp["case_id"] == "TEST-CASE"
-        # Message points operators at the right status tool.
-        assert "opensearch_ingest_status" in resp["message"]
-        assert "intel" in resp["message"]
-        # F-MVP-2: no absolute log path leaks to the agent — neither in the
-        # structured log_file field nor embedded in the message string.
-        assert not resp["log_file"].startswith("/")
-        assert resp["log_file"] == f"ingest-logs/{resp['run_id']}.log"
-        assert "Log file:" not in resp["message"]
-        assert str(tmp_path) not in resp["message"]
-        assert str(tmp_path) not in resp["log_file"]
-
-    def test_execute_respects_explicit_case_arg(self, mock_client, monkeypatch, tmp_path):
-        """Explicit case_id must be passed to the worker, not silently
-        overridden by the active-case."""
-        from opensearch_mcp.server import opensearch_enrich_intel
-
-        monkeypatch.setattr(srv, "_get_active_case", lambda: "ACTIVE-CASE")
-
-        fake_proc = MagicMock()
-        fake_proc.pid = 11111
-        captured_cmd = []
-
-        def _capture_spawn(cmd, env, stdout, run_id):
-            captured_cmd.extend(cmd)
-            return fake_proc
-
-        with (
-            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
-            patch("opensearch_mcp.server._spawn_ingest", side_effect=_capture_spawn),
-            patch("opensearch_mcp.ingest_status.write_status"),
-            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
-            patch("opensearch_mcp.paths.sift_dir", return_value=tmp_path),
-        ):
-            resp = opensearch_enrich_intel(case_id="OVERRIDE-CASE", dry_run=False)
-
-        assert resp["case_id"] == "OVERRIDE-CASE"
-        # Worker cmd includes --case OVERRIDE-CASE, not ACTIVE-CASE.
-        assert "OVERRIDE-CASE" in captured_cmd
-        assert "ACTIVE-CASE" not in captured_cmd
-
-    def test_execute_force_flag_propagated(self, mock_client, monkeypatch, tmp_path):
-        """--force flag must reach the worker command line."""
-        from opensearch_mcp.server import opensearch_enrich_intel
-
-        monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
-
-        fake_proc = MagicMock()
-        fake_proc.pid = 22222
-        captured_cmd = []
-
-        def _capture_spawn(cmd, env, stdout, run_id):
-            captured_cmd.extend(cmd)
-            return fake_proc
-
-        with (
-            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
-            patch("opensearch_mcp.server._spawn_ingest", side_effect=_capture_spawn),
-            patch("opensearch_mcp.ingest_status.write_status"),
-            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]),
-            patch("opensearch_mcp.paths.sift_dir", return_value=tmp_path),
-        ):
-            opensearch_enrich_intel(dry_run=False, force=True)
-
-        assert "--force" in captured_cmd
-
-    def test_execute_concurrency_gate_blocks_at_cap(self, mock_client, monkeypatch):
-        """Enrichment must respect the same concurrency cap as ingest —
-        running 5+ long enrichments simultaneously would starve the
-        OpenCTI rate limiter and is a stability hazard."""
-        from opensearch_mcp.server import _MAX_CONCURRENT_INGESTS, opensearch_enrich_intel
-
-        monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
-        full_roster = [
-            {"status": "running", "case_id": f"C{i}", "pid": 1000 + i}
-            for i in range(_MAX_CONCURRENT_INGESTS)
-        ]
-        with (
-            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
-            patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=full_roster),
-        ):
-            resp = opensearch_enrich_intel(dry_run=False)
-        assert "error" in resp
-        assert "Too many concurrent" in resp["error"]
 
 
 class TestEnrichIntelBackendUnavailable:
@@ -1112,21 +1001,6 @@ class TestEnrichIntelBackendUnavailable:
         assert resp["intel_backend"] == "unavailable"
         assert "unavailable" in resp["intel_backend_message"].lower()
         assert "setup-addon" in resp["intel_backend_message"]
-
-    def test_dry_run_flags_available_backend(self, mock_client, monkeypatch):
-        """When a backend is present, dry_run marks intel_backend available."""
-        from opensearch_mcp.server import opensearch_enrich_intel
-
-        monkeypatch.setattr(srv, "_get_active_case", lambda: "TEST-CASE")
-        fake_iocs = {"ip": {"1.2.3.4"}, "hash": set(), "domain": set()}
-        with (
-            patch("opensearch_mcp.gateway.gateway_available", return_value=True),
-            patch("opensearch_mcp.threat_intel.extract_unique_iocs", return_value=fake_iocs),
-        ):
-            resp = opensearch_enrich_intel(dry_run=True)
-        assert resp["status"] == "preview"
-        assert resp["intel_backend"] == "available"
-        assert "intel_backend_message" not in resp
 
     def test_execute_returns_unavailable_not_started(self, mock_client, monkeypatch):
         """dry_run=False with no backend must NOT launch — returns unavailable."""

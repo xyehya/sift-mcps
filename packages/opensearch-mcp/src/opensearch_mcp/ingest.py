@@ -204,7 +204,7 @@ def _write_ingest_manifest(
         logging.getLogger(__name__).debug("Ingest manifest write skipped: %s", e)
 
 
-# Artifacts handled by Plaso/wintools (not EZ tools on Linux)
+# Artifacts handled by Plaso (not EZ tools on Linux)
 _PLASO_ARTIFACTS = {"prefetch", "srum"}
 
 # Artifacts with custom parsers (not EZ tools, not Plaso)
@@ -1048,7 +1048,7 @@ def _ingest_plaso_artifact(
     run_id: str = "",
     host_dict=None,
 ) -> None:
-    """Ingest a prefetch or SRUM artifact (wintools-first, Plaso fallback)."""
+    """Ingest a prefetch or SRUM artifact via Plaso."""
     from opensearch_mcp.parse_prefetch import parse_prefetch
     from opensearch_mcp.parse_srum import parse_srum
 

@@ -3,8 +3,6 @@
 Drivers: docs/migration/task-batches.md BATCH-B1; Session-Notes F-MVP-2 / F-MVP-3.
 
 Acceptance covered here:
-  - Agent tokens cannot use REST to bypass MCP policy (REST tool exec is
-    operator-only; agents use the MCP surface). [F-MVP-3]
   - case_info / evidence_info / finding views / run-command-style responses
     expose no absolute case/evidence/mount paths over the agent MCP path; the
     agent keeps IDs, names, RELATIVE display paths, size, hash, seal status. [F-MVP-2]
@@ -16,133 +14,18 @@ Acceptance covered here:
 from __future__ import annotations
 
 import json
-import secrets
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastmcp import FastMCP
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
-from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.testclient import TestClient
-
 from sift_core.evidence_chain import ChainStatus
-from sift_gateway.auth import AuthMiddleware
 from sift_gateway.policy_middleware import gateway_policy_middlewares
 from sift_gateway.response_guard import (
     _redact_paths_in_text,
     guard_tool_result,
     redact_paths_structured,
 )
-from sift_gateway.rest import rest_routes
-from sift_gateway.server import Gateway
-
-
-# ---------------------------------------------------------------------------
-# F-MVP-3: REST tool execution is operator-only
-# ---------------------------------------------------------------------------
-
-_EXAMINER_KEY = "sift_gw_" + secrets.token_hex(24)
-_AGENT_KEY = "sift_svc_" + secrets.token_hex(24)
-_SERVICE_KEY = "sift_svc_" + secrets.token_hex(24)
-
-# SEC-6: identities resolve through the Supabase resolver (the sole credential
-# authority) — the legacy api-key fallback that used to authenticate these
-# tokens has been removed.
-from sift_gateway.identity import Identity  # noqa: E402
-from sift_gateway.supabase_auth import SupabaseAuthConfig  # noqa: E402
-
-_IDENTITIES = {
-    _EXAMINER_KEY: Identity("alice", "user", "ex", None, None, "examiner", None, "rest"),
-    _AGENT_KEY: Identity("hermes", "agent", "ag", "hermes", None, "agent", None, "rest"),
-    _SERVICE_KEY: Identity("svc", "service", "sv", None, None, "service", None, "rest"),
-}
-
-
-class _FakeResolver:
-    async def resolve(self, token, *, source_ip=None, auth_surface="rest"):
-        from dataclasses import replace
-
-        from sift_gateway.supabase_auth import InvalidTokenError
-
-        ident = _IDENTITIES.get(token)
-        if ident is None:
-            raise InvalidTokenError("unknown token")
-        return replace(ident, source_ip=source_ip, auth_surface=auth_surface)
-
-
-def _rest_app():
-    from sift_gateway.server import ToolSurfaceSnapshot
-    gateway = Gateway({"backends": {}, "execute": {"security": {"denied_binaries": ["env"]}}})
-    # D7: inject test state via the atomic snapshot rather than direct attribute.
-    gateway._tool_surface = ToolSurfaceSnapshot(
-        tool_map={"addon_echo": "addon"}, tool_cache={}, manifest_meta={}
-    )
-
-    async def call_tool(name, arguments, examiner=None, identity=None):
-        return [TextContent(type="text", text=f"ran {name} for {examiner}")]
-
-    gateway.call_tool = call_tool
-    app = Starlette(
-        routes=rest_routes(),
-        middleware=[Middleware(
-            AuthMiddleware,
-            resolver=_FakeResolver(),
-            auth_config=SupabaseAuthConfig(
-                enabled=True, url="http://supabase.local", anon_key="anon"
-            ),
-        )],
-    )
-    app.state.gateway = gateway
-    return app
-
-
-@pytest.fixture()
-def rest_client():
-    return TestClient(_rest_app(), raise_server_exceptions=True)
-
-
-def test_agent_token_blocked_from_rest_tool_execution(rest_client):
-    resp = rest_client.post(
-        "/api/v1/tools/addon_echo",
-        json={"arguments": {}},
-        headers={"Authorization": f"Bearer {_AGENT_KEY}"},
-    )
-    assert resp.status_code == 403
-    assert "operator-only" in resp.json()["error"]
-
-
-def test_service_token_blocked_from_rest_tool_execution(rest_client):
-    resp = rest_client.post(
-        "/api/v1/tools/addon_echo",
-        json={"arguments": {}},
-        headers={"Authorization": f"Bearer {_SERVICE_KEY}"},
-    )
-    assert resp.status_code == 403
-
-
-def test_operator_token_allowed_on_rest_tool_execution(rest_client):
-    resp = rest_client.post(
-        "/api/v1/tools/addon_echo",
-        json={"arguments": {}},
-        headers={"Authorization": f"Bearer {_EXAMINER_KEY}"},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["tool"] == "addon_echo"
-
-
-def test_agent_rest_block_does_not_invoke_tool(rest_client):
-    """The 403 must fire before tool dispatch (no policy-less execution)."""
-    resp = rest_client.post(
-        "/api/v1/tools/addon_echo",
-        json={"arguments": {"command": "ls"}},
-        headers={"Authorization": f"Bearer {_AGENT_KEY}"},
-    )
-    assert resp.status_code == 403
-    # The operator-only error body never contains tool output.
-    assert "ran addon_echo" not in json.dumps(resp.json())
-
 
 # ---------------------------------------------------------------------------
 # F-MVP-2: absolute-path redaction unit behaviour

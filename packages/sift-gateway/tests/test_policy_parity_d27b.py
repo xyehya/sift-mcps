@@ -11,17 +11,11 @@ from fastmcp import FastMCP
 from fastmcp.server import create_proxy
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
-from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.testclient import TestClient
-
 from sift_core.evidence_chain import ChainStatus
-from sift_gateway.auth import AuthMiddleware
 from sift_gateway.mcp_endpoint import SiftTokenVerifier
 from sift_gateway.mcp_server import _validate_egress_url
 from sift_gateway.policy_middleware import gateway_policy_middlewares
 from sift_gateway.response_guard import guard_tool_result
-from sift_gateway.rest import rest_routes
 from sift_gateway.server import Gateway
 from sift_gateway.token_gen import token_fingerprint
 from sift_gateway.token_registry import RegistryToken
@@ -172,32 +166,6 @@ def test_guard_tool_result_redacts_and_caps_structured_content(tmp_path):
     assert findings
     assert cap_events
     assert "_sift_output_capped" in guarded.structured_content
-
-
-def test_rest_tool_path_keeps_unredacted_examiner_output():
-    from sift_gateway.server import ToolSurfaceSnapshot
-    gateway = Gateway({"backends": {}, **_execute_security()})
-    secret = "AKIAIOSFODNN7EXAMPLE"
-    # D7: inject test state via the atomic snapshot rather than direct attribute.
-    gateway._tool_surface = ToolSurfaceSnapshot(
-        tool_map={"addon_leak": "addon"}, tool_cache={}, manifest_meta={}
-    )
-
-    async def call_tool(name, arguments, examiner=None):
-        return [TextContent(type="text", text=f"examiner sees {secret}")]
-
-    gateway.call_tool = call_tool
-    app = Starlette(
-        routes=rest_routes(),
-        middleware=[Middleware(AuthMiddleware, api_keys={})],
-    )
-    app.state.gateway = gateway
-    client = TestClient(app)
-
-    response = client.post("/api/v1/tools/addon_leak", json={"arguments": {}})
-
-    assert response.status_code == 200
-    assert secret in json.dumps(response.json())
 
 
 def test_gateway_app_exposes_only_aggregate_mcp_route():

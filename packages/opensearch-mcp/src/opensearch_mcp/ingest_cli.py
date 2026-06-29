@@ -508,27 +508,18 @@ def _resolve_case_id(args_case: str | None) -> str:
 
 
 def _ensure_case_active(case_id: str) -> None:
-    """Ensure the case is active and SMB share is configured.
+    """Ensure the case is active and the SMB share is repointed.
 
-    Tries gateway case_activate first (handles SMB + wintools).
-    Falls back to setting active_case_file + inline SMB repoint.
+    Writes the active case to ``~/.sift/active_case`` and repoints the Samba
+    [cases] share to the case directory (no-op when Samba is not configured).
     """
-    active_case_file = sift_dir() / "active_case"  # Legacy CLI fallback
+    active_case_file = sift_dir() / "active_case"
     if active_case_file.exists():
         current = Path(active_case_file.read_text().strip()).name
         if current == case_id:
             return
 
-    # Try gateway (handles SMB + wintools notification)
-    try:
-        from opensearch_mcp.gateway import call_tool
-
-        call_tool("case_activate", {"case_id": case_id})
-        return
-    except Exception as exc:
-        logger.debug("Gateway case_activate failed, using fallback: %s", exc)
-
-    # Fallback: set active_case_file + try inline SMB repoint
+    # Set active_case_file + try inline SMB repoint
     case_path = sift_dir() / "cases" / case_id
     if case_path.is_dir():
         active_case_file.parent.mkdir(parents=True, exist_ok=True)
@@ -2154,9 +2145,8 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
     """Enrich indexed data with OpenCTI threat intel.
 
     Progress is written to the shared `ingest-status` dir with
-    `artifact_name="intel"` so the async MCP entry point
-    (`opensearch_enrich_intel` via `_launch_enrich_background`) can surface
-    it through `opensearch_ingest_status`.
+    `artifact_name="intel"` so it can be surfaced through
+    `opensearch_ingest_status`.
     """
     case_id = _resolve_case_id(getattr(args, "case", None))
     force = getattr(args, "force", False)

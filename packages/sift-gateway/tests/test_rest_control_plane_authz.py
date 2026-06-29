@@ -75,12 +75,7 @@ _MUTATION_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 #   /api/v1/setup/join         — public, one-time-code-authenticated join
 #                                exchange (hardening is SEC-3/019, not operator
 #                                authority); reachable without a bearer token.
-#   /api/v1/tools/{tool_name}  — the REST tool-EXECUTION surface, governed by
-#                                `is_agent_principal` (agents/service blocked).
-#                                That is the SEC-5 policy boundary; readonly
-#                                tool-exec is a separate decision, not SEC-1's.
-#                                Its agent-block is asserted explicitly below.
-_EXEMPT_PATHS = {"/api/v1/setup/join", "/api/v1/tools/{tool_name}"}
+_EXEMPT_PATHS = {"/api/v1/setup/join"}
 
 _PATH_PARAM_RE = re.compile(r"\{[^}]+\}")
 
@@ -153,15 +148,6 @@ def test_every_mutation_route_allows_examiner(client, method, path):
     """An examiner passes the authority gate (a non-403 status from the handler)."""
     resp = client.request(method, path, headers={"Authorization": f"Bearer {_EXAMINER_KEY}"}, json={})
     assert resp.status_code != 403, f"{method} {path} wrongly 403'd an examiner"
-
-
-def test_tool_exec_route_still_blocks_agents(client):
-    """The tool-exec surface (SEC-5, excluded from the control-plane sweep) must
-    still deny agent/service principals via is_agent_principal."""
-    resp = client.post(
-        "/api/v1/tools/dummy", headers={"Authorization": f"Bearer {_AGENT_KEY}"}, json={}
-    )
-    assert resp.status_code == 403
 
 
 def test_public_join_route_is_not_operator_gated(client):

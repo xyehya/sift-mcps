@@ -321,7 +321,9 @@ def test_enrich_intel_has_no_inprocess_env_gate(monkeypatch, tmp_path):
     assert result.get("status") != "scope_denied", (
         f"in-process env gate must be gone (gateway is authority), got: {result}"
     )
-    assert result.get("status") == "started", f"Expected started, got: {result}"
+    # No intel-lookup backend is wired in, so execute mode honestly reports
+    # unavailable rather than scope_denied.
+    assert result.get("status") == "unavailable", f"Expected unavailable, got: {result}"
 
 
 def test_enrich_intel_dry_run_allowed_without_scope(monkeypatch):
@@ -344,40 +346,6 @@ def test_enrich_intel_dry_run_allowed_without_scope(monkeypatch):
     # Dry run must succeed even without scope.
     assert result.get("status") == "preview", f"Expected preview, got: {result}"
     assert "total_iocs" in result
-
-
-def test_enrich_intel_execute_returns_pollable_status(monkeypatch, tmp_path):
-    """opensearch_enrich_intel(dry_run=False) must return poll_via and run_id
-    so callers can track enrichment status via opensearch_ingest_status."""
-    from opensearch_mcp import server
-
-    # Allow all scopes.
-    monkeypatch.delenv("SIFT_ENRICHMENT_SCOPE", raising=False)
-    monkeypatch.setattr(server, "_get_active_case", lambda: "INC-POLL")
-    monkeypatch.setenv("SIFT_CASE_DIR", str(tmp_path / "INC-POLL"))
-    (tmp_path / "INC-POLL").mkdir(parents=True)
-
-    with patch("opensearch_mcp.gateway.gateway_available", return_value=True), \
-         patch("opensearch_mcp.server._spawn_ingest") as mock_spawn, \
-         patch("opensearch_mcp.ingest_status.write_status"), \
-         patch("opensearch_mcp.ingest_status.read_active_ingests", return_value=[]):
-        mock_proc = MagicMock()
-        mock_proc.pid = 9999
-        mock_spawn.return_value = mock_proc
-        result = server.opensearch_enrich_intel(case_id="INC-POLL", dry_run=False)
-
-    assert result.get("status") == "started", f"Expected started, got: {result}"
-    assert "run_id" in result, "run_id must be present for polling"
-    assert result.get("poll_via") == "opensearch_ingest_status", (
-        "poll_via must point to the status tool"
-    )
-    assert "poll_hint" in result
-    assert result.get("enrichment_type") == "threat_intel"
-    # prohibited_operations must be present.
-    prohibited = result.get("prohibited_operations", [])
-    assert "approve_findings" in prohibited
-    assert "alter_evidence" in prohibited
-    assert "decide_reports" in prohibited
 
 
 def test_enrich_intel_response_leaks_no_secrets(monkeypatch, tmp_path):
