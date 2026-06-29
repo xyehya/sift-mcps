@@ -13,23 +13,30 @@ export function displayHost(h) {
 }
 
 // ── Confidence (forensic severity dimension) ─────────────────────────────
-// Severity is High/Med/Low (jade/amber/crimson/steel). The dropped
-// SPECULATIVE tier folds into LOW/steel for backward compat with old data.
-export const CONF_WEIGHTS = { HIGH: 4, MEDIUM: 3, LOW: 2, SPECULATIVE: 1 }
+// Severity is High/Med/Low (crimson/amber/steel). The SPECULATIVE tier was
+// PURGED — it is no key in any map below; a historical row carrying that label
+// folds to LOW/steel at read time (normConfidence) for backward compat.
+export const CONF_WEIGHTS = { HIGH: 4, MEDIUM: 3, LOW: 2 }
 
 /** Static token classes per confidence (→ --sev-* tokens). JIT-safe literals. */
 export const CONF_CLASS = {
   HIGH: { label: 'HIGH', text: 'text-sev-high', tint: 'bg-sev-high/10', ring: 'border-sev-high/30' },
   MEDIUM: { label: 'MEDIUM', text: 'text-sev-med', tint: 'bg-sev-med/10', ring: 'border-sev-med/30' },
   LOW: { label: 'LOW', text: 'text-sev-low', tint: 'bg-sev-low/10', ring: 'border-sev-low/30' },
-  // Backward-compat: historical SPECULATIVE renders as Low/steel.
-  SPECULATIVE: { label: 'LOW', text: 'text-sev-low', tint: 'bg-sev-low/10', ring: 'border-sev-low/30' },
 }
 
-/** Resolve the class bundle for a confidence label (muted fallback). */
+/** Read-time fold of a confidence label to a canonical tier — the purged
+   SPECULATIVE → LOW (historical data); other values pass through uppercased. */
+function normConfidence(confidence) {
+  const key = (confidence ?? '').toUpperCase()
+  return key === 'SPECULATIVE' ? 'LOW' : key
+}
+
+/** Resolve the class bundle for a confidence label (muted fallback). A
+   historical 'SPECULATIVE' folds to the LOW bundle (normConfidence). */
 export function confClass(confidence) {
   return (
-    CONF_CLASS[(confidence ?? '').toUpperCase()] ?? {
+    CONF_CLASS[normConfidence(confidence)] ?? {
       label: (confidence || 'UNKNOWN').toUpperCase(),
       text: 'text-muted-foreground',
       tint: 'bg-muted/40',
@@ -39,12 +46,14 @@ export function confClass(confidence) {
 }
 
 /**
- * Highest-weighted confidence across a list of findings (legacy parity:
- * starts at SPECULATIVE, picks the max-weight label seen). Returns the raw
- * label as it appeared in the data.
+ * Highest-weighted confidence across a list of findings. Floors at LOW (the
+ * lowest canonical tier) when the list is empty or carries only unrecognised /
+ * historical-SPECULATIVE labels — those fold into LOW rather than surfacing the
+ * purged tier (a SPECULATIVE row weighs 0 and never wins). Returns the raw
+ * label as it appeared in the data otherwise.
  */
 export function bestConfidence(list) {
-  let best = 'SPECULATIVE'
+  let best = 'LOW'
   let maxWeight = 0
   for (const f of list ?? []) {
     const conf = (f.confidence ?? '').toUpperCase()

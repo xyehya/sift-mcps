@@ -13,7 +13,8 @@ describe('confidenceScore', () => {
     expect(confidenceScore({ confidence: 'HIGH' })).toBe(92)
     expect(confidenceScore({ confidence: 'MEDIUM' })).toBe(74)
     expect(confidenceScore({ confidence: 'LOW' })).toBe(48)
-    expect(confidenceScore({ confidence: 'SPECULATIVE' })).toBe(30)
+    // SPECULATIVE was purged; a historical row folds to LOW's score (not its own).
+    expect(confidenceScore({ confidence: 'SPECULATIVE' })).toBe(48)
   })
 
   it('returns null when confidence is unknown', () => {

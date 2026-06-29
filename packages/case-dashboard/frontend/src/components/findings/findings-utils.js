@@ -11,25 +11,35 @@
 
 /**
  * Confidence == the forensic severity dimension. Order = high → low.
- * "Speculative" was dropped in P0 model-shift (handoff §3: High/Med/Low only).
- * The SPECULATIVE fallback entry is kept in CONF_CLASS for backward compat with
- * any existing data that carries the label — it renders with the low-steel tone.
+ * Three canonical tiers only — High / Medium / Low (P0 model-shift, handoff §3).
+ * The SPECULATIVE tier was PURGED: it is no longer a key in any map below. A
+ * historical row still carrying that label is normalised to LOW at read time
+ * (normConfidence) so it renders as Low/steel rather than blank/Unknown.
  */
 export const CONF_ORDER = ['HIGH', 'MEDIUM', 'LOW']
+
+/**
+ * Read-time fold of a confidence label to a canonical tier. The only fold is the
+ * purged SPECULATIVE → LOW (backward compat with historical findings); every
+ * other value is just uppercased and passed through for the caller's own
+ * fallback handling. Single chokepoint so the fold stays consistent.
+ */
+function normConfidence(confidence) {
+  const key = (confidence ?? '').toUpperCase()
+  return key === 'SPECULATIVE' ? 'LOW' : key
+}
 
 /** Static token classes per confidence (→ --sev-* tokens). */
 export const CONF_CLASS = {
   HIGH: { label: 'High', text: 'text-sev-high', bg: 'bg-sev-high', tint: 'bg-sev-high/10', ring: 'border-sev-high/40' },
   MEDIUM: { label: 'Medium', text: 'text-sev-med', bg: 'bg-sev-med', tint: 'bg-sev-med/10', ring: 'border-sev-med/40' },
   LOW: { label: 'Low', text: 'text-sev-low', bg: 'bg-sev-low', tint: 'bg-sev-low/10', ring: 'border-sev-low/40' },
-  // Backward-compat fallback — renders as Low/steel so the UI doesn't break on
-  // historical data; the examiner edit select no longer exposes this tier.
-  SPECULATIVE: { label: 'Speculative', text: 'text-sev-low', bg: 'bg-sev-low', tint: 'bg-sev-low/10', ring: 'border-sev-low/40' },
 }
 
-/** Resolve the class bundle for a finding's confidence (null when unknown). */
+/** Resolve the class bundle for a finding's confidence (null when unknown).
+   A historical 'SPECULATIVE' folds to the LOW bundle (normConfidence). */
 export function confClass(confidence) {
-  return CONF_CLASS[(confidence ?? '').toUpperCase()] ?? null
+  return CONF_CLASS[normConfidence(confidence)] ?? null
 }
 
 /**
@@ -47,15 +57,15 @@ export function confidenceLabel(confidence) {
  * Representative numeric score per categorical confidence, used by the graded
  * confidence ring when a finding carries no explicit `confidence_score`. The
  * categorical label stays the source of truth; the score only grades the ring.
- * SPECULATIVE kept for backward compat (maps to the crimson range, score 30).
+ * Three canonical tiers only; a historical SPECULATIVE folds to LOW first.
  */
-export const CONF_SCORE = { HIGH: 92, MEDIUM: 74, LOW: 48, SPECULATIVE: 30 }
+export const CONF_SCORE = { HIGH: 92, MEDIUM: 74, LOW: 48 }
 
 /** Numeric 0–100 confidence for a finding (explicit score wins, else mapped). */
 export function confidenceScore(finding) {
   const explicit = finding?.confidence_score ?? finding?.confidenceScore
   if (Number.isFinite(explicit)) return Math.max(0, Math.min(100, explicit))
-  return CONF_SCORE[(finding?.confidence ?? '').toUpperCase()] ?? null
+  return CONF_SCORE[normConfidence(finding?.confidence)] ?? null
 }
 
 /**
@@ -129,8 +139,10 @@ export function filterFindings(findings, { filter = 'pending', host = null, acco
   else if (filter === 'rejected') list = list.filter((f) => normStatus(f) === 'rejected')
 
   if (confidence) {
-    const want = String(confidence).toUpperCase()
-    list = list.filter((f) => (f.confidence ?? '').toUpperCase() === want)
+    // Fold both sides so the purged SPECULATIVE tier filters as LOW — historical
+    // rows stay reachable under the Low filter (FE-1 SPECULATIVE→LOW).
+    const want = normConfidence(confidence)
+    list = list.filter((f) => normConfidence(f.confidence) === want)
   }
   if (host) {
     const h = host.toUpperCase()

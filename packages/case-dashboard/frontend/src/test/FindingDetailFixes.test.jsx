@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 
-import { ConfChip, MitreChips } from '../components/findings/FindingDetailChips'
+import { ConfChip, GroundingChip, MitreChips } from '../components/findings/FindingDetailChips'
 import { Row } from '../components/findings/FindingRow'
 import { FindingDetail } from '../components/findings/FindingDetail'
 import { AuditTrailPanel } from '../components/findings/AuditTrailPanel'
@@ -38,6 +38,42 @@ describe('P35-11 confidence shows categorical text, never a fabricated %', () =>
     expect(container.textContent).toMatch(/DESKTOP-\s*X · High/)
     expect(container.textContent).not.toMatch(/%/)
     expect(container.textContent).not.toMatch(/92/)
+  })
+})
+
+// ── FE-2: examiner skim affordances (confidence cap + grounding chips) ────
+describe('FE-2 confidence cap + grounding skim affordances', () => {
+  it('ConfChip appends a muted "capped" affordance only when clamped', () => {
+    const derivation = { agent: 'HIGH', final: 'MEDIUM', clamped: true }
+    const { rerender, container } = render(<ConfChip confidence="MEDIUM" derivation={derivation} />)
+    const cap = screen.getByText(/capped/i)
+    expect(cap).toBeInTheDocument()
+    // The cap detail rides the title attribute (escaped), not the visible text.
+    expect(cap.getAttribute('title')).toMatch(/model said HIGH → capped to MEDIUM/)
+
+    // Not clamped → no affordance.
+    rerender(<ConfChip confidence="MEDIUM" derivation={{ clamped: false }} />)
+    expect(screen.queryByText(/capped/i)).not.toBeInTheDocument()
+    // Legacy finding (no derivation) → no affordance, no crash, label still shows.
+    rerender(<ConfChip confidence="MEDIUM" />)
+    expect(screen.queryByText(/capped/i)).not.toBeInTheDocument()
+    expect(container.textContent).toMatch(/Confidence:\s*Medium/i)
+  })
+
+  it('GroundingChip shows level + count, with the consulted sources in the title', () => {
+    const grounding = { level: 'HIGH', sources_count: 2, sources_consulted: ['forensic-rag-mcp', 'windows-triage-mcp'] }
+    render(<GroundingChip grounding={grounding} />)
+    const chip = screen.getByText(/Grounding:\s*HIGH\s*\(2\)/i)
+    expect(chip).toBeInTheDocument()
+    expect(chip.getAttribute('title')).toMatch(/forensic-rag-mcp, windows-triage-mcp/)
+  })
+
+  it('GroundingChip renders nothing on a legacy / malformed finding (no crash)', () => {
+    const { container, rerender } = render(<GroundingChip grounding={undefined} />)
+    expect(container.firstChild).toBeNull()
+    // Malformed block (no level) also renders nothing rather than crashing.
+    rerender(<GroundingChip grounding={{ sources_count: 3 }} />)
+    expect(container.firstChild).toBeNull()
   })
 })
 
