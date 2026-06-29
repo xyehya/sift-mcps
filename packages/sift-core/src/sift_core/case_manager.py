@@ -10,8 +10,8 @@ import json
 import logging
 import os
 import re
+import secrets
 import tempfile
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,7 +20,7 @@ import yaml
 from sift_common.audit import resolve_examiner
 from sift_common.identifiers import is_valid_examiner_slug
 
-from sift_core.case_io import case_audit_dir, cases_root, state_root
+from sift_core.case_io import cases_root
 from sift_core.case_ops import build_case_brief
 from sift_core.evidence_chain import load_manifest
 from sift_core.evidence_ops import list_manifest_evidence_data
@@ -176,41 +176,6 @@ def _available_backend_capabilities() -> list[dict]:
     return []
 
 
-def _db_audit_event_has_audit_id(
-    dsn: str, case_id: str | None, candidates: list[str]
-) -> bool:
-    """True when ``app.audit_events`` records one of the candidate audit ids.
-
-    The gateway envelope middleware stores each tool call's backend audit id in
-    ``details->>'backend_audit_id'`` (and some writers use ``details->>'audit_id'``).
-    Gateway canonical UUIDs are stored in ``details->>'envelope_event_id'`` on the
-    result row and also matched here so agents citing an envelope_event_id can resolve.
-    Scoped to the case when the case UUID is known. Lightweight single-row probe.
-    """
-    if not candidates:
-        return False
-    import psycopg
-
-    match = (
-        "(details->>'backend_audit_id' = any(%s)"
-        " or details->>'audit_id' = any(%s)"
-        " or details->>'envelope_event_id' = any(%s))"
-    )
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor() as cur:
-            if case_id:
-                cur.execute(
-                    f"select 1 from app.audit_events where case_id = %s and {match} limit 1",
-                    (case_id, candidates, candidates, candidates),
-                )
-            else:
-                cur.execute(
-                    f"select 1 from app.audit_events where {match} limit 1",
-                    (candidates, candidates, candidates),
-                )
-            return cur.fetchone() is not None
-
-
 def build_platform_capabilities() -> dict:
     """Capability summary derived ONLY from registered, available backends and
     the capabilities their manifests advertise. No installed-package probing,
@@ -291,23 +256,11 @@ def _protected_write(path: Path, content: str) -> None:
 
 _ACTIVE_CASE_FILE = Path.home() / ".sift" / "active_case"
 
-# Audit ID format: prefix-examiner-YYYYMMDD-NNN (all lowercase alphanumeric + hyphens).
-# The prefix segment is ``[a-z][a-z0-9]*`` (must START with a letter — the
-# anti-injection guarantee — but may then carry digits). The opensearch ingest
-# scheme embeds the worker PID in the prefix, e.g.
-# ``opensearchingest1018805-sift-service-20260623-040``; a letters-only ``[a-z]+``
-# prefix wrongly rejected those, so a finding citing a real ingest id was denied
-# "no evidence trail" before the DB authority check ran (Gap B live-prove fix).
-_AUDIT_ID_PATTERN = re.compile(
-    r"^[a-z][a-z0-9]*-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?-[0-9]{8}-[0-9]{3,}\Z"
-)
-
-# Gateway canonical UUID: 8-4-4-4-12 hex (envelope_event_id assigned by AuditEnvelopeMiddleware).
-# These are accepted as valid provenance citations and routed to the DB authority check.
-_UUID_PATTERN = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z",
-    re.IGNORECASE,
-)
+# Provenance is now DB-membership based: a cited id counts only when it resolves
+# to a gateway-written ``app.audit_events`` row (see ``_scan_audit_trail`` /
+# ``_resolve_evidence_engaged`` / ``_score_grounding``). A malformed or forged id
+# never matches such a row, so the old scheme/UUID format regexes are no longer a
+# security gate and were removed with ``_classify_provenance``.
 
 # Allowlist: only these fields pass through from user-supplied finding data
 _ALLOWED_FINDING_FIELDS = {
@@ -359,112 +312,10 @@ def _next_seq(items: list[dict], id_field: str, prefix: str, examiner: str) -> i
     return max_num + 1
 
 
-def _resolve_source_evidence_static(
-    input_files: list[str],
-    audit_entries: list[dict],
-    evidence_registry: set[str],
-    visited: set[str] | None = None,
-    depth: int = 0,
-    max_depth: int = 10,
-    evidence_by_hash: dict[str, str] | None = None,
-    output_to_inputs: dict[str, list[str]] | None = None,
-    output_to_entry: dict[str, dict] | None = None,
-    hostname_hint: str = "",
-) -> tuple[str, list[dict]]:
-    """Walk input files backward through audit trail to find registered evidence.
-
-    Returns (evidence_path, chain_steps) where chain_steps records each
-    intermediate audit entry traversed during the walk.
-    """
-    if depth >= max_depth:
-        return "", []
-    if visited is None:
-        visited = set()
-    # Build output→input_files and output→entry lookups once at depth 0
-    if output_to_inputs is None:
-        output_to_inputs = {}
-        output_to_entry = {}
-        for entry in audit_entries:
-            inp = entry.get("input_files", [])
-            rs = entry.get("result_summary", {})
-            if isinstance(rs, dict):
-                of = rs.get("output_file", "")
-                if of:
-                    try:
-                        key = str(Path(of).resolve())
-                        output_to_inputs[key] = inp
-                        output_to_entry[key] = entry
-                    except OSError:
-                        pass
-                for of in rs.get("output_files", []):
-                    if of:
-                        try:
-                            key = str(Path(of).resolve())
-                            output_to_inputs[key] = inp
-                            output_to_entry[key] = entry
-                        except OSError:
-                            pass
-    if output_to_entry is None:
-        output_to_entry = {}
-    for path in input_files:
-        resolved = str(Path(path).resolve())
-        if resolved in visited:
-            continue
-        visited.add(resolved)
-        if resolved in evidence_registry:
-            return resolved, []
-        # Directory containment
-        resolved_prefix = resolved.rstrip("/") + "/"
-        containment_match = ""
-        for reg_path in sorted(evidence_registry):
-            if reg_path.startswith(resolved_prefix):
-                if not containment_match:
-                    containment_match = reg_path
-                if hostname_hint and hostname_hint.lower() in reg_path.lower():
-                    return reg_path, []
-        if containment_match:
-            return containment_match, []
-        # Hash-based fallback
-        if evidence_by_hash:
-            for entry in audit_entries:
-                entry_inputs = entry.get("input_files", [])
-                entry_hashes = entry.get("input_sha256s", [])
-                for i, inp in enumerate(entry_inputs):
-                    if str(Path(inp).resolve()) == resolved and i < len(entry_hashes):
-                        h = entry_hashes[i]
-                        if h and h in evidence_by_hash:
-                            return evidence_by_hash[h], []
-        parent_inputs = output_to_inputs.get(resolved)
-        if parent_inputs:
-            producer = output_to_entry.get(resolved, {})
-            result, sub_chain = _resolve_source_evidence_static(
-                parent_inputs,
-                audit_entries,
-                evidence_registry,
-                visited,
-                depth + 1,
-                max_depth,
-                evidence_by_hash,
-                output_to_inputs,
-                output_to_entry,
-                hostname_hint,
-            )
-            if result:
-                step = {
-                    "audit_id": producer.get("audit_id", ""),
-                    "tool": producer.get("tool", ""),
-                    "input_files": producer.get("input_files", []),
-                    "role": "intermediate",
-                }
-                return result, sub_chain + [step]
-    return "", []
-
-
 # --- IOC helpers (extracted to ioc_helpers.py) ---
 # Re-exported here so existing callers and tests using
 # ``from sift_core.case_manager import _compute_ioc_hash`` keep working.
 from sift_core.ioc_helpers import (  # noqa: E402
-    _CONF_RANKS,
     _compute_ioc_hash,
     _conf_rank,
     _detect_ioc_type,
@@ -473,50 +324,31 @@ from sift_core.ioc_helpers import (  # noqa: E402
 )
 
 
-def _derive_confidence_ceiling(
-    provenance: dict,
-    finding_prov_grade: str,
-    source_evidence: object,
-    validated_commands: list,
-) -> str:
-    """Derive a confidence CEILING from provenance signals (W3 cap-hint).
+def _derive_confidence_ceiling(evidence_engaged: bool, grounding_count: int) -> str:
+    """The ONE tunable function: confidence CEILING from the two decoupled axes.
 
-    Pure function over signals already computed at record_finding time. Returns
-    one of HIGH/MEDIUM/LOW/SPECULATIVE. This is a *ceiling*: the caller clamps
-    the agent-supplied confidence DOWN to it (``min`` by rank), never up — so a
-    self-asserted HIGH citing only NONE/unverified ids gets capped, closing the
-    self-asserted-HIGH-on-NONE gap (spec W3.2). It never raises an agent's value.
+    This is the single place the (evidence_engaged, grounding_count) -> ceiling
+    mapping lives (locked by an ``inspect.getsource`` guard test). It is a
+    *ceiling*: ``record_finding`` clamps the agent-supplied confidence DOWN to it
+    (``min`` by rank), never up — a self-asserted HIGH on weak provenance is
+    capped; an honest LOW is never raised.
 
-    Mapping (spec W3.2), re-based on *resolved* ids:
-      - HIGH:  FULL grade AND >=2 resolved MCP ids AND no NONE ids.
-      - MEDIUM: (FULL AND >=1 resolved MCP id) OR (>=2 resolved MCP/HOOK ids AND
-                source_evidence present).
-      - LOW:   >=1 resolved (MCP/HOOK) id but below MEDIUM, OR shell-only with
-               validated_commands.
-      - SPECULATIVE: floor — only none/unverified ids (no resolved provenance).
+      | evidence_engaged | grounding_count | ceiling |
+      |       ✅          |      >= 2        |  HIGH   |
+      |       ✅          |       1          |  MEDIUM |
+      |       ✅          |       0          |  LOW    |
+      |       ❌          |      any         |  LOW    | (floor; SPECULATIVE removed)
+
+    Axis A (``evidence_engaged``) is an UNFAKEABLE chain-of-custody signal the
+    gateway writes; Axis B (``grounding_count``) counts DISTINCT case-independent
+    knowledge backends cited. LOW is the floor (findings with no evidence trail
+    at all are REJECTED upstream, not floored).
     """
-    mcp = provenance.get("mcp") or []
-    hook = provenance.get("hook") or []
-    none = provenance.get("none") or []
-    n_mcp = len(mcp)
-    n_hook = len(hook)
-    resolved = n_mcp + n_hook
-    has_source = bool(source_evidence)
-
-    # HIGH: strongest — fully-graded, multi-MCP, no unresolved ids.
-    if finding_prov_grade == "FULL" and n_mcp >= 2 and len(none) == 0:
+    if evidence_engaged and grounding_count >= 2:
         return "HIGH"
-    # MEDIUM: fully-graded w/ at least one MCP id, OR two resolved ids backed by
-    # traced evidence.
-    if (finding_prov_grade == "FULL" and n_mcp >= 1) or (
-        resolved >= 2 and has_source
-    ):
+    if evidence_engaged and grounding_count >= 1:
         return "MEDIUM"
-    # LOW: at least one resolved id (but below MEDIUM), or shell-only w/ commands.
-    if resolved >= 1 or (validated_commands and resolved == 0):
-        return "LOW"
-    # Floor: only NONE/unverified ids reached confidence assignment.
-    return "SPECULATIVE"
+    return "LOW"
 
 
 def _validate_case_id(case_id: str) -> None:
@@ -847,105 +679,46 @@ class CaseManager:
 
     # --- AUT2-B3: artifact audit_id validation helpers -------------------- #
 
-    def _candidate_audit_dirs(self, case_dir: Path) -> list[Path]:
-        """Every plausible audit dir for this case, deduped.
+    def _scan_audit_trail(self) -> tuple[set[str], list[dict]]:
+        """Return ``(resolved-id set, audit entries)`` from the DB audit authority.
 
-        The gateway, the durable job worker, and legacy CLI sessions resolve
-        their audit JSONL dir independently (state-root keyed by CASE.yaml
-        case_id, state-root keyed by directory name, in-case ``audit/``,
-        or an explicit ``SIFT_AUDIT_DIR``). Artifact validation must scan all
-        of them or a fresh ``run_command`` audit_id written by another process
-        is wrongly rejected.
+        DB-only (the single tool-audit reader): pulls the ``app.audit_events``
+        ``mcp.tool.result`` rows via :func:`list_audit_provenance_db`, case-scoped
+        to the server-resolved case UUID (never agent input). The resolved-id set
+        is the union of every citable form per row —
+        ``{audit_id} ∪ audit_aliases ∪ {envelope_event_id}`` — so a finding citing
+        any of those forms resolves.
+
+        Fail-closed: returns ``(set(), [])`` in file mode (no case UUID) or on any
+        DB error — which floors confidence and rejects cited-only findings, never
+        fails open. There is no JSONL scan and no filesystem read.
         """
-        dirs: list[Path] = []
-        seen: set[str] = set()
-
-        def _add(path: Path) -> None:
-            key = str(path)
-            if key not in seen:
-                seen.add(key)
-                dirs.append(path)
-
-        _add(case_audit_dir(case_dir))
-        _add(state_root(case_dir) / case_dir.name / "audit")
-        _add(case_dir / "audit")
-        env_audit = os.environ.get("SIFT_AUDIT_DIR", "").strip()
-        if env_audit:
-            _add(Path(env_audit))
-        return dirs
-
-    def _scan_audit_trail(self, case_dir: Path) -> tuple[set[str], list[dict]]:
-        """Scan all candidate audit dirs; return (audit_id set, entries).
-
-        Entries are deduped by audit_id across dirs so the downstream
-        provenance pass does not see duplicates when the same JSONL is
-        reachable through two candidate dirs.
-
-        In DB-authority mode there are no per-case JSONL audit files — the
-        tool audit lives in ``app.audit_events``.  We additionally pull the
-        DB-recorded ``mcp.tool.result`` rows (fail-closed: [] on any DB error)
-        and merge them in, deduped by audit_id, so the provenance block in
-        ``record_finding`` is reachable in pure DB mode.  File-mode behaviour
-        is unchanged (the DB read returns [] when authority is not DB).
-        """
-        eid_set: set[str] = set()
+        resolved: set[str] = set()
         entries: list[dict] = []
-        for audit_dir in self._candidate_audit_dirs(case_dir):
-            if not audit_dir.is_dir():
-                continue
-            for jsonl_file in audit_dir.glob("*.jsonl"):
-                try:
-                    with open(jsonl_file, encoding="utf-8") as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                entry = json.loads(line)
-                            except json.JSONDecodeError:
-                                continue
-                            aid = entry.get("audit_id", "")
-                            if aid:
-                                if aid in eid_set:
-                                    continue
-                                eid_set.add(aid)
-                            entries.append(entry)
-                except OSError:
-                    continue
-
-        # DB-authority mode: merge Postgres-recorded tool-result audit entries.
+        case_id = self._db_case_id()
+        if not case_id:
+            return resolved, entries
         try:
-            from sift_core.active_case_context import db_authority_active
+            from sift_core.investigation_store import list_audit_provenance_db
 
-            if db_authority_active():
-                from sift_core.investigation_store import list_audit_provenance_db
-
-                db_entries = list_audit_provenance_db(self._db_case_id() or "")
-                for entry in db_entries:
-                    aid = entry.get("audit_id", "")
-                    if aid and aid in eid_set:
-                        # Already seen from JSONL — do not double-add.
-                        continue
-                    if aid:
-                        eid_set.add(aid)
-                    # Credit alias / envelope forms too so an agent that cites
-                    # the envelope UUID still resolves against this entry.
-                    for alias in entry.get("audit_aliases", []):
-                        if alias:
-                            eid_set.add(alias)
-                    env = entry.get("envelope_event_id", "")
-                    if env:
-                        eid_set.add(env)
-                    entries.append(entry)
+            entries = list_audit_provenance_db(case_id)
         except Exception:
-            # Fail-closed: any error in the DB merge leaves the JSONL-derived
-            # trail intact; the provenance grader degrades to PARTIAL.
             logger.warning(
-                "_scan_audit_trail: DB audit merge failed (fail-closed)",
+                "_scan_audit_trail: DB read failed (fail-closed, empty trail)",
                 exc_info=True,
             )
-
-        return eid_set, entries
+            return set(), []
+        for entry in entries:
+            aid = entry.get("audit_id", "")
+            if aid:
+                resolved.add(aid)
+            for alias in entry.get("audit_aliases") or []:
+                if alias:
+                    resolved.add(alias)
+            env = entry.get("envelope_event_id", "")
+            if env:
+                resolved.add(env)
+        return resolved, entries
 
     @staticmethod
     def _audit_id_candidates(aid: str) -> list[str]:
@@ -965,31 +738,6 @@ class CaseManager:
             if candidate in eid_set:
                 return candidate
         return None
-
-    def _db_audit_id_known(self, aid: str) -> bool:
-        """Check the DB transport audit (``app.audit_events``) for a tool audit id.
-
-        In DB-active mode the gateway durably records each tool call's
-        backend audit id in ``audit_events.details`` (``backend_audit_id``),
-        while the local JSONL mirror can lag or land in a different process's
-        audit dir. Accept ids the DB authority recorded; fail closed (False)
-        on any lookup problem so unknown ids stay rejected.
-        """
-        try:
-            from sift_core.active_case_context import db_authority_active
-            from sift_core.investigation_store import control_plane_dsn
-
-            if not db_authority_active():
-                return False
-            dsn = control_plane_dsn()
-            if not dsn:
-                return False
-            return _db_audit_event_has_audit_id(
-                dsn, self._db_case_id(), self._audit_id_candidates(aid)
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("DB audit-id lookup failed for %s: %s", aid, exc)
-            return False
 
     def get_case_status(self, case_id: str | None = None) -> dict:
         """Get investigation summary.
@@ -1292,13 +1040,16 @@ class CaseManager:
             else 0
         )
 
-        # Validate artifact audit_ids: required and must exist in audit trail
-        # (JSONL mirror across all plausible audit dirs) OR in the DB transport
-        # audit authority (app.audit_events) in DB-active mode.
-        provenance_warnings: list[str] = []
-        if validated_artifacts:
-            eid_set, all_audit_entries = self._scan_audit_trail(case_dir)
+        # Fetch the DB audit authority ONCE — the artifact custody check and BOTH
+        # confidence axes read from this single DB-resolved trail (no filesystem,
+        # no JSONL scan). Fail-closed empty in file mode / on DB outage.
+        resolved_id_set, audit_entries = self._scan_audit_trail()
 
+        # Artifact custody: every artifact must cite an audit_id that resolves in
+        # the DB audit trail. The two custody rejects are preserved but re-pointed
+        # at the DB-resolved set; the old JSONL re-scan + time.sleep race hack and
+        # the single-row DB probe are gone (one reader: list_audit_provenance_db).
+        if validated_artifacts:
             for art in validated_artifacts:
                 aid = art.get("audit_id", "")
                 if not aid:
@@ -1310,20 +1061,11 @@ class CaseManager:
                             "to record Bash commands with audit_ids)."
                         ),
                     }
-                resolved_aid = self._resolve_known_audit_id(aid, eid_set)
-                if resolved_aid is None:
-                    # Two-strike: flush race condition — rescan everything
-                    time.sleep(0.1)
-                    eid_set, all_audit_entries = self._scan_audit_trail(case_dir)
-                    resolved_aid = self._resolve_known_audit_id(aid, eid_set)
-                if resolved_aid is None and self._db_audit_id_known(aid):
-                    # DB audit authority recorded this tool call even though the
-                    # local JSONL mirror has not caught up (cross-process lag).
-                    resolved_aid = aid[3:] if aid.startswith("rc-") else aid
+                resolved_aid = self._resolve_known_audit_id(aid, resolved_id_set)
                 if resolved_aid is None:
                     recent_ids = [
-                        e.get("audit_id")
-                        for e in all_audit_entries
+                        str(e.get("audit_id"))
+                        for e in audit_entries
                         if e.get("audit_id")
                     ][-3:]
                     hint = (
@@ -1338,8 +1080,7 @@ class CaseManager:
                             "Pass the audit_id from the tool response." + hint
                         ),
                     }
-                # Canonicalize (e.g. strip rc- receipt prefix) so downstream
-                # provenance resolution matches the JSONL trail entries.
+                # Canonicalize (e.g. strip the rc- receipt prefix).
                 art["audit_id"] = resolved_aid
 
             # Auto-merge artifact audit_ids into finding audit_ids
@@ -1348,7 +1089,6 @@ class CaseManager:
             ]
         else:
             artifact_aids = []
-            all_audit_entries = []
 
         # Extend audit_ids with shell audit IDs + artifact audit IDs
         audit_ids = list(sanitized.get("audit_ids", []))
@@ -1356,424 +1096,17 @@ class CaseManager:
         audit_ids.extend(artifact_aids)
         sanitized["audit_ids"] = list(dict.fromkeys(audit_ids))
 
-        # Per-artifact provenance resolution
-        finding_prov_grade = "PARTIAL"
-        if all_audit_entries and validated_artifacts:
-            # In DB-authority mode the on-disk evidence.json is empty ([]); the
-            # real sealed-evidence registry lives in Postgres.  Load from DB when
-            # active so confidence grading and the artifact-source hard-reject
-            # both see the actual sealed evidence set.  File mode keeps the
-            # existing load_manifest() path.  Fails closed (empty list) on any
-            # DB error — identical to the legacy behaviour when no files are
-            # registered (PARTIAL grade, artifact rejected).
-            db_mode_active = False
-            try:
-                from sift_core.active_case_context import db_authority_active
-                from sift_core.investigation_store import list_sealed_evidence_db
+        # === Two-axis confidence grading (DB-authoritative, fail-closed) ===
+        # Provenance is no longer derived by walking file paths or globbing JSONL;
+        # both axes read the single DB-resolved trail fetched above.
+        cited_ids = set(sanitized["audit_ids"])
 
-                db_mode_active = db_authority_active()
-                if db_mode_active:
-                    evidence = list_sealed_evidence_db(self._db_case_id() or "")
-                else:
-                    manifest = load_manifest(case_dir) or {}
-                    evidence = manifest.get("files", [])
-            except Exception:
-                db_mode_active = False
-                manifest = load_manifest(case_dir) or {}
-                evidence = manifest.get("files", [])
-            registered = set()
-            ev_by_hash = {}
-            # DB-mode evidence-ref FULL path: map sealed evidence_id → resolved
-            # path.  Only sealed+sealed objects (the SQL filter) enter these,
-            # so an unsealed or foreign evidence_ref can never grade FULL.
-            registered_evidence_ids: set[str] = set()
-            evid_to_path: dict[str, str] = {}
-            for e in evidence:
-                if e.get("status") in ("IGNORED", "RETIRED"):
-                    continue
-                p = e.get("path", "")
-                if p:
-                    resolved_p = str(Path(p).resolve()) if str(p).startswith("/") else str((case_dir / p).resolve())
-                    registered.add(resolved_p)
-                    h = e.get("sha256", "")
-                    if h:
-                        ev_by_hash[h] = resolved_p
-                    evid = e.get("evidence_id", "")
-                    if evid:
-                        registered_evidence_ids.add(evid)
-                        evid_to_path[evid] = resolved_p
-            audit_by_id: dict[str, dict] = {}
-            for e in all_audit_entries:
-                aid_key = e.get("audit_id", "")
-                if not aid_key:
-                    continue
-                if aid_key in audit_by_id:
-                    logger.warning("Duplicate audit_id in trail: %s", aid_key)
-                audit_by_id[aid_key] = e
-            active_cid = self._active_case_id or ""
-            # CONF-1-IDX: DB-mode audit entries (from list_audit_provenance_db)
-            # carry the case UUID, whereas _active_case_id is the human case key.
-            # The idx_ cross-case guard below compares an entry's case_id against
-            # this set, so include BOTH forms — otherwise every DB-mode ingest
-            # entry is wrongly dropped (UUID != key) and the indirect trace fails.
-            _active_cids = {c for c in (active_cid, self._db_case_id() or "") if c}
-
-            # Pre-build output→input and output→entry lookups
-            shared_output_map: dict[str, list[str]] = {}
-            shared_entry_map: dict[str, dict] = {}
-            for _e in all_audit_entries:
-                _inp = _e.get("input_files", [])
-                _rs = _e.get("result_summary", {})
-                if isinstance(_rs, dict):
-                    _of = _rs.get("output_file", "")
-                    if _of:
-                        try:
-                            _key = str(Path(_of).resolve())
-                            shared_output_map[_key] = _inp
-                            shared_entry_map[_key] = _e
-                        except OSError:
-                            pass
-                    for _of in _rs.get("output_files", []):
-                        if _of:
-                            try:
-                                _key = str(Path(_of).resolve())
-                                shared_output_map[_key] = _inp
-                                shared_entry_map[_key] = _e
-                            except OSError:
-                                pass
-
-            for art in validated_artifacts:
-                art_aid = art.get("audit_id", "")
-                if not art_aid:
-                    art["provenance_grade"] = "PARTIAL"
-                    continue
-                entry = audit_by_id.get(art_aid)
-                if not entry:
-                    art["provenance_grade"] = "PARTIAL"
-                    continue
-
-                # DB-mode evidence-ref FULL path: the gateway WROTE the resolved
-                # sealed evidence_id(s) into the audit row's
-                # detail.provenance.evidence_refs.  These are authoritative
-                # (gateway-written, not agent-supplied) and sidestep the
-                # large-file hash that the gateway marks "skipped:too_large".
-                # Grade FULL only when a ref is in the sealed registry, so an
-                # unsealed/foreign ref cannot grade FULL.
-                if db_mode_active:
-                    refs = entry.get("evidence_refs") or []
-                    hit = next(
-                        (r for r in refs if r in registered_evidence_ids), None
-                    )
-                    if hit:
-                        art["source_evidence"] = evid_to_path.get(hit, "")
-                        art["provenance_grade"] = "FULL"
-                        art["provenance_chain"] = [
-                            {
-                                "audit_id": art_aid,
-                                "evidence_id": hit,
-                                "role": "evidence_ref",
-                            }
-                        ]
-                        continue
-
-                # Direct path: audit entry has input_files.
-                # NOTE: the idx_ indirect path (opensearch_search → ingest) below
-                # still relies on ingest audit entries being present in the trail
-                # and is intentionally out of scope for this DB-evidence-ref fix.
-                art_input_files = entry.get("input_files", [])
-                if art_input_files:
-                    try:
-                        source_ev, chain = _resolve_source_evidence_static(
-                            art_input_files,
-                            all_audit_entries,
-                            registered,
-                            evidence_by_hash=ev_by_hash,
-                            output_to_inputs=shared_output_map,
-                            output_to_entry=shared_entry_map,
-                        )
-                        if source_ev:
-                            art["source_evidence"] = source_ev
-                            art["provenance_grade"] = "FULL"
-                            if chain:
-                                art["provenance_chain"] = chain
-                            else:
-                                art["provenance_chain"] = [
-                                    {
-                                        "audit_id": entry.get("audit_id", ""),
-                                        "tool": entry.get("tool", ""),
-                                        "input_files": entry.get("input_files", []),
-                                        "role": "query",
-                                    }
-                                ]
-                            continue
-                    except OSError:
-                        pass
-
-                # Indirect path: opensearch_search/opensearch_aggregate → trace to
-                # the opensearch ingest of the sealed source evidence.
-                # The cited entry's tool is the search/aggregate tool: in file mode
-                # the legacy in-process readers used an ``idx_`` prefix; the gateway
-                # / DB-authority path records the canonical ``opensearch_search`` /
-                # ``opensearch_aggregate`` names (CONF-1-IDX).  Match both so the
-                # indirect FULL-grade trace is reachable in DB mode too.
-                tool = entry.get("tool", "")
-                if (
-                    tool.startswith("idx_")
-                    or tool in ("opensearch_search", "opensearch_aggregate")
-                ):
-                    search_index = entry.get("params", {}).get("index", "")
-                    # Collect candidates, score by filename affinity
-                    candidates: list[tuple[int, dict, list[str]]] = []
-                    for e in all_audit_entries:
-                        e_tool = e.get("tool", "")
-                        # Accept the top-level ``opensearch_ingest`` row (file mode)
-                        # AND the per-artifact ``ingest_*`` rows (the only ingest
-                        # rows that carry input_files in DB-authority mode, written
-                        # by opensearch-mcp _persist_ingest_audit_event — CONF-1-IDX).
-                        # A non-empty input_files is required either way, so an
-                        # ingest row that recorded no path can never grade FULL
-                        # (fail-closed).
-                        if not (
-                            (
-                                e_tool.startswith("opensearch_ingest")
-                                or e_tool.startswith("ingest_")
-                            )
-                            and e.get("input_files")
-                        ):
-                            continue
-                        e_cid = e.get("case_id", "")
-                        if e_cid and _active_cids and e_cid not in _active_cids:
-                            continue
-                        ingest_hosts: list[str] = []
-                        if search_index and "*" not in search_index:
-                            ingest_hosts = e.get("params", {}).get("hosts", [])
-                            if not ingest_hosts:
-                                h = e.get("params", {}).get("hostname", "")
-                                if h:
-                                    ingest_hosts = [h]
-                            idx_lower = search_index.lower()
-                            if not ingest_hosts or not any(
-                                idx_lower.endswith(f"-{h.lower()}")
-                                or f"-{h.lower()}-" in idx_lower
-                                for h in ingest_hosts
-                            ):
-                                continue
-                        score = 0
-                        for inp in e.get("input_files", []):
-                            stem = Path(inp).stem.lower()
-                            if stem and search_index and stem in search_index.lower():
-                                score = 1
-                                break
-                        candidates.append((score, e, ingest_hosts))
-                    candidates.sort(key=lambda c: -c[0])
-                    for _score, e, ingest_hosts in candidates:
-                        hint = ingest_hosts[0] if ingest_hosts else ""
-                        try:
-                            source_ev, chain = _resolve_source_evidence_static(
-                                e["input_files"],
-                                all_audit_entries,
-                                registered,
-                                evidence_by_hash=ev_by_hash,
-                                output_to_inputs=shared_output_map,
-                                output_to_entry=shared_entry_map,
-                                hostname_hint=hint,
-                            )
-                            if source_ev:
-                                art["source_evidence"] = source_ev
-                                # Extract artifact type from index name.
-                                # The `case-` prefix is applied exactly once: the
-                                # case key (dir basename) already starts with
-                                # `case-`, so strip the redundant leading prefix
-                                # before matching the single-prefix index name
-                                # (mirrors opensearch_mcp index naming, XYE-10).
-                                # Inlined to avoid a sift-core -> opensearch-mcp dep.
-                                _art_type = ""
-                                if search_index and active_cid:
-                                    _key = (
-                                        active_cid[len("case-") :]
-                                        if active_cid.lower().startswith("case-")
-                                        else active_cid
-                                    )
-                                    _pfx = f"case-{_key}-".lower()
-                                    _idx = search_index.lower()
-                                    if _idx.startswith(_pfx):
-                                        _rem = _idx[len(_pfx) :]
-                                        if hint:
-                                            _sfx = f"-{hint}".lower()
-                                            if _rem.endswith(_sfx):
-                                                _art_type = _rem[: -len(_sfx)]
-                                        # Wildcard: strip trailing -* or just use remainder
-                                        if not _art_type:
-                                            _art_type = _rem.rstrip("-*")
-                                ingest_step = {
-                                    "audit_id": e.get("audit_id"),
-                                    "tool": e.get("tool"),
-                                    "input_files": e.get("input_files"),
-                                    "hostname": hint
-                                    or (
-                                        e.get("params", {}).get("hosts", [""])[0]
-                                        if e.get("params", {}).get("hosts")
-                                        else e.get("params", {}).get("hostname", "")
-                                    ),
-                                    "artifact_type": _art_type,
-                                    "role": "ingest",
-                                }
-                                # Find per-artifact parser entry via run_id
-                                ingest_run_id = e.get("params", {}).get("run_id", "")
-                                parser_step = None
-                                if ingest_run_id and search_index:
-                                    idx_lower = search_index.lower()
-                                    for pe in all_audit_entries:
-                                        pe_tool = pe.get("tool", "")
-                                        if not pe_tool.startswith("ingest_"):
-                                            continue
-                                        pe_rid = pe.get("params", {}).get("run_id", "")
-                                        if pe_rid != ingest_run_id:
-                                            continue
-                                        pe_host = pe.get("params", {}).get(
-                                            "hostname", ""
-                                        )
-                                        if (
-                                            hint
-                                            and pe_host
-                                            and pe_host.lower() != hint.lower()
-                                        ):
-                                            continue
-                                        # Match artifact type from index name
-                                        pe_idx = (
-                                            pe.get("params", {})
-                                            .get("index_name", "")
-                                            .lower()
-                                        )
-                                        if pe_idx and pe_idx in idx_lower:
-                                            parser_step = {
-                                                "audit_id": pe.get("audit_id"),
-                                                "tool": pe_tool,
-                                                "hostname": pe_host,
-                                                "role": "parser",
-                                            }
-                                            break
-                                full_chain = chain + [ingest_step]
-                                if parser_step:
-                                    full_chain.append(parser_step)
-                                art["provenance_chain"] = full_chain
-                                art["provenance_grade"] = "FULL"
-                                break
-                        except OSError:
-                            continue
-
-                if "provenance_grade" not in art:
-                    art["provenance_grade"] = "PARTIAL"
-
-                # Ensure the terminal "query" step (the tool that produced
-                # this artifact's data) is present in the chain. Path A
-                # builds chains that may include it; Path B/D builds
-                # chains without it. Normalizing server-side means the
-                # portal reads what the server provides — no per-render
-                # synthesis.
-                art_aid = art.get("audit_id", "")
-                chain = art.get("provenance_chain") or []
-                if art_aid and not any(s.get("audit_id") == art_aid for s in chain):
-                    art["provenance_chain"] = chain + [
-                        {"audit_id": art_aid, "tool": "", "role": "query"}
-                    ]
-
-            # Finding-level grade: FULL or PARTIAL (NONE cannot survive reject gates)
-            art_grades = [
-                a.get("provenance_grade", "PARTIAL") for a in validated_artifacts
-            ]
-            if all(g == "FULL" for g in art_grades):
-                finding_prov_grade = "FULL"
-            else:
-                finding_prov_grade = "PARTIAL"
-            for art in validated_artifacts:
-                if art.get("source_evidence"):
-                    sanitized["source_evidence"] = art["source_evidence"]
-                    break
-
-            # Hard reject: artifact sources must be in evidence registry.
-            # Exception: FULL-graded artifacts (chain traced to evidence).
-            unregistered_sources = []
-            for art in validated_artifacts:
-                if art.get("provenance_grade") == "FULL":
-                    continue
-                src = art.get("source", "")
-                if not src:
-                    continue
-                try:
-                    resolved = str(Path(src).resolve()) if str(src).startswith("/") else str((case_dir / src).resolve())
-                except OSError:
-                    continue
-                if resolved not in registered:
-                    prefix = resolved.rstrip("/") + "/"
-                    if any(r.startswith(prefix) for r in registered):
-                        continue
-                    case_dir_str = str(case_dir)
-                    case_relative = src
-                    if resolved.startswith(case_dir_str + "/"):
-                        case_relative = resolved[len(case_dir_str) + 1 :]
-                    unregistered_sources.append(
-                        {
-                            "source": src,
-                            "action": f"evidence_register(path='{case_relative}')",
-                        "hint": (
-                            "If derivative: pass supporting_commands with "
-                            "audit_ids linking to the original evidence."
-                        ),
-                        }
-                    )
-            if unregistered_sources:
-                fid = sanitized.get("finding_id", "unknown")
-                return {
-                    "status": "REJECTED",
-                    "error": (
-                        "Artifact sources not in evidence registry. "
-                        "Register original evidence via the portal, or bridge "
-                        "derivatives to registered evidence with supporting_commands."
-                    ),
-                    "unregistered_sources": unregistered_sources,
-                    "finding_held": f"{fid} (not staged -- fix sources and resubmit)",
-                }
-
-            # Provenance gap diagnostics for staged findings
-            provenance_gaps: list[dict] = []
-            for i, art in enumerate(validated_artifacts):
-                if art.get("provenance_grade") == "FULL":
-                    continue
-                art_aid = art.get("audit_id", "")
-                entry = audit_by_id.get(art_aid, {}) if art_aid else {}
-                unresolved = ""
-                for inp in entry.get("input_files", []):
-                    try:
-                        r = str(Path(inp).resolve())
-                    except OSError:
-                        r = inp
-                    if r not in registered:
-                        unresolved = inp
-                        break
-                gap: dict = {
-                    "artifact_index": i,
-                    "audit_id": art_aid or "(none)",
-                    "grade": art.get("provenance_grade", "PARTIAL"),
-                }
-                if unresolved:
-                    gap["unresolved_input"] = unresolved
-                gap["fix"] = (
-                    "Link to registered evidence with supporting_commands "
-                    "and resubmit"
-                )
-                provenance_gaps.append(gap)
-            if provenance_gaps:
-                sanitized["provenance_gaps"] = provenance_gaps
-
-        if provenance_warnings:
-            sanitized["provenance_warnings"] = provenance_warnings
-
-        # Classify provenance
-        provenance = self._classify_provenance(sanitized["audit_ids"], case_dir)
-
-        # Hard gate: reject if all NONE and no supporting_commands
-        if provenance["summary"] == "NONE" and not validated_commands:
+        # Hard gate (DB form, fail-closed): a finding needs EITHER a cited id that
+        # resolves in the DB audit trail OR at least one validated supporting
+        # command. A DB outage yields an empty trail => a cited-only finding is
+        # rejected here (never fail-open).
+        any_resolved = bool(cited_ids & resolved_id_set)
+        if not any_resolved and not validated_commands:
             return {
                 "status": "REJECTED",
                 "error": (
@@ -1786,24 +1119,27 @@ class CaseManager:
                 ),
             }
 
-        # Provenance grade: per-artifact roll-up, or shell fallback
-        if not validated_artifacts:
-            finding_prov_grade = "PARTIAL"  # shell-only (no artifacts)
-
-        # W3 cap-hint: clamp the agent-supplied confidence DOWN to a ceiling
-        # derived from resolved provenance. Provenance may only LOWER the
-        # agent's value, never raise it (final = weaker of the two by rank).
-        # NEW findings only — confidence is inside the content hash, so this MUST
-        # run before _compute_content_hash and is never backfilled onto existing
-        # findings (that would mutate their hash and break the approval ledger).
-        agent_conf = (sanitized.get("confidence") or "").upper()
-        derived_ceiling = _derive_confidence_ceiling(
-            provenance,
-            finding_prov_grade,
-            sanitized.get("source_evidence"),
-            validated_commands,
+        # Axis A - evidence_engaged (binary, gateway-written, unfakeable).
+        evidence_engaged, ev_detail = self._resolve_evidence_engaged(
+            cited_ids, audit_entries
         )
-        # min() by rank = the WEAKER of the two (higher rank number).
+        # Axis B - grounding_count (DISTINCT external-knowledge backends cited).
+        grounding = self._score_grounding(sanitized, audit_entries=audit_entries)
+        grounding_count = grounding.get("sources_count", 0)
+        provenance_grade = "REFERENCED" if evidence_engaged else "UNREFERENCED"
+
+        # source_evidence (display-only): the sealed object an Axis-A run_command
+        # read, mapped to its display path. NEVER gates confidence.
+        source_evidence = self._sealed_path_for_ref(ev_detail.get("evidence_ref", ""))
+        if source_evidence:
+            sanitized["source_evidence"] = source_evidence
+
+        # Confidence ceiling clamp: final = min(agent, ceiling) by rank - the
+        # ceiling may only LOWER the agent value, never raise it. NEW findings only
+        # (confidence is inside the content hash, so this runs before the hash and
+        # is never backfilled onto existing findings).
+        agent_conf = (sanitized.get("confidence") or "").upper()
+        derived_ceiling = _derive_confidence_ceiling(evidence_engaged, grounding_count)
         final_conf = (
             agent_conf
             if _conf_rank(agent_conf) >= _conf_rank(derived_ceiling)
@@ -1817,31 +1153,28 @@ class CaseManager:
             "final": final_conf,
             "clamped": clamped,
             "basis": {
-                "prov_grade": finding_prov_grade,
-                "mcp_ids": len(provenance.get("mcp") or []),
-                "hook_ids": len(provenance.get("hook") or []),
-                "none_ids": len(provenance.get("none") or []),
+                "evidence_engaged": evidence_engaged,
+                "grounding_count": grounding_count,
+                "sources_consulted": grounding.get("sources_consulted", []),
             },
         }
         if clamped:
             audit_warnings.append(
                 f"confidence capped {agent_conf}->{final_conf}: "
-                f"{len(provenance.get('mcp') or [])} resolved MCP ids, "
-                f"prov_grade={finding_prov_grade}"
+                f"evidence_engaged={evidence_engaged}, grounding={grounding_count}"
             )
 
         finding_record = {
             **sanitized,
             "confidence_derivation": confidence_derivation,
+            "grounding": grounding,
             "id": finding_id,
             "status": "DRAFT",
             "staged": now,
             "modified_at": now,
             "created_by": exam,
             "examiner": exam,
-            "provenance": provenance["summary"],
-            "provenance_detail": provenance,
-            "provenance_grade": finding_prov_grade,
+            "provenance_grade": provenance_grade,
         }
 
         # Store supporting_commands if provided
@@ -1937,21 +1270,16 @@ class CaseManager:
         except Exception:
             pass
 
+        # Surface the two-axis grading on the agent-facing result (record_finding
+        # has no outputSchema / worker envelope — this dict IS the surface).
         result = {
             "status": "STAGED",
             "finding_id": finding_id,
-            "provenance_detail": provenance,
-            "provenance_grade": finding_prov_grade,
+            "provenance_grade": provenance_grade,
+            "grounding": grounding,
+            "confidence_derivation": confidence_derivation,
             "source_evidence": sanitized.get("source_evidence", ""),
         }
-        gaps = sanitized.get("provenance_gaps", [])
-        if gaps:
-            result["provenance_gaps"] = gaps
-            result["message"] = (
-                f"Finding staged as {finding_prov_grade}. "
-                f"{len(gaps)} artifact(s) have provenance gaps. "
-                "Fix gaps and resubmit to upgrade to FULL."
-            )
         if timeline_event_id:
             result["timeline_event_id"] = timeline_event_id
         if sanitized.get("supersedes"):
@@ -1979,32 +1307,46 @@ class CaseManager:
         return result
 
     def _next_shell_seq(self, case_dir: Path, examiner: str, today: str) -> int:
-        """Find next sequence number for shell-{examiner}-{today}-NNN audit IDs."""
-        audit_dir = case_audit_dir(case_dir)
+        """Next ``shell-{examiner}-{today}-NNN`` sequence, counted from the DB.
+
+        DB-only: counts the existing ``shell-*`` supporting-command rows for this
+        examiner+day in ``app.audit_events`` (parameterised; ``examiner`` is a
+        validated slug and ``today`` is digits, so the LIKE pattern carries no
+        metacharacters). The returned value is an audit LABEL, not a security id.
+
+        Fail-closed: in file mode (no case UUID), with no DSN, or on any DB error,
+        returns a random 3-digit suffix so two concurrent supporting commands never
+        collide on a guessed sequence. ``case_dir`` is retained for the caller
+        contract but no longer read (no filesystem).
+        """
         prefix = f"shell-{examiner}-{today}-"
-        max_num = 0
-        if audit_dir.is_dir():
-            for jsonl_file in audit_dir.glob("*.jsonl"):
-                try:
-                    with open(jsonl_file, encoding="utf-8") as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                entry = json.loads(line)
-                                eid = entry.get("audit_id", "")
-                                if eid.startswith(prefix):
-                                    try:
-                                        num = int(eid[len(prefix) :])
-                                        max_num = max(max_num, num)
-                                    except ValueError:
-                                        pass
-                            except json.JSONDecodeError:
-                                continue
-                except OSError:
-                    continue
-        return max_num + 1
+        case_id = self._db_case_id()
+        if not case_id:
+            return secrets.randbelow(900) + 100
+        try:
+            from sift_core.investigation_store import control_plane_dsn
+
+            dsn = control_plane_dsn()
+            if not dsn:
+                return secrets.randbelow(900) + 100
+            import psycopg
+
+            with psycopg.connect(dsn, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "select count(*) from app.audit_events"
+                        " where case_id = %s"
+                        " and details->>'backend_audit_id' like %s",
+                        (case_id, prefix + "%"),
+                    )
+                    row = cur.fetchone()
+            return (int(row[0]) + 1) if row else 1
+        except Exception:
+            logger.warning(
+                "_next_shell_seq: DB count failed (fail-closed to random suffix)",
+                exc_info=True,
+            )
+            return secrets.randbelow(900) + 100
 
     def record_timeline_event(self, event: dict, examiner_override: str = "") -> dict:
         """Validate and stage timeline event as DRAFT."""
@@ -2247,111 +1589,145 @@ class CaseManager:
                 return backend
         return ""
 
-    def _score_grounding(self, finding: dict) -> dict:
-        """Score how well a finding is grounded by external reference MCPs.
+    def _score_grounding(
+        self, finding: dict, audit_entries: list[dict] | None = None
+    ) -> dict:
+        """Axis B — grounding: count DISTINCT case-independent knowledge backends.
 
-        Attribution is tool→backend off the DB audit trail (``_scan_audit_trail``
-        / ``list_audit_provenance_db``), with old id-prefix and JSONL fallbacks so
-        file-mode and legacy native-scheme citations are still credited.
+        Credit a reference backend ONLY when a cited audit_id resolves to a real
+        ``app.audit_events`` row whose backend (``entry['backend']`` else
+        :meth:`_backend_for_tool`) is a DECLARED reference backend
+        (``forensic-rag-mcp`` / ``windows-triage-mcp`` / ``opencti-mcp``). A cited
+        id is matched against ``{audit_id} ∪ audit_aliases ∪ {envelope_event_id}``.
 
-        Level is WEAK/MEDIUM/HIGH scaled by the count of DISTINCT credited backends:
-          0 or 1 credited backend → WEAK
-          2 credited backends    → MEDIUM
-          3+ credited backends   → HIGH
+        NOT credited: ``sift-core`` / ``run_command`` (touches evidence → Axis A),
+        ``opensearch`` (primary evidence → Axis A), hayabusa (a Sigma alert is a
+        hypothesis). There is NO prefix-shape or JSONL-file fallback — those were
+        agent-fakeable grading backdoors and are gone; attribution is DB-resolved
+        only.
 
-        Creditable backends (operator decision, P35-3 §2):
-          sift-core (run_command / record_*), forensic-rag-mcp (kb_*),
-          windows-triage-mcp (wintriage_*), opencti-mcp (opencti/threat-intel).
-        opensearch is NOT credited (primary evidence, not a grounding source).
+        ``audit_entries`` (the :func:`list_audit_provenance_db` rows) is passed in
+        by ``record_finding`` so both axes share one DB read; when omitted it is
+        fetched via :meth:`_scan_audit_trail` (fail-closed empty off-DB).
 
-        Fail-soft: the DB audit-trail step is wrapped in try/except; any DB error
-        falls back to the prefix/JSONL path.  record_finding never crashes here.
+        Returns ``{level, sources_count, sources_consulted, sources_missing, …}``;
+        ``level`` (WEAK/MEDIUM/HIGH) is a display label — the confidence ceiling
+        uses ``sources_count`` directly.
         """
-        case_dir = self.active_case_dir
-        if case_dir is None or not case_dir.exists():
-            return {}
-
-        # The check_set is the union of:
-        #  (a) declared reference backends (from the gateway-injected provider)
-        #  (b) sift-core — credited per operator decision even though it is not a
-        #      ``provides:["reference"]`` backend.
-        available = _declared_reference_backends()
-        creditable: set[str] = set(available) | {"sift-core"}
-
-        if not creditable:
-            return self._grounding_result(set(), finding, available)
-
-        cited_aids: list[str] = [
+        creditable: set[str] = set(_declared_reference_backends())
+        available = sorted(creditable)
+        cited_aids: set[str] = {
             str(aid)
             for aid in (finding.get("audit_ids") or [])
             if isinstance(aid, str) and aid
-        ]
-        if not cited_aids:
+        }
+        if audit_entries is None:
+            _, audit_entries = self._scan_audit_trail()
+        if not creditable or not cited_aids:
             return self._grounding_result(set(), finding, available)
 
-        # --- Primary attribution: audit trail entries (stable post-Unit-1) -------
-        # _scan_audit_trail merges JSONL + DB entries; each entry carries tool,
-        # backend, audit_id, audit_aliases, envelope_event_id.  We match a cited
-        # audit_id against any of those forms and resolve the backend.
         consulted_backends: set[str] = set()
-        try:
-            _, trail_entries = self._scan_audit_trail(case_dir)
-            # Build lookup: id form → entry, so we can credit any cited form.
-            cited_set: set[str] = set(cited_aids)
-            for entry in trail_entries:
-                # Match canonical audit_id, any alias, or envelope_event_id.
-                entry_ids: set[str] = {entry.get("audit_id", "")}
-                for alias in entry.get("audit_aliases") or []:
-                    if alias:
-                        entry_ids.add(alias)
-                env = entry.get("envelope_event_id", "")
-                if env:
-                    entry_ids.add(env)
-                if not (cited_set & entry_ids):
-                    continue
-                # Resolve backend from entry's ``backend`` field first, then tool.
-                backend = self._backend_for_tool(
-                    entry.get("tool", ""), entry.get("backend", "")
-                )
-                if backend and backend in creditable:
-                    consulted_backends.add(backend)
-        except Exception:
-            # Fail-soft: fall back to prefix/JSONL path below.
-            logger.warning(
-                "_score_grounding: audit-trail attribution failed (fail-soft, "
-                "falling back to prefix/JSONL)",
-                exc_info=True,
-            )
-
-        # --- Fallback 1: scheme-prefix match on native-format audit_ids ----------
-        # Covers JSONL-mode and native-scheme citations (``windowstriage-*``,
-        # ``siftgateway-*``) that do not appear in the DB trail, and run_command
-        # core ids where the canonical is already native.
-        cited_prefixes = {
-            aid.split("-", 1)[0].lower()
-            for aid in cited_aids
-            if "-" in aid and not _UUID_PATTERN.match(aid)
-        }
-        for backend_name in creditable:
-            if backend_name in consulted_backends:
-                continue  # already credited via trail
-            prefix = backend_name.replace("-mcp", "").replace("-", "").lower()
-            if prefix and prefix in cited_prefixes:
-                consulted_backends.add(backend_name)
-
-        # --- Fallback 2: non-empty per-case JSONL audit file ---------------------
-        # Covers backends in file-authority mode that left a JSONL but the finding
-        # doesn't cite a matching id directly.
-        for backend_name in available:  # JSONL files only exist for declared backends
-            if backend_name in consulted_backends:
+        for entry in audit_entries:
+            # Match the cited id against every citable form of this DB row.
+            entry_ids: set[str] = {entry.get("audit_id", "")}
+            for alias in entry.get("audit_aliases") or []:
+                if alias:
+                    entry_ids.add(alias)
+            env = entry.get("envelope_event_id", "")
+            if env:
+                entry_ids.add(env)
+            if not (cited_aids & entry_ids):
                 continue
-            for audit_dir in self._candidate_audit_dirs(case_dir):
-                audit_file = audit_dir / f"{backend_name}.jsonl"
-                if audit_file.exists() and audit_file.stat().st_size > 0:
-                    consulted_backends.add(backend_name)
-                    break
+            backend = self._backend_for_tool(
+                entry.get("tool", ""), entry.get("backend", "")
+            )
+            if backend in creditable:
+                consulted_backends.add(backend)
 
         return self._grounding_result(consulted_backends, finding, available)
+
+    @staticmethod
+    def _resolve_evidence_engaged(
+        cited_ids: set[str], audit_entries: list[dict]
+    ) -> tuple[bool, dict]:
+        """Axis A — evidence_engaged (binary, UNFAKEABLE chain of custody).
+
+        ``True`` iff a CITED audit_id resolves to a gateway-written
+        ``app.audit_events`` row that is EITHER an opensearch query (those indices
+        exist only because the sealed image was ingested) OR a ``run_command``
+        carrying non-empty gateway-resolved ``evidence_refs`` (the sandbox attaches
+        those only when the command actually read sealed evidence). ``backend`` /
+        ``tool`` / ``evidence_refs`` are gateway-written — the agent cannot forge
+        them; it only controls which ids it cites.
+
+        Pure over already-fetched DB rows; no filesystem. Fail-closed: empty rows
+        ⇒ ``(False, …)``. A ``run_command`` ref is preferred for the returned
+        ``evidence_ref`` (it names a concrete sealed object for display).
+        """
+        engaged_via_opensearch = False
+        run_command_ref = ""
+        opensearch_ref = ""
+        for entry in audit_entries:
+            entry_ids: set[str] = {entry.get("audit_id", "")}
+            for alias in entry.get("audit_aliases") or []:
+                if alias:
+                    entry_ids.add(alias)
+            env = entry.get("envelope_event_id", "")
+            if env:
+                entry_ids.add(env)
+            if not (cited_ids & entry_ids):
+                continue
+            backend = str(entry.get("backend", "")).lower()
+            tool = str(entry.get("tool", "")).lower()
+            refs = [str(r) for r in (entry.get("evidence_refs") or []) if r]
+            # Query plane: an opensearch_* result proves the sealed image was
+            # ingested. backend is the registered name; the tool-prefix is a
+            # gateway-written backstop if the backend field is absent.
+            if backend == "opensearch-mcp" or tool.startswith("opensearch_"):
+                engaged_via_opensearch = True
+                if refs and not opensearch_ref:
+                    opensearch_ref = refs[0]
+                continue
+            # Execution plane: a run_command that read sealed evidence carries
+            # gateway-resolved evidence_refs.
+            if tool == "run_command" and refs and not run_command_ref:
+                run_command_ref = refs[0]
+        if run_command_ref:
+            return True, {
+                "engaged": True,
+                "via": "run_command",
+                "evidence_ref": run_command_ref,
+            }
+        if engaged_via_opensearch:
+            return True, {
+                "engaged": True,
+                "via": "opensearch",
+                "evidence_ref": opensearch_ref,
+            }
+        return False, {"engaged": False, "via": None, "evidence_ref": ""}
+
+    def _sealed_path_for_ref(self, evidence_ref: str) -> str:
+        """Display-only: sealed display path for a gateway-written evidence_ref.
+
+        Maps an Axis-A ``evidence_ref`` (an ``app.evidence_objects.id`` the gateway
+        recorded) to its sealed display path via :func:`list_sealed_evidence_db`.
+        Returns ``""`` when unresolvable. NEVER gates confidence — purely for the
+        ``source_evidence`` portal/report display.
+        """
+        if not evidence_ref:
+            return ""
+        case_id = self._db_case_id()
+        if not case_id:
+            return ""
+        try:
+            from sift_core.investigation_store import list_sealed_evidence_db
+
+            for ev in list_sealed_evidence_db(case_id):
+                if ev.get("evidence_id") == evidence_ref:
+                    return str(ev.get("path", ""))
+        except Exception:
+            logger.debug("source_evidence resolution failed", exc_info=True)
+        return ""
 
     def _grounding_result(
         self,
@@ -2359,19 +1735,15 @@ class CaseManager:
         finding: dict,
         available: list[str] | None = None,
     ) -> dict:
-        """Build grounding score result from consulted backend set.
+        """Build the grounding display block from the consulted backend set.
 
-        Level = count of DISTINCT credited backends:
-          0 or 1 → WEAK
-          2       → MEDIUM
-          3+      → HIGH
-        PARTIAL is folded into WEAK (3-tier vocabulary: WEAK/MEDIUM/HIGH).
-        The ``>=2 → return {}`` suppression is removed; the block is always emitted
-        when creditable sources are in scope.  ``sources_count`` is added.
+        Level = count of DISTINCT credited reference backends:
+          0 or 1 → WEAK · 2 → MEDIUM · 3+ → HIGH
+        ``level`` is a display label only; the confidence ceiling reads
+        ``sources_count`` directly. ``sources_missing`` is relative to the declared
+        reference backends.
         """
-        check_set = available if available is not None else _declared_reference_backends()
-        # sources_missing is relative to declared reference backends only (sift-core
-        # is an implicit creditable source, not a user-declared reference backend).
+        check_set = available if available is not None else sorted(set(_declared_reference_backends()))
         missing = [m for m in check_set if m not in consulted_backends]
 
         # No declared reference backends and nothing consulted → nothing to flag.
@@ -2417,103 +1789,6 @@ class CaseManager:
         if suggestions:
             result["suggestions"] = suggestions
 
-        return result
-
-    # --- Provenance Classification ---
-
-    # Provenance tier priority: MCP > HOOK > SHELL
-    _PROVENANCE_TIERS = ("MCP", "HOOK", "SHELL")
-
-    def _classify_provenance(self, audit_ids: list[str], case_dir: Path) -> dict:
-        """Classify audit IDs by provenance tier.
-
-        Scans audit/*.jsonl to determine where each audit_id came from:
-        - MCP: found in any audit file except claude-code.jsonl
-        - HOOK: found in claude-code.jsonl
-        - NONE: not found in any audit file or malformed ID
-
-        Evidence IDs must match the format: prefix-examiner-YYYYMMDD-NNN.
-        Malformed IDs (path traversal, unicode, injection) are classified as NONE.
-
-        Returns {"summary": tier, "mcp": [...], "hook": [...], "shell": [...], "none": [...]}.
-        """
-        # Build audit_id -> source lookup from every plausible audit dir for the
-        # case (AUT2-B3: the gateway/worker/CLI can write to different dirs).
-        eid_source: dict[str, str] = {}
-        for audit_dir in self._candidate_audit_dirs(case_dir):
-            if not audit_dir.is_dir():
-                continue
-            for jsonl_file in audit_dir.glob("*.jsonl"):
-                source = "HOOK" if jsonl_file.name == "claude-code.jsonl" else "MCP"
-                try:
-                    with open(jsonl_file, encoding="utf-8") as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                entry = json.loads(line)
-                                eid = entry.get("audit_id", "")
-                                if not eid:
-                                    continue
-                                existing = eid_source.get(eid)
-                                if existing is None:
-                                    eid_source[eid] = source
-                                elif source == "MCP":
-                                    # MCP > HOOK priority
-                                    eid_source[eid] = "MCP"
-                            except json.JSONDecodeError:
-                                continue
-                except OSError:
-                    continue
-
-        # Classify each audit_id
-        result: dict[str, list[str]] = {
-            "mcp": [],
-            "hook": [],
-            "shell": [],
-            "none": [],
-        }
-        for eid in audit_ids:
-            # Reject malformed audit IDs (path traversal, homoglyphs, injection).
-            # Accept scheme-format ids (prefix-examiner-YYYYMMDD-NNN) AND gateway
-            # canonical UUIDs (envelope_event_id assigned by AuditEnvelopeMiddleware).
-            if not (_AUDIT_ID_PATTERN.match(eid) or _UUID_PATTERN.match(eid)):
-                result["none"].append(eid)
-                continue
-            source = None
-            for candidate in self._audit_id_candidates(eid):
-                source = eid_source.get(candidate)
-                if source:
-                    break
-            if not source and self._db_audit_id_known(eid):
-                # Recorded by the gateway DB transport audit (app.audit_events)
-                # even though the local JSONL mirror has not caught up.
-                source = "MCP"
-            if source:
-                result[source.lower()].append(eid)
-            else:
-                result["none"].append(eid)
-
-        # Compute summary tier
-        tiers_present = set()
-        if result["mcp"]:
-            tiers_present.add("MCP")
-        if result["hook"]:
-            tiers_present.add("HOOK")
-        if result["shell"]:
-            tiers_present.add("SHELL")
-        has_none = bool(result["none"])
-
-        if not tiers_present:
-            summary = "NONE"
-        elif len(tiers_present) == 1 and not has_none:
-            summary = next(iter(tiers_present))
-        else:
-            # Mixed tiers or any NONE with other tiers
-            summary = "MIXED"
-
-        result["summary"] = summary  # type: ignore[assignment]
         return result
 
     # --- Internal helpers ---

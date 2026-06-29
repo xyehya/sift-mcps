@@ -15,17 +15,13 @@ from __future__ import annotations
 import hashlib
 import json
 
-import pytest
-
 from sift_core.ioc_helpers import (
-    _CONF_RANKS,
     _compute_ioc_hash,
     _conf_rank,
     _detect_ioc_type,
     _normalize_ioc,
     _refang_ioc,
 )
-
 
 # ---------------------------------------------------------------------------
 # _conf_rank
@@ -47,8 +43,9 @@ class TestConfRank:
     def test_case_insensitive(self):
         assert _conf_rank("high") == _conf_rank("HIGH")
 
-    def test_speculative_is_weakest_ranked(self):
-        assert _conf_rank("SPECULATIVE") > _conf_rank("LOW")
+    def test_legacy_speculative_normalizes_to_low(self):
+        # SPECULATIVE tier removed; a legacy value ranks identically to LOW.
+        assert _conf_rank("SPECULATIVE") == _conf_rank("LOW")
 
 
 # ---------------------------------------------------------------------------

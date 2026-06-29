@@ -15,12 +15,24 @@ import hashlib
 import json
 import re
 
-# Confidence rank map (lower = stronger).
-_CONF_RANKS: dict[str, int] = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "SPECULATIVE": 3}
+# Confidence rank map (lower = stronger). Three tiers only — SPECULATIVE was
+# removed in the two-axis confidence rebuild (LOW is the floor).
+_CONF_RANKS: dict[str, int] = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+
+
+def normalize_confidence(conf: str) -> str:
+    """Normalize a confidence label to the current 3-tier vocabulary.
+
+    The single read-time chokepoint that collapses any historical ``SPECULATIVE``
+    row to ``LOW`` (the floor) so legacy payloads grade consistently after the
+    SPECULATIVE tier was removed. Unknown/empty values pass through uppercased.
+    """
+    c = conf.upper() if conf else ""
+    return "LOW" if c == "SPECULATIVE" else c
 
 
 def _conf_rank(conf: str) -> int:
-    return _CONF_RANKS.get(conf.upper() if conf else "", 99)
+    return _CONF_RANKS.get(normalize_confidence(conf), 99)
 
 
 def _refang_ioc(value: str) -> str:

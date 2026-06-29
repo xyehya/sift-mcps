@@ -12,7 +12,6 @@ import importlib
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helper: resolve from the future extraction path first, fall back to
 # case_manager while the code still lives there.  Once the extraction is
@@ -44,8 +43,9 @@ class TestConfRank:
     def test_low(self, H):
         assert H._conf_rank("LOW") == 2
 
-    def test_speculative(self, H):
-        assert H._conf_rank("SPECULATIVE") == 3
+    def test_legacy_speculative_normalizes_to_low(self, H):
+        # SPECULATIVE tier was removed; a legacy value collapses to LOW's rank.
+        assert H._conf_rank("SPECULATIVE") == H._conf_rank("LOW") == 2
 
     def test_unknown_returns_99(self, H):
         assert H._conf_rank("BOGUS") == 99
@@ -220,12 +220,12 @@ class TestComputeIocHash:
 # --- _CONF_RANKS constant -------------------------------------------------
 
 class TestConfRanksConstant:
-    """Regression: ensure the four tiers are present with the expected ranks."""
+    """Regression: the three tiers are present with the expected ranks
+    (SPECULATIVE was removed in the two-axis confidence rebuild)."""
 
     def test_all_tiers_present(self, H):
-        assert set(H._CONF_RANKS.keys()) == {"HIGH", "MEDIUM", "LOW", "SPECULATIVE"}
+        assert set(H._CONF_RANKS.keys()) == {"HIGH", "MEDIUM", "LOW"}
 
     def test_ordering(self, H):
         assert H._CONF_RANKS["HIGH"] < H._CONF_RANKS["MEDIUM"]
         assert H._CONF_RANKS["MEDIUM"] < H._CONF_RANKS["LOW"]
-        assert H._CONF_RANKS["LOW"] < H._CONF_RANKS["SPECULATIVE"]

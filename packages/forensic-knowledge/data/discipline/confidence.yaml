@@ -6,8 +6,5 @@ levels:
     criteria: "At least one evidence source. Observation is clear but interpretation has alternatives."
     min_audit_ids: 1
   LOW:
-    criteria: "Limited evidence. Reasonable inference but significant uncertainty."
-    min_audit_ids: 0
-  SPECULATIVE:
-    criteria: "Hypothesis based on experience or pattern recognition. No direct evidence."
+    criteria: "Limited evidence. Reasonable inference but significant uncertainty. The floor tier — a hypothesis with no engaged evidence caps here."
     min_audit_ids: 0
