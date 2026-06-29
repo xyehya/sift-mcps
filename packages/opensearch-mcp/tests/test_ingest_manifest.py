@@ -1,16 +1,14 @@
 """Tests for _write_ingest_manifest — the renamed/rewritten manifest writer.
 
-Verifies the two load-bearing behaviors of the B-registry-pollution fix:
-  1. Manifests land in case/audit/ingest-manifests/ — NOT case/evidence/
-  2. No evidence_register call is made — internal audit records don't
-     go through the operator-facing registry.
+Verifies the load-bearing behavior of the B-registry-pollution fix: manifests
+land in case/audit/ingest-manifests/ — NOT case/evidence/ — so internal audit
+records don't go through the operator-facing registry.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 from opensearch_mcp.ingest import _write_ingest_manifest
 
@@ -52,13 +50,6 @@ class TestWriteIngestManifest:
         assert m["artifact_type"] == "evtx"
         assert m["sha256"] == "abc123"
         assert m["doc_count"] == 42
-
-    def test_does_not_call_evidence_register(self, tmp_path, monkeypatch):
-        _setup_active_case(tmp_path, monkeypatch)
-
-        with patch("opensearch_mcp.gateway.call_tool") as mock_call:
-            _write_ingest_manifest("/evidence/host1/evtx/App.evtx", "host1", "evtx", doc_count=1)
-        assert mock_call.call_count == 0
 
     def test_no_active_case_is_noop(self, tmp_path, monkeypatch):
         fake_home = tmp_path / "home"

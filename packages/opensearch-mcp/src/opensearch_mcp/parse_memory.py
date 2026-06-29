@@ -540,22 +540,6 @@ def _index_vol3_records(
     return count, bulk_failed
 
 
-def _register_memory_evidence(image_path: Path, hostname: str) -> None:
-    """Register memory image via the gateway evidence_register tool (best-effort)."""
-    try:
-        from opensearch_mcp.gateway import call_tool
-
-        call_tool(
-            "evidence_register",
-            {
-                "path": str(image_path),
-                "description": f"Memory image from {hostname} (vol3 analysis)",
-            },
-        )
-    except Exception:
-        pass
-
-
 def ingest_memory(
     image_path: Path,
     client: OpenSearch,
@@ -658,8 +642,6 @@ def ingest_memory(
             return {"windows.info": {"status": "failed", "error": "Symbols not available"}}
     except subprocess.TimeoutExpired:
         pass  # Slow but not a symbol issue — continue
-
-    _register_memory_evidence(image_path, hostname)
 
     for plugin in plugin_list:
         suffix = _plugin_to_index_suffix(plugin)

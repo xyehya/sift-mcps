@@ -1,4 +1,4 @@
-"""Prefetch parsing — wintools-first (PECmd), Plaso fallback."""
+"""Prefetch parsing via Plaso (prefetch parser)."""
 
 from __future__ import annotations
 
@@ -20,38 +20,11 @@ def parse_prefetch(
     source_file: str = "",
     host_dict=None,
 ) -> tuple[int, int, str]:
-    """Parse prefetch files. Returns (count_indexed, count_bulk_failed, note).
+    """Parse prefetch files via Plaso. Returns (count_indexed, count_bulk_failed, note).
 
-    Strategy: wintools-first (PECmd on Windows), Plaso fallback.
-    PECmd produces richer output than Plaso's prefetch parser.
+    On a Plaso failure the directory is skipped and a note is returned rather
+    than raising.
     """
-    from opensearch_mcp.wintools import mark_wintools_down, wintools_available
-
-    _fallback_note = (
-        "prefetch: parsed with Plaso fallback (reduced fidelity — "
-        "misses execution counts, loaded DLLs). "
-        "Provision wintools-mcp with PECmd for complete analysis."
-    )
-
-    if wintools_available():
-        try:
-            cnt, bf = _parse_prefetch_wintools(
-                prefetch_dir,
-                client,
-                index_name,
-                hostname,
-                ingest_audit_id=ingest_audit_id,
-                pipeline_version=pipeline_version,
-                vss_id=vss_id,
-                source_file=source_file,
-                host_dict=host_dict,
-            )
-            return cnt, bf, ""
-        except Exception as e:
-            print(f"  prefetch: PECmd failed ({e}), trying Plaso...", file=sys.stderr)
-            if "connection" in str(e).lower() or "timeout" in str(e).lower():
-                mark_wintools_down()
-
     try:
         cnt, bf = _parse_prefetch_plaso(
             prefetch_dir,
@@ -64,66 +37,11 @@ def parse_prefetch(
             source_file=source_file,
             host_dict=host_dict,
         )
-        return cnt, bf, _fallback_note
+        return cnt, bf, ""
     except subprocess.CalledProcessError as e:
-        print(
-            f"  prefetch: Plaso failed ({e})\n  NOTE: {_fallback_note}",
-            file=sys.stderr,
-        )
-        return 0, 0, _fallback_note
-
-
-def _parse_prefetch_wintools(
-    prefetch_dir: Path,
-    client: OpenSearch,
-    index_name: str,
-    hostname: str,
-    ingest_audit_id: str = "",
-    pipeline_version: str = "",
-    vss_id: str = "",
-    source_file: str = "",
-    host_dict=None,
-) -> tuple[int, int]:
-    """Parse prefetch via PECmd on Windows (wintools-mcp)."""
-    from opensearch_mcp.parse_csv import ingest_csv, table_name_from_stem
-    from opensearch_mcp.wintools import run_tool_and_get_csv
-
-    csv_files = run_tool_and_get_csv(
-        tool_binary="PECmd.exe",
-        input_flag="-d",
-        evidence_path=str(prefetch_dir),
-        purpose="Parse prefetch files for execution history",
-        hostname=hostname,
-    )
-
-    if not csv_files:
-        raise RuntimeError("PECmd produced no CSV output")
-
-    total_count = 0
-    total_failed = 0
-    for csv_file in csv_files:
-        # PECmd emits multiple sub-tables (the main PECmd_Output and the
-        # _Timeline) into ONE index. Derive a per-CSV table_name so _doc_id
-        # folds the logical table into the content-hash seed — otherwise two
-        # sub-tables with identical raw columns collide on the same _id.
-        table_name = table_name_from_stem(csv_file.stem)
-        count, _sk, bf = ingest_csv(
-            csv_path=csv_file,
-            client=client,
-            index_name=index_name,
-            hostname=hostname,
-            source_file=source_file or str(prefetch_dir),
-            ingest_audit_id=ingest_audit_id,
-            pipeline_version=pipeline_version,
-            table_name=table_name,
-            vss_id=vss_id,
-            parse_method="PECmd",
-            host_dict=host_dict,
-        )
-        total_count += count
-        total_failed += bf
-
-    return total_count, total_failed
+        note = "prefetch: skipped — Plaso parse failed."
+        print(f"  prefetch: Plaso failed ({e})", file=sys.stderr)
+        return 0, 0, note
 
 
 def _parse_prefetch_plaso(

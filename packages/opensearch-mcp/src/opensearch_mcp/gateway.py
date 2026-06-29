@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import ssl
 import time
-import urllib.error
 import urllib.request
 
 from opensearch_mcp.paths import sift_dir
@@ -52,61 +50,6 @@ def load_gateway_config() -> dict | None:
         _cached_config = None
     _config_loaded = True
     return _cached_config
-
-
-def call_tool(tool_name: str, arguments: dict, timeout: int = 60) -> dict:
-    """Call MCP tool through gateway REST API. Returns parsed result dict."""
-    config = load_gateway_config()
-    if not config:
-        raise RuntimeError("Gateway not configured")
-    body = json.dumps({"arguments": arguments}).encode()
-    headers = {"Content-Type": "application/json"}
-    if config["token"]:
-        headers["Authorization"] = f"Bearer {config['token']}"
-    req = urllib.request.Request(
-        f"{config['url']}/api/v1/tools/{tool_name}",
-        data=body,
-        headers=headers,
-        method="POST",
-    )
-    open_kwargs: dict = {"timeout": timeout}
-    if config.get("tls"):
-        ctx = ssl.create_default_context()
-        verify_certs = config.get("verify_certs", True)
-        ca_cert = config.get("ca_cert_path")
-        if not verify_certs:
-            _logger.warning("TLS certificate verification disabled via gateway config")
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-        elif ca_cert:
-            ctx.load_verify_locations(ca_cert)
-        # else: default SSL context (system CA bundle)
-        open_kwargs["context"] = ctx
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(req, **open_kwargs) as resp:
-                raw = json.loads(resp.read())
-            break
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                raise RuntimeError(f"Tool not found: {tool_name}") from e
-            if e.code not in {502, 503, 504} or attempt == 2:
-                raise
-            time.sleep(2**attempt)
-        except (OSError, ConnectionRefusedError):
-            if attempt == 2:
-                raise
-            time.sleep(2**attempt)
-    # Gateway REST returns {"result": [...], "tool": ..., "backend": ...}
-    result_array = raw.get("result", raw.get("content", []))
-    if result_array and isinstance(result_array, list):
-        text = result_array[0].get("text", "")
-        if text:
-            try:
-                return json.loads(text)
-            except json.JSONDecodeError:
-                return {"text": text}
-    return raw
 
 
 def wait_for_gateway(timeout: int = 60) -> bool:
