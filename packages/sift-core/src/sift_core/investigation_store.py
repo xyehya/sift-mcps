@@ -143,7 +143,7 @@ class InvestigationAuthorityStore(ABC):
 # --------------------------------------------------------------------------- #
 # Content hash — single shared implementation used by ALL call sites.
 #
-# HASH_EXCLUDE_KEYS is the authoritative exclude set (19 keys).  Every module
+# HASH_EXCLUDE_KEYS is the authoritative exclude set (21 keys).  Every module
 # that previously redeclared its own narrow copy (case_io, case_manager,
 # reporting, routes) now imports this set directly (BATCH-NW1).
 #

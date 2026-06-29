@@ -72,6 +72,59 @@ class TestDeriveCeilingTable:
 
 
 # --------------------------------------------------------------------------- #
+# 1b. BE-4: fail-on-revert guard — the grading path is DB-only (no file reads).
+# --------------------------------------------------------------------------- #
+class TestNoFileBasedGradingPath:
+    """Locks the de-backdooring this rebuild performed. The file-coupled and
+    agent-fakeable grading symbols must stay DELETED, and no grading function may
+    glob audit JSONL or read the evidence file-manifest. Reverting the rewrite
+    (reintroducing any file-based / forgeable vector) fails here — the guard the
+    plan's BE-4 mandates. Scoped to the grading functions only; the deferred
+    activity-log (``actions.jsonl``) and the out-of-grading ``get_case_status``
+    manifest read are intentionally NOT in scope.
+    """
+
+    def test_deleted_file_based_symbols_stay_deleted(self):
+        # module-level xmount/temp path-walker (the CONF-1-IDX root cause)
+        assert not hasattr(cm, "_resolve_source_evidence_static")
+        # JSONL-globbing graders + the agent-fakeable DB existence probe
+        for meth in (
+            "_classify_provenance",
+            "_candidate_audit_dirs",
+            "_db_audit_event_has_audit_id",
+        ):
+            assert not hasattr(
+                CaseManager, meth
+            ), f"CaseManager.{meth} must stay deleted (file-based/forgeable grading)"
+
+    def test_grading_functions_read_no_files(self):
+        srcs = "\n".join(
+            inspect.getsource(fn)
+            for fn in (
+                CaseManager.record_finding,
+                CaseManager._scan_audit_trail,
+                CaseManager._score_grounding,
+                CaseManager._grounding_result,
+                CaseManager._resolve_evidence_engaged,
+                CaseManager._next_shell_seq,
+                cm._derive_confidence_ceiling,
+            )
+        )
+        for token in (
+            ".glob(",  # no audit/*.jsonl globbing
+            ".jsonl",  # no JSONL file paths in the grading path
+            "load_manifest",  # no evidence file-manifest read
+            "_classify_provenance",
+            "_resolve_source_evidence_static",
+            "_candidate_audit_dirs",
+            "_db_audit_event_has_audit_id",
+        ):
+            assert (
+                token not in srcs
+            ), f"file-based grading vestige reintroduced: {token!r}"
+
+
+# --------------------------------------------------------------------------- #
 # Shared DB-mode fixture + helpers.
 # --------------------------------------------------------------------------- #
 class _CapturingStore:
