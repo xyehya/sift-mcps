@@ -196,7 +196,7 @@ Discovery (done) → **operator approves this spec** → W1 → W2 → W3 (W1 as
 
 ## L-1a — Audit-write DSN process-env footprint
 
-> Documented here (not in a worker/deploy runbook) because the SIFT portal-v3 deploy + opensearch-worker runbooks live in the **external ops hub** (`~/AI/SIFTHACK/sift-portal-ops/`), which is not part of this repo and cannot be committed on the `portal-v3/p0-foundation` branch. This is the repo-tracked home for the footprint note; mirror it into the ops-hub deploy runbook at deploy time.
+> Documented here (not in a worker/deploy runbook) because the SIFT portal-v3 deploy + opensearch-worker runbooks live in the **external ops hub** (`~/AI/sift-portal-ops/`), which is not part of this repo and cannot be committed on the `portal-v3/p0-foundation` branch. This is the repo-tracked home for the footprint note; mirror it into the ops-hub deploy runbook at deploy time.
 
 **What is injected, and where.** To let the per-artifact ingest provenance forward-writes (Gap B / B-D1) reach `app.audit_events`, the gateway carries a Postgres write DSN into the opensearch-worker job and then into the ingest subprocess env:
 

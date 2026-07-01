@@ -11,7 +11,7 @@
 
 ## Operating model, trackers & lessons (read before substantive work)
 
-Internal ops hub lives **outside this repo** (local): `~/AI/SIFTHACK/sift-portal-ops/`.
+Internal ops hub lives **outside this repo** (local): `~/AI/sift-portal-ops/`.
 - **Start there (only these two):** `STATUS.md` (narrative current state) +
   `trackers/MASTER_TRACKER.md` (the single consolidated tracker — every open / decision-pending /
   deferred item + the GitHub PR & issue board, in tables). Read it before "discovering" work. The old
@@ -57,6 +57,27 @@ graph tools over grep/glob for code discovery:
 
 Fall back to `rg` for string literals, configs, shell scripts, docs, or when the
 graph is insufficient.
+
+### Architecture Decision Record (ADR)
+
+`codebase-memory-mcp` also persists a project-level ADR (PURPOSE / STACK /
+ARCHITECTURE / PATTERNS / TRADEOFFS / PHILOSOPHY) in the same graph store as the
+code-discovery tools above — shared across Claude Code, Codex CLI, and OpenCode
+since all three point at the identical local binary + DB.
+
+- **Read it at session start** and before touching gateway / security / execution
+  code: `manage_adr(project="Users-yk-AI-sift-mcps", mode="get")`. Faster and more
+  current than re-reading this file plus both architecture docs from scratch.
+- **Update it, don't let it rot**: when a PATTERNS/TRADEOFFS entry changes (policy-chain
+  stage count, seccomp/AppArmor default posture, an add-on drift gets resolved, etc.),
+  re-run `manage_adr(mode="update", content=...)` with the revised section. A stale
+  ADR is worse than none — agents will trust it.
+- **Targeted access**: `mode="sections"` reads/writes one named section instead of the
+  whole document.
+- Source material for the ADR content: `docs/drafts/architecture/sift-architecture-SPEC.md`
+  + `docs/drafts/architecture/sift-architecture.html` (C4 + STRIDE viewpoints), reconciled
+  against live `get_architecture()` graph output — code wins on conflict, flag the drift
+  (same rule as the Security model section above).
 
 ## Spawned agents & agent teams — required loadout
 

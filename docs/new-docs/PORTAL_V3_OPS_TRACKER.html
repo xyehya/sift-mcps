@@ -83,7 +83,7 @@
 <tr><td>Current-state snapshot</td><td><span class="tier wt">WORKTREE</span></td><td class="path">…/frontend/design/claude-design-export/CURRENT-STATE.md</td></tr>
 <tr><td>Design tokens (single source, both themes)</td><td><span class="tier git">GIT</span></td><td class="path">…/frontend/src/styles/tokens.css</td></tr>
 <tr><td>Built code (current HEAD 445827b · <b>PUSHED to origin</b>)</td><td><span class="tier git">GIT</span></td><td class="path">branch portal-v3/p0-foundation · origin/portal-v3/p0-foundation @ 445827b (97 ahead of main)</td></tr>
-<tr><td><b>Current ops hub</b> — status, runbooks, trackers, B1/P35-8 record</td><td><span class="tier durable">DURABLE</span></td><td class="path">/home/yk/AI/SIFTHACK/sift-portal-ops/</td></tr>
+<tr><td><b>Current ops hub</b> — status, runbooks, trackers, B1/P35-8 record</td><td><span class="tier durable">DURABLE</span></td><td class="path">~/AI/sift-portal-ops/</td></tr>
 <tr><td>Cross-session memory (loads every session)</td><td><span class="tier durable">DURABLE</span></td><td class="path">/home/yk/.claude/projects/-home-yk-AI-SIFTHACK-sift-mcps/memory/project_portal_v3_rebuild.md</td></tr>
 <tr><td><b>This tracker</b></td><td><span class="tier durable">DURABLE</span></td><td class="path">/home/yk/AI/SIFTHACK/sift-mcps/docs/new-docs/PORTAL_V3_OPS_TRACKER.html</td></tr>
 </tbody>
@@ -155,7 +155,7 @@
 You are ORCHESTRATOR. Working dir = this worktree (branch portal-v3/p0-foundation,
 HEAD 445827b, already PUSHED to origin). NEVER touch the main checkout. You read /
 verify / gate / dispatch — you do NOT write code yourself. Read first:
-/home/yk/AI/SIFTHACK/sift-portal-ops/STATUS.md (forward brief) and its trackers/.
+~/AI/sift-portal-ops/STATUS.md (forward brief) and its trackers/.
 
 Agents — dispatch via the Agent tool, ONE writer at a time, fresh context, self-contained:
 - frontend-coder   → SOLE WRITER for FRONTEND units (packages/case-dashboard/frontend).
@@ -182,7 +182,7 @@ B2 (c04d744); B6 audit-link chain (b385a59→7cc26ee→2f953a7→c73dc93→44582
 audit trail now resolves+renders for core/run_command ids, browser-verified.
 
 NEXT CANDIDATE — P35-3 (BACKEND, gateway-only, no add-on backend churn). Full actionable
-spec: /home/yk/AI/SIFTHACK/sift-portal-ops/trackers/P35-3_AUDIT_ID_FLOW.md. Add-on backends
+spec: ~/AI/sift-portal-ops/trackers/P35-3_AUDIT_ID_FLOW.md. Add-on backends
 (opensearch/kb/wintriage) give the agent no citable audit_id → grounding WEAK. Recommended
 Option A: gateway injects envelope_event_id into the response when none present (~15 lines in
 sift-gateway/src/sift_gateway/policy_middleware.py:~986 + :1034) + companion
