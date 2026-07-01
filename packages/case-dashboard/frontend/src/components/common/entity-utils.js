@@ -191,7 +191,13 @@ export function filterTimeline(timeline, { types = new Set(), host = 'all', sear
     const q = search.toLowerCase()
     list = list.filter((e) => (e.description ?? '').toLowerCase().includes(q))
   }
-  return [...list].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+
+  // ⚡ Bolt: Optimize sorting by mapping dates once rather than parsing repeatedly on every sort comparison.
+  // Reduces sort time complexity overhead from O(N log N) date parses to O(N) date parses.
+  return list
+    .map((e) => ({ e, ts: e.timestamp ? new Date(e.timestamp).getTime() : 0 }))
+    .sort((a, b) => a.ts - b.ts)
+    .map((w) => w.e)
 }
 
 // ── Generic table sort (Hosts / Accounts / IOCs) ─────────────────────────
