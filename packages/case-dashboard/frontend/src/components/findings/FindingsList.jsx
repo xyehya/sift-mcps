@@ -74,9 +74,12 @@ export function FindingsList({
   const sortedList = useMemo(() => {
     const arr = list.slice()
     return arr.sort((a, b) => {
-      const ta = new Date(a.modified_at || a.event_timestamp || 0).getTime()
-      const tb = new Date(b.modified_at || b.event_timestamp || 0).getTime()
-      return sortFilter === 'oldest' ? ta - tb : tb - ta
+      // ⚡ Bolt: Fast lexicographical sort for ISO 8601 strings (avoids new Date() allocation)
+      const ta = a.modified_at || a.event_timestamp || ''
+      const tb = b.modified_at || b.event_timestamp || ''
+      if (ta === tb) return 0
+      if (sortFilter === 'oldest') return ta < tb ? -1 : 1
+      return ta > tb ? -1 : 1
     })
   }, [list, sortFilter])
 

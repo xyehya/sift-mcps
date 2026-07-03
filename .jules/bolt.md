@@ -1,0 +1,3 @@
+## 2024-05-24 - [Avoid Date Instantiation for ISO 8601 Sorting]
+**Learning:** Instantiating `new Date(string).getTime()` in hot array sorting loops for ISO 8601 timestamps has significant overhead and can be a performance bottleneck for large datasets (e.g. rendering long lists of findings).
+**Action:** Use lexicographical string comparison (`a < b ? -1 : 1`) for ISO 8601 timestamp strings directly, which is order-preserving and an order of magnitude faster. Only fallback to `0` or `''` when fields are missing.

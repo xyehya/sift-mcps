@@ -214,5 +214,11 @@ export function contextWindow(finding, timeline) {
   const TWO_H = 2 * 3600 * 1000
   return timeline
     .filter((e) => Math.abs(new Date(e.timestamp).getTime() - ts) <= TWO_H)
-    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+    .sort((a, b) => {
+      // ⚡ Bolt: Fast lexicographical sort for ISO 8601 strings
+      const ta = a.timestamp || ''
+      const tb = b.timestamp || ''
+      if (ta === tb) return 0
+      return ta < tb ? -1 : 1
+    })
 }
