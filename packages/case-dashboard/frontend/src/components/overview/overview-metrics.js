@@ -154,6 +154,11 @@ export function recentActivity(findings, rangeKey, limit = 8, now = Date.now()) 
       return ts ? now - new Date(ts).getTime() < range.ms : false
     })
     .slice()
-    .sort((a, b) => new Date(findingTs(b) ?? 0) - new Date(findingTs(a) ?? 0))
+    // ⚡ Bolt: Fast lexicographical sort for ISO 8601 strings (avoids new Date() overhead, descending order)
+    .sort((a, b) => {
+      const ta = findingTs(a) || ''
+      const tb = findingTs(b) || ''
+      return ta < tb ? 1 : ta > tb ? -1 : 0
+    })
     .slice(0, limit)
 }

@@ -1,0 +1,3 @@
+## 2024-07-05 - Lexicographical Date Sorting
+**Learning:** Instantiating `new Date()` inside a `sort` comparator function creates significant memory overhead and garbage collection pressure, especially in hot loops for rendering. Since ISO 8601 timestamps are designed to be lexicographically comparable, using `new Date()` is redundant for ordering. Simple string operators (`<` and `>`) are over 20x faster than `new Date(a) - new Date(b)`.
+**Action:** Always prefer `<` / `>` string comparison over `new Date()` instantiation when sorting arrays of objects by ISO 8601 timestamp properties. Note that `String.localeCompare` is faster than `new Date()` but `<` / `>` operator comparison is the fastest.
