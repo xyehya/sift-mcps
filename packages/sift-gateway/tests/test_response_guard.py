@@ -48,6 +48,17 @@ class TestScanToolResult:
         assert findings[0]["severity"] == "critical"
         assert findings[0]["char_offset"] == 0
 
+    def test_openai_api_key_formats_detected(self):
+        formats = [
+            "sk-12345678901234567890T3BlbkFJ12345678901234567890",
+            "sk-proj-123456789012345678901234567890123456789012345678",
+            "sk-svcacct-123456789012345678901234567890123456789012345678"
+        ]
+        for key in formats:
+            findings = scan_tool_result(f"found {key} in config")
+            names = [f["pattern_name"] for f in findings]
+            assert "OpenAI API Key" in names, f"Failed to detect {key}"
+
     def test_clean_text_returns_empty(self):
         assert scan_tool_result("clean forensic output with no secrets") == []
 

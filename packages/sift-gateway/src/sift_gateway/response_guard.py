@@ -63,7 +63,7 @@ _PATTERNS: list[_Pattern] = [
     _Pattern("AWS Secret Key",    re.compile(r'(?i)aws[_\-]?secret[_\-]?access[_\-]?key\s*[=:]\s*[A-Za-z0-9/+=]{40}'), "critical"),
     _Pattern("GitHub Token",      re.compile(r'gh[pousr]_[A-Za-z0-9_]{36,}'), "critical"),
     _Pattern("GitHub Classic PAT",re.compile(r'github_pat_[A-Za-z0-9_]{82,}'), "critical"),
-    _Pattern("OpenAI API Key",    re.compile(r'sk-[A-Za-z0-9]{20,}T3BlbkFJ[A-Za-z0-9]{20,}'), "critical"),
+    _Pattern("OpenAI API Key",    re.compile(r'sk-(?:[A-Za-z0-9]{20,}T3BlbkFJ[A-Za-z0-9]{20,}|(?:proj|svcacct)-[A-Za-z0-9\-_]{20,})'), "critical"),
     _Pattern("Anthropic Key",     re.compile(r'sk-ant-[A-Za-z0-9\-]{80,}'), "critical"),
     _Pattern("Stripe Key",        re.compile(r'(?:sk|pk)_(?:test|live)_[A-Za-z0-9]{24,}'), "critical"),
     _Pattern("Discord Token",     re.compile(r'[MN][A-Za-z\d]{23,}\.[\w-]{6}\.[\w-]{27,}'), "critical"),
