@@ -212,7 +212,14 @@ export function contextWindow(finding, timeline) {
   if (!rawTs || !timeline?.length) return []
   const ts = new Date(rawTs).getTime()
   const TWO_H = 2 * 3600 * 1000
+  // ⚡ Bolt: Optimize timestamp sorting
+  // Prefer lexicographical string comparison for ISO 8601 timestamps
+  // to avoid instantiation overhead of new Date() in the sort loop.
   return timeline
     .filter((e) => Math.abs(new Date(e.timestamp).getTime() - ts) <= TWO_H)
-    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+    .sort((a, b) => {
+      const ta = a.timestamp || ''
+      const tb = b.timestamp || ''
+      return ta < tb ? -1 : ta > tb ? 1 : 0
+    })
 }

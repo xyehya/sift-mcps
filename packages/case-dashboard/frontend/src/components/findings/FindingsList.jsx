@@ -73,10 +73,16 @@ export function FindingsList({
   // Sort the list by time
   const sortedList = useMemo(() => {
     const arr = list.slice()
+    // ⚡ Bolt: Optimize timestamp sorting
+    // Prefer lexicographical string comparison for ISO 8601 timestamps
+    // to avoid instantiation overhead of new Date() in the sort loop.
     return arr.sort((a, b) => {
-      const ta = new Date(a.modified_at || a.event_timestamp || 0).getTime()
-      const tb = new Date(b.modified_at || b.event_timestamp || 0).getTime()
-      return sortFilter === 'oldest' ? ta - tb : tb - ta
+      const ta = a.modified_at || a.event_timestamp || ''
+      const tb = b.modified_at || b.event_timestamp || ''
+      if (ta === tb) return 0
+
+      const comp = ta < tb ? -1 : 1
+      return sortFilter === 'oldest' ? comp : -comp
     })
   }, [list, sortFilter])
 

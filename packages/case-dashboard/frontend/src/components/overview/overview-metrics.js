@@ -147,6 +147,9 @@ export const ACTIVITY_RANGES = [
 /** Most-recent findings within the window, newest first, capped at `limit`. */
 export function recentActivity(findings, rangeKey, limit = 8, now = Date.now()) {
   const range = ACTIVITY_RANGES.find((r) => r.key === rangeKey) ?? ACTIVITY_RANGES[0]
+  // ⚡ Bolt: Optimize timestamp sorting
+  // Prefer lexicographical string comparison for ISO 8601 timestamps
+  // to avoid instantiation overhead of new Date() in the sort loop.
   return (findings ?? [])
     .filter((f) => {
       if (range.ms === Infinity) return true
@@ -154,6 +157,10 @@ export function recentActivity(findings, rangeKey, limit = 8, now = Date.now()) 
       return ts ? now - new Date(ts).getTime() < range.ms : false
     })
     .slice()
-    .sort((a, b) => new Date(findingTs(b) ?? 0) - new Date(findingTs(a) ?? 0))
+    .sort((a, b) => {
+      const ta = findingTs(a) || ''
+      const tb = findingTs(b) || ''
+      return ta > tb ? -1 : ta < tb ? 1 : 0
+    })
     .slice(0, limit)
 }

@@ -191,7 +191,14 @@ export function filterTimeline(timeline, { types = new Set(), host = 'all', sear
     const q = search.toLowerCase()
     list = list.filter((e) => (e.description ?? '').toLowerCase().includes(q))
   }
-  return [...list].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+  // ⚡ Bolt: Optimize timestamp sorting
+  // Prefer lexicographical string comparison for ISO 8601 timestamps
+  // to avoid instantiation overhead of new Date() in the sort loop.
+  return [...list].sort((a, b) => {
+    const ta = a.timestamp || ''
+    const tb = b.timestamp || ''
+    return ta < tb ? -1 : ta > tb ? 1 : 0
+  })
 }
 
 // ── Generic table sort (Hosts / Accounts / IOCs) ─────────────────────────
