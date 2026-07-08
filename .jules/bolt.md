@@ -1,0 +1,3 @@
+## 2026-07-08 - Optimize ISO 8601 Timestamp Sorting
+**Learning:** Instantiating Date objects within `Array.prototype.sort` comparators or `Array.prototype.filter` iterations creates significant GC pressure and CPU overhead in hot loops. While `Date.parse()` is faster for parsing strings to epoch numbers, it degrades performance if passed actual `Date` objects (by converting them to strings first) and returns NaN for numeric epoch timestamps, which breaks sorting logic.
+**Action:** Always prefer `x.getTime ? x.getTime() : typeof x === 'number' ? x : (Date.parse(x) || 0)` or similar robust parsing when sorting or filtering mixed timestamp arrays, to avoid `new Date()` allocations while gracefully handling strings, numbers, and existing Date objects.

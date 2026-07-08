@@ -191,7 +191,9 @@ export function filterTimeline(timeline, { types = new Set(), host = 'all', sear
     const q = search.toLowerCase()
     list = list.filter((e) => (e.description ?? '').toLowerCase().includes(q))
   }
-  return [...list].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+  // ⚡ Bolt: Use Date.parse to avoid GC overhead, handling existing Date objects and numbers correctly.
+  const getMs = (t) => t?.getTime ? t.getTime() : typeof t === 'number' ? t : (Date.parse(t) || 0)
+  return [...list].sort((a, b) => getMs(a.timestamp) - getMs(b.timestamp))
 }
 
 // ── Generic table sort (Hosts / Accounts / IOCs) ─────────────────────────

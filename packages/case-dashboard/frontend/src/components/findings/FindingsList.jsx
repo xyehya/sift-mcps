@@ -73,9 +73,11 @@ export function FindingsList({
   // Sort the list by time
   const sortedList = useMemo(() => {
     const arr = list.slice()
+    // ⚡ Bolt: Use Date.parse to avoid GC overhead, handling existing Date objects and numbers correctly.
+    const getMs = (t) => t?.getTime ? t.getTime() : typeof t === 'number' ? t : (Date.parse(t) || 0)
     return arr.sort((a, b) => {
-      const ta = new Date(a.modified_at || a.event_timestamp || 0).getTime()
-      const tb = new Date(b.modified_at || b.event_timestamp || 0).getTime()
+      const ta = getMs(a.modified_at || a.event_timestamp || 0)
+      const tb = getMs(b.modified_at || b.event_timestamp || 0)
       return sortFilter === 'oldest' ? ta - tb : tb - ta
     })
   }, [list, sortFilter])

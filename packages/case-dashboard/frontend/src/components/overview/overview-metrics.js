@@ -147,13 +147,17 @@ export const ACTIVITY_RANGES = [
 /** Most-recent findings within the window, newest first, capped at `limit`. */
 export function recentActivity(findings, rangeKey, limit = 8, now = Date.now()) {
   const range = ACTIVITY_RANGES.find((r) => r.key === rangeKey) ?? ACTIVITY_RANGES[0]
+
+  // ⚡ Bolt: Use Date.parse to avoid GC overhead, handling existing Date objects and numbers correctly.
+  const getMs = (t) => t?.getTime ? t.getTime() : typeof t === 'number' ? t : (Date.parse(t) || 0)
+
   return (findings ?? [])
     .filter((f) => {
       if (range.ms === Infinity) return true
       const ts = findingTs(f)
-      return ts ? now - new Date(ts).getTime() < range.ms : false
+      return ts ? now - getMs(ts) < range.ms : false
     })
     .slice()
-    .sort((a, b) => new Date(findingTs(b) ?? 0) - new Date(findingTs(a) ?? 0))
+    .sort((a, b) => getMs(findingTs(b) ?? 0) - getMs(findingTs(a) ?? 0))
     .slice(0, limit)
 }

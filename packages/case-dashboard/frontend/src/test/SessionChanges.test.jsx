@@ -276,7 +276,9 @@ describe('B-04: ActivityFeed time filter', () => {
   it('truncates to max 8 findings', () => {
     const now = Date.now()
     const findings = Array.from({ length: 15 }, (_, i) => makeFinding(String(i + 1), new Date(now)))
-    const sliced = [...findings].sort((a, b) => new Date(b.modified_at) - new Date(a.modified_at)).slice(0, 8)
+    // ⚡ Bolt: Use Date.parse to avoid GC overhead, handling existing Date objects and numbers correctly.
+    const getMs = (t) => t?.getTime ? t.getTime() : typeof t === 'number' ? t : (Date.parse(t) || 0)
+    const sliced = [...findings].sort((a, b) => getMs(b.modified_at) - getMs(a.modified_at)).slice(0, 8)
     expect(sliced).toHaveLength(8)
   })
 
