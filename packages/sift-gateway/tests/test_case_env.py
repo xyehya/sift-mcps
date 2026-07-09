@@ -1,9 +1,7 @@
 import os
 from pathlib import Path
 
-import pytest
 import yaml
-
 from sift_gateway.backends.stdio_backend import StdioMCPBackend
 from sift_gateway.config import load_config
 from sift_gateway.server import Gateway

@@ -13,20 +13,18 @@ from __future__ import annotations
 
 import secrets
 
+from _supabase_reauth_harness import operator_principal
+from case_dashboard.auth import PortalSessionMiddleware
+from case_dashboard.session_jwt import (
+    SESSION_ENVELOPE_COOKIE_NAME,
+    generate_session_envelope,
+)
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
-
-from case_dashboard.auth import PortalSessionMiddleware
-from case_dashboard.session_jwt import (
-    SESSION_ENVELOPE_COOKIE_NAME,
-    generate_session_envelope,
-)
-
-from _supabase_reauth_harness import operator_principal
 
 _SECRET = secrets.token_hex(32)
 _ACCESS_TOKEN = "mw-access-" + secrets.token_hex(8)

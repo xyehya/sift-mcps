@@ -1572,7 +1572,7 @@ def test_run_command_sigpipe_on_nonfinal_stage_is_not_a_partial_failure(
     """`yes | head -1` — yes dies of SIGPIPE (rc 141 / -13) when head closes the
     pipe early. That is a normal pipeline event, not an inaccessible-input
     failure, so partial_failure must NOT be set (no false alarms)."""
-    case_dir = _exec_case_dir(tmp_path, monkeypatch)
+    case_dir = _exec_case_dir(tmp_path, monkeypatch)  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     _set_policy(monkeypatch, {"denied_binaries": ["env"]})
 
     res = generic.run_command("yes | head -1", purpose="sigpipe exemption")

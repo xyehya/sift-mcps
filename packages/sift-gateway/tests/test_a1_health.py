@@ -7,15 +7,10 @@ from __future__ import annotations
 
 import json
 import os
-import stat
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
-
 from sift_gateway.health import _check_evidence_root, _probe_supabase, health_endpoint
-
 
 # ---------------------------------------------------------------------------
 # _check_evidence_root

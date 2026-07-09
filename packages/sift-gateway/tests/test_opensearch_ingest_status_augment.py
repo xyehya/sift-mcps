@@ -17,7 +17,6 @@ import pytest
 from fastmcp import FastMCP
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
-
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.identity import Identity
 from sift_gateway.policy_middleware import (
@@ -25,7 +24,6 @@ from sift_gateway.policy_middleware import (
     _use_gateway_active_case,
 )
 from sift_gateway.server import Gateway
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -522,11 +520,10 @@ async def test_ingstatus_assert_passes_schema_catches_text_only():
     assert_passes_output_schema must raise AssertionError with the SDK error string.
     This is the lightweight Seam B regression guard for the M-INGSTATUS bug class.
     """
+    import pytest
     from opensearch_mcp.registry import IngestStatusOut
     from sift_common.registry_helpers import tool_output_schema
     from sift_common.testing.surface import assert_passes_output_schema
-
-    import pytest
 
     schema = tool_output_schema(IngestStatusOut)
     # Simulate a pre-fix text-only result (structured_content=None).

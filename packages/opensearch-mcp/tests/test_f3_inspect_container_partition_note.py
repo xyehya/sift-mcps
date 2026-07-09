@@ -4,12 +4,10 @@ dead-end on `mmls` (exit 1, empty output)."""
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import opensearch_mcp.server as srv
 from opensearch_mcp.server import opensearch_inspect_container
-
 
 _EWFINFO_OUT = (
     "ewfinfo 20140608\n\n"

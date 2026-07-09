@@ -14,16 +14,13 @@ from __future__ import annotations
 import sys
 import types
 
-import pytest
-
-from sift_gateway.active_case import ActiveCase
 from sift_core.evidence_chain import ChainStatus
+from sift_gateway.active_case import ActiveCase
 from sift_gateway.evidence_gate import check_evidence_gate_db
 from sift_gateway.policy_middleware import (
     EvidenceGateMiddleware,
     _use_gateway_active_case,
 )
-
 
 _DSN = "postgresql://service@localhost/sift"
 _CASE = "11111111-1111-1111-1111-111111111111"

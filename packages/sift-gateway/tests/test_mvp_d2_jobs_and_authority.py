@@ -8,13 +8,11 @@ from unittest.mock import patch
 
 import pytest
 from fastmcp import FastMCP
-
 from sift_core.evidence_chain import ChainStatus
 from sift_gateway.identity import CaseMembership, Identity
 from sift_gateway.jobs import EnqueuedJob, JobService, JobServiceError
 from sift_gateway.policy_middleware import gateway_policy_middlewares
 from sift_gateway.server import Gateway
-
 
 # ---------------------------------------------------------------------------
 # Fake psycopg connection plumbing for JobService
@@ -22,7 +20,7 @@ from sift_gateway.server import Gateway
 
 
 class _FakeCursor:
-    def __init__(self, conn: "_FakeConn") -> None:
+    def __init__(self, conn: _FakeConn) -> None:
         self._conn = conn
 
     def __enter__(self):

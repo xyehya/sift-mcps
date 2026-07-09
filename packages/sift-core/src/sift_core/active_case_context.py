@@ -19,11 +19,11 @@ name used across the codebase.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
 
 
 @dataclass(frozen=True)

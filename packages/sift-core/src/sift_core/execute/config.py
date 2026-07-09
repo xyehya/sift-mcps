@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from sift_common import resolve_case_dir  # noqa: F401
+from sift_common import resolve_case_dir
 
 
 @dataclass

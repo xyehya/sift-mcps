@@ -694,7 +694,6 @@ class TestPreflightToParserIntegration:
         """Fresh-eyes Issue 3 — gate is at the dict primitive, not just at
         discover_hosts. Covers preflight + opensearch_host_fix + future CLI paths."""
         import pytest
-
         from opensearch_mcp.host_dictionary import (
             HostDictionary,
             InvalidHostnameValue,

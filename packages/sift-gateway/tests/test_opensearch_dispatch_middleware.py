@@ -15,10 +15,7 @@ from __future__ import annotations
 
 import json
 
-import pytest
 from fastmcp import FastMCP
-
-from sift_core.evidence_chain import ChainStatus
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.identity import Identity
 from sift_gateway.policy_middleware import (
@@ -43,9 +40,9 @@ def test_opensearch_job_dispatch_set_is_the_worker_route_invariant():
     """
     from sift_gateway.policy_middleware import _OPENSEARCH_JOB_DISPATCH_TOOLS
 
-    assert _OPENSEARCH_JOB_DISPATCH_TOOLS == frozenset(
+    assert frozenset(
         {"opensearch_ingest", "opensearch_enrich_intel"}
-    )
+    ) == _OPENSEARCH_JOB_DISPATCH_TOOLS
     # The long-running reindex stays DIRECT by design (documented exception).
     assert "opensearch_fix_host_mapping" not in _OPENSEARCH_JOB_DISPATCH_TOOLS
 

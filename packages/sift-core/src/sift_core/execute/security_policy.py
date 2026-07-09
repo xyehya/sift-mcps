@@ -8,7 +8,6 @@ import os
 from copy import deepcopy
 from typing import Any
 
-
 SECURITY_POLICY_ENV = "SIFT_EXECUTE_SECURITY_POLICY"
 
 DENY_FLOOR = frozenset(
@@ -186,7 +185,6 @@ MVP_FORENSIC_ALLOWLIST = frozenset(
         "wxtcmd",
         # Strings / carving / signatures
         "strings",
-        "bstrings",
         "bulk_extractor",
         "foremost",
         "scalpel",

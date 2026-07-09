@@ -306,7 +306,7 @@ def ensure_winlog_pipeline(client) -> dict[str, Any]:
         legacy_count = 0
         try:
             mappings = client.indices.get_mapping(index=_TEMPLATE_PATTERN)
-            for idx, m in (mappings or {}).items():
+            for idx, m in (mappings or {}).items():  # noqa: B007 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
                 props = (
                     m.get("mappings", {})
                     .get("properties", {})

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "supabase" / "migrations" / "202606070400_active_case_authority.sql"
 FOUNDATION = ROOT / "supabase" / "migrations" / "202606070101_identity_foundation.sql"
@@ -35,7 +34,7 @@ def test_no_historical_data_or_deferred_runtime_tables() -> None:
         "mcp_backends",
         "opensearch",
     ):
-        assert f"create table" not in sql or f"app.{deferred_table}" not in sql
+        assert "create table" not in sql or f"app.{deferred_table}" not in sql
 
 
 def test_rls_still_enabled_on_case_authority_tables() -> None:

@@ -21,16 +21,15 @@ from pathlib import Path
 
 import case_dashboard.routes as routes_mod
 import pytest
+from _supabase_reauth_harness import (
+    ReauthFakeSupabaseAuth,
+    operator_envelope,
+    operator_principal,
+    set_operator_session,
+)
 from case_dashboard.routes import create_dashboard_v2_app
 from case_dashboard.session_jwt import SESSION_ENVELOPE_COOKIE_NAME
 from starlette.testclient import TestClient
-
-from _supabase_reauth_harness import (
-    ReauthFakeSupabaseAuth,
-    operator_principal,
-    operator_envelope,
-    set_operator_session,
-)
 
 _SECRET = secrets.token_hex(32)
 

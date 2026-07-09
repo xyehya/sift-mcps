@@ -23,7 +23,7 @@ import pytest
 _MOD_PATH = (
     Path(__file__).resolve().parents[1] / "src" / "rag_mcp" / "pgvector_store.py"
 )
-import sys  # noqa: E402
+import sys
 
 _spec = importlib.util.spec_from_file_location("rag_mcp_pgvector_store", _MOD_PATH)
 _pg = importlib.util.module_from_spec(_spec)

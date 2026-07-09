@@ -16,7 +16,7 @@ import tailwindcss from '@tailwindcss/vite'
 // back to `secure:false` (dev-only). Production/live must provide the CA via
 // VITE_PROXY_CA so TLS is actually verified.
 const PROXY_TARGET = process.env.VITE_API_PROXY ?? 'https://192.168.122.81:4508'
-const PROXY_CA = process.env.VITE_PROXY_CA ?? '/home/yk/.sift-vm-ca-192.168.122.81.pem'
+const PROXY_CA = process.env.VITE_PROXY_CA ?? '/Users/yk/.sift-vm-ca-192.168.122.81.pem'
 
 function buildProxyConfig() {
   const base = { target: PROXY_TARGET, changeOrigin: true }

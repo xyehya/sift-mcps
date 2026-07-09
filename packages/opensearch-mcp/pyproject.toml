@@ -55,19 +55,7 @@ git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--mat
 [tool.hatch.build.targets.wheel]
 packages = ["src/opensearch_mcp"]
 
-[tool.ruff]
-target-version = "py310"
-line-length = 99
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "W"]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/generate_test_data.py" = ["E501"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["tests"]
-markers = [
-    "integration: tests requiring OpenSearch Docker container",
-]
+# ruff and pytest config are centralized at the repo root pyproject.toml (this
+# package used to be a separate repo — see the root's per-file-ignores for
+# this package's carve-outs, and [tool.pytest.ini_options] for its markers/
+# pythonpath entries).

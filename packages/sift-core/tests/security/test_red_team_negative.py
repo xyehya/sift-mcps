@@ -7,13 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from sift_core.active_case_context import AuthorityContext, use_active_case_context
 from sift_core.execute import security
 from sift_core.execute.exceptions import DeniedBinaryError, ExecutionError
 from sift_core.execute.runtime_acl import build_sandbox_env
 from sift_core.execute.security_policy import build_security_policy
-
 
 STRICT_GATE_ENV = "SIFT_RUN3_GATE_STRICT"
 APPROVAL_REQUIRED = "approval" + "_required"

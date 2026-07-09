@@ -1,7 +1,6 @@
 """B-MVP-004/B-MVP-015: RAG embedding-model revision pin + offline resolution."""
 
 import pytest
-
 from rag_mcp.utils import (
     CANONICAL_MODEL_NAME,
     CANONICAL_MODEL_REVISION,

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
 from sift_core.case_io import get_case_dir, resolve_case_path
 

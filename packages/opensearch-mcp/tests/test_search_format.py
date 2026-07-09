@@ -9,13 +9,9 @@ caught even if server-level wiring changes.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 import opensearch_mcp.search_format as sf
-
 
 # ---------------------------------------------------------------------------
 # _strip_hits

@@ -16,7 +16,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from sift_core.execute.job_worker import JobWorker
 
 # Reuse the faithful fake DB from sift-core's worker test module.
@@ -33,7 +32,7 @@ _spec.loader.exec_module(_mod)
 FakeJobDB = _mod.FakeJobDB
 _Job = _mod._Job
 
-from opensearch_mcp import ingest_job  # noqa: E402
+from opensearch_mcp import ingest_job
 
 
 @pytest.fixture

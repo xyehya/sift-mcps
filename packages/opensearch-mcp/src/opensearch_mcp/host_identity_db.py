@@ -29,7 +29,8 @@ Security invariants (BATCH-K4 acceptance + Migration-Spec constraints):
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +167,7 @@ def ingest_status_from_db(dsn: str, case_id: str, *, limit: int = 25) -> list[di
                 )
                 col_names = [desc[0] for desc in cur.description] if cur.description else []
                 for raw in cur.fetchall():
-                    record = dict(zip(col_names, raw))
+                    record = dict(zip(col_names, raw))  # noqa: B905 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
                     rows.append({k: record.get(k) for k in _STATUS_FIELDS if k in record})
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("DB ingest-status read failed (%s)", type(exc).__name__)

@@ -6,6 +6,7 @@ import os
 import shutil
 from pathlib import Path
 from urllib.parse import urlparse
+
 import jsonschema
 
 from sift_gateway.backends.base import MCPBackend
@@ -252,7 +253,7 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
         
         try:
             if manifest_path.exists():
-                with open(manifest_path, "r", encoding="utf-8") as f:
+                with open(manifest_path, encoding="utf-8") as f:
                     manifest_data = json.load(f)
             else:
                 logger.warning("Manifest not found for stdio backend %s at %s", name, manifest_path)
@@ -280,7 +281,7 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
                 manifest_source = str(manifest_path)
                 try:
                     if manifest_path.exists():
-                        with open(manifest_path, "r", encoding="utf-8") as f:
+                        with open(manifest_path, encoding="utf-8") as f:
                             manifest_data = json.load(f)
                 except Exception as e:
                     logger.warning("Failed to load manifest for HTTP backend %s from file %s: %s", name, manifest_path, e)
@@ -337,7 +338,7 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
             logger.error("JSON schema file not found at %s", SCHEMA_PATH)
             return manifest_data
 
-        with open(SCHEMA_PATH, "r", encoding="utf-8") as sf:
+        with open(SCHEMA_PATH, encoding="utf-8") as sf:
             schema = json.load(sf)
 
         # spec_version major-version compatibility: gateway accepts 1.x, rejects 2.x.

@@ -13,7 +13,6 @@ the DB-sourced snapshot.
 from __future__ import annotations
 
 import pytest
-
 from sift_core import case_ops, investigation_store
 from sift_core.active_case_context import AuthorityContext, use_active_case_context
 from sift_core.investigation_store import (
@@ -21,7 +20,6 @@ from sift_core.investigation_store import (
     resolve_case_metadata,
     resolve_investigation_store,
 )
-
 
 _DSN = "postgresql://service@localhost/sift"
 _CASE_ID = "11111111-1111-1111-1111-111111111111"

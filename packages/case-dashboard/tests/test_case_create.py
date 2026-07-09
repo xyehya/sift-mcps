@@ -15,14 +15,13 @@ from pathlib import Path
 import case_dashboard.routes as routes_mod
 import pytest
 import yaml
-from case_dashboard.routes import create_dashboard_v2_app
-from starlette.testclient import TestClient
-
 from _supabase_reauth_harness import (
     ReauthFakeSupabaseAuth,
     operator_principal,
     set_operator_session,
 )
+from case_dashboard.routes import create_dashboard_v2_app
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 
@@ -85,9 +84,9 @@ def _setup_cookie(client, examiner="alice", role="examiner", must_reset=False, p
     if passwords_dir:
         passwords_dir.mkdir(parents=True, exist_ok=True)
 
-    status = "invited" if must_reset else "active"
-    system_role = role if role in ("readonly",) else "owner"
-    from _supabase_reauth_harness import operator_principal, operator_envelope
+    status = "invited" if must_reset else "active"  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
+    system_role = role if role in ("readonly",) else "owner"  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
+    from _supabase_reauth_harness import operator_envelope
     from case_dashboard.session_jwt import SESSION_ENVELOPE_COOKIE_NAME
     env = operator_envelope(
         _SECRET,

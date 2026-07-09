@@ -17,7 +17,6 @@ from sift_gateway.audit_helpers import (
 )
 from sift_gateway.identity import Identity
 
-
 _SUPABASE_PRINCIPAL_ID = "33333333-3333-3333-3333-333333333333"
 
 

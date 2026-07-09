@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from mcp.types import Tool
-
 from sift_gateway.server import Gateway
 
 # Load the real migrated manifest so the test tracks the shipped namespace + tool set.

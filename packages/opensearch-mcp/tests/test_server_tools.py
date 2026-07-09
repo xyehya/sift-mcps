@@ -7,11 +7,9 @@ import json as _json
 from pathlib import Path as _Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-from opensearchpy.exceptions import RequestError as _OSRequestError
-
 import opensearch_mcp.server as _srv_mod
 import opensearch_mcp.server as srv
+import pytest
 from opensearch_mcp.registry import (
     IngestIn,
     IngestStatusIn,
@@ -33,6 +31,7 @@ from opensearch_mcp.server import (
     opensearch_status,
     opensearch_timeline,
 )
+from opensearchpy.exceptions import RequestError as _OSRequestError
 
 
 @pytest.fixture(autouse=True)
@@ -1102,9 +1101,8 @@ class TestEnrichIntelOutModel:
     def test_rejects_invalid_status(self):
         """Invalid status values must still fail validation."""
         import pytest
-        from pydantic import ValidationError
-
         from opensearch_mcp.registry import EnrichIntelOut
+        from pydantic import ValidationError
 
         with pytest.raises(ValidationError):
             EnrichIntelOut(status="running", case_id="test-case")
@@ -1254,7 +1252,7 @@ class TestIdxIngestContainerDetection:
         monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
         resp = opensearch_ingest(path="evidence", dry_run=True)
         assert "error" in resp
-        assert "containers_detected" != resp.get("status")
+        assert resp.get("status") != "containers_detected"
 
     def test_directory_no_containers_preserves_original_error(
         self, mock_client, tmp_path, monkeypatch

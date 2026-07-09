@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from sift_core.case_ops import (
     case_activate_data,
     case_init_data,

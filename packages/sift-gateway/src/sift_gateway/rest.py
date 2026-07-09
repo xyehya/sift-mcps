@@ -21,6 +21,12 @@ from sift_gateway.auth import (
     require_control_plane_operator,
     require_recent_reauth,
 )
+from sift_gateway.backends import (
+    SCHEMA_PATH,
+    load_and_validate_manifest,
+    validate_manifest_contract,
+)
+from sift_gateway.health import _operator_backend_health
 from sift_gateway.join import (
     check_join_rate_limit,
     generate_join_code,
@@ -29,12 +35,6 @@ from sift_gateway.join import (
     validate_and_consume_join_code,
 )
 from sift_gateway.token_gen import generate_gateway_token
-from sift_gateway.backends import (
-    SCHEMA_PATH,
-    load_and_validate_manifest,
-    validate_manifest_contract,
-)
-from sift_gateway.health import _operator_backend_health
 
 logger = logging.getLogger(__name__)
 

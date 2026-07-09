@@ -18,7 +18,7 @@ from fastmcp.server.providers.proxy import FastMCPProxy
 from fastmcp.tools import Tool, ToolResult
 from mcp.types import TextContent, ToolAnnotations
 from pydantic import PrivateAttr
-from sift_core.agent_tools import call_core_tool, core_tool_names, core_tool_specs
+from sift_core.agent_tools import call_core_tool, core_tool_specs
 
 from sift_gateway.backends.egress import (
     make_pinned_egress_factory,
@@ -205,7 +205,7 @@ def _prepare_core_tool_arguments(gateway: Any, tool_name: str, arguments: dict[s
         return prepared
     try:
         resolved = _resolve_db_evidence_refs(gateway, prepared.get("evidence_refs"))
-    except Exception as exc:  # noqa: BLE001 - return typed core error, no raw path
+    except Exception as exc:
         reason = getattr(exc, "reason", None) or str(exc) or "evidence_ref_resolution_failed"
         prepared[_INTERNAL_EVIDENCE_REF_ERROR] = str(reason)
         return prepared
@@ -517,7 +517,7 @@ def mount_single_addon_proxy(
 def expected_mounted_tool_names(gateway: Any) -> set[str]:
     expected: set[str] = set()
     local_tools = getattr(gateway, "_gateway_local_tools", None) or set()
-    for backend_name, backend in sorted(getattr(gateway, "backends", {}).items()):
+    for backend_name, backend in sorted(getattr(gateway, "backends", {}).items()):  # noqa: B007 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
         manifest = getattr(backend, "manifest", None)
         if not manifest:
             continue

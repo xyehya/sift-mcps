@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import pytest
-
-from sift_core.execute.tools import discovery
 from sift_core.execute.security_policy import MVP_FORENSIC_ALLOWLIST
+from sift_core.execute.tools import discovery
 from sift_core.execute.tools.discovery import build_tool_inventory, get_tool_help
 
 

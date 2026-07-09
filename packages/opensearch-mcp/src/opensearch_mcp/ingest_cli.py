@@ -75,7 +75,7 @@ def _load_case_host_dict(case_id: str):
 # canonical definition lives in host_dictionary where server.py can
 # import it without going through ingest_cli (avoids lazy-import
 # stale-loaded-code surface in long-running MCP gateway).
-from opensearch_mcp.host_dictionary import (  # noqa: E402  (after sys path setup)
+from opensearch_mcp.host_dictionary import (
     detect_host_id_mapping_type as _detect_host_id_mapping_type,
 )
 
@@ -189,7 +189,7 @@ def _warn_if_mapping_upgrade_required(case_id: str) -> None:
 
 def _preflight_host_discovery(
     case_id: str, scan_root: Path, hosts: list
-) -> tuple[dict, "object | None"]:
+) -> tuple[dict, object | None]:
     """Discover hostnames, auto-apply best-guess decisions, save dict.
 
     Replaces the prior fail-loud `_classify_or_fail`. v1 policy is
@@ -664,7 +664,7 @@ def _fail_archive_rejected(case_id: str, reason: str) -> NoReturn:
             started=datetime.now(timezone.utc).isoformat(),
             error=f"{HALT_ARCHIVE_REJECTED}: {reason}",
         )
-    except Exception as exc:  # noqa: BLE001 — never let status writing mask the abort
+    except Exception as exc:
         logger.debug("archive-rejected status write failed: %s", exc)
     print(f"ABORT: {HALT_ARCHIVE_REJECTED}: {reason}", file=sys.stderr)
     sys.exit(1)
@@ -902,9 +902,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
 
             scan_root = tmpdir
 
-        elif container_type == "directory":
-            scan_root = input_path
-        elif container_type == "unknown" and input_path.is_dir():
+        elif container_type == "directory" or container_type == "unknown" and input_path.is_dir():
             scan_root = input_path
         else:
             print(f"Error: Unsupported input: {input_path}", file=sys.stderr)
@@ -1601,7 +1599,7 @@ def cmd_ingest_json(args: argparse.Namespace, examiner: str = "unknown") -> None
                 # capacity exhaustion. `except Exception` below must
                 # NOT swallow this.
                 raise
-            except Exception as e:  # noqa: BLE001 — per-file isolation (UAT 2026-04-22)
+            except Exception as e:
                 # parse_json imports _doc_id from parse_csv; identical
                 # TypeError crash class as delimited. Broad Exception
                 # ensures JSONL files with pathological rows skip-and-
@@ -1763,7 +1761,7 @@ def cmd_ingest_delimited(args: argparse.Namespace, examiner: str = "unknown") ->
                 # except Exception below so the caller's halt-status
                 # path runs.
                 raise
-            except Exception as e:  # noqa: BLE001 — subdir-level isolation
+            except Exception as e:
                 # Subdir-level resilience (UAT 2026-04-22): a crash in
                 # one subdir must not abort the walk across sibling
                 # subdirs. Per-file isolation (fix inside the
@@ -1916,7 +1914,7 @@ def cmd_ingest_delimited(args: argparse.Namespace, examiner: str = "unknown") ->
                 # `except Exception` below must NOT swallow this; the
                 # whole walk must halt when cluster capacity is gone.
                 raise
-            except Exception as e:  # noqa: BLE001 — per-file isolation
+            except Exception as e:
                 # Walker resilience (UAT 2026-04-22): one bad file
                 # must not abort the walk. TypeError from _doc_id on
                 # prose-shaped content was the original crash; broad
@@ -2065,7 +2063,7 @@ def cmd_ingest_accesslog(args: argparse.Namespace, examiner: str = "unknown") ->
             except ShardCapacityExhausted:
                 # Re-raise so the outer circuit-breaker handler fires.
                 raise
-            except Exception as e:  # noqa: BLE001 — per-file isolation (UAT 2026-04-22)
+            except Exception as e:
                 # General exception hygiene — OSError, UnicodeDecodeError,
                 # or unexpected parser failure. parse_accesslog uses its
                 # own hashlib.sha256 (not _doc_id) so it's not TypeError-
@@ -2221,7 +2219,7 @@ def cmd_enrich_intel(args: argparse.Namespace, examiner: str = "unknown") -> Non
 
     try:
         result = enrich_case(client, case_id, force=force, on_progress=_progress)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # Terminal failed write with the real exception text so
         # opensearch_ingest_status surfaces *why* enrichment failed without
         # forcing the operator into the log file. The excepthook guard
@@ -2613,7 +2611,7 @@ def _install_terminal_status_guards() -> None:
                     os.replace(str(tmp), str(f))
                 except OSError:
                     pass  # Best-effort; process is dying anyway
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass  # Absolutely must not raise from atexit/excepthook
 
     def _excepthook(exc_type, exc_value, exc_tb):

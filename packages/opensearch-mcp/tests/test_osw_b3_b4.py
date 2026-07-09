@@ -20,9 +20,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 import opensearch_mcp.server as srv
+import pytest
 from opensearch_mcp.server import opensearch_ingest_status
 
 # ---------------------------------------------------------------------------
@@ -438,7 +437,7 @@ _spec.loader.exec_module(_mod)
 FakeJobDB = _mod.FakeJobDB
 _Job = _mod._Job
 
-from opensearch_mcp import ingest_job  # noqa: E402
+from opensearch_mcp import ingest_job
 
 
 @pytest.fixture

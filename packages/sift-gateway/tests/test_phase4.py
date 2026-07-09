@@ -1,17 +1,14 @@
-import os
 import json
-import time
-import pytest
-import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from sift_gateway.identity import resolve_identity, Identity
-from sift_gateway.backends import load_and_validate_manifest, create_backend
-from sift_gateway.server import Gateway
+import pytest
+from sift_gateway.backends import load_and_validate_manifest
 from sift_gateway.evidence_gate import build_block_response
-from sift_gateway.mcp_endpoint import log_rate_limit_violation, _LAST_429_AUDIT
-from sift_core.case_manager import set_reference_backend_provider
+from sift_gateway.identity import resolve_identity
+from sift_gateway.mcp_endpoint import _LAST_429_AUDIT, log_rate_limit_violation
+from sift_gateway.server import Gateway
+
 
 def _execute_security():
     return {"execute": {"security": {"denied_binaries": ["env"]}}}
@@ -538,14 +535,13 @@ def test_probe_backends_script_offline(tmp_path):
 # allow-through on OK, and a single audit line on block (no double-count with the
 # transport envelope). This is the §4 regression guard at unit level.
 # ---------------------------------------------------------------------------
-from types import SimpleNamespace  # noqa: E402
-from unittest.mock import AsyncMock  # noqa: E402
+from unittest.mock import AsyncMock
 
-from fastmcp import FastMCP  # noqa: E402
-from mcp.types import TextContent  # noqa: E402
-from fastmcp.tools import ToolResult  # noqa: E402
-from sift_core.evidence_chain import ChainStatus  # noqa: E402
-from sift_gateway.policy_middleware import gateway_policy_middlewares  # noqa: E402
+from fastmcp import FastMCP
+from fastmcp.tools import ToolResult
+from mcp.types import TextContent
+from sift_core.evidence_chain import ChainStatus
+from sift_gateway.policy_middleware import gateway_policy_middlewares
 
 
 def _gate(status):

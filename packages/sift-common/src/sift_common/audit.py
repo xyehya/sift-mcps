@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sift_common.paths import is_under_system_tmpdir
+
 try:  # POSIX advisory file locking; absent on Windows / some minimal runtimes.
     import fcntl
 except ImportError:  # pragma: no cover - platform-dependent
@@ -59,8 +61,8 @@ def _state_root_for_case(case_dir: Path) -> Path:
     configured = os.environ.get("SIFT_STATE_DIR", "").strip()
     if configured:
         return Path(configured)
-    resolved = case_dir.resolve()
-    if str(resolved).startswith("/tmp/"):
+    if is_under_system_tmpdir(case_dir):
+        resolved = case_dir.resolve()
         return resolved.parent / ".sift-state" / resolved.name
     return Path(_DEFAULT_STATE_DIR)
 

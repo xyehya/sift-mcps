@@ -16,27 +16,25 @@ import logging
 from unittest.mock import MagicMock
 
 import pytest
-from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse
-from starlette.routing import Route
-from starlette.testclient import TestClient
-
 from sift_gateway.auth import AuthMiddleware
 from sift_gateway.identity import CaseMembership, Identity
 from sift_gateway.mcp_endpoint import MCPAuthASGIApp, SiftTokenVerifier
 from sift_gateway.supabase_auth import (
     AmbiguousPrincipalError,
+    InvalidTokenError,
     PrincipalDisabledError,
     PrincipalNotMappedError,
     PrincipalRecord,
     SupabaseAuthConfig,
     SupabaseIdentityResolver,
     SupabaseUnavailableError,
-    InvalidTokenError,
 )
-
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+from starlette.testclient import TestClient
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -726,7 +724,7 @@ class _RecordingHttpx:
 
 
 def _admin_client(delete_status=200):
-    from sift_gateway.supabase_auth import SupabaseAuthConfig, SupabaseAuthClient
+    from sift_gateway.supabase_auth import SupabaseAuthClient, SupabaseAuthConfig
 
     cfg = SupabaseAuthConfig(enabled=True, url="http://supabase.local", anon_key="anon",
                              service_role_key="svc")
@@ -765,7 +763,7 @@ async def test_d31_admin_revoke_delete_false_is_noop():
 
 
 async def test_d31_revoke_invalidates_resolver_cache():
-    from sift_gateway.supabase_auth import SupabaseAuthConfig, SupabaseAuthCallbacks
+    from sift_gateway.supabase_auth import SupabaseAuthCallbacks, SupabaseAuthConfig
 
     cfg = SupabaseAuthConfig(enabled=True, url="http://supabase.local", anon_key="anon",
                              service_role_key="svc")
@@ -786,10 +784,13 @@ async def test_d31_revoke_invalidates_resolver_cache():
 
 async def test_d31_invalidate_principal_drops_only_matching_entries():
     import time as _t
-    from sift_gateway.supabase_auth import (
-        SupabaseIdentityResolver, SupabaseAuthConfig, _CacheEntry,
-    )
+
     from sift_gateway.identity import Identity
+    from sift_gateway.supabase_auth import (
+        SupabaseAuthConfig,
+        SupabaseIdentityResolver,
+        _CacheEntry,
+    )
 
     cfg = SupabaseAuthConfig(enabled=True, url="http://x", anon_key="a",
                              principal_cache_ttl_seconds=30)
@@ -822,7 +823,9 @@ class _ReverifyClient:
 
     async def password_grant(self, email, password):
         from sift_gateway.supabase_auth import (
-            InvalidTokenError, SupabaseSession, SupabaseUnavailableError,
+            InvalidTokenError,
+            SupabaseSession,
+            SupabaseUnavailableError,
         )
         self.grant_calls.append((email, password))
         if self._outcome == "bad_password":
@@ -836,7 +839,7 @@ class _ReverifyClient:
 
 
 def _reverify_callbacks(*, sub="auth-operator", outcome="ok"):
-    from sift_gateway.supabase_auth import SupabaseAuthConfig, SupabaseAuthCallbacks
+    from sift_gateway.supabase_auth import SupabaseAuthCallbacks, SupabaseAuthConfig
 
     cfg = SupabaseAuthConfig(enabled=True, url="http://supabase.local", anon_key="anon")
     cb = SupabaseAuthCallbacks.__new__(SupabaseAuthCallbacks)

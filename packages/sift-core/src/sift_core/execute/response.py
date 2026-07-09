@@ -15,7 +15,6 @@ from collections import defaultdict
 from typing import Any
 
 from forensic_knowledge import loader
-
 from sift_common.audit import resolve_examiner
 
 logger = logging.getLogger(__name__)
@@ -124,7 +123,7 @@ def build_response(
         error: Error message if failed
         fk_tool_name: FK tool name override (e.g., "AmcacheParser")
     """
-    call_num = next(_call_counter)
+    call_num = next(_call_counter)  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
 
     response: dict[str, Any] = {
         "success": success,

@@ -10,7 +10,12 @@ from sift_common.audit import AuditWriter
 
 from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
 from sift_core.agent_tools import _run_command
-from sift_core.execute.job_worker import ClaimedJob, FatalJobError, JobContext, JobResult
+from sift_core.execute.job_worker import (
+    ClaimedJob,
+    FatalJobError,
+    JobContext,
+    JobResult,
+)
 
 
 def run_command_job_handler(job: ClaimedJob, ctx: JobContext) -> JobResult:

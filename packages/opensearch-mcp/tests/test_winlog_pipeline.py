@@ -19,7 +19,6 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
-
 from opensearch_mcp.mappings import (
     _EVTX_TEMPLATE_FILE,
     _MAPPINGS_DIR,
@@ -516,8 +515,6 @@ class TestInstallAllTemplates:
         only .status see the failure signal. CR 2026-04-21 flagged
         the original behavior as misleading (13/14 failures returned
         status='ok')."""
-        from tests.test_winlog_pipeline import _simulate_result_for_doc  # self
-
         client = MagicMock()
         client.indices.simulate_index_template.return_value = {
             "template": {"priority": 0, "settings": {"index": {}}}
@@ -594,8 +591,6 @@ class TestInstallAllTemplates:
         """The end-to-end fix: calling ensure_winlog_pipeline must
         also install the 14 non-evtx templates, since this is the
         function wired into server startup + ingest pre-flight."""
-        from tests.test_winlog_pipeline import _simulate_result_for_doc  # self
-
         client = MagicMock()
         client.indices.simulate_index_template.return_value = {
             "template": {"priority": 0, "settings": {"index": {}}}

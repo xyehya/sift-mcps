@@ -11,11 +11,11 @@ generation logic the portal calls into.
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sift_core.active_case_context import db_authority_active
 from sift_core.case_io import (
     load_case_meta,
     load_findings,
@@ -24,13 +24,14 @@ from sift_core.case_io import (
 )
 from sift_core.evidence_chain import (
     ChainStatus,
-    chain_status as _ev_chain_status,
     load_manifest,
 )
+from sift_core.evidence_chain import (
+    chain_status as _ev_chain_status,
+)
 from sift_core.evidence_ops import list_evidence_data
+from sift_core.investigation_store import compute_content_hash
 from sift_core.report_profiles import PROFILES, STRIPPED_FINDING_FIELDS
-from sift_core.active_case_context import db_authority_active
-from sift_core.investigation_store import HASH_EXCLUDE_KEYS, compute_content_hash
 from sift_core.verification import read_approval_commit_tip_db
 
 # BATCH-NW1: the old narrow _HASH_EXCLUDE_KEYS (15 keys) has been removed.

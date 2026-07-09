@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import pytest
-
 from sift_gateway.active_case import (
+    CASE_METADATA_JSON_FIELDS,
     ActiveCaseError,
     ActiveCaseService,
-    CASE_METADATA_JSON_FIELDS,
     plan_case_yaml_backfill,
 )
-
 
 _CASE_ROW = (
     "11111111-1111-1111-1111-111111111111",

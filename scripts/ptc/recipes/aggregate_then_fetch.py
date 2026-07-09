@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ptc import MCP, family  # noqa: E402
+from ptc import MCP, family
 
 
 def main() -> int:

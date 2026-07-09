@@ -17,7 +17,6 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
-
 from opensearch_mcp import bulk as bulk_mod
 from opensearch_mcp.bulk import (
     ShardCapacityExhausted,

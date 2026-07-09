@@ -5,12 +5,11 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from opensearch_mcp.discover import safe_rglob
-
 import defusedxml.ElementTree as ET
 from opensearchpy import OpenSearch
 
 from opensearch_mcp.bulk import flush_bulk
+from opensearch_mcp.discover import safe_rglob
 
 NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
 

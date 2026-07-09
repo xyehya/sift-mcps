@@ -27,10 +27,7 @@ Fail-on-revert proof (2026-06-26):
 
 from __future__ import annotations
 
-import pytest
-
 from opensearch_mcp.ingest_job import _aggregate
-
 
 # ---------------------------------------------------------------------------
 # Helpers: build a run_ids set and a latest_by_run dict from a simple spec.

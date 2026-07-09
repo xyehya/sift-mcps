@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "case-dashboard"
 dynamic = ["version"]
 description = "Valhuntir case dashboard — web-based finding review interface"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [{name = "AppliedIncidentResponse.com"}]
 keywords = ["mcp", "forensics", "dashboard", "dfir"]
@@ -14,8 +14,6 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Security",
 ]
@@ -46,5 +44,4 @@ git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--mat
 [tool.hatch.build.targets.wheel]
 packages = ["src/case_dashboard"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+# pytest/ruff config is centralized at the repo root pyproject.toml.

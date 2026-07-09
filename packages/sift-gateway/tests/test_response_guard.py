@@ -9,10 +9,9 @@ import json
 import time
 
 import pytest
+import sift_gateway.response_guard as rg
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
-
-import sift_gateway.response_guard as rg
 from sift_gateway.response_guard import (
     UNTRUSTED_OUTPUT_LABEL,
     cancel_override,

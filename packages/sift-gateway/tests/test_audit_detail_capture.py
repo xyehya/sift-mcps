@@ -22,7 +22,6 @@ from unittest.mock import MagicMock, patch
 
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
-
 from sift_core.active_case_context import AuthorityContext, use_active_case_context
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.audit_helpers import (
@@ -35,7 +34,6 @@ from sift_gateway.policy_middleware import (
     AuditEnvelopeMiddleware,
     _use_gateway_active_case,
 )
-
 
 # --------------------------------------------------------------------------
 # helpers / fakes

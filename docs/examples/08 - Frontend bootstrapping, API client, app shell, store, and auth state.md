@@ -49,7 +49,7 @@ The README is a template-level Vite note for the frontend package. It documents 
 The example environment file is explicitly scoped to the Vite dev proxy used by `npm run dev`. It says the production build and bundle ignore these settings, and it documents the default mock-data flow that works without any proxy configuration.
 
 - `VITE_API_PROXY` — gateway target for the dev proxy that forwards `/portal/api/*`; default `https://192.168.122.81:4508`.
-- `VITE_PROXY_CA` — path to the VM CA PEM used to verify the gateway TLS certificate; default /home/yk/.sift-vm-ca-192.168.122.81.pem.
+- `VITE_PROXY_CA` — path to the VM CA PEM used to verify the gateway TLS certificate; default /Users/yk/.sift-vm-ca-192.168.122.81.pem.
 
 > [!note]
 > `VITE_API_PROXY` and `VITE_PROXY_CA` only affect the Vite dev proxy path. The example explicitly says the production build and bundle ignore them, and the default mock flow works without either variable. packages/case-dashboard/frontend/.env.example

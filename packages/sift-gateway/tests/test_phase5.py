@@ -13,16 +13,14 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from sift_gateway.config import apply_trust_env, load_config
 from sift_gateway.response_guard import (
-    OUTPUT_CAP_ENV,
     _DEFAULT_OUTPUT_CAP_BYTES,
+    OUTPUT_CAP_ENV,
     cap_tool_result,
     output_cap_bytes,
     redact_tool_result,
 )
-
 
 # ---------------------------------------------------------------------------
 # output_cap_bytes resolver

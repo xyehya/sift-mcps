@@ -1034,7 +1034,7 @@ class OpenCTIClient:
             import pycti
 
             pycti_ver = getattr(pycti, "__version__", "") or ""
-        except Exception:  # noqa: BLE001
+        except Exception:
             pycti_ver = ""
         if not pycti_ver:
             # Can't read our own pycti version — skip enforcement,
@@ -1047,7 +1047,7 @@ class OpenCTIClient:
         try:
             about = client.query("query About { about { version } }") or {}
             server_ver = (about.get("data") or {}).get("about", {}).get("version") or ""
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Server unreachable at init — don't fail-closed. If the
             # server is actually unreachable, downstream queries will
             # surface that separately. Mismatch cases we're trying to

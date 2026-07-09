@@ -6,13 +6,13 @@ health checks, and tool contract invariants.
 """
 
 import argparse
+import http.client
 import json
 import os
 import ssl
 import sys
-import http.client
-import urllib.request
 from pathlib import Path
+
 import jsonschema
 
 # Locate repo root
@@ -290,7 +290,7 @@ def run_mcp_handshake(gateway_url, backend_name, token):
 def validate_backend(manifest_path, schema, gateway_url, token, skip_mcp_check=False):
     print(f"Validating manifest: {manifest_path}")
     try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
+        with open(manifest_path, encoding="utf-8") as f:
             manifest = json.load(f)
     except Exception as e:
         print(f"  [FAIL] Failed to read/parse JSON: {e}")
@@ -412,7 +412,7 @@ def main():
         print(f"ERROR: schema file not found at {schema_path}", file=sys.stderr)
         sys.exit(1)
         
-    with open(schema_path, "r", encoding="utf-8") as f:
+    with open(schema_path, encoding="utf-8") as f:
         schema = json.load(f)
 
     # Determine gateway URL and token

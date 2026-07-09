@@ -7,11 +7,10 @@ from __future__ import annotations
 
 import secrets
 
-import pytest
-from starlette.applications import Starlette
-
 import case_dashboard.routes as routes_mod
+import pytest
 from case_dashboard.routes import create_dashboard_v2_app
+from starlette.applications import Starlette
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +31,7 @@ class TestSessionSecretWiring:
     def test_session_secret_stored_as_module_global(self):
         secret = secrets.token_hex(32)
         create_dashboard_v2_app(session_secret=secret)
-        assert routes_mod._SESSION_SECRET == secret
+        assert secret == routes_mod._SESSION_SECRET
 
     def test_session_max_age_stored_as_module_global(self):
         create_dashboard_v2_app(session_secret=secrets.token_hex(32), session_max_age=3600)
@@ -52,6 +51,6 @@ class TestSessionSecretWiring:
         secret1 = secrets.token_hex(32)
         secret2 = secrets.token_hex(32)
         create_dashboard_v2_app(session_secret=secret1)
-        assert routes_mod._SESSION_SECRET == secret1
+        assert secret1 == routes_mod._SESSION_SECRET
         create_dashboard_v2_app(session_secret=secret2)
-        assert routes_mod._SESSION_SECRET == secret2
+        assert secret2 == routes_mod._SESSION_SECRET

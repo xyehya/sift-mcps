@@ -30,8 +30,8 @@ for _key in list(sys.modules):
 
 pytest.importorskip("mcp.server.fastmcp")
 
-from rag_mcp import server as srv  # noqa: E402
-from rag_mcp.pgvector_store import RagHit, RagSearchResult  # noqa: E402
+from rag_mcp import server as srv
+from rag_mcp.pgvector_store import RagHit, RagSearchResult
 
 
 class _FakeStore:

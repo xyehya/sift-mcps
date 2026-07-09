@@ -40,7 +40,7 @@ def _detect_json_format(path: Path) -> str:
     is a bare `{`. That fallback is size-capped (200MB) for the same
     reason json_array is — streaming isn't possible on a bare object.
     """
-    with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -58,7 +58,7 @@ def _detect_json_format(path: Path) -> str:
                         # reject and log — consistent with json_array
                         # treatment.
                         return "unknown"
-                    with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
+                    with open(path, encoding="utf-8-sig", errors="replace") as fh:
                         data = json.load(fh)
                     if isinstance(data, dict):
                         return "json_single"
@@ -82,7 +82,7 @@ def _detect_json_format(path: Path) -> str:
 def _iter_json_records(path: Path, fmt: str):
     """Yield dicts from JSON/JSONL file."""
     if fmt == "jsonl":
-        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
             for lineno, line in enumerate(f, 1):
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -101,7 +101,7 @@ def _iter_json_records(path: Path, fmt: str):
                 f"JSON array file too large ({file_size // 1_000_000}MB). "
                 "Convert to JSONL format for streaming ingest."
             )
-        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
             data = json.load(f)
         if isinstance(data, list):
             yield from data
@@ -113,7 +113,7 @@ def _iter_json_records(path: Path, fmt: str):
     elif fmt == "json_single":
         # Single pretty-printed JSON object — yield as one record.
         # Size cap was already enforced in _detect_json_format.
-        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
             data = json.load(f)
         if isinstance(data, dict):
             yield data

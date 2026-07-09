@@ -50,19 +50,8 @@ jobs:
             --extra windows-triage \
             --extra dev
 
-      - name: Ruff undefined-name guard
-        run: |
-          uv run --locked --extra full --extra dev ruff check \
-            --target-version py311 \
-            --select F821,F822,F823 \
-            .
-
-      - name: Ruff clean source packages
-        run: |
-          uv run --locked --extra full --extra dev ruff check \
-            packages/case-dashboard/src \
-            packages/forensic-knowledge/src \
-            packages/sift-common/src
+      - name: Ruff check (whole repo — single root config, no per-package overrides)
+        run: uv run --locked --extra full --extra dev ruff check .
 
   typecheck:
     name: Pyright typecheck
@@ -129,22 +118,14 @@ jobs:
             --extra windows-triage \
             --extra dev
 
-      - name: Test (per-package — a single root pytest can't collect this monorepo in one pass)
-        # Bare `pytest` with testpaths=['tests','packages'] hits 101 collection errors
-        # (duplicate-module collisions across packages). Run root tests + each package
-        # separately. Accumulate failures (|| rc=1) so one bad package doesn't hide
-        # later ones. Exclude integration tests (live DB/OpenSearch) — no services in CI.
+      - name: Test (single root invocation)
+        # addopts = "--import-mode=importlib" in [tool.pytest.ini_options]
+        # (root pyproject.toml) resolves the monorepo's cross-package
+        # duplicate-module collisions that used to require running pytest
+        # once per package — see that section for the full rationale.
         run: |
-          UVR="uv run --locked --extra full --extra opencti --extra windows-triage --extra dev"
-          rc=0
-          echo "::group::pytest tests (root)"; $UVR pytest tests -m "not integration" || rc=1; echo "::endgroup::"
-          for d in packages/*/tests; do
-            pkg=$(dirname "$d")
-            echo "::group::pytest $pkg"
-            $UVR pytest "$d" -m "not integration" || rc=1
-            echo "::endgroup::"
-          done
-          exit $rc
+          uv run --locked --extra full --extra opencti --extra windows-triage \
+            --extra dev pytest tests packages -m "not integration"
 
   coverage:
     name: Package coverage floors

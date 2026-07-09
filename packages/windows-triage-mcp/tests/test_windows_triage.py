@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-import pytest
 
+import pytest
 from mcp.types import CallToolRequest, ListToolsRequest
 from windows_triage_mcp.config import Config
-from windows_triage_mcp.db import KnownGoodDB, ContextDB, RegistryDB
+from windows_triage_mcp.db import ContextDB, KnownGoodDB, RegistryDB
 from windows_triage_mcp.server import WindowsTriageServer
 
 

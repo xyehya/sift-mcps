@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-
 from opensearch_mcp.parse_csv import _detect_encoding, _doc_id
 
 # ---------------------------------------------------------------------------

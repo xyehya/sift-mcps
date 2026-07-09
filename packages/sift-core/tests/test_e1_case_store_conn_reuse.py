@@ -17,7 +17,6 @@ from __future__ import annotations
 import os
 
 import pytest
-
 from sift_core import investigation_store
 from sift_core.active_case_context import (
     AuthorityContext,
@@ -45,10 +44,10 @@ _ROW = (
 
 
 class FakeCursor:
-    def __init__(self, conn: "FakeConn") -> None:
+    def __init__(self, conn: FakeConn) -> None:
         self._conn = conn
 
-    def __enter__(self) -> "FakeCursor":
+    def __enter__(self) -> FakeCursor:
         return self
 
     def __exit__(self, *exc) -> bool:

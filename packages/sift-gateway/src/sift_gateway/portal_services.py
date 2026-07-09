@@ -1241,9 +1241,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 issues.append(f"Missing: {rel}")
                 continue
             actual_sha, actual_bytes = _hash_file(path)
-            if sealed_bytes is not None and actual_bytes != int(sealed_bytes):
-                issues.append(f"Modified: {rel}")
-            elif sealed_sha and f"sha256:{actual_sha}" != str(sealed_sha):
+            if sealed_bytes is not None and actual_bytes != int(sealed_bytes) or sealed_sha and f"sha256:{actual_sha}" != str(sealed_sha):
                 issues.append(f"Modified: {rel}")
         return (not issues, issues, manifest_version)
 
@@ -1758,6 +1756,8 @@ class InvestigationService(_BasePortalDbService):
             detail_audit_id = details.get("audit_id") or ""
             # §9.6: match against every handle the superset SQL may have matched.
             matched = [
+                # SIM109's tuple-membership suggestion would silently drop the
+                # aliases/envelope_eid/row_req_id/detail_audit_id fallbacks below.
                 aid for aid in ids
                 if (
                     aid == row_uuid

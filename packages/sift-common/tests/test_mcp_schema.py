@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 from pydantic import BaseModel, Field
-
 from sift_common.mcp_schema import SchemaCollisionError, output_schema
 
 

@@ -6,11 +6,10 @@ import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from opensearch_mcp.discover import safe_rglob
-
 from opensearchpy import OpenSearch
 
 from opensearch_mcp.bulk import flush_bulk
+from opensearch_mcp.discover import safe_rglob
 
 
 def parse_wer_file(file_path: Path) -> dict:

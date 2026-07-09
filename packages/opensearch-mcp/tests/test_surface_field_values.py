@@ -24,10 +24,7 @@ Fail-on-revert proof (2026-06-26):
 
 from __future__ import annotations
 
-import pytest
-
 from sift_common.testing.surface import assert_surfaces, call_through_registry
-
 
 # ---------------------------------------------------------------------------
 # Baseline raw dict: all required fields for a successful field_values call.

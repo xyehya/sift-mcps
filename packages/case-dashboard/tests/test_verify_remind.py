@@ -17,15 +17,14 @@ import secrets
 
 import case_dashboard.routes as routes_mod
 import pytest
-from case_dashboard.routes import create_dashboard_v2_app
-from starlette.testclient import TestClient
-
 from _supabase_reauth_harness import (
     GOOD_PASSWORD,
     ReauthFakeSupabaseAuth,
     operator_principal,
     set_operator_session,
 )
+from case_dashboard.routes import create_dashboard_v2_app
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 _CASE_ID = "11111111-1111-1111-1111-111111111111"

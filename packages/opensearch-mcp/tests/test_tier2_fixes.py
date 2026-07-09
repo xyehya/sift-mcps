@@ -16,9 +16,6 @@ import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -69,8 +66,9 @@ class TestMemoryRamPreflightHelper:
 
     def test_read_mem_available_bytes_returns_none_on_missing_file(self, monkeypatch):
         """Returns None when /proc/meminfo is unreadable — never raises."""
-        from opensearch_mcp.parse_memory import _read_mem_available_bytes
         from pathlib import Path as _P
+
+        from opensearch_mcp.parse_memory import _read_mem_available_bytes
 
         def _raise(*a, **kw):
             raise OSError("No such file")
@@ -80,8 +78,9 @@ class TestMemoryRamPreflightHelper:
 
     def test_preflight_failsafe_on_unreadable_meminfo(self, tmp_path, monkeypatch):
         """memory_ram_preflight returns None when /proc/meminfo is unreadable."""
-        from opensearch_mcp.parse_memory import memory_ram_preflight
         from pathlib import Path as _P
+
+        from opensearch_mcp.parse_memory import memory_ram_preflight
 
         raw = tmp_path / "test.raw"
         raw.write_bytes(b"\x00" * (20 * 1024 * 1024 * 1024 // 1024))  # tiny file
@@ -95,8 +94,11 @@ class TestMemoryRamPreflightHelper:
 
     def test_preflight_warns_when_ram_low(self, tmp_path, monkeypatch):
         """memory_ram_preflight returns a string when available RAM < required."""
-        from opensearch_mcp.parse_memory import memory_ram_preflight, _read_mem_available_bytes
         from pathlib import Path as _P
+
+        from opensearch_mcp.parse_memory import (
+            memory_ram_preflight,
+        )
 
         # 10 GB image, but only 8 GB available
         image_gb = 10
@@ -126,8 +128,9 @@ class TestMemoryRamPreflightHelper:
 
     def test_preflight_no_warn_when_ample(self, tmp_path, monkeypatch):
         """memory_ram_preflight returns None when RAM is ample."""
-        from opensearch_mcp.parse_memory import memory_ram_preflight
         from pathlib import Path as _P
+
+        from opensearch_mcp.parse_memory import memory_ram_preflight
 
         raw = tmp_path / "test.raw"
         raw.write_bytes(b"\x00" * 8)
@@ -150,8 +153,9 @@ class TestMemoryRamPreflightHelper:
 
     def test_preflight_env_headroom_override(self, tmp_path, monkeypatch):
         """SIFT_MEM_PREFLIGHT_HEADROOM_GB=24 triggers warning on a 19 GB image with 31 GB avail."""
-        from opensearch_mcp.parse_memory import memory_ram_preflight
         from pathlib import Path as _P
+
+        from opensearch_mcp.parse_memory import memory_ram_preflight
 
         raw = tmp_path / "test.raw"
         raw.write_bytes(b"\x00" * 8)
@@ -389,8 +393,9 @@ class TestAutoPathMemoryDerivesHostname:
         call to idx_ingest_memory is unconditional (hostname='' is OK since
         idx_ingest_memory derives it internally).
         """
-        import opensearch_mcp.server as srv
         from unittest.mock import MagicMock, patch
+
+        import opensearch_mcp.server as srv
 
         case_dir = tmp_path / "case-auto"
         evidence_dir = case_dir / "evidence"

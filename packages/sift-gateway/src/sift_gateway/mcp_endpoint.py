@@ -12,7 +12,7 @@ from typing import Any
 import yaml
 from fastmcp.server.auth import AccessToken, TokenVerifier
 from fastmcp.server.dependencies import get_access_token, get_http_request
-from mcp.types import TextContent, Tool
+from mcp.types import TextContent
 from sift_common.instructions import GATEWAY as _GATEWAY_INSTRUCTIONS
 from starlette.responses import JSONResponse
 

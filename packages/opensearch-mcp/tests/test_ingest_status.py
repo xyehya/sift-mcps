@@ -9,7 +9,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from opensearch_mcp.ingest_status import (
     _is_process_alive,
     _status_path_safe,

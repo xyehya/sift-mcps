@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import os
 
-import pytest
-
 from sift_core.agent_tools import _case_file_structure
 
 

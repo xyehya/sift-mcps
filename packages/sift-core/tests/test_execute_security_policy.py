@@ -1,5 +1,4 @@
 import pytest
-
 from sift_core.execute.security_policy import (
     build_security_policy,
     matches_allowed_binary,
@@ -142,7 +141,6 @@ def test_grep_e_and_E_flags_are_allowed():
 def test_e_flag_still_blocked_for_exec_style_tools():
     """-e must remain blocked where it is exec-style (not allowlisted)."""
     import pytest as _pytest
-
     from sift_core.execute.security import sanitize_extra_args
 
     for tool in ("sed", "xargs"):

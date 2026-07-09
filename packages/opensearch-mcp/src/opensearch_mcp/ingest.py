@@ -128,7 +128,7 @@ def _persist_ingest_audit_event(
         except Exception:
             evict_audit_write_connection(dsn)
             raise
-    except Exception as exc:  # noqa: BLE001 — fail-soft: never block ingest
+    except Exception as exc:
         logger.debug(
             "ingest audit_events forward-write skipped for %s: %s",
             audit_id,

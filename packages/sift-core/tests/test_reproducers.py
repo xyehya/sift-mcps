@@ -1,16 +1,13 @@
 from __future__ import annotations
-import os
-import shutil
+
 import pytest
-from pathlib import Path
-from sift_core.execute import worker
-from sift_core.execute.tools import generic
+from sift_core.execute.catalog import clear_catalog_cache
 from sift_core.execute.security import (
     split_command_by_operators,
-    parse_subcommand_argv_and_redirects,
 )
-from sift_core.execute.catalog import clear_catalog_cache
 from sift_core.execute.security_policy import SECURITY_POLICY_ENV, policy_to_env_json
+from sift_core.execute.tools import generic
+
 
 @pytest.fixture(autouse=True)
 def _run_as_current_user(monkeypatch):

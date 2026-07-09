@@ -15,10 +15,7 @@ No OpenSearch connection is required. The key mocks are:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # Fixtures: TSK outputs that represent a partitioned disk (same as test_containers.py)

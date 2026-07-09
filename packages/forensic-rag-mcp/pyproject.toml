@@ -10,14 +10,12 @@ license = "MIT"
 authors = [
     { name = "AppliedIncidentResponse.com" }
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 keywords = ["mcp", "rag", "security", "incident-response", "semantic-search"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Security",
 ]

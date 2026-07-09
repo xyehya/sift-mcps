@@ -6,7 +6,6 @@ import csv
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from opensearch_mcp.normalize import normalize_event
 from opensearch_mcp.parse_csv import _doc_id, ingest_csv
 
@@ -186,7 +185,6 @@ class TestPathEdgeCases:
     def test_path_with_spaces_in_dir_names(self, tmp_path):
         """Discovery works with spaces in directory names."""
         from _helpers import make_windows_tree
-
         from opensearch_mcp.discover import find_volume_root
 
         spaced = tmp_path / "My Evidence" / "Case Files"
@@ -209,7 +207,6 @@ class TestPathEdgeCases:
     def test_symlinks_in_evidence_dir(self, tmp_path):
         """Symlinked evidence roots are rejected for case-scope safety."""
         from _helpers import make_windows_tree
-
         from opensearch_mcp.discover import find_volume_root
 
         real_dir = tmp_path / "real"
@@ -226,7 +223,6 @@ class TestPathEdgeCases:
     def test_permission_denied_on_evidence_file(self, tmp_path):
         """Permission denied on an evidence file is handled gracefully."""
         from _helpers import make_windows_tree
-
         from opensearch_mcp.discover import DiscoveredHost, discover_artifacts
 
         make_windows_tree(tmp_path)

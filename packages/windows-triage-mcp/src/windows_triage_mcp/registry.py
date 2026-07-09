@@ -31,7 +31,7 @@ from .exceptions import ValidationError as TriageValidationError
 from .tool_metadata import DEFAULT_METADATA, TOOL_METADATA
 
 
-class Verdict(str, Enum):
+class Verdict(str, Enum):  # noqa: UP042 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     EXPECTED = "EXPECTED"
     EXPECTED_LOLBIN = "EXPECTED_LOLBIN"
     SUSPICIOUS = "SUSPICIOUS"
@@ -39,7 +39,7 @@ class Verdict(str, Enum):
     ERROR = "ERROR"
 
 
-class ArtifactType(str, Enum):
+class ArtifactType(str, Enum):  # noqa: UP042 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     file = "file"
     hash = "hash"
     filename = "filename"
@@ -47,7 +47,7 @@ class ArtifactType(str, Enum):
     dll = "dll"
 
 
-class SystemType(str, Enum):
+class SystemType(str, Enum):  # noqa: UP042 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     service = "service"
     scheduled_task = "scheduled_task"
     autorun = "autorun"

@@ -20,7 +20,6 @@ import sys
 import types
 
 import pytest
-
 import sift_core.case_manager as cm
 
 

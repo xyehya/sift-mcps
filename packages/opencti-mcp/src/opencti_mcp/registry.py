@@ -246,7 +246,7 @@ class CtiSearchThreatIntelIn(CtiSearchFilters):
     limit: int = Field(5, ge=1, le=20, description="Max results per entity type. Cap 20.")
 
 
-class CtiEntityType(str, Enum):
+class CtiEntityType(str, Enum):  # noqa: UP042 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     threat_actor = "threat_actor"
     malware = "malware"
     attack_pattern = "attack_pattern"
@@ -265,7 +265,7 @@ class CtiEntityType(str, Enum):
     note = "note"
 
 
-class CtiDirection(str, Enum):
+class CtiDirection(str, Enum):  # noqa: UP042 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     from_ = "from"
     to = "to"
     both = "both"

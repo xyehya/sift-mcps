@@ -6,7 +6,6 @@ to the tamperable CASE.yaml mirror.
 """
 
 import pytest
-
 from sift_core import investigation_store
 from sift_core.active_case_context import (
     AuthorityContext,
@@ -149,7 +148,6 @@ class TestResolveCaseMetadata:
 class TestGetExaminerDbMode:
     def test_db_mode_examiner_from_db_not_case_yaml(self, tmp_path, monkeypatch):
         import yaml
-
         from sift_core import case_io
 
         # env examiners must be unset so the case-metadata path is exercised.
@@ -197,7 +195,6 @@ class TestRequireActiveCaseDbClosedGate:
         self, tmp_path, monkeypatch
     ):
         import yaml
-
         from sift_core.active_case_context import use_active_case_context
 
         case_dir = tmp_path / "INC-CLOSED"
@@ -218,7 +215,6 @@ class TestRequireActiveCaseDbClosedGate:
 
     def test_db_error_fails_closed_not_file_fallback(self, tmp_path, monkeypatch):
         import yaml
-
         from sift_core.active_case_context import use_active_case_context
 
         case_dir = tmp_path / "INC-CLOSED"

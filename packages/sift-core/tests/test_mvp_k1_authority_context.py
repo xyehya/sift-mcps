@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import pytest
 import yaml
-
 from sift_core import case_manager as case_manager_mod
 from sift_core.active_case_context import (
-    AuthorityContext,
     ActiveCaseContext,
+    AuthorityContext,
     db_authority_active,
     use_active_case_context,
 )
@@ -82,6 +81,7 @@ def test_db_active_context_wins_over_pointer_tampering(monkeypatch, tmp_path):
     # case-metadata reader fails closed without one. Supply a fake DSN + store so
     # this stays a coherent DB-active setup.
     import types as _types
+
     import sift_core.investigation_store as _inv
 
     monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://fake")

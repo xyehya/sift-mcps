@@ -12,15 +12,12 @@ Covers:
 from __future__ import annotations
 
 import pytest
-
 from sift_core.investigation_store import (
     PostgresInvestigationStore,
     ReviewAction,
-    StaleVersionError,
     compute_content_hash,
     is_human_locked,
 )
-
 
 # --------------------------------------------------------------------------- #
 # In-memory fake psycopg connection backing the store's SQL.
@@ -428,9 +425,9 @@ class InMemoryStore:
 @pytest.fixture
 def db_active_manager(tmp_path, monkeypatch):
     """A CaseManager bound to a DB-active AuthorityContext + in-memory store."""
+    import sift_core.case_manager as cm
     from sift_core.active_case_context import AuthorityContext, use_active_case_context
     from sift_core.case_manager import CaseManager
-    import sift_core.case_manager as cm
 
     case_dir = tmp_path / "case-k2-06080000"
     case_dir.mkdir()
@@ -445,6 +442,7 @@ def db_active_manager(tmp_path, monkeypatch):
     # closed without one. Provide a fake DSN + metadata store so this fixture is
     # a coherent DB-active setup rather than the removed db-active/no-DSN hybrid.
     import types as _types
+
     import sift_core.investigation_store as _inv
 
     monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://fake")

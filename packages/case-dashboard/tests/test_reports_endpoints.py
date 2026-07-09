@@ -6,22 +6,19 @@ Supabase-envelope harness.
 
 from __future__ import annotations
 
-import json
 import secrets
 import uuid
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-import pytest
-from starlette.testclient import TestClient
+from unittest.mock import patch
 
 import case_dashboard.routes as routes_mod
-from case_dashboard.routes import create_dashboard_v2_app
-
+import pytest
 from _supabase_reauth_harness import (
     ReauthFakeSupabaseAuth,
     operator_principal,
     set_operator_session,
 )
+from case_dashboard.routes import create_dashboard_v2_app
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 

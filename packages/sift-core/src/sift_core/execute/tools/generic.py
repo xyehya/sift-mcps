@@ -7,26 +7,12 @@ import os
 import shlex
 from pathlib import Path
 
-
-from sift_core.case_io import cases_root
 from sift_core.execute.catalog import get_tool_def
-from sift_core.execute.config import get_config, resolve_case_dir
-from sift_core.execute.environment import find_binary
-from sift_core.execute.exceptions import DeniedBinaryError, ExecutionError
+from sift_core.execute.config import get_config
+from sift_core.execute.exceptions import ExecutionError
 from sift_core.execute.executor import execute
 from sift_core.execute.security import (
-    get_output_flags,
-    is_allowed_by_mode,
-    is_denied,
-    sanitize_extra_args,
-    validate_input_path,
-    validate_output_path,
-    validate_rm_targets,
     validate_shell_command,
-    split_command_by_operators,
-    parse_subcommand_argv_and_redirects,
-    _DEV_PATH_TOOLS,
-    _PRIVILEGED_TARGETS,
 )
 
 logger = logging.getLogger(__name__)
@@ -187,7 +173,7 @@ def run_command(
         if not first_binary:
             first_binary = stage["binary"]
         if stage["privileged"]:
-            privileged_candidate = True
+            privileged_candidate = True  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
 
     binary = first_binary or "bash"
 
@@ -254,7 +240,7 @@ def run_command(
 
             if not os.path.exists("/usr/bin/sudo"):
                 logger.error("Privilege escalation required but /usr/bin/sudo is missing.")
-                raise PermissionError("Privilege escalation via sudo is unavailable: /usr/bin/sudo not found.")
+                raise PermissionError("Privilege escalation via sudo is unavailable: /usr/bin/sudo not found.")  # noqa: B904 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
 
             # Log fallback attempt
             fallback_event = {

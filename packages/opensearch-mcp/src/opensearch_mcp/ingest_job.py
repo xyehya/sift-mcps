@@ -47,7 +47,12 @@ import time
 from typing import Any
 
 from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
-from sift_core.execute.job_worker import ClaimedJob, FatalJobError, JobContext, JobResult
+from sift_core.execute.job_worker import (
+    ClaimedJob,
+    FatalJobError,
+    JobContext,
+    JobResult,
+)
 
 # Terminal ingest_status states (see opensearch_mcp.ingest_status).
 _TERMINAL = frozenset({"complete", "failed"})

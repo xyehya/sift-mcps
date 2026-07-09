@@ -12,6 +12,7 @@ from sift_core.execute.security_policy import (
     build_security_policy,
     policy_to_env_json,
 )
+
 from sift_gateway.response_guard import OUTPUT_CAP_ENV
 
 logger = logging.getLogger(__name__)

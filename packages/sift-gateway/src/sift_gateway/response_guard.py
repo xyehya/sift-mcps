@@ -695,7 +695,9 @@ def _cap_guarded_result(
     # has no back-edge today, but keep it local for safety).
     native_audit_id: str | None = None
     try:
-        from sift_gateway.audit_helpers import _extract_audit_id_from_result  # noqa: PLC0415
+        from sift_gateway.audit_helpers import (
+            _extract_audit_id_from_result,
+        )
         native_audit_id = _extract_audit_id_from_result(result)
     except Exception:
         pass

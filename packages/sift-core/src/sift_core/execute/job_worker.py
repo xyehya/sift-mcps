@@ -30,8 +30,9 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class _Cursor(Protocol):
     def execute(self, sql: str, params: Any = ...) -> Any: ...
     def fetchone(self) -> Any: ...
 
-    def __enter__(self) -> "_Cursor": ...
+    def __enter__(self) -> _Cursor: ...
     def __exit__(self, *exc: Any) -> Any: ...
 
 
@@ -64,7 +65,7 @@ class _Connection(Protocol):
     def commit(self) -> None: ...
     def close(self) -> None: ...
 
-    def __enter__(self) -> "_Connection": ...
+    def __enter__(self) -> _Connection: ...
     def __exit__(self, *exc: Any) -> Any: ...
 
 
@@ -114,7 +115,7 @@ class ClaimedJob:
     worker_id: str
 
     @classmethod
-    def from_row(cls, row: Any, worker_id: str) -> "ClaimedJob | None":
+    def from_row(cls, row: Any, worker_id: str) -> ClaimedJob | None:
         if row is None:
             return None
         # Accept either a mapping or the positional tuple shape returned by
@@ -188,7 +189,7 @@ JobHandler = Callable[[ClaimedJob, "JobContext"], JobResult]
 class JobContext:
     """Handler-facing API for steps, logs, and heartbeats during execution."""
 
-    def __init__(self, worker: "JobWorker", job: ClaimedJob) -> None:
+    def __init__(self, worker: JobWorker, job: ClaimedJob) -> None:
         self._worker = worker
         self.job = job
 

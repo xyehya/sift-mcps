@@ -8,8 +8,6 @@ from __future__ import annotations
 import secrets
 import time
 
-import pytest
-
 from case_dashboard.session_jwt import (
     generate_jwt,
     verify_jwt,
@@ -90,7 +88,8 @@ class TestVerifyJwt:
 
     def test_tampered_payload_returns_none(self):
         """Changing the payload invalidates the signature."""
-        import base64, json as _json
+        import base64
+        import json as _json
         token = generate_jwt("alice", "examiner", _SECRET)
         parts = token.split(".")
         # Decode and modify payload

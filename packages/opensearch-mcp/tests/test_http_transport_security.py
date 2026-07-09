@@ -8,10 +8,9 @@ lock that control in place so it cannot be silently dropped again.
 
 from __future__ import annotations
 
+from opensearch_mcp.http_server import ALLOWED_HOSTS, create_http_app
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.testclient import TestClient
-
-from opensearch_mcp.http_server import ALLOWED_HOSTS, create_http_app
 
 
 def test_create_http_app_wraps_with_trusted_host_middleware() -> None:

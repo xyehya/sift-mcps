@@ -10,7 +10,6 @@ import logging
 import os
 import re
 import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,9 +17,9 @@ import yaml
 
 from sift_core.case_io import (
     _atomic_write,
+    _tmp_case,
     case_audit_dir,
     cases_root,
-    _tmp_case,
     load_findings,
     load_timeline,
     load_todos,

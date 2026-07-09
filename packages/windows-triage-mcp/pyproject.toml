@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "windows-triage-mcp"
 dynamic = ["version"]
 description = "SIFT-local Windows baseline validation MCP backend"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [{name = "AppliedIncidentResponse.com"}]
 dependencies = [

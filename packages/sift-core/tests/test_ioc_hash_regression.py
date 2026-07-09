@@ -13,8 +13,8 @@ now lives in ioc_helpers, not case_manager directly.
 
 from __future__ import annotations
 
-import sift_core.ioc_helpers as ioc_mod
 import sift_core.case_manager as cm
+import sift_core.ioc_helpers as ioc_mod
 from sift_core.case_manager import _compute_ioc_hash
 from sift_core.ioc_helpers import _compute_ioc_hash as _compute_ioc_hash_direct
 

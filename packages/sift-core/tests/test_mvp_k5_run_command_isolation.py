@@ -18,11 +18,8 @@ import io
 import json
 
 import pytest
-
-from sift_common.audit import AuditWriter
 from sift_core.evidence_chain import init_evidence_chain, seal_manifest
 from sift_core.execute.catalog import clear_catalog_cache
-from sift_core.execute.job_worker import ClaimedJob, JobResult, JobWorker
 from sift_core.execute.run_command_job import run_command_job_handler
 from sift_core.execute.runtime_acl import (
     assert_no_authority_write_target,
@@ -36,11 +33,15 @@ from sift_core.execute.security_policy import SECURITY_POLICY_ENV
 # path under test is identical to production; only the SQL engine is simulated.
 from .test_job_worker import (
     FakeJobDB,
-    _Conn as _JobConn,
-    _Cursor as _JobCursor,
     _Job,
     _unwrap_jsonb,
     _worker,
+)
+from .test_job_worker import (
+    _Conn as _JobConn,
+)
+from .test_job_worker import (
+    _Cursor as _JobCursor,
 )
 
 _KEY = b"k5-run-command-isolation-derived-key32"

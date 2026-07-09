@@ -59,7 +59,7 @@ def _detect_delimited_format(path: Path) -> dict:
     joined head to a single csv.reader rather than per-line counting.
     """
     encoding = _detect_encoding(path)
-    with open(path, "r", encoding=encoding, errors="replace") as f:
+    with open(path, encoding=encoding, errors="replace") as f:
         first_lines = []
         for line in f:
             line = line.rstrip("\n\r")
@@ -110,7 +110,7 @@ def _detect_delimited_format(path: Path) -> dict:
 
 def _parse_zeek_header(path: Path) -> list[str]:
     """Extract field names from Zeek #fields header."""
-    with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
         for line in f:
             if line.strip().startswith("#fields"):
                 return line.strip().split("\t")[1:]
@@ -126,7 +126,7 @@ def _iter_delimited(path: Path, fmt: dict, delimiter: str | None = None):
         fields = _parse_zeek_header(path)
         if not fields:
             return
-        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -134,10 +134,10 @@ def _iter_delimited(path: Path, fmt: dict, delimiter: str | None = None):
                 values = line.split("\t")
                 if len(values) != len(fields):
                     continue
-                yield {f: (None if v in _ZEEK_NULL else v) for f, v in zip(fields, values)}
+                yield {f: (None if v in _ZEEK_NULL else v) for f, v in zip(fields, values)}  # noqa: B905 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
 
     elif format_name == "bodyfile":
-        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -145,7 +145,7 @@ def _iter_delimited(path: Path, fmt: dict, delimiter: str | None = None):
                 parts = line.split("|")
                 if len(parts) != 11:
                     continue
-                row = dict(zip(_BODYFILE_COLUMNS, parts))
+                row = dict(zip(_BODYFILE_COLUMNS, parts))  # noqa: B905 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
                 for ts_col in ("atime", "mtime", "ctime", "crtime"):
                     try:
                         epoch = int(row.get(ts_col, 0) or 0)

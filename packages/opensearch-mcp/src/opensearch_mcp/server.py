@@ -23,7 +23,6 @@ import os
 import re as _re
 from pathlib import Path
 
-from sift_core.case_io import cases_root, resolve_case_path
 from opensearchpy.exceptions import (
     AuthorizationException,
     ConnectionTimeout,
@@ -31,6 +30,7 @@ from opensearchpy.exceptions import (
 )
 from opensearchpy.exceptions import ConnectionError as OSConnectionError
 from sift_common.audit import AuditWriter
+from sift_core.case_io import cases_root, resolve_case_path
 
 from opensearch_mcp.client import get_client
 from opensearch_mcp.host_dictionary import detect_host_id_mapping_type
@@ -318,7 +318,7 @@ def _add_investigation_hints(resp: dict, artifacts: dict) -> None:
 def _build_coverage_state(
     artifacts: dict,
     enrichment: dict,
-    case_dir: "Path | None" = None,
+    case_dir: Path | None = None,
 ) -> dict:
     """Compute coverage state for opensearch_case_summary.
 
@@ -328,7 +328,13 @@ def _build_coverage_state(
     or None). No new OpenSearch queries.
     """
     from pathlib import Path as _Path
-    from opensearch_mcp.parse_memory import TIER_1, TIER_2, TIER_3, _plugin_to_index_suffix
+
+    from opensearch_mcp.parse_memory import (
+        TIER_1,
+        TIER_2,
+        TIER_3,
+        _plugin_to_index_suffix,
+    )
 
     art_keys = set(artifacts.keys())
 
@@ -674,22 +680,50 @@ def _os_call(fn, *args, **kwargs):
 # Field exclusion, hit stripping, constant-field hoisting, and large-result
 # autosave are all in opensearch_mcp.search_format.  Re-exported here so the
 # existing public surface (tests reference srv._strip_hits, etc.) is unchanged.
-from opensearch_mcp.search_format import (  # noqa: E402
-    _SEARCH_EXCLUDE_FIELDS,
-    _MAX_FIELD_CHARS,
-    _strip_hits,
-    _HOISTABLE_CONSTANT_FIELDS,
-    _HOIST_MISSING,
-    _hoist_constant_fields,
-    _payload_bytes,
-    _save_full_results,
-    _SEARCH_AUTOSAVE_THRESHOLD,
-    _SEARCH_INLINE_TOP_N,
-    _SEARCH_AUTOSAVE_MAX_BYTES,
-    _AGG_AUTOSAVE_THRESHOLD,
-    _AGG_INLINE_TOP_N,
-    _AGG_AUTOSAVE_MAX_BYTES,
-    _autosave_or_inline,
+#
+# Explicit `as` re-export aliases (PEP 484 convention, also recognized by
+# ruff's F401): a bare `from x import y` looks unused to any linter since
+# nothing in THIS file calls y() by name — but tests reach it externally via
+# monkeypatch.setattr(srv, "y", ...), so removing it as "dead" breaks those
+# tests. `import y as y` tells the linter this is an intentional re-export.
+from opensearch_mcp.search_format import (
+    _AGG_AUTOSAVE_MAX_BYTES as _AGG_AUTOSAVE_MAX_BYTES,
+)
+from opensearch_mcp.search_format import (
+    _AGG_AUTOSAVE_THRESHOLD as _AGG_AUTOSAVE_THRESHOLD,
+)
+from opensearch_mcp.search_format import (
+    _AGG_INLINE_TOP_N as _AGG_INLINE_TOP_N,
+)
+from opensearch_mcp.search_format import (
+    _HOIST_MISSING as _HOIST_MISSING,
+)
+from opensearch_mcp.search_format import (
+    _HOISTABLE_CONSTANT_FIELDS as _HOISTABLE_CONSTANT_FIELDS,
+)
+from opensearch_mcp.search_format import (
+    _SEARCH_AUTOSAVE_MAX_BYTES as _SEARCH_AUTOSAVE_MAX_BYTES,
+)
+from opensearch_mcp.search_format import (
+    _SEARCH_AUTOSAVE_THRESHOLD as _SEARCH_AUTOSAVE_THRESHOLD,
+)
+from opensearch_mcp.search_format import (
+    _SEARCH_INLINE_TOP_N as _SEARCH_INLINE_TOP_N,
+)
+from opensearch_mcp.search_format import (
+    _autosave_or_inline as _autosave_or_inline,
+)
+from opensearch_mcp.search_format import (
+    _hoist_constant_fields as _hoist_constant_fields,
+)
+from opensearch_mcp.search_format import (
+    _payload_bytes as _payload_bytes,
+)
+from opensearch_mcp.search_format import (
+    _save_full_results as _save_full_results,
+)
+from opensearch_mcp.search_format import (
+    _strip_hits as _strip_hits,
 )
 
 _UUID_RE = _re.compile(
@@ -769,7 +803,7 @@ def _detect_preparsed_csvs(path: Path) -> str | None:
     hayabusa = False
     for f in csv_files[:5]:
         try:
-            with open(f, "r", errors="replace") as fh:
+            with open(f, errors="replace") as fh:
                 header = fh.read(200).lower()
             if "ruletitle" in header and "eventid" in header:
                 hayabusa = True
@@ -2674,7 +2708,9 @@ def opensearch_ingest(
                 if suffix in checked_suffixes:
                     continue
                 checked_suffixes.add(suffix)
-                from opensearch_mcp.paths import build_index_name as _build_idx  # noqa: E402
+                from opensearch_mcp.paths import (
+                    build_index_name as _build_idx,
+                )
 
                 idx = _build_idx(case_id, suffix, host.hostname)
                 try:
@@ -2683,7 +2719,9 @@ def opensearch_ingest(
                 except Exception:
                     pass
             if evtx_count:
-                from opensearch_mcp.paths import build_index_name as _build_idx  # noqa: E402
+                from opensearch_mcp.paths import (
+                    build_index_name as _build_idx,
+                )
 
                 idx = _build_idx(case_id, "evtx", host.hostname)
                 try:
@@ -3554,7 +3592,7 @@ def _install_sigchld_reaper() -> None:
                     break  # No more children ready to reap
         except (ChildProcessError, InterruptedError):
             pass
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass  # Handler must never raise
 
     try:
@@ -3567,7 +3605,22 @@ def _install_sigchld_reaper() -> None:
 
 # Install on module import so the handler is active for any Popen
 # that runs through this process. Idempotent.
-_install_sigchld_reaper()
+#
+# Skipped under pytest: os.waitpid(-1, ...) reaps ANY child of the current
+# process, not just this module's own ingest subprocesses. That's correct and
+# harmless in production, where opensearch-mcp always runs as its own
+# dedicated OS process (see sift-opensearch-worker@{1,2} in
+# lib/services.sh/systemd units) — SIGCHLD there only ever concerns its own
+# children. But a monorepo-wide pytest run imports this module into the SAME
+# process as every other package's tests, so this handler would race
+# subprocess.run() calls in unrelated tests (e.g. tests/test_installer_*.py)
+# for their child's exit status — whichever waitpid() call wins gets the real
+# returncode; the loser silently gets 0. No test here exercises this reaper's
+# behavior, so skipping it under pytest costs nothing.
+import sys
+
+if "pytest" not in sys.modules:
+    _install_sigchld_reaper()
 
 
 def _spawn_ingest(cmd, env, stdout, run_id):
@@ -3872,8 +3925,9 @@ def idx_ingest_memory(
     # Derivation runs here (before subprocess spawn) so the subprocess always
     # receives a concrete --hostname value (the CLI arg is required=True).
     hostname_source: str | None = None
-    from opensearch_mcp.parse_memory import _derive_hostname_from_image as _derive_hn
     from pathlib import Path as _Path
+
+    from opensearch_mcp.parse_memory import _derive_hostname_from_image as _derive_hn
 
     _derived, _derived_source = _derive_hn(_Path(resolved_path), timeout=120)
     if _derived:
@@ -4081,8 +4135,9 @@ def idx_ingest_memory(
     _pid0_m.unlink(missing_ok=True)
 
     # Collect filesystem metadata sidecar for memory image
-    from opensearch_mcp.containers import _collect_filesystem_meta as _cfm_mem
     import json as _json_mem
+
+    from opensearch_mcp.containers import _collect_filesystem_meta as _cfm_mem
 
     _fs_meta_m = _cfm_mem(resolved_path, "memory")
     _fs_meta_rel_m: str | None = None

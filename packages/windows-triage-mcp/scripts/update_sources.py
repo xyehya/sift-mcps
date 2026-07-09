@@ -367,7 +367,7 @@ def update_files(data_dir: Path, status: dict, force: bool, dry_run: bool) -> bo
 def update_registry(data_dir: Path, status: dict, force: bool, dry_run: bool) -> bool:
     """Update known_good_registry.db from VanillaWindowsRegistryHives."""
     source = SOURCES["registry"]
-    db_path = data_dir / source["db"]
+    db_path = data_dir / source["db"]  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
 
     # Registry hive JSONs are inside zip files — always need extraction after clone
     changed_jsons = [
@@ -433,7 +433,7 @@ def _update_registry_with_clone(
 ) -> bool:
     """Update known_good_registry.db using an already-cloned and extracted registry repo."""
     source = SOURCES["registry"]
-    db_path = data_dir / source["db"]
+    db_path = data_dir / source["db"]  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
 
     import_args = ["--sources-dir", shared_dir]
     import_args += ["--sync-commit", status["latest_commit"]]

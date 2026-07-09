@@ -2,7 +2,7 @@
 
 Canonical implementation shared by all SIFT-platform MCPs via sift-common.
 """
-# ruff: noqa: E501, UP035
+# ruff: noqa: UP035
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ class ResultMeta(BaseModel):
     audit_warning: str | None = Field(None, description="Set when the audit write failed — action not recorded.")
 
 
-class ErrorCode(str, Enum):
+class ErrorCode(str, Enum):  # noqa: UP042 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     invalid_input        = "invalid_input"        # schema/enum/range violation caught pre-dispatch
     not_found            = "not_found"            # entity/index/document/path absent
     upstream_unavailable = "upstream_unavailable" # OpenSearch / OpenCTI / DB down or unreachable

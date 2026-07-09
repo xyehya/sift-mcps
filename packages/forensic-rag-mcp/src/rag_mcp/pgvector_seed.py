@@ -12,9 +12,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .ingest import DEFAULT_KNOWLEDGE_DIR, get_document_records, scan_knowledge_folder
 from .pgvector_store import (

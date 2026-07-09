@@ -21,10 +21,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
 from fastmcp import FastMCP
 from mcp.types import Tool
-
 from sift_gateway.mcp_server import (
     expected_mounted_tool_names,
     mount_single_addon_proxy,

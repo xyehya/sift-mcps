@@ -3,7 +3,7 @@
 **Scope:** exact, code-verified description of how `opensearch-mcp` is wired into the SIFT gateway.
 **Authority rule:** code wins over diagram/docs. Every claim carries a `file:line` cite or is marked `INFERRED` / `UNVERIFIED`.
 
-**Baseline:** **`origin/main` = `713b87d`**, read from the authoritative current-main worktree **`/home/yk/AI/SIFTHACK/wt/main-cur`** (`git rev-parse --short HEAD` → `713b87d`). This HEAD includes Wave-2 **batch-3** (`0ff4d11`): SEC-6 (`a6a4896`), SEC-7 (`ee09499`/`ee1620c`), SEC-8 (`edd5a93`), SEC-11/SEC-16 (`9f67ea0`), SEC-14 (`f828bab`), plus batch-2 SEC-2/SEC-3. **Every `file:line` below was re-verified with Read/grep against this worktree at `713b87d`** — the codebase-memory graph indexes a now-deleted worktree (`wt/sec-auth-rm`) and was NOT used for line numbers.
+**Baseline:** **`origin/main` = `713b87d`**, read from the authoritative current-main worktree **`/Users/yk/AI/wt/main-cur`** (`git rev-parse --short HEAD` → `713b87d`). This HEAD includes Wave-2 **batch-3** (`0ff4d11`): SEC-6 (`a6a4896`), SEC-7 (`ee09499`/`ee1620c`), SEC-8 (`edd5a93`), SEC-11/SEC-16 (`9f67ea0`), SEC-14 (`f828bab`), plus batch-2 SEC-2/SEC-3. **Every `file:line` below was re-verified with Read/grep against this worktree at `713b87d`** — the codebase-memory graph indexes a now-deleted worktree (`wt/sec-auth-rm`) and was NOT used for line numbers.
 Companion design doc: **`docs/architecture/SIFT-GATEWAY-SECURITY-MODEL.md`** (operator's C4+STRIDE model) — this spec is its named opensearch annex; §H cross-checks it against code.
 
 ---

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import yaml
 from sift_common.identifiers import is_valid_examiner_slug
+from sift_common.paths import is_under_system_tmpdir
 
 DEFAULT_CASES_DIR = str(Path.home() / "cases")
 DEFAULT_STATE_DIR = "/var/lib/sift"
@@ -55,10 +56,9 @@ def state_root(case_dir: Path | None = None) -> Path:
     configured = os.environ.get("SIFT_STATE_DIR", "").strip()
     if configured:
         return Path(configured)
-    if case_dir is not None:
+    if case_dir is not None and is_under_system_tmpdir(case_dir):
         resolved = Path(case_dir).resolve()
-        if str(resolved).startswith("/tmp/"):
-            return resolved.parent / ".sift-state" / resolved.name
+        return resolved.parent / ".sift-state" / resolved.name
     return Path(DEFAULT_STATE_DIR)
 
 
@@ -81,7 +81,7 @@ def case_approvals_path(case_dir: Path) -> Path:
 
 
 def _tmp_case(case_dir: Path) -> bool:
-    return str(Path(case_dir).resolve()).startswith("/tmp/")
+    return is_under_system_tmpdir(case_dir)
 
 
 def _validate_case_id(case_id: str) -> None:
@@ -472,7 +472,7 @@ def find_draft_item(
 # EXISTING DEPLOYMENTS NOTE: the old narrow exclude set (15 keys) has been
 # replaced by the wider 19-key authority set.  See investigation_store.py for
 # the full re-hash migration note.
-from sift_core.investigation_store import (  # noqa: E402
+from sift_core.investigation_store import (
     HASH_EXCLUDE_KEYS,
     compute_content_hash,
 )

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+
+from sift_common.paths import is_under_system_tmpdir
 
 from sift_core.active_case_context import db_authority_active
 from sift_core.case_io import case_approvals_path, case_audit_dir
@@ -17,7 +20,7 @@ def _load_audit_entries(case_dir: Path) -> list[dict]:
     corrupt_lines = 0
 
     audit_dir = case_audit_dir(case_dir)
-    if str(case_dir.resolve()).startswith("/tmp/") and (case_dir / "audit").is_dir():
+    if is_under_system_tmpdir(case_dir) and (case_dir / "audit").is_dir():
         audit_dir = case_dir / "audit"
     if audit_dir.is_dir():
         for jsonl_file in sorted(audit_dir.glob("*.jsonl")):
@@ -38,7 +41,7 @@ def _load_audit_entries(case_dir: Path) -> list[dict]:
                 print(f"  Warning: could not read {jsonl_file}: {e}", file=sys.stderr)
 
     approvals_file = case_approvals_path(case_dir)
-    if str(case_dir.resolve()).startswith("/tmp/") and (case_dir / "approvals.jsonl").exists():
+    if is_under_system_tmpdir(case_dir) and (case_dir / "approvals.jsonl").exists():
         approvals_file = case_dir / "approvals.jsonl"
     if approvals_file.exists():
         try:

@@ -1,7 +1,6 @@
 """B-MVP-010: portal session secret env-indirection in config loading."""
 
 import yaml
-
 from sift_gateway.config import load_config, resolve_portal_session_secret
 
 

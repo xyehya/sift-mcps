@@ -15,20 +15,17 @@ from __future__ import annotations
 import secrets
 
 import pytest
-from starlette.testclient import TestClient
-
+from _supabase_reauth_harness import (
+    ReauthFakeSupabaseAuth,
+    operator_envelope,
+    set_operator_session,
+)
 from case_dashboard.routes import create_dashboard_v2_app
 from case_dashboard.session_jwt import (
     SESSION_ENVELOPE_COOKIE_NAME,
     generate_session_envelope,
 )
-
-from _supabase_reauth_harness import (
-    ReauthFakeSupabaseAuth,
-    operator_principal,
-    operator_envelope,
-    set_operator_session,
-)
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 
@@ -101,14 +98,15 @@ class TestRefreshFailClosed:
 
 class TestAbsoluteLifetimeCap:
     def test_envelope_past_absolute_cap_is_rejected(self, client):
+        import time as _time
+
         from case_dashboard.session_jwt import (
             ABSOLUTE_ENVELOPE_LIFETIME_SECONDS,
             verify_session_envelope,
         )
-        import time as _time
 
         old_eiat = int(_time.time()) - ABSOLUTE_ENVELOPE_LIFETIME_SECONDS - 10
-        env = operator_envelope(_SECRET)
+        env = operator_envelope(_SECRET)  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
         # Re-stamp issued-at past the cap (rebuild with explicit issued_at).
         env_capped = generate_session_envelope(
             access_token="reauth-access", refresh_token="r", expires_at=9999999999,

@@ -21,8 +21,6 @@ from __future__ import annotations
 import sys
 import types
 
-import pytest
-
 from opensearch_mcp import ingest as ing
 
 

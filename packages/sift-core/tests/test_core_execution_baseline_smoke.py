@@ -6,7 +6,7 @@ import hashlib
 import json
 
 import pytest
-
+from sift_common.audit import AuditWriter
 from sift_core.evidence_chain import (
     ChainStatus,
     chain_status,
@@ -15,7 +15,6 @@ from sift_core.evidence_chain import (
     load_manifest,
     seal_manifest,
 )
-from sift_common.audit import AuditWriter
 
 _KEY = b"job0-baseline-derived-key-32bytes"
 

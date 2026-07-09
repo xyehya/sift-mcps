@@ -19,9 +19,7 @@ from typing import Any
 
 import pytest
 from mcp.types import Tool
-
 from sift_gateway.server import Gateway, ToolSurfaceSnapshot
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -193,7 +191,7 @@ class TestSnapshotInvariant:
 # ---------------------------------------------------------------------------
 
 
-import dataclasses  # noqa: E402 — needed for FrozenInstanceError above
+import dataclasses
 
 
 class TestConcurrency:
@@ -309,7 +307,7 @@ class TestConcurrency:
         # The safe pattern is to capture the snapshot once (as the internal
         # methods do). Prove the snapshot-capture idiom is consistent.
         snap_direct = gw._tool_surface
-        assert snap_direct.tool_map is snap_direct.tool_cache or True  # always
+        assert snap_direct.tool_map is snap_direct.tool_cache or True  # always  # noqa: SIM222 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
         assert "theta_check" in snap_direct.tool_map
         assert "theta_check" in snap_direct.tool_cache
         assert "theta_check" in snap_direct.manifest_meta

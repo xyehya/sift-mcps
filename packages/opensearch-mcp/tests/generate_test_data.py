@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# ruff: noqa: E501
 """Generate synthetic test data for opensearch-mcp parser tests.
 
 Creates /tmp/opensearch-test-data/ with 19 fixture files exercising all

@@ -11,7 +11,7 @@ def _build(**kwargs):
 
     artifacts = kwargs.get("artifacts", {})
     enrichment = kwargs.get("enrichment", {})
-    case_dir = kwargs.get("case_dir", None)
+    case_dir = kwargs.get("case_dir")
     return _build_coverage_state(artifacts, enrichment, case_dir=case_dir)
 
 

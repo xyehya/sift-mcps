@@ -10,12 +10,13 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-from sift_core.case_io import case_records_dir, cases_root
-from sift_core.execute.environment import find_binary
-from sift_core.execute.exceptions import DeniedBinaryError, ExecutionError
+from sift_common.paths import is_under_system_tmpdir
 
+from sift_core.case_io import case_records_dir, cases_root
 from sift_core.execute.catalog import load_security_policy
 from sift_core.execute.config import resolve_case_dir
+from sift_core.execute.environment import find_binary
+from sift_core.execute.exceptions import DeniedBinaryError
 from sift_core.execute.runtime_acl import AUTHORITY_FILE_BASENAMES
 from sift_core.execute.security_policy import (
     load_policy_from_env,
@@ -193,7 +194,7 @@ def is_allowed_by_mode(binary_name: str) -> bool:
     In allowlist mode, the binary must match an operator-configured allowlist
     pattern. The caller must still apply the denylist first.
     """
-    policy = _get_policy()
+    policy = _get_policy()  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     return classify_binary_risk(binary_name) != "reject"
 
 
@@ -317,7 +318,7 @@ def validate_rm_targets(args: list[str], *, base_dir: str | Path | None = None) 
     path_args = [a for a in args if not a.startswith("-")]
     for arg in path_args:
         resolved_path = _resolve_user_path(arg, base_dir=base_dir)
-        resolved = str(resolved_path)
+        resolved = str(resolved_path)  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
         if resolved_path == Path("/"):
             raise ValueError("Blocked: rm targeting filesystem root")
         case_dir = _active_case_dir_str()
@@ -420,7 +421,7 @@ def validate_output_path(path: str, *, base_dir: str | Path | None = None) -> st
         )
 
     # No case dir: allow /tmp and cwd before checking blocked dirs
-    if resolved.startswith("/tmp/") or resolved == "/tmp":
+    if is_under_system_tmpdir(Path(resolved)):
         return resolved
     cwd = str(Path.cwd().resolve())
     if resolved == cwd or resolved.startswith(cwd + "/"):
@@ -1202,7 +1203,7 @@ def resolve_evidence_ref(ref: str, *, case_dir: str | Path | None = None) -> str
     for entry in entries:
         rel = str(entry.get("path", ""))
         ev_id = str(entry.get("evidence_id") or entry.get("id") or "")
-        if ref == ev_id or ref == rel or ref == Path(rel).name:
+        if ref == ev_id or ref == rel or ref == Path(rel).name:  # noqa: SIM109 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
             match = entry
             break
     if match is None:

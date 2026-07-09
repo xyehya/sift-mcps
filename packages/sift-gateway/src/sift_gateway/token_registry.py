@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 from sift_gateway.token_gen import token_fingerprint, token_hash
 
-
 CONTROL_PLANE_DSN_ENV = "SIFT_CONTROL_PLANE_DSN"
 TOKEN_PEPPER_ENV = "SIFT_TOKEN_PEPPER"
 

@@ -9,11 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 import opensearch_mcp.parse_memory as _pm
 from opensearch_mcp.parse_memory import _derive_hostname_from_image
-
 
 # ---------------------------------------------------------------------------
 # Fixtures — sample vol3 JSON rows (verbatim shapes from live VM probe)
@@ -276,7 +273,7 @@ class TestDeriveFailure:
 
     def test_registry_runtime_error_falls_through_to_envars(self, monkeypatch):
         """RuntimeError from registry probe is swallowed; envars still attempted."""
-        call_count = {"n": 0}
+        call_count = {"n": 0}  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
 
         def _fake_vol(image_path, plugin, timeout=3600, plugin_args=None):
             if plugin == "windows.registry.printkey":

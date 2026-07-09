@@ -11,8 +11,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 SIFT_BACKEND_JSON = Path(__file__).resolve().parents[1] / "sift-backend.json"
 
 

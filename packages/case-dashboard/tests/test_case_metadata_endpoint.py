@@ -12,18 +12,16 @@ from __future__ import annotations
 
 import secrets
 
+import case_dashboard.routes as routes_mod
 import pytest
 import yaml
-from starlette.testclient import TestClient
-
-import case_dashboard.routes as routes_mod
-from case_dashboard.routes import create_dashboard_v2_app
-
 from _supabase_reauth_harness import (
     ReauthFakeSupabaseAuth,
     operator_principal,
     set_operator_session,
 )
+from case_dashboard.routes import create_dashboard_v2_app
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 

@@ -179,7 +179,7 @@ def process_csv_file(
     }
 
     # Register OS version
-    os_id = db.add_os_version(
+    os_id = db.add_os_version(  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
         short_name=os_info["short_name"],
         os_family=os_info["os_family"],
         os_edition=os_info.get("os_edition"),

@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from sift_core.execute.catalog import load_security_policy
 from sift_core.execute.security_policy import SECURITY_POLICY_ENV
 from sift_gateway.config import EXECUTE_AS_USER_ENV, load_config

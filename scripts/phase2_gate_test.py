@@ -228,10 +228,10 @@ def wait_for_gateway(timeout: int = GATEWAY_START_TIMEOUT) -> bool:
 
 def setup_case_and_restart() -> None:
     """Create case, seal evidence, update gateway.yaml, restart service."""
-    from sift_core.case_ops import case_init_data
     from sift_core.approval_auth import derive_ledger_key
-    from sift_core.evidence_chain import ChainStatus, chain_status, seal_manifest
     from sift_core.case_io import case_records_dir
+    from sift_core.case_ops import case_init_data
+    from sift_core.evidence_chain import ChainStatus, chain_status, seal_manifest
 
     section("Setup: create case + seal evidence + configure gateway")
     gw = _load_gateway_yaml()
@@ -246,7 +246,7 @@ def setup_case_and_restart() -> None:
     CASES_ROOT.mkdir(parents=True, exist_ok=True)
     if CASE_DIR.exists():
         from sift_core.evidence_chain import _set_immutable
-        for root, dirs, files in os.walk(CASE_DIR):
+        for root, dirs, files in os.walk(CASE_DIR):  # noqa: B007 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
             for f in files:
                 _set_immutable(Path(root) / f, False)
         shutil.rmtree(CASE_DIR)
@@ -286,7 +286,7 @@ def setup_case_and_restart() -> None:
     # Verify
     cs = chain_status(CASE_DIR)
     assert cs.get("status") == ChainStatus.OK, f"chain_status not OK after seal: {cs}"
-    print(f"  chain_status: OK ✓")
+    print("  chain_status: OK ✓")
 
     # Update gateway.yaml
     import yaml as _yaml
@@ -296,7 +296,7 @@ def setup_case_and_restart() -> None:
     print(f"  gateway.yaml case.dir → {CASE_DIR}")
 
     # Restart gateway
-    print(f"  Restarting sift-gateway service...")
+    print("  Restarting sift-gateway service...")
     subprocess.run(
         ["sudo", "systemctl", "restart", "sift-gateway.service"],
         check=True, capture_output=True,
@@ -304,7 +304,7 @@ def setup_case_and_restart() -> None:
     print(f"  Waiting for gateway health (up to {GATEWAY_START_TIMEOUT}s — uv run is slow)...")
     if not wait_for_gateway():
         raise RuntimeError(f"Gateway did not start within {GATEWAY_START_TIMEOUT}s")
-    print(f"  Gateway healthy ✓")
+    print("  Gateway healthy ✓")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -313,7 +313,7 @@ def setup_case_and_restart() -> None:
 def _restore_and_reseal() -> None:
     """Restore evidence file from source and re-seal the manifest."""
     from sift_core.approval_auth import derive_ledger_key
-    from sift_core.evidence_chain import chain_status, ChainStatus, seal_manifest
+    from sift_core.evidence_chain import ChainStatus, chain_status, seal_manifest
     gw = _load_gateway_yaml()
     examiner = str(gw.get("portal", {}).get("default_examiner") or os.environ.get("SIFT_EXAMINER") or "examiner")
     pw_entry = json.loads((Path("/var/lib/sift/passwords") / f"{examiner}.json").read_text())
@@ -335,7 +335,7 @@ def _restore_and_reseal() -> None:
 
 
 def run_checks() -> None:
-    from sift_core.evidence_chain import chain_status, ChainStatus
+    from sift_core.evidence_chain import ChainStatus, chain_status
 
     # ── Restore evidence if corrupted from a prior run ──────────────────
     cs = chain_status(CASE_DIR)

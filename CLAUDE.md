@@ -2,7 +2,7 @@
 
 ## Repo map & where to work
 
-- **`/home/yk/AI/SIFTHACK/sift-mcps` is the `main` checkout** — Python MCP gateway
+- **`/Users/yk/AI/sift-mcps` is the `main` checkout** — Python MCP gateway
   + portal. **`main` is the single canonical line.** if launched on a stale linked worktree, treat its branch as a local alias of `main` and push to `main`.
 - **Portal frontend:** `packages/case-dashboard/frontend` — carries its own
   `AGENTS.md` / `DESIGN-SYSTEM.md` (design-system contract); read those before

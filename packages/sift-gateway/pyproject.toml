@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "sift-gateway"
 dynamic = ["version"]
 description = "HTTP gateway aggregating SIFT-local MCP servers behind one endpoint"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
     {name = "AppliedIncidentResponse.com"},
@@ -46,5 +46,4 @@ git_describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--mat
 [tool.hatch.build.targets.wheel]
 packages = ["src/sift_gateway"]
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
+# pytest/ruff config is centralized at the repo root pyproject.toml.

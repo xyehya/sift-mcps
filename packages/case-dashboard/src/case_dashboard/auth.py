@@ -127,7 +127,7 @@ class PortalSessionMiddleware(BaseHTTPMiddleware):
         # 1. Try resolving the current access token.
         try:
             principal = await self._supabase_auth.resolve(access_token, source_ip)
-        except Exception as exc:  # noqa: BLE001 - never leak token material
+        except Exception as exc:
             logger.warning("portal resolve failed: %s", type(exc).__name__)
             principal = None
 
@@ -135,7 +135,7 @@ class PortalSessionMiddleware(BaseHTTPMiddleware):
         if principal is None and refresh_token:
             try:
                 refreshed = await self._supabase_auth.refresh(refresh_token, source_ip)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("portal refresh failed: %s", type(exc).__name__)
                 refreshed = None
             refreshed_principal = refreshed.get("principal") if refreshed else None

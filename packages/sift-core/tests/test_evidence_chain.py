@@ -5,7 +5,6 @@ import json
 import os
 
 import pytest
-
 from sift_core.evidence_chain import (
     ChainStatus,
     anchor_manifest,

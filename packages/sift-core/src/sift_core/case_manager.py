@@ -53,7 +53,7 @@ def _bound_supporting_command(value: Any) -> str:
         if len(s) > _SHELL_AUDIT_FIELD_MAX:
             s = s[:_SHELL_AUDIT_FIELD_MAX] + "...[truncated]"
         return s
-    except Exception:  # noqa: BLE001 — defensive: never propagate
+    except Exception:
         return "[error: could not convert to string]"
 
 
@@ -315,7 +315,7 @@ def _next_seq(items: list[dict], id_field: str, prefix: str, examiner: str) -> i
 # --- IOC helpers (extracted to ioc_helpers.py) ---
 # Re-exported here so existing callers and tests using
 # ``from sift_core.case_manager import _compute_ioc_hash`` keep working.
-from sift_core.ioc_helpers import (  # noqa: E402
+from sift_core.ioc_helpers import (
     _compute_ioc_hash,
     _conf_rank,
     _detect_ioc_type,
@@ -988,7 +988,7 @@ class CaseManager:
                             case_id=_db_case_uuid,
                             examiner=exam,
                         )
-                    except Exception as exc:  # noqa: BLE001 — fail-soft
+                    except Exception as exc:
                         logger.debug(
                             "shell audit_events forward-write skipped for %s: %s",
                             shell_eid,

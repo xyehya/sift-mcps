@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any
 
 import chromadb
-from sentence_transformers import SentenceTransformer
 
 from .ingest import (
     DEFAULT_KNOWLEDGE_DIR,

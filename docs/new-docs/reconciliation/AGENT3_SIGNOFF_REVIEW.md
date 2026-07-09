@@ -6,7 +6,7 @@ independently re-verify their highest-risk claims against current source,
 classify each contradiction, and either pass correct findings through
 (VALID-FINDING) or bounce wrong/overclaimed ones back (NEEDS-REVISION).
 
-**Base commit.** `a7ea369` (worktree `/Users/yk/AI/SIFTHACK/recon-wt/agent3-review-signoff`,
+**Base commit.** `a7ea369` (worktree `/Users/yk/AI/recon-wt/agent3-review-signoff`,
 same commit as the indexed main repo and both peer worktrees).
 
 **Inputs reviewed (read-only).**
@@ -14,7 +14,7 @@ same commit as the indexed main repo and both peer worktrees).
 - Agent 2a: `…/agent2-newdocs-install-ci/docs/new-docs/reconciliation/AGENT2_RECENT_DOCS_CODE_TRACE.md`
 - Agent 2b: `…/agent2-newdocs-install-ci/docs/new-docs/reconciliation/AGENT2_TESTING_CI_PACKAGING_EXPANSION.md`
 
-**Method.** codebase-memory MCP index `Users-yk-AI-SIFTHACK-sift-mcps`
+**Method.** codebase-memory MCP index `Users-yk-AI-sift-mcps`
 (15,968 nodes / 61,764 edges, status `ready`) for routing; **every** verdict
 below is backed by my OWN `Read`/`grep` in this worktree — I did not trust peer
 citations blindly. Citations are relative paths against the worktree (= same
@@ -199,7 +199,7 @@ path is removed (fix D5) or documented (amend D5). The contradiction matrix
 ## 7. Assumptions Made
 
 - **A1.** codebase-memory is keyed to the main repo path
-  (`Users-yk-AI-SIFTHACK-sift-mcps`); this worktree is the same commit
+  (`Users-yk-AI-sift-mcps`); this worktree is the same commit
   (`a7ea369`). I used the graph only for routing and verified every cited
   file:line with a direct `Read`/`grep` in THIS worktree.
 - **A2.** I did not run git/linear-cli/product-code edits (hard rule). Linear IDs

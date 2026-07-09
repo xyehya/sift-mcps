@@ -23,7 +23,7 @@ build-backend = "hatchling.build"
 name = "sift-mcps"
 dynamic = ["version"]
 description = "Portable MCP runtime for the Hermes forensic investigation agent (SIFT Workstation)"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "AppliedIncidentResponse.com" }]
 keywords = ["mcp", "forensics", "incident-response", "dfir", "security"]
@@ -83,11 +83,14 @@ dev = [
 packages = []
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+# RUF100 flags noqa comments that no longer suppress anything — this makes the
+# 2026-07-01 grandfather list (see `noqa` comments below) self-cleaning: fixing
+# the underlying issue and forgetting to drop the noqa gets caught automatically.
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF100"]
 ignore = [
     # E501 (line length) is advisory only (XYE-76 / D8 decision). line-length=88
     # below is the target for new code and drives import sorting, but E501 is not
@@ -110,11 +113,39 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B011", "B017", "B018", "F841", "B007", "E741", "E722", "F811"]
+# SIM109's tuple-membership suggestion for the multi-condition `or`-chain in
+# portal_services.py would silently drop the aliases/envelope_eid/row_req_id/
+# detail_audit_id fallbacks — a real behavior change, not a style fix. A
+# per-line `# noqa: SIM109` does not reliably attach to this rule's multi-line
+# violation span in ruff 0.15, so it's ignored file-wide here instead.
+"packages/sift-gateway/src/sift_gateway/portal_services.py" = ["SIM109"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "packages"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# --import-mode=importlib is the root-cause fix for the monorepo collection
+# collisions (previously worked around by running pytest once per package —
+# see ci.yml history). Default ("prepend") import mode inserts each test
+# file's directory into sys.path and imports by bare module name, so two
+# packages with a same-named test file collide; importlib mode imports each
+# file via its unique rootdir-relative path instead. Requires no per-package
+# tests/__init__.py (those cause a *different* collision: conftest.py plugin
+# registration falls back to a shallow dotted name like "tests.conftest" that
+# is identical across packages once __init__.py truncates the qualified path).
+addopts = "--import-mode=importlib"
+# Directories containing test-only helper modules imported bare (e.g.
+# `from _helpers import ...`) rather than as installed packages. Needed
+# because importlib import mode does not insert a test file's own directory
+# onto sys.path the way default mode does.
+pythonpath = [
+    "tests",
+    "packages/opensearch-mcp/tests",
+    "packages/case-dashboard/tests",
+]
+markers = [
+    "integration: requires a live Docker-backed service (OpenSearch, Postgres, etc.) — excluded in CI via -m 'not integration'",
+]
 
 [tool.coverage.run]
 source = ["packages/*/src"]
@@ -124,3 +155,11 @@ branch = true
 # tests), so they read as uncovered in their own package's coverage run. Omit them
 # from product coverage rather than counting test-infra as uncovered product code.
 omit = ["*/sift_common/testing/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

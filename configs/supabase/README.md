@@ -120,7 +120,7 @@ upgrade to the pinned version and re-run.
 
 **Checking migration status:**
 ```bash
-cd /home/yk/AI/SIFTHACK/sift-mcps
+cd /Users/yk/AI/sift-mcps
 supabase migration list
 ```
 

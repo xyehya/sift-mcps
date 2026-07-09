@@ -38,7 +38,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from opensearch_mcp.discover import safe_rglob
-
 from opensearch_mcp.host_dictionary import HostDictionary, propose_canonical
 from opensearch_mcp.hostname import (
     detect_hostname_from_volume,
@@ -74,7 +73,7 @@ def _is_safe_raw_hostname(raw: str) -> bool:
         return False
     if "\x00" in raw:
         return False
-    for ch in raw:
+    for ch in raw:  # noqa: SIM110 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
         if ord(ch) < 0x20 and ch != "\t":
             return False
     return True

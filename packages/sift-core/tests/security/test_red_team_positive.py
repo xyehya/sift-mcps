@@ -4,11 +4,9 @@ import inspect
 from pathlib import Path
 
 import pytest
-
 from sift_core.active_case_context import AuthorityContext, use_active_case_context
 from sift_core.execute import security, worker
 from sift_core.execute.security_policy import build_security_policy
-
 
 RUNBOOK = Path(__file__).with_name("RUN3_LIVE_GATE_RUNBOOK.md")
 

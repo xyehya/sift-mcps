@@ -254,7 +254,7 @@ def _make_pinned_egress_transport(target: EgressTarget, *, verify: bool | str = 
 
 # httpx is imported lazily inside functions elsewhere to keep import cost down,
 # but the transport subclass needs the base class at definition time.
-import httpx  # noqa: E402
+import httpx
 
 
 class _PinnedEgressTransport(httpx.AsyncBaseTransport):

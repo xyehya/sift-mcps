@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from sift_gateway.mcp_backends_registry import (
     BackendRegistryError,
     normalize_connection_config,

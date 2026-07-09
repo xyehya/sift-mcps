@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 import sift_core.agent_tools as agent_tools
 from sift_common.audit import AuditWriter
 from sift_core.active_case_context import ActiveCaseContext, use_active_case_context

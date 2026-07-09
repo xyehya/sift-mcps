@@ -21,10 +21,7 @@ Tests:
 
 from __future__ import annotations
 
-import pytest
-
 from sift_core.execute.tools.generic import _is_broken_pipe_stderr
-
 
 # ---------------------------------------------------------------------------
 # _is_broken_pipe_stderr unit tests

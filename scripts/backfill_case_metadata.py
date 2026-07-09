@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from sift_gateway.active_case import plan_case_yaml_backfill
 
 LOGGER = logging.getLogger("backfill_case_metadata")

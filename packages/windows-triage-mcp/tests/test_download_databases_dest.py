@@ -13,7 +13,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from windows_triage_mcp.config import reset_config
 from windows_triage_mcp.scripts import download_databases as dd
 

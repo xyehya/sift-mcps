@@ -61,7 +61,7 @@
 
 <h1>Protocol SIFT Gateway — Portal v3 · Ops Tracker</h1>
 <p class="sub">Single control sheet for the portal rebuild: references, phases, session log, approvals. <span class="mono" id="upd"></span></p>
-<p class="note">Maintained by the orchestrator each session. The <b>Scratch log</b> at the bottom is yours — it saves to this browser and exports so you can paste notes back to merge. Mac paths: swap <code>/home/yk/AI/SIFTHACK</code> → <code>/Users/yk/Fedora</code>.</p>
+<p class="note">Maintained by the orchestrator each session. The <b>Scratch log</b> at the bottom is yours — it saves to this browser and exports so you can paste notes back to merge. Mac paths: swap <code>/Users/yk/AI</code> → <code>/Users/yk/Fedora</code>.</p>
 
 <h2>1 · References (where everything lives)</h2>
 <div class="card">
@@ -84,8 +84,8 @@
 <tr><td>Design tokens (single source, both themes)</td><td><span class="tier git">GIT</span></td><td class="path">…/frontend/src/styles/tokens.css</td></tr>
 <tr><td>Built code (current HEAD 445827b · <b>PUSHED to origin</b>)</td><td><span class="tier git">GIT</span></td><td class="path">branch portal-v3/p0-foundation · origin/portal-v3/p0-foundation @ 445827b (97 ahead of main)</td></tr>
 <tr><td><b>Current ops hub</b> — status, runbooks, trackers, B1/P35-8 record</td><td><span class="tier durable">DURABLE</span></td><td class="path">~/AI/sift-portal-ops/</td></tr>
-<tr><td>Cross-session memory (loads every session)</td><td><span class="tier durable">DURABLE</span></td><td class="path">/home/yk/.claude/projects/-home-yk-AI-SIFTHACK-sift-mcps/memory/project_portal_v3_rebuild.md</td></tr>
-<tr><td><b>This tracker</b></td><td><span class="tier durable">DURABLE</span></td><td class="path">/home/yk/AI/SIFTHACK/sift-mcps/docs/new-docs/PORTAL_V3_OPS_TRACKER.html</td></tr>
+<tr><td>Cross-session memory (loads every session)</td><td><span class="tier durable">DURABLE</span></td><td class="path">/Users/yk/.claude/projects/-Users-yk-AI-sift-mcps/memory/project_portal_v3_rebuild.md</td></tr>
+<tr><td><b>This tracker</b></td><td><span class="tier durable">DURABLE</span></td><td class="path">/Users/yk/AI/sift-mcps/docs/new-docs/PORTAL_V3_OPS_TRACKER.html</td></tr>
 </tbody>
 </table>
 <p class="note"><b>Task list:</b> the harness task list is ephemeral (wiped on crash). Canonical phase/task state = §2 below + brief §6 + memory.</p>
@@ -148,7 +148,7 @@
 <h2>5 · Next-session launch</h2>
 <div class="card">
 <p class="sub">Launch dir — <b>cd into the worktree</b> (that folder IS branch portal-v3/p0-foundation, HEAD 445827b, PUSHED to origin). NOT the main checkout. Confirm <code>/mcp</code> shows Siftmcp + claude-in-chrome before live validation:</p>
-<pre id="launch">cd /home/yk/AI/SIFTHACK/sift-mcps/.claude/worktrees/portal-v3-p0-foundation && claude<button class="copybtn" onclick="cp('launch',this)">copy</button></pre>
+<pre id="launch">cd /Users/yk/AI/sift-mcps/.claude/worktrees/portal-v3-p0-foundation && claude<button class="copybtn" onclick="cp('launch',this)">copy</button></pre>
 <p class="sub">First message (orchestrator kickoff — next candidate is P35-3, a BACKEND gateway unit):</p>
 <pre id="kick">Orchestrator kickoff — SIFT Examiner Portal v3, P3.5 tuning/backwiring.
 
@@ -196,7 +196,7 @@ Also OPEN: B5 (frontend — surface real commit re-auth error/status instead of 
 "check your password"); P35-4 (LOW); pre-existing red test src/test/agentState.test.js (LOW).
 Housekeeping: operator to reject probes F-…-005/006 (password-gated; review staged set).
 
-Discovery: codebase-memory-mcp (project home-yk-AI-SIFTHACK-sift-mcps), not grep.
+Discovery: codebase-memory-mcp (project Users-yk-AI-sift-mcps), not grep.
 Live portal: https://192.168.122.81:4508/portal/   Runbook: sift-portal-ops/runbooks/.
 
 Start: confirm HEAD + clean tree + /mcp wired, read STATUS.md + trackers/P35-3_AUDIT_ID_FLOW.md,

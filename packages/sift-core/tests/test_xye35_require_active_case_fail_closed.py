@@ -19,7 +19,6 @@ These tests pin the corrected behavior:
 from __future__ import annotations
 
 import pytest
-
 import sift_core.active_case_context as acc
 from sift_core.case_manager import CaseManager
 

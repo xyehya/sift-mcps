@@ -2,7 +2,7 @@
 
 > **Exercise:** You + 3-agent architecture/docs/code reconciliation.
 > **Base commit:** `a7ea369` (local `main`, clean). **Date:** 2026-06-19.
-> **Index:** codebase-memory `Users-yk-AI-SIFTHACK-sift-mcps` (15,968 nodes /
+> **Index:** codebase-memory `Users-yk-AI-sift-mcps` (15,968 nodes /
 > 61,764 edges, `ready`, zero drift since `HEAD~8`).
 > **Constraint honored:** documentation/reconciliation/planning only — no product
 > code changed, **no Linear issues created or mutated** (all Linear items below are

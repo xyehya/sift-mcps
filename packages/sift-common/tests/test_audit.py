@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import threading
 from datetime import timezone
 from pathlib import Path
@@ -87,10 +88,15 @@ class TestStateRootForCase:
             assert _state_root_for_case(Path("/some/case")) == tmp_path
 
     def test_tmp_prefix_uses_sift_state_subdir(self):
+        # Use tempfile.gettempdir() rather than a hardcoded "/tmp/..." literal:
+        # on macOS it's $TMPDIR (a per-session /var/folders/... path), not
+        # literal /tmp (which is itself a symlink to /private/tmp there) — the
+        # code under test now matches against gettempdir() precisely so this
+        # detection works the same way pytest's own tmp_path fixture does.
         env = os.environ.copy()
         env.pop("SIFT_STATE_DIR", None)
         with mock.patch.dict(os.environ, env, clear=True):
-            result = _state_root_for_case(Path("/tmp/case1"))
+            result = _state_root_for_case(Path(tempfile.gettempdir()) / "case1")
             assert ".sift-state" in str(result)
 
     def test_non_tmp_uses_default(self):
@@ -1156,7 +1162,7 @@ class TestThreadSafety:
                     local.append(aid)
                 with ids_lock:
                     ids.extend(local)
-            except BaseException as e:  # noqa: BLE001 - surface in assertion
+            except BaseException as e:
                 errors.append(e)
 
         with mock.patch("sift_common.audit.os.open", side_effect=counting_open):
@@ -1205,7 +1211,7 @@ class TestThreadSafety:
                 for k in range(iters):
                     # Vary date/seq per call; the writer is the locked atomic path.
                     w._write_seq_sidecar_locked("20260626", tid * 1000 + k)
-            except BaseException as e:  # noqa: BLE001 - surface in assertion
+            except BaseException as e:
                 errors.append(e)
 
         threads = [
@@ -1283,7 +1289,7 @@ class TestAuditWriterThreadSafety:
                     out.append(
                         w.log("t", {"i": i}, "ok", examiner_override="x")
                     )
-            except Exception as e:  # noqa: BLE001 - surface any race crash
+            except Exception as e:
                 errors.append(repr(e))
             return out
 

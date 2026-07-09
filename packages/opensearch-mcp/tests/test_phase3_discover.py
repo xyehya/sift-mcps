@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from _helpers import make_windows_tree
-
 from opensearch_mcp.discover import DiscoveredHost, discover_artifacts
 
 

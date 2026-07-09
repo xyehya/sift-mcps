@@ -1,28 +1,25 @@
 import asyncio
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
 from fastmcp import FastMCP
-from mcp.types import TextContent
-from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.testclient import TestClient
-
-from sift_gateway.backends import load_and_validate_manifest
 from sift_gateway.auth import AuthMiddleware
+from sift_gateway.backends import load_and_validate_manifest
 from sift_gateway.mcp_endpoint import (
     _capability_guide,
 )
 from sift_gateway.mcp_server import (
     GatewayToolCatalogMiddleware,
+    _stdio_transport,
     assert_mounted_tool_names,
     expected_mounted_tool_names,
-    _stdio_transport,
 )
 from sift_gateway.rest import rest_routes
 from sift_gateway.server import Gateway
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.testclient import TestClient
 
 
 def _execute_security():

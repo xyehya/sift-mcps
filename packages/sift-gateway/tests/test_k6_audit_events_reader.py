@@ -14,8 +14,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from mcp.types import TextContent
-
-from sift_gateway.audit_helpers import _AUDIT_MAX_DEPTH, _collect_audit_ids_from_obj, _extract_all_audit_ids
+from sift_gateway.audit_helpers import (
+    _AUDIT_MAX_DEPTH,
+    _collect_audit_ids_from_obj,
+    _extract_all_audit_ids,
+)
 from sift_gateway.portal_services import InvestigationService
 
 
@@ -581,7 +584,7 @@ def test_citing_envelope_event_id_returns_exactly_one_row():
     request_id = "req-dedup-001"
     # The SQL WHERE has already matched both rows (call stub by id::text,
     # result row by details->>'envelope_event_id'); simulate that by returning both.
-    call_stub = _call_stub_row(envelope_id, request_id=request_id)
+    call_stub = _call_stub_row(envelope_id, request_id=request_id)  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     result_row_data = _result_row(
         "ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb",
         request_id=request_id,

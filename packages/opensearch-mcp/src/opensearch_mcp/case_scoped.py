@@ -109,7 +109,7 @@ def strip_case_prefix(index: str, prefix: str) -> str:
     return index[len(prefix):] if index.startswith(prefix) else index
 
 
-def case_id_term_filter(case_id: str) -> dict[str, Any] | None:  # noqa: ARG001
+def case_id_term_filter(case_id: str) -> dict[str, Any] | None:
     """DEFERRED defense-in-depth ``sift.case_id`` term clause — returns ``None``.
 
     Intentionally a no-op in Phase 1. See the module docstring: ``sift.case_id``

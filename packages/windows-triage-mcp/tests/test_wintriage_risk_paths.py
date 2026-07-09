@@ -21,23 +21,10 @@ All synthetic databases are tiny in-memory or tmp-path SQLite files.
 from __future__ import annotations
 
 import json
-import os
-import sqlite3
 from pathlib import Path
 
 import pytest
-
-from windows_triage_mcp.config import (
-    Config,
-    _load_config_from_env,
-    _parse_int_env,
-    get_config,
-    reset_config,
-    set_config,
-)
-from windows_triage_mcp.exceptions import ConfigurationError, ValidationError
-from windows_triage_mcp.db import KnownGoodDB, ContextDB, RegistryDB
-from windows_triage_mcp.server import WindowsTriageServer, _validate_input_length, _validate_no_null_bytes
+from windows_triage_mcp.analysis.filename import analyze_filename
 from windows_triage_mcp.analysis.verdicts import (
     Verdict,
     VerdictResult,
@@ -46,8 +33,21 @@ from windows_triage_mcp.analysis.verdicts import (
     calculate_process_verdict,
     calculate_service_verdict,
 )
-from windows_triage_mcp.analysis.filename import analyze_filename
-
+from windows_triage_mcp.config import (
+    Config,
+    _load_config_from_env,
+    _parse_int_env,
+    get_config,
+    reset_config,
+    set_config,
+)
+from windows_triage_mcp.db import ContextDB, KnownGoodDB, RegistryDB
+from windows_triage_mcp.exceptions import ConfigurationError, ValidationError
+from windows_triage_mcp.server import (
+    WindowsTriageServer,
+    _validate_input_length,
+    _validate_no_null_bytes,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers

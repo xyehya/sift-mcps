@@ -324,7 +324,7 @@ class JobService:
                         (case_id, limit),
                     )
                     rows = cur.fetchall()
-        except Exception:  # noqa: BLE001 - fail-closed; caller returns []
+        except Exception:
             logger.warning(
                 "list_ingest_jobs_for_case: DB error listing jobs for case %s", case_id
             )

@@ -84,14 +84,14 @@ skips LSP, plugins, MCP sync, and auto-discovery.
 Start from the correct working tree:
 
 ```bash
-cd /home/yk/AI/SIFTHACK/sift-mcps
+cd /Users/yk/AI/sift-mcps
 claude
 ```
 
 For portal v3 UI work, start from the portal worktree instead:
 
 ```bash
-cd /home/yk/AI/SIFTHACK/sift-mcps/.claude/worktrees/portal-v3-p0-foundation
+cd /Users/yk/AI/sift-mcps/.claude/worktrees/portal-v3-p0-foundation
 claude
 ```
 

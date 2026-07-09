@@ -335,7 +335,7 @@ def run_vol3_plugin(
 
     if isinstance(raw, dict) and "columns" in raw:
         cols = [c["name"] for c in raw["columns"]]
-        return [dict(zip(cols, row)) for row in raw.get("data", [])]
+        return [dict(zip(cols, row)) for row in raw.get("data", [])]  # noqa: B905 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     elif isinstance(raw, list):
         return raw
     return []

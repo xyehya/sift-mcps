@@ -12,13 +12,11 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
-
-from case_dashboard.file_io import _load_json, _load_yaml, _load_jsonl
 
 # Verify that the names are still importable from the original routes module
 # (backcompat re-export via module-level import in routes.py).
-from case_dashboard import routes as _routes_mod  # noqa: F401
+from case_dashboard import routes as _routes_mod
+from case_dashboard.file_io import _load_json, _load_jsonl, _load_yaml
 
 assert hasattr(_routes_mod, "_load_json")
 assert hasattr(_routes_mod, "_load_yaml")

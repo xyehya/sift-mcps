@@ -69,7 +69,7 @@ def parse_w3c_log(
             if len(values) != len(fields):
                 skipped += 1
                 continue
-            row = dict(zip(fields, values))
+            row = dict(zip(fields, values))  # noqa: B905 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
 
             # Construct timestamp
             date_val = row.pop("date", "")

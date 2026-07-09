@@ -15,17 +15,15 @@ from __future__ import annotations
 import json
 import secrets
 
-import pytest
-from starlette.testclient import TestClient
-
 import case_dashboard.routes as routes_mod
-from case_dashboard.routes import create_dashboard_v2_app
-
+import pytest
 from _supabase_reauth_harness import (
     GOOD_PASSWORD,
     ReauthFakeSupabaseAuth,
     set_operator_session,
 )
+from case_dashboard.routes import create_dashboard_v2_app
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 _CASE_ID = "11111111-1111-1111-1111-111111111111"

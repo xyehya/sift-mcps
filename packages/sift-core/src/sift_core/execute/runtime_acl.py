@@ -28,7 +28,6 @@ subprocess and without a real DB.
 from __future__ import annotations
 
 import os
-import re
 
 from sift_core.execute.security_policy import SECURITY_POLICY_ENV
 

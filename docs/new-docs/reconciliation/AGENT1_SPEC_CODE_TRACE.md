@@ -6,7 +6,7 @@ companion `docs/drafts/architecture/active-case-authority-flow.md`) against the
 code + tests decide what is implemented now; the SPEC anchors intended
 architecture; on conflict the contradiction is recorded, not silently resolved.
 
-**Base commit.** `a7ea369` (worktree `/Users/yk/AI/SIFTHACK/recon-wt/agent1-spec-code`).
+**Base commit.** `a7ea369` (worktree `/Users/yk/AI/recon-wt/agent1-spec-code`).
 The SPEC was code-grounded at `156e810` (2026-06-14); the authority-flow doc at
 `e3ce8f8` (2026-06-18). My base is newer than both, so line-number / surface
 drift is expected and is itself a finding.
@@ -17,7 +17,7 @@ verified against source with `Read`/`Grep` in the worktree before assertion. All
 `file:line` citations are relative paths against the worktree (= same commit as
 the indexed main repo).
 
-**Index project name used.** `Users-yk-AI-SIFTHACK-sift-mcps`.
+**Index project name used.** `Users-yk-AI-sift-mcps`.
 
 **Status legend.** confirmed | partially confirmed | stale | contradicted | not found.
 
@@ -524,7 +524,7 @@ authority-flow doc (06-18). Append `evidence_unseal` to §8.
 ## Assumptions Made
 
 - **A1.** The codebase-memory graph is keyed to the main repo path
-  (`Users-yk-AI-SIFTHACK-sift-mcps`) and my worktree is the same commit
+  (`Users-yk-AI-sift-mcps`) and my worktree is the same commit
   (`a7ea369`); I treated graph `file:line` as valid against the worktree but
   **verified every load-bearing claim with a direct `Read`/`Grep`** before
   asserting it. Where I cite a line, it came from a direct read, not the graph

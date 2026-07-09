@@ -28,22 +28,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
-
 from sift_core.active_case_context import AuthorityContext, use_active_case_context
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.audit_helpers import (
-    AuditPersistError,
     _extract_all_audit_ids_from_result,
     _extract_audit_id_from_result,
 )
 from sift_gateway.identity import Identity
 from sift_gateway.policy_middleware import (
-    AuditEnvelopeMiddleware,
     _CORE_DURABLE_LANE_TOOLS,
+    AuditEnvelopeMiddleware,
     _use_gateway_active_case,
 )
 from sift_gateway.response_guard import guard_tool_result
-
 
 # ---------------------------------------------------------------------------
 # helpers / fakes

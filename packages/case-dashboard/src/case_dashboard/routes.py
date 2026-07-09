@@ -744,7 +744,7 @@ async def _supabase_reverify(request: Request, body: dict) -> JSONResponse | Non
             source_ip,
             expected_auth_user_id=expected_auth_user_id,
         )
-    except Exception as exc:  # noqa: BLE001 - never leak token/password material
+    except Exception as exc:
         # FAIL CLOSED on ANY error, including a TypeError from a callback that
         # cannot bind expected_auth_user_id: never retry without the identity
         # binding and never fall through to "allowed".
@@ -2806,7 +2806,7 @@ def _export_case_yaml_safe(active_case: Any) -> None:
         from sift_core.case_metadata import export_case_yaml_from_db
 
         export_case_yaml_from_db(Path(artifact_path), active_case.as_dict())
-    except Exception as exc:  # noqa: BLE001 - compat export is non-authoritative
+    except Exception as exc:
         logger.warning("CASE.yaml compat export failed for %s: %s", artifact_path, exc)
 
 
@@ -3693,7 +3693,7 @@ async def post_supabase_login(request: Request) -> JSONResponse:
     source_ip = request.client.host if request.client else "unknown"
     try:
         result = await _SUPABASE_AUTH.login(email, password, source_ip)
-    except Exception as exc:  # noqa: BLE001 - never leak token material
+    except Exception as exc:
         status = _http_status_from_callback_error(exc, default=401)
         reason = getattr(exc, "reason", None)
         msg = reason if isinstance(reason, str) and reason else "Invalid credentials"
@@ -3754,7 +3754,7 @@ async def post_supabase_refresh(request: Request) -> JSONResponse:
     source_ip = request.client.host if request.client else "unknown"
     try:
         result = await _SUPABASE_AUTH.refresh(envelope["rt"], source_ip)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # Fail closed: a raising refresh (e.g. revoked session) must drop the
         # cookie, not just report 401 (C10.1).
         status = _http_status_from_callback_error(exc, default=401)
@@ -3835,7 +3835,7 @@ async def post_supabase_forced_reset(request: Request) -> JSONResponse:
             new_password=new_password,
             source_ip=source_ip,
         )
-    except Exception as exc:  # noqa: BLE001 - never leak token material
+    except Exception as exc:
         status = _http_status_from_callback_error(exc, default=400)
         reason = getattr(exc, "reason", None)
         msg = reason if isinstance(reason, str) and reason else "Forced reset failed"
@@ -3890,7 +3890,7 @@ async def post_auth_logout(request: Request) -> JSONResponse:
                 source_ip = request.client.host if request.client else "unknown"
                 try:
                     await _SUPABASE_AUTH.logout(envelope["at"], source_ip)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.warning("portal logout callback failed: %s", type(exc).__name__)
 
     resp = JSONResponse({"ok": True})
@@ -4087,7 +4087,7 @@ async def list_principals(request: Request) -> JSONResponse:
     creator = principal if isinstance(principal, dict) else {"display_name": examiner}
     try:
         items = await _SUPABASE_AUTH.list_principals(creator, source_ip)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         status = _http_status_from_callback_error(exc, default=500)
         return JSONResponse({"error": "Failed to list principals"}, status_code=status)
 
@@ -4179,7 +4179,7 @@ async def create_principal(request: Request) -> JSONResponse:
             case_id,
             source_ip,
         )
-    except Exception as exc:  # noqa: BLE001 - never leak token material
+    except Exception as exc:
         status = _http_status_from_callback_error(exc, default=500)
         reason = getattr(exc, "reason", None)
         msg = reason if isinstance(reason, str) and reason else "Failed to create principal"
@@ -4242,7 +4242,7 @@ async def revoke_principal(request: Request) -> JSONResponse:
         await _SUPABASE_AUTH.revoke_principal(
             creator, principal_type, principal_id, source_ip
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         status = _http_status_from_callback_error(exc, default=500)
         return JSONResponse({"error": "Failed to revoke principal"}, status_code=status)
 

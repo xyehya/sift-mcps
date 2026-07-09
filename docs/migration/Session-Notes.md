@@ -383,7 +383,7 @@ VERIFIED (live):
 NEW BACKLOG: **B-MVP-043** (migration double-apply), **B-MVP-044** (docker-group msg), **B-MVP-045** (runtime_user
 msg), **B-MVP-046** (apparmor enforce flip, BATCH-HR3), **B-MVP-047** (wintriage baseline didn't persist),
 **B-MVP-048** (evidence-dir not operator-writable). CA fetched to host
-`/home/yk/.sift-vm-ca-192.168.122.81.pem` (fresh, CN=Protocol SIFT Gateway local CA). Operator handling: case
+`/Users/yk/.sift-vm-ca-192.168.122.81.pem` (fresh, CN=Protocol SIFT Gateway local CA). Operator handling: case
 `case-rocba-round-2-06151840` active, evidence (`Rocba-Memory.raw` 18G valid + `rocba-cdrive.e01` 81GiB EnCase)
 copy+seal; vol symbol-cache write for the worker already fixed (per operator). **Next:** wintriage proper staged
 setup-addon from `/opt` + register; harness MCP reconnect (new CA + portal-minted agent token); B-MVP-002 rename.

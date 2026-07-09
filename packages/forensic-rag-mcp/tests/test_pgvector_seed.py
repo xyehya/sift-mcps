@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 from typing import Any, cast
 
-import tomllib
 from rag_mcp.pgvector_seed import plan_knowledge_seed, seed_knowledge_documents
 
 

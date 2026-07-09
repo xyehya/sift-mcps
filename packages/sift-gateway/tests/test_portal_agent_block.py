@@ -13,16 +13,15 @@ from __future__ import annotations
 import secrets
 
 import pytest
+from sift_gateway.auth import AuthMiddleware
+from sift_gateway.identity import Identity
+from sift_gateway.supabase_auth import SupabaseAuthConfig
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 from starlette.testclient import TestClient
-
-from sift_gateway.auth import AuthMiddleware
-from sift_gateway.identity import Identity
-from sift_gateway.supabase_auth import SupabaseAuthConfig
 
 _EXAMINER_KEY = "sift_gw_" + secrets.token_hex(24)
 _AGENT_KEY = "sift_svc_" + secrets.token_hex(24)

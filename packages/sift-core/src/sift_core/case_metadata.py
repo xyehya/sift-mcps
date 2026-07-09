@@ -7,9 +7,10 @@ the pure validation + persistence logic the portal route calls into.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import yaml
 

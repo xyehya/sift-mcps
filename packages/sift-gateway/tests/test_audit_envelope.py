@@ -13,14 +13,11 @@ import secrets
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
 from sift_gateway.mcp_endpoint import (
     MCPAuthASGIApp,
     _extract_request_context,
     _hash_token,
 )
-
 
 # ---------------------------------------------------------------------------
 # _hash_token

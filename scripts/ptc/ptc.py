@@ -21,12 +21,12 @@ Library:
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import ssl
 import sys
 import time
-import http.client
 import urllib.parse
 from pathlib import Path
 from typing import Any

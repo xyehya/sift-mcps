@@ -15,7 +15,6 @@ from unittest.mock import patch
 
 import pytest
 import yaml
-
 from sift_core.audit_ops import audit_summary_data
 from sift_core.backup_ops import create_backup_data
 from sift_core.evidence_chain import ChainStatus

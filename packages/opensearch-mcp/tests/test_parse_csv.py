@@ -3,7 +3,12 @@
 import csv
 from unittest.mock import MagicMock, patch
 
-from opensearch_mcp.parse_csv import _VOLATILE_KEYS, _detect_encoding, _doc_id, ingest_csv
+from opensearch_mcp.parse_csv import (
+    _VOLATILE_KEYS,
+    _detect_encoding,
+    _doc_id,
+    ingest_csv,
+)
 
 
 class TestDetectEncoding:

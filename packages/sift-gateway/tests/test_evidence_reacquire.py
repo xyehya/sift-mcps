@@ -21,10 +21,8 @@ from __future__ import annotations
 import hashlib
 
 import pytest
-
 import sift_gateway.portal_services as ps
 from sift_gateway.portal_services import EvidenceAuthorityService, PortalServiceError
-
 
 _CASE = "11111111-1111-1111-1111-111111111111"
 

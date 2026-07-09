@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from _helpers import make_windows_tree
-
 from opensearch_mcp.discover import DiscoveredHost
 from opensearch_mcp.ingest import (
     _artifact_to_tool,

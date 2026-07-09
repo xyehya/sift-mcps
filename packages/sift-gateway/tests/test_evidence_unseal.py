@@ -20,7 +20,6 @@ Asserts:
 from __future__ import annotations
 
 import pytest
-
 import sift_gateway.portal_services as ps
 from sift_gateway.portal_services import EvidenceAuthorityService, PortalServiceError
 

@@ -4,7 +4,6 @@ import json
 
 import pytest
 import yaml
-
 from sift_core.audit_ops import audit_summary_data
 
 

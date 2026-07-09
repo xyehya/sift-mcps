@@ -25,7 +25,7 @@ import logging
 import os
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -209,7 +209,7 @@ class SupabaseAuthConfig:
 
     def __repr__(self) -> str:  # pragma: no cover - defensive, no secrets in repr
         return (
-            "SupabaseAuthConfig(enabled=%r, url=%r, anon_key=%s, "
+            "SupabaseAuthConfig(enabled=%r, url=%r, anon_key=%s, "  # noqa: UP031 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
             "service_role_key=%s, validation=%r, ttl=%r, min_agent_ttl=%r, "
             "legacy_anonymous_examiner=%r)"
             % (
@@ -1010,7 +1010,7 @@ class SupabaseAuthCallbacks:
         resolver: SupabaseIdentityResolver,
         *,
         audit: Any | None = None,
-        agent_issuance: "AgentServiceIssuance | None" = None,
+        agent_issuance: AgentServiceIssuance | None = None,
     ) -> None:
         self._config = config
         self._client = client
@@ -1586,7 +1586,7 @@ class AgentServiceIssuance:
         case_id: str | None,
         creator: dict[str, Any],
     ) -> str:
-        principal_type_col = (
+        principal_type_col = (  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
             "agent_type" if kind == "agent" else "service_type"
         )
         # default principal_role

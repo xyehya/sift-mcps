@@ -303,8 +303,8 @@ async def test_run_command_preserves_case_cwd_jail(tmp_path, monkeypatch):
 
 
 async def test_run_command_mount_denied_integration(tmp_path, monkeypatch):
-    import shutil
     import os
+    import shutil
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     cases_root = tmp_path / "cases"
     case = case_init_data(

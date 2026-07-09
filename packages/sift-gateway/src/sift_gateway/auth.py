@@ -445,7 +445,7 @@ async def require_recent_reauth(request: Request, body: dict) -> JSONResponse | 
             source_ip,
             expected_auth_user_id=expected_auth_user_id,
         )
-    except Exception as exc:  # noqa: BLE001 - never leak token/password material
+    except Exception as exc:
         # FAIL CLOSED on ANY error (incl. a TypeError from a primitive that
         # cannot bind expected_auth_user_id): never retry without the identity
         # binding and never fall through to "allowed".

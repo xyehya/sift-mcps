@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import importlib.metadata
+import json
 from unittest.mock import MagicMock, patch
 
 _metadata_version = importlib.metadata.version

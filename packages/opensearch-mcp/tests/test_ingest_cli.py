@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
-
 from opensearch_mcp.ingest_cli import (
     _parse_date,
     _parse_set,

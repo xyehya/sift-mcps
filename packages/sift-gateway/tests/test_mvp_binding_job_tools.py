@@ -12,7 +12,6 @@ import pytest
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
 from sift_core.evidence_chain import ChainStatus
-
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.job_tools import (
     GATEWAY_JOB_TOOLS,
@@ -137,7 +136,7 @@ def test_ingest_job_tool_is_fully_retired():
     assert "opensearch_ingest" not in names, (
         "the gateway must not shadow/intercept the add-on opensearch_ingest tool"
     )
-    assert GATEWAY_JOB_TOOLS == frozenset({"run_command_job", "running_commands_status"})
+    assert frozenset({"run_command_job", "running_commands_status"}) == GATEWAY_JOB_TOOLS
     # The retired handlers and policy enforcer no longer exist on the module.
     import sift_gateway.job_tools as jt
 
@@ -556,9 +555,9 @@ async def test_opensearch_ingest_dry_run_false_is_not_intercepted_by_gateway(tmp
     """A direct opensearch_ingest(dry_run=False) call must reach the dispatch
     (call_next) rather than being denied/redirected by a gateway gatekeeper.
     Only the shared evidence gate may stop it — proven separately below."""
-    from mcp.types import TextContent
     from types import SimpleNamespace
 
+    from mcp.types import TextContent
     from sift_gateway.policy_middleware import EvidenceGateMiddleware
 
     case_dir = tmp_path / "case"

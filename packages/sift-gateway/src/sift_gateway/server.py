@@ -1399,7 +1399,6 @@ class Gateway:
         @contextlib.asynccontextmanager
         async def app_lifespan(app):
             """Start gateway metadata/background tasks around the FastAPI app."""
-            import os as _os
             await gateway.start()
             # wave8/ingest-tools (Blocker B): close the startup mount race. Add-on
             # backend proxies are mounted at app-build time from the backends that

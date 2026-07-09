@@ -35,10 +35,9 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-
-from opensearch_mcp.discover import safe_rglob
 from typing import TYPE_CHECKING
 
+from opensearch_mcp.discover import safe_rglob
 from opensearch_mcp.paths import resolve_case_insensitive
 
 if TYPE_CHECKING:

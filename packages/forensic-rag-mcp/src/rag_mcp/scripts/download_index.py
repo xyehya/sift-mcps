@@ -276,7 +276,7 @@ def download_index(dest_dir: str | Path, tag: str = "latest") -> bool:
                 ingested_state = json.load(f)
             ingested_docs = ingested_state.get("documents", {})
             if ingested_docs:
-                has_ingested_content = True
+                has_ingested_content = True  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
                 ingested_state_backup = ingested_state_path.read_bytes()
                 total_records = sum(
                     info.get("records", 0) for info in ingested_docs.values()

@@ -234,7 +234,7 @@ def import_chroma_collection(
 def import_chroma_from_dir(
     *,
     dsn: str | None,
-    chroma_dir: Path = get_chroma_path(),
+    chroma_dir: Path = get_chroma_path(),  # noqa: B008 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     collection_name: str = DEFAULT_COLLECTION,
     batch_size: int = 500,
     limit: int | None = None,

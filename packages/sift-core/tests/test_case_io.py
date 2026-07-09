@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from sift_core.case_io import (
     DEFAULT_CASES_DIR,
     CaseError,

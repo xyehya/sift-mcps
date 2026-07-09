@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
+from sift_common.paths import is_under_system_tmpdir
+
 logger = logging.getLogger(__name__)
 
 # Default service user the gateway/worker run as. install.sh creates this
@@ -49,7 +51,7 @@ class EvidenceHardeningError(RuntimeError):
     """
 
 
-class ChainStatus(str, Enum):
+class ChainStatus(str, Enum):  # noqa: UP042 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     OK = "ok"
     UNSEALED = "unsealed"       # no sealed manifest (version=0, no files)
     MODIFIED = "modified"       # registered file has different byte size
@@ -84,7 +86,7 @@ def anchor_proof_path(case_dir: Path, version: int) -> Path:
 
 
 def _tmp_case(case_dir: Path) -> bool:
-    return str(case_dir.resolve()).startswith("/tmp/")
+    return is_under_system_tmpdir(case_dir)
 
 
 def _legacy_case_path(case_dir: Path, filename: str) -> Path:
@@ -745,7 +747,7 @@ def _set_immutable(path: Path, immutable: bool) -> bool:
         with open(path, "rb") as f:
             fcntl.ioctl(f.fileno(), _FS_IOC_SETFLAGS, flags_val)
         return True
-    except (OSError, IOError, AttributeError):
+    except (OSError, AttributeError):
         return False
 
 
@@ -759,7 +761,7 @@ def get_immutable_flag(path: Path) -> bool | None:
         with open(path, "rb") as f:
             fcntl.ioctl(f.fileno(), _FS_IOC_GETFLAGS, flags_val)
         return bool(flags_val.value & _FS_IMMUTABLE_FL)
-    except (OSError, IOError, AttributeError):
+    except (OSError, AttributeError):
         return None
 
 
@@ -1055,12 +1057,13 @@ def _do_solana_anchor(proof: dict, keypair_path: str, rpc_url: str | None, clust
     """Submit anchor_payload to Solana via SPL Memo. Modifies proof in place."""
     import base64
     import time as _time
+
+    from solders.hash import Hash as SolHash
+    from solders.instruction import AccountMeta, Instruction
     from solders.keypair import Keypair
+    from solders.message import Message
     from solders.pubkey import Pubkey
     from solders.transaction import Transaction
-    from solders.message import Message
-    from solders.instruction import Instruction, AccountMeta
-    from solders.hash import Hash as SolHash
 
     rpc = rpc_url or (_SOLANA_MAINNET_RPC if cluster == "mainnet" else _SOLANA_DEVNET_RPC)
 

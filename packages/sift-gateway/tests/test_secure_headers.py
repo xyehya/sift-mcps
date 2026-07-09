@@ -8,14 +8,13 @@ Verifies:
 from __future__ import annotations
 
 import pytest
+from sift_gateway.server import SecureHeadersMiddleware
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
-
-from sift_gateway.server import SecureHeadersMiddleware
 
 
 async def _html_endpoint(request: Request) -> HTMLResponse:

@@ -19,19 +19,16 @@ from __future__ import annotations
 
 import secrets
 
-import pytest
-from starlette.testclient import TestClient
-
 import case_dashboard.routes as routes_mod
-from case_dashboard.routes import create_dashboard_v2_app
-from case_dashboard.session_jwt import SESSION_ENVELOPE_COOKIE_NAME
-
 from _supabase_reauth_harness import (
     GOOD_PASSWORD,
     ReauthFakeSupabaseAuth,
     operator_principal,
     set_operator_session,
 )
+from case_dashboard.routes import create_dashboard_v2_app
+from case_dashboard.session_jwt import SESSION_ENVELOPE_COOKIE_NAME
+from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
 _CASE_ID = "11111111-1111-1111-1111-111111111111"

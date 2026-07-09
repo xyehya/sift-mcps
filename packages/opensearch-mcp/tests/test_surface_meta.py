@@ -32,16 +32,11 @@ itself is asserted instead).
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-import jsonschema
 import pytest
-from pydantic import BaseModel
-
 from sift_common.registry_helpers import tool_output_schema
 from sift_common.testing.surface import assert_surfaces
-
 
 # ---------------------------------------------------------------------------
 # SURFACE_OPTIONAL_KEYS manifest

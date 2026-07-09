@@ -102,7 +102,7 @@ See memory `reference_worktree_editable_install_resolution_trap`.
 ## Suggested batching (avoid parallel writers in the same package)
 - Parallel now (disjoint): **SEC-8** (opensearch), **SEC-11+SEC-16** (sift-core/configs), **SEC-14** (RAG).
 - Serialize (both gateway-auth, overlapping files): **SEC-6** then **SEC-5**.
-- Each writer in its own worktree off HEAD: `git worktree add /home/yk/AI/SIFTHACK/wt/<slug> -b sec/<slug> HEAD`.
+- Each writer in its own worktree off HEAD: `git worktree add /Users/yk/AI/wt/<slug> -b sec/<slug> HEAD`.
 
 ## Per-issue workflow
 validate (codebase-memory + codeguard) → spawn Opus coding agent in an isolated worktree off HEAD with
@@ -127,7 +127,7 @@ PASS gate → operator merge go-ahead → merge → push → DEPLOY-AND-PROVE on
   (worker runs as `sift-service`, HOME=/var/lib/sift). `curl -s http://127.0.0.1:9200/_cat/indices?h=index`.
 - Live MCP (agent path proof): load `mcp__Siftmcp__*` via ToolSearch (case_info, opensearch_*, run_command).
   Active case `case-test-case-06251017` (evidence chain OK); cross-case `case-seed-{accesslog,evtx,json,ssh}-init`
-  exist for isolation proofs. Host curl: `curl -s --cacert /home/yk/.sift-vm-ca-192.168.122.81.pem https://192.168.122.81:4508/health`.
+  exist for isolation proofs. Host curl: `curl -s --cacert /Users/yk/.sift-vm-ca-192.168.122.81.pem https://192.168.122.81:4508/health`.
 - Standing rule: green test = hypothesis; prove the exact repro live before/after. If the live setup
   can't reproduce it (e.g. no live HTTP backend for SEC-3-style egress), SAY SO — never imply a live
   proof that didn't happen.

@@ -24,27 +24,19 @@ check_os() {
 }
 
 check_python() {
-  if [[ ! -x "$SYSTEM_PYTHON" ]]; then
-    # Fall back through candidates
-    for candidate in /usr/bin/python3.11 /usr/bin/python3.10 /usr/bin/python3; do
-      if [[ -x "$candidate" ]]; then
-        SYSTEM_PYTHON="$candidate"
-        break
-      fi
-    done
-  fi
-  [[ -x "$SYSTEM_PYTHON" ]] || die "No usable Python found (tried /usr/bin/python3.12, .11, .10, python3)."
-  local ver
+  # SIFT-native forensic tool bindings (pyewf, etc. — see
+  # repair_pyewf_venv_link in lib/python.sh) are compiled against the exact
+  # system Python. There is deliberately no fallback to a different Python
+  # version here: a python3.10/3.11 substitute would let the installer
+  # proceed but silently degrade forensic tool integration (that failure mode
+  # previously only surfaced as a warning deep in repair_pyewf_venv_link).
+  [[ -x "$SYSTEM_PYTHON" ]] || die "SIFT-native /usr/bin/python3.12 not found. This installer requires the exact SIFT Workstation system Python — forensic tool bindings (pyewf, etc.) are compiled against it specifically; a different Python version cannot load them."
+  local ver major minor
   ver=$("$SYSTEM_PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null) || true
-  local major
   major=$("$SYSTEM_PYTHON" -c 'import sys; print(sys.version_info.major)' 2>/dev/null) || true
-  if [[ -z "$major" || "$major" -lt 3 ]]; then
-    die "Python ≥ 3.10 required; $SYSTEM_PYTHON reports version '$ver'."
-  fi
-  local minor
   minor=$("$SYSTEM_PYTHON" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null) || true
-  if [[ "$major" -eq 3 && "$minor" -lt 10 ]]; then
-    die "Python ≥ 3.10 required; $SYSTEM_PYTHON reports version '$ver'."
+  if [[ -z "$major" || "$major" -ne 3 || "$minor" -ne 12 ]]; then
+    die "Python 3.12 required; $SYSTEM_PYTHON reports version '${ver:-unknown}'."
   fi
   log "System Python: $SYSTEM_PYTHON ($ver)"
   export SYSTEM_PYTHON

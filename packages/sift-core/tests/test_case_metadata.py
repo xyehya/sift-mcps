@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 import yaml
-
 from sift_core.case_metadata import (
     PROTECTED_FIELDS,
     get_case_metadata,

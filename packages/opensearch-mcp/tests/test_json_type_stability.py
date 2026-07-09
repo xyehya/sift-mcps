@@ -236,7 +236,7 @@ class TestInstallComponentTemplate:
 # ---------------------------------------------------------------------------
 
 
-import uuid  # noqa: E402 — grouped with integration imports
+import uuid
 
 
 @pytest.mark.integration

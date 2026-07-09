@@ -16,7 +16,6 @@ from unittest.mock import patch
 
 import pytest
 import yaml
-
 from sift_core.evidence_chain import ChainStatus
 
 

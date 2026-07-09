@@ -173,7 +173,7 @@ async def handle_job_status(
         try:
             uuid.UUID(job_id)
         except (ValueError, AttributeError, TypeError):
-            raise GatewayJobToolError("invalid_job_id")
+            raise GatewayJobToolError("invalid_job_id")  # noqa: B904 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
         _case, identity = _active_case(gateway)
         result = _job_service(gateway).job_status_public(job_id, identity)
     except Exception as exc:

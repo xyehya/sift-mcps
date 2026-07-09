@@ -106,7 +106,7 @@ def _ensure_passwords_dir(passwords_dir: Path) -> None:
     try:
         passwords_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     except OSError:
-        raise PermissionError(
+        raise PermissionError(  # noqa: B904 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
             f"Cannot create {passwords_dir}/. Create it manually:\n"
             f"  sudo mkdir -p {passwords_dir}\n"
             f"  sudo chown $USER:$USER {passwords_dir}\n"
@@ -137,7 +137,7 @@ def require_tty_confirmation(prompt: str) -> bool:
     try:
         tty = open("/dev/tty")
     except OSError:
-        raise AuthError("No terminal available (/dev/tty). Cannot confirm interactively.")
+        raise AuthError("No terminal available (/dev/tty). Cannot confirm interactively.")  # noqa: B904 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     try:
         sys.stderr.write(prompt)
         sys.stderr.flush()

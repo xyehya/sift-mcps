@@ -10,12 +10,8 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 from fastmcp import FastMCP
 from fastmcp.server import create_proxy
-from fastmcp.tools import ToolResult
-from mcp.types import TextContent
-
 from sift_core.evidence_chain import ChainStatus
 from sift_gateway.identity import Identity
 from sift_gateway.policy_middleware import (

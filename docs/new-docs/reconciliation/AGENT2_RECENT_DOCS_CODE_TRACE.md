@@ -3,7 +3,7 @@
 > **Scope:** reconcile `docs/new-docs` + `docs/new-docs/install-nextgen` (recent operational truth)
 > against CURRENT code at commit `a7ea369`.
 > **Author:** Agent 2 (recent-docs/install/CI/packaging/roadmap auditor).
-> **Date:** 2026-06-19. **Index:** codebase-memory `Users-yk-AI-SIFTHACK-sift-mcps`, status `ready`
+> **Date:** 2026-06-19. **Index:** codebase-memory `Users-yk-AI-sift-mcps`, status `ready`
 > (15968 nodes / 61764 edges); file:line citations are against this worktree (same commit).
 > **Source precedence applied:** (1) current code/tests/CI decide what is implemented NOW;
 > (2) `docs/drafts/architecture/sift-architecture-SPEC.md` anchors intent; (3) new-docs/install-nextgen

@@ -534,7 +534,7 @@ class InspectContainerOut(BaseModel):
     )
 
 
-class IngestFormat(str, Enum):
+class IngestFormat(str, Enum):  # noqa: UP042 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
     auto = "auto"
     json = "json"
     delimited = "delimited"
@@ -959,7 +959,7 @@ async def run_opensearch_search(params: SearchIn) -> ToolResult:
     # unchanged to the generic wrapper, which remains correct for backend errors.
     try:
         raw = _impl_server().opensearch_search(**params.model_dump())
-    except ValueError as exc:  # noqa: BLE001 — narrow: only query-parse ValueErrors
+    except ValueError as exc:
         msg = str(exc)
         if msg.startswith("Query error:"):
             # Strip the "Query error: " prefix — the reason is already user-readable.
@@ -1020,7 +1020,7 @@ async def run_opensearch_aggregate(params: AggregateIn) -> ToolResult:
 async def run_opensearch_get_event(params: GetEventIn) -> ToolResult:
     try:
         raw = _impl_server().opensearch_get_event(**params.model_dump())
-    except Exception as exc:  # noqa: BLE001 - sanitized typed error for MCP clients
+    except Exception as exc:
         message = f"{type(exc).__name__}: document lookup failed."
         code = ErrorCode.not_found if "not" in type(exc).__name__.lower() else ErrorCode.internal
         return _tool_error_result(
@@ -1093,7 +1093,7 @@ async def run_opensearch_status(_params: StatusIn) -> ToolResult:
         # SEC-7: forward the Gateway-injected active case so the backend scopes
         # the index catalog to it (empty when none resolves).
         raw = _impl_server().opensearch_status(**_params.model_dump())
-    except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
+    except Exception as exc:
         return _tool_error_result(
             ErrorCode.upstream_unavailable,
             f"{type(exc).__name__}: OpenSearch status check failed.",
@@ -1121,7 +1121,7 @@ async def run_opensearch_shard_status(_params: ShardStatusIn) -> ToolResult:
     try:
         # SEC-7: forward the Gateway-injected active case so top_indices is scoped.
         raw = _impl_server().opensearch_shard_status(**_params.model_dump())
-    except Exception as exc:  # noqa: BLE001 - expose typed upstream failure
+    except Exception as exc:
         return _tool_error_result(
             ErrorCode.upstream_unavailable,
             f"{type(exc).__name__}: OpenSearch shard status check failed.",
@@ -1487,7 +1487,7 @@ async def opensearch_field_catalog_resource(
                 "total_fields": len(fields),
             }
         )
-    except Exception as exc:  # noqa: BLE001 - resource returns JSON diagnostics
+    except Exception as exc:
         return _json_text(
             {
                 "artifact_type": artifact_type,

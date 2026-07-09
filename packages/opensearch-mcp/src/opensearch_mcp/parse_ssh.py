@@ -7,11 +7,10 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from opensearch_mcp.discover import safe_rglob
-
 from opensearchpy import OpenSearch
 
 from opensearch_mcp.bulk import flush_bulk
+from opensearch_mcp.discover import safe_rglob
 
 _SSH_LINE = re.compile(r"^(\d{4}-\d{2}-\d{2}\s+[\d:.]+)\s+sshd[:\[]\s*(.+)")
 _AUTH_ACCEPTED = re.compile(r"Accepted\s+(\w+)\s+for\s+(\S+)\s+from\s+(\S+)\s+port\s+(\d+)")

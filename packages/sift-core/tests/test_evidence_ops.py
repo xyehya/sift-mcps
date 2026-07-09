@@ -1,7 +1,6 @@
 """Tests for sift_core.evidence_ops data functions."""
 
 import pytest
-
 from sift_core.evidence_ops import (
     list_evidence_data,
     register_evidence_data,

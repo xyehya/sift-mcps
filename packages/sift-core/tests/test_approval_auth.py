@@ -1,25 +1,22 @@
 """Tests for sift_core.approval_auth module."""
 
+import hashlib
 import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-
-import hashlib
-
 from sift_core.approval_auth import (
     _LOCKOUT_SECONDS,
     _MAX_PASSWORD_ATTEMPTS,
     _MIN_PASSWORD_LENGTH,
+    AuthError,
+    LockoutError,
     _check_lockout,
     _clear_failures,
-    _load_password_entry,
     _recent_failure_count,
     _record_failure,
     _validate_examiner_name,
-    AuthError,
-    LockoutError,
     derive_auth_key,
     derive_ledger_key,
     get_analyst_salt,

@@ -21,10 +21,8 @@ import hashlib
 from pathlib import Path
 
 import pytest
-
 import sift_gateway.portal_services as ps
 from sift_gateway.portal_services import EvidenceAuthorityService
-
 
 _CASE = "11111111-1111-1111-1111-111111111111"
 
