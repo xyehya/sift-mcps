@@ -8,7 +8,7 @@
 // remains the single import surface.
 // ─────────────────────────────────────────────────────────────────────────
 
-import { CONF_ORDER, confClass, findingTs, normStatus } from '@/components/findings/findings-utils'
+import { CONF_ORDER, confClass, findingTs, normStatus, parseMs } from '@/components/findings/findings-utils'
 
 export {
   mitreTechniques,
@@ -60,7 +60,7 @@ export function severityCounts(findings, now = Date.now()) {
     counts[c] += 1
     if (normStatus(f) === 'draft') awaiting[c] += 1
     const ts = findingTs(f)
-    if (ts && now - new Date(ts).getTime() < DAY) recent[c] += 1
+    if (ts && now - parseMs(ts) < DAY) recent[c] += 1
   }
   const max = Math.max(1, ...Object.values(counts))
   const total = Object.values(counts).reduce((s, n) => s + n, 0)
@@ -103,7 +103,7 @@ export function velocitySeries(findings, rangeKey, now = Date.now()) {
   const stamped = (findings ?? [])
     .map((f) => {
       const ts = findingTs(f)
-      return ts ? new Date(ts).getTime() : null
+      return ts ? parseMs(ts) : null
     })
     .filter((t) => t !== null && !Number.isNaN(t))
 
@@ -151,9 +151,9 @@ export function recentActivity(findings, rangeKey, limit = 8, now = Date.now()) 
     .filter((f) => {
       if (range.ms === Infinity) return true
       const ts = findingTs(f)
-      return ts ? now - new Date(ts).getTime() < range.ms : false
+      return ts ? now - (parseMs(ts) || 0) < range.ms : false
     })
     .slice()
-    .sort((a, b) => new Date(findingTs(b) ?? 0) - new Date(findingTs(a) ?? 0))
+    .sort((a, b) => (parseMs(findingTs(b) ?? 0) || 0) - (parseMs(findingTs(a) ?? 0) || 0))
     .slice(0, limit)
 }

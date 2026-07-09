@@ -210,9 +210,14 @@ export function effectiveFinding(finding, stagedItem) {
 export function contextWindow(finding, timeline) {
   const rawTs = finding?.event_timestamp || finding?.timestamp
   if (!rawTs || !timeline?.length) return []
-  const ts = new Date(rawTs).getTime()
+  const ts = parseMs(rawTs)
   const TWO_H = 2 * 3600 * 1000
   return timeline
-    .filter((e) => Math.abs(new Date(e.timestamp).getTime() - ts) <= TWO_H)
-    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+    .filter((e) => Math.abs(parseMs(e.timestamp) - ts) <= TWO_H)
+    .sort((a, b) => (parseMs(a.timestamp) || 0) - (parseMs(b.timestamp) || 0))
+}
+
+/** Robust helper to parse timestamps without `new Date()` overhead. Returns NaN for invalid strings. */
+export function parseMs(t) {
+  return t?.getTime ? t.getTime() : typeof t === 'number' ? t : Date.parse(t)
 }

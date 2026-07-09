@@ -104,10 +104,16 @@ export function getAccountsForFinding(f) {
 }
 
 // ── Time-range / timestamp formatting ────────────────────────────────────
+
+/** Robust helper to parse timestamps without `new Date()` overhead. Returns NaN for invalid strings. */
+export function parseMs(t) {
+  return t?.getTime ? t.getTime() : typeof t === 'number' ? t : Date.parse(t)
+}
+
 /** "YYYY-MM-DD HH:MM:SS" (UTC) for a timestamp, or '—' when unparseable. */
 export function fmtTs(raw) {
   if (!raw) return '—'
-  const ms = new Date(raw).getTime()
+  const ms = parseMs(raw)
   if (Number.isNaN(ms)) return '—'
   return new Date(ms).toISOString().replace('T', ' ').substring(0, 19)
 }
@@ -123,7 +129,7 @@ export function timeRange(list) {
   for (const f of list ?? []) {
     const raw = f.event_timestamp || f.timestamp
     if (!raw) continue
-    const ms = new Date(raw).getTime()
+    const ms = parseMs(raw)
     if (Number.isNaN(ms)) continue
     seen = true
     if (ms < minMs) minMs = ms
@@ -191,7 +197,7 @@ export function filterTimeline(timeline, { types = new Set(), host = 'all', sear
     const q = search.toLowerCase()
     list = list.filter((e) => (e.description ?? '').toLowerCase().includes(q))
   }
-  return [...list].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+  return [...list].sort((a, b) => (parseMs(a.timestamp) || 0) - (parseMs(b.timestamp) || 0))
 }
 
 // ── Generic table sort (Hosts / Accounts / IOCs) ─────────────────────────
