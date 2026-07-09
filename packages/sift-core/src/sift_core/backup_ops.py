@@ -115,7 +115,12 @@ def create_backup_data(
     ledger_path = VERIFICATION_DIR / f"{case_id}.jsonl"
     ledger_included = False
     ledger_note = ""
-    if ledger_path.is_file():
+    try:
+        ledger_exists = ledger_path.is_file()
+    except OSError:
+        ledger_exists = False
+        ledger_note = "Warning: could not inspect verification ledger"
+    if ledger_exists:
         try:
             vdir = backup_dir / "verification"
             vdir.mkdir(exist_ok=True)

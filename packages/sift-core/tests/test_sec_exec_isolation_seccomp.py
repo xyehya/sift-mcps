@@ -71,6 +71,7 @@ def test_systemd_scope_auto_missing_systemd_run_fails_closed(monkeypatch):
 
 def test_systemd_scope_command_reports_scope_applied(monkeypatch):
     monkeypatch.setenv("SIFT_EXECUTE_SYSTEMD_SCOPE", "1")
+    monkeypatch.setenv("SIFT_EXECUTE_SYSTEMD_SCOPE_HELPER", "0")
     monkeypatch.setattr(
         ex.shutil,
         "which",

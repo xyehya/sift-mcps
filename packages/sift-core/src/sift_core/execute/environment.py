@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -74,8 +75,11 @@ def find_binary(name: str, extra_paths: list[str] | None = None) -> str | None:
     for d in search_paths:
         base = Path(d)
         for candidate in (base / name, base / name / name):
-            if candidate.is_file() and os.access(candidate, os.X_OK):
-                return str(candidate)
+            try:
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return str(candidate)
+            except OSError as exc:
+                logger.debug("Cannot inspect candidate binary %s: %s", candidate, exc)
 
     return None
 
@@ -86,5 +90,5 @@ def get_environment_info() -> dict:
         "wsl": is_wsl(),
         "sift_version": get_sift_version(),
         "platform": os.uname().sysname,
-        "python": os.sys.version,
+        "python": sys.version,
     }

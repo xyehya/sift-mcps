@@ -268,6 +268,7 @@ def test_run_command_wraps_worker_in_systemd_scope_when_requested(monkeypatch):
     from sift_core.execute.executor import _run_isolated_worker
 
     monkeypatch.setenv("SIFT_EXECUTE_SYSTEMD_SCOPE", "1")
+    monkeypatch.setenv("SIFT_EXECUTE_SYSTEMD_SCOPE_HELPER", "0")
     monkeypatch.setattr(
         executor_module.shutil,
         "which",
