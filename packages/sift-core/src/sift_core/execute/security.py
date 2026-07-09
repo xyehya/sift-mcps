@@ -359,6 +359,33 @@ _BLOCKED_EXCEPTIONS = (
 )
 
 
+def _resolve_policy_path(path: str) -> Path:
+    return Path(path).expanduser().resolve(strict=False)
+
+
+def _path_is_blocked(
+    resolved_path: Path,
+    blocked_dirs: tuple[str, ...],
+    *,
+    exceptions: tuple[str, ...] = (),
+) -> tuple[str, Path] | None:
+    """Return the matching blocked directory for a resolved path, if any.
+
+    Policy directories such as /var/lib/sift must be compared after resolving
+    symlinks. On macOS, /var resolves to /private/var; raw string-prefix checks
+    miss that alias and silently fail open for Mac-local validation.
+    """
+    resolved = resolved_path.resolve(strict=False)
+    for blocked in blocked_dirs:
+        blocked_path = _resolve_policy_path(blocked)
+        if not _path_is_under(resolved, blocked_path):
+            continue
+        if any(_path_is_under(resolved, _resolve_policy_path(exc)) for exc in exceptions):
+            return None
+        return blocked, blocked_path
+    return None
+
+
 def get_output_flags() -> frozenset:
     """Return the set of flags that take output path values."""
     return _get_policy()["output_flags"]
@@ -428,12 +455,14 @@ def validate_output_path(path: str, *, base_dir: str | Path | None = None) -> st
         return resolved
 
     # Block system directories
-    for blocked in _OUTPUT_BLOCKED_DIRECTORIES:
-        if resolved == blocked or resolved.startswith(blocked + "/"):
-            raise ValueError(
-                f"Output denied: path '{path}' resolves to '{resolved}' "
-                f"which is inside blocked directory '{blocked}'"
-            )
+    blocked_match = _path_is_blocked(Path(resolved), _OUTPUT_BLOCKED_DIRECTORIES)
+    if blocked_match:
+        blocked, blocked_path = blocked_match
+        raise ValueError(
+            f"Output denied: path '{path}' resolves to '{resolved}' "
+            f"which is inside blocked directory '{blocked}' "
+            f"(canonical '{blocked_path}')"
+        )
 
     raise ValueError(
         f"Output denied: path '{path}' resolves to '{resolved}'. "
@@ -460,18 +489,18 @@ def validate_input_path(path: str, *, base_dir: str | Path | None = None) -> str
     resolved_path = _resolve_user_path(path, base_dir=base_dir)
     _reject_if_protected_case_path(resolved_path, action="Read")
     resolved = str(resolved_path)
-    for blocked in _BLOCKED_DIRECTORIES:
-        if resolved == blocked or resolved.startswith(blocked + "/"):
-            # Check if path falls within an allowed exception (evidence data)
-            if any(
-                resolved == exc or resolved.startswith(exc + "/")
-                for exc in _BLOCKED_EXCEPTIONS
-            ):
-                break  # Allowed exception
-            raise ValueError(
-                f"Access denied: path '{path}' resolves to '{resolved}' "
-                f"which is inside blocked system directory '{blocked}'"
-            )
+    blocked_match = _path_is_blocked(
+        resolved_path,
+        _BLOCKED_DIRECTORIES,
+        exceptions=_BLOCKED_EXCEPTIONS,
+    )
+    if blocked_match:
+        blocked, blocked_path = blocked_match
+        raise ValueError(
+            f"Access denied: path '{path}' resolves to '{resolved}' "
+            f"which is inside blocked system directory '{blocked}' "
+            f"(canonical '{blocked_path}')"
+        )
     return resolved
 
 
@@ -1274,7 +1303,7 @@ _ABS_PATH_TOKEN_RE = re.compile(r"(?<![\w./])/[A-Za-z0-9._\-/]+")
 
 def _sensitive_prefixes() -> tuple[str, ...]:
     """Static sensitive mounts plus the operator-configured cases/state roots."""
-    prefixes = list(_SENSITIVE_PATH_PREFIXES)
+    prefixes: list[str] = list(_SENSITIVE_PATH_PREFIXES)
     try:
         prefixes.append(str(cases_root().resolve()))
     except Exception:  # pragma: no cover - defensive

