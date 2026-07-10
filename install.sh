@@ -257,12 +257,13 @@ main() {
   RAG_SEEDED=false
 
   install_hayabusa
-  write_opensearch_config
-  write_opensearch_env    # gateway env refs for the mandatory opensearch-mcp
+  ensure_opensearch_admin_credentials
   start_opensearch        # sets OPENSEARCH_UP=1 if healthy
   if [[ "$OPENSEARCH_UP" -ne 1 ]]; then
     die "Mandatory core OpenSearch did not become healthy; refusing a partial installation. Fix Docker/OpenSearch and re-run."
   fi
+  write_opensearch_config
+  write_opensearch_env    # gateway env refs for the mandatory opensearch-mcp
   configure_opensearch_cluster
   configure_geoip_pipeline
   install_opensearch_templates

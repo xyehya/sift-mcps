@@ -320,23 +320,22 @@ def test_opensearch_env_refs_stored_without_resolving_secrets():
 # OS1 additions: manifest requires field correctness
 # ---------------------------------------------------------------------------
 
-def test_opensearch_manifest_requires_http_endpoint():
-    """The manifest requires field should use http (not https) for the default local endpoint.
+def test_opensearch_manifest_requires_tls_endpoint():
+    """The manifest requires field tracks the TLS-protected local endpoint.
 
     evaluate_requirement does a TCP socket connect on the declared port; the
-    scheme is informational. We verify the manifest uses http://localhost:9200
-    (matching the install.sh default) rather than the stale https://localhost:9200.
+    scheme is informational. We verify the manifest uses https://localhost:9200,
+    matching the secure fresh-install default.
     """
     reqs = _MANIFEST.get("capabilities", {}).get("requires", [])
     assert reqs, "opensearch-mcp manifest must declare at least one requirement"
-    # The default local OpenSearch endpoint is HTTP, not HTTPS.
-    assert "http://localhost:9200" in reqs, (
-        f"Expected 'http://localhost:9200' in requires, got: {reqs}"
+    assert "https://localhost:9200" in reqs, (
+        f"Expected 'https://localhost:9200' in requires, got: {reqs}"
     )
 
 
-def test_evaluate_requirement_http_localhost_9200_reachable_vs_not():
-    """evaluate_requirement handles http://localhost:9200 correctly.
+def test_evaluate_requirement_tls_localhost_9200_reachable_vs_not():
+    """evaluate_requirement handles https://localhost:9200 correctly.
 
     We mock the socket.create_connection call to test both paths without
     requiring a live OpenSearch instance.
@@ -347,13 +346,13 @@ def test_evaluate_requirement_http_localhost_9200_reachable_vs_not():
     with patch("socket.create_connection") as mock_conn:
         mock_conn.return_value.__enter__ = lambda s: s
         mock_conn.return_value.__exit__ = lambda s, *a: None
-        result = gateway.evaluate_requirement("http://localhost:9200")
+        result = gateway.evaluate_requirement("https://localhost:9200")
     assert result is True
     mock_conn.assert_called_once_with(("localhost", 9200), timeout=2.0)
 
     # Simulate unreachable
     with patch("socket.create_connection", side_effect=OSError("refused")):
-        result = gateway.evaluate_requirement("http://localhost:9200")
+        result = gateway.evaluate_requirement("https://localhost:9200")
     assert result is False
 
 

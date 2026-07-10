@@ -8,10 +8,10 @@ services:
     container_name: sift-opensearch
     environment:
       - discovery.type=single-node
-      # B-MVP-005 DECIDED: security plugin stays disabled on the loopback-bound
-      # single-node lab (Gateway is the sole policy boundary). Container hardening
-      # below bounds a container-escape blast radius instead.
-      - DISABLE_SECURITY_PLUGIN=true
+      # The fresh-install default is a Security-plugin/TLS boundary.  The
+      # installer creates this high-entropy value in a service-owned 0600 file
+      # before Compose starts; never substitute a committed or demo password.
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${SIFT_OPENSEARCH_ADMIN_PASSWORD:?run install.sh to provision the OpenSearch admin credential}
       - OPENSEARCH_JAVA_OPTS=-Xms4g -Xmx4g
       - path.repo=/usr/share/opensearch/snapshots
       - thread_pool.search.queue_size=5000
@@ -43,7 +43,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -sf http://localhost:9200/_cluster/health | grep -v '\"status\":\"red\"'",
+          "curl -ksfu admin:$$OPENSEARCH_INITIAL_ADMIN_PASSWORD https://localhost:9200/_cluster/health | grep -v '\"status\":\"red\"'",
         ]
       interval: 30s
       timeout: 10s

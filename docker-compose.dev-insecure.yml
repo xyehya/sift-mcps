@@ -1,0 +1,13 @@
+# Explicit local-development-only OpenSearch profile.  It is deliberately
+# separate from docker-compose.yml so a fresh installer invocation can never
+# mistake this Security-disabled profile for the supported acceptance path.
+services:
+  opensearch:
+    environment:
+      - DISABLE_SECURITY_PLUGIN=true
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf http://localhost:9200/_cluster/health | grep -v '\"status\":\"red\"'",
+        ]

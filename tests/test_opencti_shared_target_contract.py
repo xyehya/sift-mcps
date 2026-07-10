@@ -39,7 +39,7 @@ def test_opencti_role_is_prefix_only_and_not_security_admin() -> None:
     assert "indices_all" in source
 
 
-def test_shared_check_is_read_only_and_fails_current_insecure_core() -> None:
+def test_shared_check_is_read_only_and_requires_secure_core_contract() -> None:
     source = CHECK.read_text(encoding="utf-8")
     assert "docker compose -f \"$shared_compose\" config --quiet" in source
     assert "docker compose.* up" not in source
@@ -52,7 +52,9 @@ def test_shared_check_is_read_only_and_fails_current_insecure_core() -> None:
         check=False,
     )
     assert result.returncode != 0
-    assert "Security is disabled" in result.stderr
+    assert "must be an immutable @sha256 image reference" in result.stderr
+    assert "OPENSEARCH_INITIAL_ADMIN_PASSWORD" in source
+    assert "https://localhost:9200" in source
 
 
 def test_external_helper_exposes_only_explicit_shared_check() -> None:

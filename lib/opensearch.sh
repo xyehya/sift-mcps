@@ -11,13 +11,47 @@ _SIFT_LIB_OPENSEARCH_SOURCED=1
 # Phase 8 — OpenSearch (Docker)
 # =============================================================================
 
+_opensearch_admin_env_file() { printf '%s/opensearch-admin.env' "$SIFT_HOME"; }
+_opensearch_ca_file() { printf '%s/opensearch-root-ca.pem' "$SIFT_HOME"; }
+
+ensure_opensearch_admin_credentials() {
+  local credential_file tmp
+  credential_file="$(_opensearch_admin_env_file)"
+  if svc_test_f "$credential_file"; then
+    return 0
+  fi
+  require_cmd openssl
+  tmp="$(mktemp)"
+  umask 077
+  printf 'SIFT_OPENSEARCH_ADMIN_PASSWORD=%s\n' "$(openssl rand -base64 36 | tr -d '\n')" > "$tmp"
+  svc_install_file "$tmp" "$credential_file" 600
+  rm -f "$tmp"
+  log "Generated a service-owned OpenSearch admin credential."
+}
+
+_load_opensearch_admin_credentials() {
+  # This file is created by the installer itself with mode 0600 under the
+  # service account.  Never log or accept its value from an untrusted CLI arg.
+  local credential_file
+  credential_file="$(_opensearch_admin_env_file)"
+  # shellcheck disable=SC1090
+  source <(svc_read "$credential_file") || return 1
+  [[ -n "${SIFT_OPENSEARCH_ADMIN_PASSWORD:-}" ]]
+}
+
+_opensearch_curl() {
+  local method="$1" path="$2" body="${3:-}"
+  _load_opensearch_admin_credentials || return 1
+  local -a args=(--fail --silent --show-error --max-time 15 --cacert "$(_opensearch_ca_file)"
+    --user "admin:${SIFT_OPENSEARCH_ADMIN_PASSWORD}" -X "$method"
+    "https://localhost:9200${path}")
+  [[ -n "$body" ]] && args+=(-H "Content-Type: application/json" --data "$body")
+  curl "${args[@]}"
+}
+
 _opensearch_api() {
   local method="$1" path="$2" body="${3:-}"
-  if [[ -n "$body" ]]; then
-    curl -fsS -X "$method" "http://127.0.0.1:9200$path" -H "Content-Type: application/json" -d "$body" >/dev/null
-  else
-    curl -fsS -X "$method" "http://127.0.0.1:9200$path" >/dev/null
-  fi
+  _opensearch_curl "$method" "$path" "$body" >/dev/null
 }
 
 
@@ -41,13 +75,18 @@ start_opensearch() {
   fi
 
   log "Starting OpenSearch."
+  _load_opensearch_admin_credentials || die "OpenSearch admin credential is unavailable."
+  export SIFT_OPENSEARCH_ADMIN_PASSWORD
   docker compose -f "$REPO_DIR/docker-compose.yml" up -d opensearch
 
   log "Waiting for OpenSearch health (up to 600 s)."
   local api_status="unknown" docker_health="unknown" attempt
   for attempt in $(seq 1 300); do
     docker_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' sift-opensearch 2>/dev/null || true)"
-    api_status="$(curl -fsS --max-time 5 http://127.0.0.1:9200/_cluster/health 2>/dev/null \
+    # Before the CA is copied out of the immutable image, this is a narrow
+    # localhost bootstrap probe only.  The post-start CA-bound probe below is
+    # the acceptance condition used by clients and follow-on configuration.
+    api_status="$(curl -kfsS --user "admin:${SIFT_OPENSEARCH_ADMIN_PASSWORD}" --max-time 5 https://127.0.0.1:9200/_cluster/health 2>/dev/null \
       | "$SYSTEM_PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("status","unknown"))' 2>/dev/null || true)"
     api_status="${api_status:-unknown}"
     docker_health="${docker_health:-unknown}"
@@ -65,12 +104,31 @@ start_opensearch() {
   if [[ "$OPENSEARCH_UP" -eq 0 ]]; then
     warn "OpenSearch not healthy after 600 s (last api=${api_status:-unknown}, docker=${docker_health:-unknown}) — the mandatory core install will fail closed."
     warn "  Check: docker logs opensearch  |  docker compose -f $REPO_DIR/docker-compose.yml ps"
+    return
   fi
+  local ca_file tmp_ca
+  ca_file="$(_opensearch_ca_file)"
+  if ! svc_test_f "$ca_file"; then
+    tmp_ca="$(mktemp)"
+    docker cp sift-opensearch:/usr/share/opensearch/config/root-ca.pem "$tmp_ca" \
+      || die "Could not extract the OpenSearch CA from the pinned image."
+    svc_install_file "$tmp_ca" "$ca_file" 644
+    rm -f "$tmp_ca"
+  fi
+  # The CA is a runtime artifact from the immutable image, not a committed
+  # trust anchor.  Validate its basic lifetime/signature properties before it
+  # becomes the client trust root, then prove a TLS-authenticated API request.
+  sudo_if_needed openssl x509 -in "$ca_file" -noout -checkend 0 >/dev/null \
+    || die "The extracted OpenSearch CA is expired or invalid."
+  sudo_if_needed openssl verify -CAfile "$ca_file" "$ca_file" >/dev/null \
+    || die "The extracted OpenSearch CA failed self-verification."
+  _opensearch_curl GET '/_cluster/health' >/dev/null \
+    || die "OpenSearch TLS certificate or authentication verification failed."
 }
 
 configure_opensearch_cluster() {
   command -v docker >/dev/null 2>&1 || return 0
-  curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null 2>&1 || return 0
+  _opensearch_curl GET "/_cluster/health" >/dev/null 2>&1 || return 0
 
   log "Applying OpenSearch cluster settings."
   _opensearch_api PUT "/_cluster/settings" '{"persistent":{"cluster.max_shards_per_node":3000}}' \
@@ -81,14 +139,14 @@ configure_opensearch_cluster() {
     '{"event.code":4624,"@timestamp":"2024-01-01T00:00:00Z","host.name":"test"}' \
     || warn "OpenSearch smoke index failed."
   local found
-  found="$(curl -fsS "http://127.0.0.1:9200/case-test-evtx-smoketest/_search?q=event.code:4624&size=1" 2>/dev/null \
+  found="$(_opensearch_curl GET "/case-test-evtx-smoketest/_search?q=event.code:4624&size=1" 2>/dev/null \
     | "$SYSTEM_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["hits"]["total"]["value"])' 2>/dev/null || echo 0)"
   if [[ "$found" == "1" ]]; then
     log "OpenSearch smoke test passed."
   else
     warn "OpenSearch smoke test expected 1 hit, got $found."
   fi
-  curl -fsS -X DELETE "http://127.0.0.1:9200/case-test-evtx-smoketest" >/dev/null 2>&1 || true
+  _opensearch_api DELETE "/case-test-evtx-smoketest" || true
 }
 
 configure_geoip_pipeline() {
@@ -103,12 +161,11 @@ configure_geoip_pipeline() {
     warn "SIFT_OFFLINE=1: skipping GeoIP datasource (it fetches from a live endpoint). Stage a local GeoLite2 datasource if needed."
     return 0
   fi
-  curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null 2>&1 || return 0
+  _opensearch_curl GET "/_cluster/health" >/dev/null 2>&1 || return 0
   log "Configuring GeoIP enrichment (SIFT_GEOIP_ENABLED=1)."
 
-  curl -fsS -X PUT "http://127.0.0.1:9200/_plugins/geospatial/ip2geo/datasource/maxmind-city" \
-    -H "Content-Type: application/json" \
-    -d '{"endpoint":"https://geoip.maps.opensearch.org/v1/geolite2-city/manifest.json","update_interval_in_days":3}' \
+  _opensearch_curl PUT "/_plugins/geospatial/ip2geo/datasource/maxmind-city" \
+    '{"endpoint":"https://geoip.maps.opensearch.org/v1/geolite2-city/manifest.json","update_interval_in_days":3}' \
     >/dev/null 2>&1 || warn "GeoIP datasource skipped."
 
   _opensearch_api PUT "/_ingest/pipeline/sift-geoip" '{
@@ -142,25 +199,33 @@ configure_geoip_pipeline() {
 # This function keeps Sigma detectors DISABLED and removes any dead detectors /
 # orphaned monitors so a fresh install does not accumulate non-functional state,
 # then seeds the Sigma alias names so templates can auto-attach them.
-# Talks to OpenSearch over plain http on loopback with NO auth (security plugin
-# is disabled; :9200 is bound to 127.0.0.1 — the loopback isolation boundary).
+# Talks to OpenSearch through the TLS/authenticated loopback endpoint.
 # Best-effort: never fails the install. Run AFTER install_opensearch_templates
 # so the alias-bearing templates exist.
 configure_opensearch_detections() {
-  curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null 2>&1 || return 0
+  _opensearch_curl GET "/_cluster/health" >/dev/null 2>&1 || return 0
   log "Configuring OpenSearch Security Analytics (Sigma detectors disabled — 3.5 regression; detection via Hayabusa)."
-  "$SYSTEM_PYTHON" - <<'PY' || warn "Security Analytics hygiene skipped (plugin may be unavailable)."
+  OPENSEARCH_CONFIG="$SIFT_HOME/opensearch.yaml" "$SYSTEM_PYTHON" - <<'PY' || warn "Security Analytics hygiene skipped (plugin may be unavailable)."
 import json, sys, time, urllib.request, urllib.error
 from collections import Counter
 
-URL = "http://127.0.0.1:9200"
-HEADERS = {"Content-Type": "application/json"}
+import base64, os, ssl, yaml
+
+config = yaml.safe_load(open(os.environ["OPENSEARCH_CONFIG"]))
+URL = config["host"]
+HEADERS = {
+    "Content-Type": "application/json",
+    "Authorization": "Basic " + base64.b64encode(
+        f"{config['user']}:{config['password']}".encode()
+    ).decode(),
+}
+CONTEXT = ssl.create_default_context(cafile=config["ca_certs"])
 
 
 def api(method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(URL + path, data=data, headers=HEADERS, method=method)
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=CONTEXT) as resp:
         return json.loads(resp.read())
 
 
@@ -247,7 +312,7 @@ PY
 }
 
 install_opensearch_templates() {
-  curl -fsS http://127.0.0.1:9200/_cluster/health >/dev/null 2>&1 || return 0
+  _opensearch_curl GET "/_cluster/health" >/dev/null 2>&1 || return 0
   log "Installing OpenSearch templates and pipelines."
   local tmp_config rc
   tmp_config="$(mktemp)"
@@ -255,13 +320,14 @@ install_opensearch_templates() {
     svc_read "$SIFT_HOME/opensearch.yaml" > "$tmp_config"
   else
     cat > "$tmp_config" <<'YAML'
-host: http://127.0.0.1:9200
+host: https://localhost:9200
 user: admin
-password: admin
-verify_certs: false
+password: unused
+verify_certs: true
+ca_certs: /dev/null
 YAML
   fi
-  OPENSEARCH_CONFIG="$tmp_config" OPENSEARCH_HOST="http://127.0.0.1:9200" \
+  OPENSEARCH_CONFIG="$tmp_config" OPENSEARCH_HOST="https://localhost:9200" \
     "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads python - <<'PY'
 from opensearch_mcp.client import get_client
 from opensearch_mcp.mappings import ensure_winlog_pipeline

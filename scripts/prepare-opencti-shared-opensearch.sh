@@ -3,10 +3,9 @@ set -Eeuo pipefail
 
 # Read-only gate for the OpenCTI shared-OpenSearch target path.
 #
-# This command deliberately does not enable Security, create credentials,
-# migrate indices, or start/stop containers. It proves that the operator has
-# supplied the immutable images/CA/credentials and that the current core
-# compose is no longer the insecure DISABLE_SECURITY_PLUGIN lab profile.
+# This command deliberately does not create credentials, transfer data, or
+# start/stop containers. It proves that the operator has supplied the immutable
+# images/CA/credentials and that the secure core compose contract is intact.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -16,7 +15,7 @@ usage() {
 Usage: scripts/prepare-opencti-shared-opensearch.sh --check
 
 Read-only preflight for the security-enabled OpenCTI shared-OpenSearch target.
-It never migrates data, changes OpenSearch security, or starts containers.
+It never transfers data, changes OpenSearch security, or starts containers.
 
 Required environment for a passing target check:
   OPENCTI_PLATFORM_IMAGE, OPENCTI_WORKER_IMAGE, OPENCTI_REDIS_IMAGE,
@@ -25,8 +24,8 @@ Required environment for a passing target check:
   OPENCTI_ADMIN_TOKEN, OPENCTI_WORKER_TOKEN, OPENCTI_RABBITMQ_PASSWORD,
   OPENCTI_MINIO_SECRET_KEY, OPENCTI_ENCRYPTION_KEY, OPENCTI_HEALTH_ACCESS_KEY
 
-The current core lab compose intentionally fails this gate while
-DISABLE_SECURITY_PLUGIN=true remains present.
+The explicit docker-compose.dev-insecure.yml profile is never an acceptance
+target and must not be used for shared mode.
 EOF
 }
 
@@ -52,6 +51,14 @@ if grep -Eq 'DISABLE_SECURITY_PLUGIN[=:]true|plugins\.security\.disabled[=:]true
   printf 'FATAL: core OpenSearch Security is disabled. Enable and prove TLS/authentication before shared mode.\n' >&2
   exit 1
 fi
+grep -q 'OPENSEARCH_INITIAL_ADMIN_PASSWORD' "$core_compose" || {
+  printf 'FATAL: core OpenSearch compose does not require an authenticated admin identity.\n' >&2
+  exit 1
+}
+grep -q 'https://localhost:9200' "$core_compose" || {
+  printf 'FATAL: core OpenSearch health contract does not require TLS.\n' >&2
+  exit 1
+}
 
 for image_var in OPENCTI_PLATFORM_IMAGE OPENCTI_WORKER_IMAGE OPENCTI_REDIS_IMAGE OPENCTI_RABBITMQ_IMAGE OPENCTI_MINIO_IMAGE; do
   value="${!image_var:-}"
@@ -102,4 +109,4 @@ docker compose -f "$shared_compose" config --quiet >/dev/null || {
 }
 
 printf 'Shared OpenCTI target preflight passed (read-only).\n'
-printf 'Next gates: enable/prove core TLS, apply the role through Security admin, run compatibility/capacity tests, then perform snapshot-backed cutover.\n'
+printf 'Next gates: apply the role through Security admin, run compatibility/capacity tests, then start the fresh empty OpenCTI target.\n'
