@@ -224,6 +224,10 @@ class Gateway:
         self.evidence_service = None
         self.investigation_service = None
         self.report_service = None
+        # First-party RAG is explicitly gateway-owned: this cached service holds
+        # the gateway's existing control-plane authority and is never a stdio
+        # child environment.
+        self._rag_knowledge_server = None
         self._gateway_local_tools: set[str] = set()
         # BATCH-D2: Gateway adapter over the D1 durable job state machine. Built
         # in create_app() once the control-plane DSN is resolved.
@@ -1161,6 +1165,12 @@ class Gateway:
 
         backend_name = snap.tool_map[name]
         backend = self.backends[backend_name]
+
+        if backend.config.get("type") == "gateway":
+            from sift_gateway.rag_tools import dispatch_gateway_rag_tool
+
+            result = await dispatch_gateway_rag_tool(self, name, arguments)
+            return list(result.content)
 
         if active_case is not None and self.is_case_scoped_tool(name):
             safe_args = self.safe_case_argument_names(name)

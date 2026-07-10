@@ -15,7 +15,7 @@
     },
     "transport": {
       "type": "string",
-      "enum": ["stdio", "http"]
+      "enum": ["stdio", "http", "gateway"]
     },
     "namespace": { "type": "string" },
     "default_case_scoped": { "type": "boolean" },

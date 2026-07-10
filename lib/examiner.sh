@@ -136,6 +136,70 @@ PY
   fi
 }
 
+# Reconcile a first-party backend whose tools execute in the Gateway process.
+# This is intentionally a narrow, named authority path — it is not a generic
+# "run arbitrary code in the gateway" registration primitive. The installer
+# process receives the control-plane DSN to perform the trusted DB upsert; the
+# registered connection contains only its local manifest path and never a
+# command, env_ref, or credential.
+reconcile_first_party_gateway_backend() {
+  local backend_name="$1"
+  local manifest_path="$2"
+  if [[ "$backend_name" != "forensic-rag-mcp" ]]; then
+    warn "first-party registry reconcile: unsupported gateway backend $backend_name."
+    return 1
+  fi
+  local cp_dsn
+  cp_dsn="$(_resolved_control_plane_dsn)"
+  if [[ -z "$cp_dsn" ]]; then
+    warn "first-party registry reconcile: no control-plane DSN for $backend_name."
+    return 1
+  fi
+  if [[ ! -f "$manifest_path" ]]; then
+    warn "first-party registry reconcile: manifest not found for $backend_name: $manifest_path"
+    return 1
+  fi
+  if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+    warn "first-party registry reconcile: runtime Python missing: $VENV_DIR/bin/python"
+    return 1
+  fi
+
+  log "Reconciling trusted first-party backend $backend_name in app.mcp_backends."
+  SIFT_CONTROL_PLANE_DSN="$cp_dsn" \
+  FIRST_PARTY_BACKEND_NAME="$backend_name" \
+  FIRST_PARTY_MANIFEST_PATH="$manifest_path" \
+    "$VENV_DIR/bin/python" - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+from sift_gateway.mcp_backends_registry import McpBackendRegistry
+
+name = os.environ["FIRST_PARTY_BACKEND_NAME"]
+manifest_path = Path(os.environ["FIRST_PARTY_MANIFEST_PATH"])
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+if name != "forensic-rag-mcp" or manifest.get("transport") != "gateway":
+    print("first-party registry reconcile: unsupported gateway manifest", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    registry = McpBackendRegistry(os.environ["SIFT_CONTROL_PLANE_DSN"])
+    registry.register(
+        name=name,
+        config={"type": "gateway", "manifest_path": str(manifest_path)},
+        manifest=manifest,
+        actor=None,
+    )
+except Exception as exc:
+    print(f"first-party registry reconcile failed for {name}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"first-party registry reconcile: {name} registered/updated.")
+PY
+}
+
 seed_addon_backends() {
   local cp_dsn
   cp_dsn="$(_resolved_control_plane_dsn)"
@@ -159,21 +223,9 @@ seed_addon_backends() {
     log "seed_addon_backends: SIFT_OPENSEARCH_ENABLED != true — skipping opensearch-mcp seeding."
   fi
 
-  # forensic-rag-mcp (BATCH-OSX-RAG): the knowledge add-on. Gated by
-  # SIFT_RAG_ENABLED. It resolves the control-plane DSN via the
-  # SIFT_CONTROL_PLANE_DSN env ref to reach the pgvector knowledge corpus; no
-  # raw DSN is stored in app.mcp_backends.
-  if [[ "${SIFT_RAG_ENABLED:-true}" == "true" ]]; then
-    if _seed_one_addon_backend \
-      "forensic-rag-mcp" \
-      "$REPO_DIR/packages/forensic-rag-mcp/sift-backend.json" \
-      "rag-mcp" \
-      '{"SIFT_CONTROL_PLANE_DSN": "SIFT_CONTROL_PLANE_DSN"}'; then
-      RAG_SEEDED=true
-    fi
-  else
-    log "seed_addon_backends: SIFT_RAG_ENABLED != true — skipping forensic-rag-mcp seeding."
-  fi
+  # forensic-rag-mcp is a first-party, gateway-owned pack.  It is reconciled
+  # only by scripts/core-addons/setup-rag.sh, which never grants a stdio child
+  # a control-plane DSN.  Do not reintroduce it into this generic stdio seeder.
 }
 
 # A1-BOOTSTRAP: create the operator in Supabase Auth (Admin API) with status=invited.
@@ -484,4 +536,3 @@ validate_evidence_root() {
   case_count=$(find "$SIFT_CASES_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l || echo 0)
   log "Evidence root OK: $SIFT_CASES_ROOT ($case_count existing case directories)."
 }
-
