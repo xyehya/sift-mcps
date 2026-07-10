@@ -46,7 +46,10 @@ _opensearch_curl() {
     --user "admin:${SIFT_OPENSEARCH_ADMIN_PASSWORD}" -X "$method"
     "https://localhost:9200${path}")
   [[ -n "$body" ]] && args+=(-H "Content-Type: application/json" --data "$body")
-  curl "${args[@]}"
+  # The verified CA lives below the service-owned 0700 state directory.  The
+  # installer operator deliberately cannot traverse that directory, so use the
+  # same narrowly-scoped privilege helper already used for service state reads.
+  sudo_if_needed curl "${args[@]}"
 }
 
 _opensearch_api() {

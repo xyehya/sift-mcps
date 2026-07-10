@@ -31,6 +31,7 @@ def test_installer_generates_and_uses_a_verified_ca_bound_config() -> None:
     assert start_call < core_phase.index("\n  write_opensearch_config")
     assert "openssl rand -base64" in opensearch
     assert "--cacert" in opensearch
+    assert "sudo_if_needed curl" in opensearch
     assert "openssl verify -CAfile" in opensearch
     assert "host: https://localhost:9200" in config
     assert "verify_certs: true" in config
