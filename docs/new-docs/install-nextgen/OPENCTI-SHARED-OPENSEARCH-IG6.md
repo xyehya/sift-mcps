@@ -21,6 +21,11 @@ The target artifacts are now committed in:
 - `scripts/setup-addon.sh opencti --shared-opensearch-check` — external-helper
   entrypoint for that read-only gate.
 
+The target keeps the OpenCTI administrator token, worker token, OpenSearch
+credential, RabbitMQ password, and MinIO secret as separate operator-managed
+secrets. No application bootstrap token is reused as a broker or object-store
+credential.
+
 The gate deliberately does **not** enable Security, create credentials, migrate
 indices, or remove the existing OpenCTI datastore. Those actions require a
 separate maintenance/cutover packet after the proof rows below pass.

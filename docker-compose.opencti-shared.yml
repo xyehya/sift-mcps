@@ -7,7 +7,8 @@
 #
 # Required operator environment is deliberately not committed here:
 # OPENCTI_PLATFORM_IMAGE / OPENCTI_WORKER_IMAGE (immutable @sha256 images),
-# OPENCTI_ADMIN_TOKEN, OPENCTI_ENCRYPTION_KEY, OPENCTI_HEALTH_ACCESS_KEY,
+# OPENCTI_ADMIN_TOKEN, OPENCTI_WORKER_TOKEN, OPENCTI_RABBITMQ_PASSWORD,
+# OPENCTI_MINIO_SECRET_KEY, OPENCTI_ENCRYPTION_KEY, OPENCTI_HEALTH_ACCESS_KEY,
 # OPENCTI_OPENSEARCH_CA, OPENCTI_OPENSEARCH_USER, and
 # OPENCTI_OPENSEARCH_PASSWORD.
 
@@ -46,12 +47,12 @@ services:
       - RABBITMQ__HOSTNAME=rabbitmq
       - RABBITMQ__PORT=5672
       - RABBITMQ__USERNAME=opencti
-      - RABBITMQ__PASSWORD=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+      - RABBITMQ__PASSWORD=${OPENCTI_RABBITMQ_PASSWORD:?set OpenCTI RabbitMQ password}
       - MINIO__ENDPOINT=minio
       - MINIO__PORT=9000
       - MINIO__USE_SSL=false
       - MINIO__ACCESS_KEY=opencti
-      - MINIO__SECRET_KEY=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+      - MINIO__SECRET_KEY=${OPENCTI_MINIO_SECRET_KEY:?set OpenCTI MinIO secret key}
     secrets:
       - sift-opensearch-ca
     depends_on:
@@ -79,7 +80,7 @@ services:
       - opencti-app-net
     environment:
       - OPENCTI_URL=http://opencti:8080
-      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+      - OPENCTI_TOKEN=${OPENCTI_WORKER_TOKEN:?set a least-privilege OpenCTI worker token}
       - WORKER_LOG_LEVEL=error
     depends_on:
       opencti:
@@ -107,7 +108,7 @@ services:
       - opencti-rabbitmq:/var/lib/rabbitmq
     environment:
       - RABBITMQ_DEFAULT_USER=opencti
-      - RABBITMQ_DEFAULT_PASS=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+      - RABBITMQ_DEFAULT_PASS=${OPENCTI_RABBITMQ_PASSWORD:?set OpenCTI RabbitMQ password}
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
@@ -123,7 +124,7 @@ services:
       - opencti-minio:/data
     environment:
       - MINIO_ROOT_USER=opencti
-      - MINIO_ROOT_PASSWORD=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+      - MINIO_ROOT_PASSWORD=${OPENCTI_MINIO_SECRET_KEY:?set OpenCTI MinIO secret key}
     command: server /data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]

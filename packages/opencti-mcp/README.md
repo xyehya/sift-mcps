@@ -69,6 +69,10 @@ verified OpenSearch CA, the least-privilege role, and the absence of the
 dedicated `opencti-opensearch` service. Do not remove the legacy OpenCTI volume
 until the migration proof and rollback window are complete.
 
+Shared mode uses separate operator-managed values for the OpenCTI administrator,
+worker, OpenSearch, RabbitMQ, and MinIO credentials; do not reuse the admin token
+for the broker or object store.
+
 OpenCTI remains a query-only reference plane at the SIFT Gateway surface. Its
 indices must not be exposed through case-search tooling; intelligence used as
 evidence must enter through the normal evidence/provenance path.

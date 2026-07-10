@@ -22,6 +22,13 @@ def test_shared_compose_has_no_dedicated_search_and_keeps_tls_prefix_boundary() 
     assert "external: true" in source
     assert "internal: true" in source
     assert "127.0.0.1:8080:8080" in source
+    assert "RABBITMQ__PASSWORD=${OPENCTI_RABBITMQ_PASSWORD" in source
+    assert "MINIO__SECRET_KEY=${OPENCTI_MINIO_SECRET_KEY" in source
+    assert "OPENCTI_TOKEN=${OPENCTI_WORKER_TOKEN" in source
+    assert "RABBITMQ_DEFAULT_PASS=${OPENCTI_RABBITMQ_PASSWORD" in source
+    assert "MINIO_ROOT_PASSWORD=${OPENCTI_MINIO_SECRET_KEY" in source
+    assert "RABBITMQ__PASSWORD=${OPENCTI_ADMIN_TOKEN" not in source
+    assert "MINIO__SECRET_KEY=${OPENCTI_ADMIN_TOKEN" not in source
 
 
 def test_opencti_role_is_prefix_only_and_not_security_admin() -> None:
