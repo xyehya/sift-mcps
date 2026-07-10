@@ -68,6 +68,43 @@ the resolved data directory above.
 
 For private repos, set `GITHUB_TOKEN` or authenticate the `gh` CLI.
 
+### First-party core-addon pack
+
+After mandatory SIFT core is installed, use the staged first-party entrypoint;
+it installs the add-on into the existing runtime, validates the local baselines,
+and reconciles the trusted gateway registry record automatically:
+
+```bash
+# Default baselines only; no registry baseline download
+sudo /opt/sift-mcps/scripts/core-addons/setup-windows-triage.sh --install
+
+# Explicitly opt in to the optional ~12 GiB registry baseline
+sudo /opt/sift-mcps/scripts/core-addons/setup-windows-triage.sh \
+  --install --with-registry
+```
+
+The pack uses the fixed service-readable default
+`/var/lib/sift/windows-triage`, so the registered child has no environment
+references at all—especially no control-plane or database credential reference.
+It is intentionally separate from `scripts/setup-addon.sh`, which prepares
+external integrations only.
+
+For an air-gapped run, pre-stage `known_good.db` and `context.db` in that
+directory and use `--offline`; the pack refuses all network access. If also
+using `--with-registry` offline, pre-stage `known_good_registry.db` and provide
+both its SHA-256 and a concise source descriptor:
+
+```bash
+sudo env SIFT_WINDOWS_TRIAGE_REGISTRY_SHA256='<64 hex SHA-256>' \
+  SIFT_WINDOWS_TRIAGE_REGISTRY_PROVENANCE='triage-db-<release>' \
+  /opt/sift-mcps/scripts/core-addons/setup-windows-triage.sh \
+  --install --with-registry --offline
+```
+
+Online registry downloads fail closed unless the release includes the registry
+asset's SHA-256, passes the free-space guard, and produces a local non-secret
+provenance sidecar beside the database.
+
 ## Offline / air-gapped staging
 
 For hosts without GitHub access, pre-stage the database files by hand. Place
