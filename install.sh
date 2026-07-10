@@ -144,10 +144,17 @@ main() {
 
   _sift_read_pack_env() {
     local env_name="$1" current="$2" raw="${!1-}"
+    local reexeced="${!SIFT_INSTALL_REEXEC_ENV:-0}"
     case "$raw" in
       "") printf '%s' "$current" ;;
       true) printf '1' ;;
       false) printf '%s' "$current" ;;
+      # The initial process serializes pack choices as 0/1 for its trusted
+      # /opt re-exec.  Those internal values are not accepted from a caller.
+      0|1)
+        [[ "$reexeced" == "1" ]] || die "$env_name must be exactly true or false when set."
+        printf '%s' "$raw"
+        ;;
       *) die "$env_name must be exactly true or false when set." ;;
     esac
   }

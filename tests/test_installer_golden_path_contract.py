@@ -78,6 +78,20 @@ def test_internal_reexec_accepts_its_own_mandatory_core_state() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_internal_reexec_accepts_serialized_positive_pack_flags() -> None:
+    """Staged execution receives installer-owned 0/1 values, not user grammar."""
+    result = _installer(
+        "--help",
+        env={
+            "SIFT_MCPS_INSTALL_REEXECED": "1",
+            "SIFT_WITH_RAG": "1",
+            "SIFT_WITH_WINDOWS_TRIAGE": "1",
+            "SIFT_WITH_WINDOWS_TRIAGE_REGISTRY": "0",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_root_extra_taxonomy_makes_opensearch_mandatory() -> None:
     """The root package models core and first-party packs without full/standard aliases."""
     project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
