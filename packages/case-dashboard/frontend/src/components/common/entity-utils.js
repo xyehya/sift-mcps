@@ -7,6 +7,15 @@
 // — never build a token class by interpolation (`text-${x}`) (AGENTS §3 / §5).
 // ─────────────────────────────────────────────────────────────────────────
 
+/**
+ * Robust helper to extract timestamp MS without the overhead of instantiating
+ * a new Date object in hot loops (sorting/filtering). Handles Date objects,
+ * raw MS numbers, and ISO strings.
+ */
+export function parseTimestamp(t) {
+  return t?.getTime ? t.getTime() : typeof t === 'number' ? t : (Date.parse(t) || 0)
+}
+
 /** Display form for a host string (uppercased; null/empty → UNKNOWN). */
 export function displayHost(h) {
   return h ? String(h).toUpperCase() : 'UNKNOWN'
@@ -191,7 +200,8 @@ export function filterTimeline(timeline, { types = new Set(), host = 'all', sear
     const q = search.toLowerCase()
     list = list.filter((e) => (e.description ?? '').toLowerCase().includes(q))
   }
-  return [...list].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+  // OPTIMIZATION: use parseTimestamp to avoid new Date() instantiation overhead in sort loops
+  return [...list].sort((a, b) => parseTimestamp(a.timestamp) - parseTimestamp(b.timestamp))
 }
 
 // ── Generic table sort (Hosts / Accounts / IOCs) ─────────────────────────

@@ -7,6 +7,7 @@ import { FilterBar } from '@/components/findings/FindingsFilterBar'
 import { Row, ActivePill } from '@/components/findings/FindingRow'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { parseTimestamp } from '@/components/common/entity-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
 // Findings list (handoff §"Left pane") — unified filter-dropdown (replaces
@@ -74,8 +75,9 @@ export function FindingsList({
   const sortedList = useMemo(() => {
     const arr = list.slice()
     return arr.sort((a, b) => {
-      const ta = new Date(a.modified_at || a.event_timestamp || 0).getTime()
-      const tb = new Date(b.modified_at || b.event_timestamp || 0).getTime()
+      // OPTIMIZATION: use parseTimestamp to avoid new Date() instantiation overhead in sort loops
+      const ta = parseTimestamp(a.modified_at || a.event_timestamp || 0)
+      const tb = parseTimestamp(b.modified_at || b.event_timestamp || 0)
       return sortFilter === 'oldest' ? ta - tb : tb - ta
     })
   }, [list, sortFilter])

@@ -9,6 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { CONF_ORDER, confClass, findingTs, normStatus } from '@/components/findings/findings-utils'
+import { parseTimestamp } from '@/components/common/entity-utils'
 
 export {
   mitreTechniques,
@@ -60,7 +61,8 @@ export function severityCounts(findings, now = Date.now()) {
     counts[c] += 1
     if (normStatus(f) === 'draft') awaiting[c] += 1
     const ts = findingTs(f)
-    if (ts && now - new Date(ts).getTime() < DAY) recent[c] += 1
+    // OPTIMIZATION: use parseTimestamp to avoid new Date() instantiation overhead in loops
+    if (ts && now - parseTimestamp(ts) < DAY) recent[c] += 1
   }
   const max = Math.max(1, ...Object.values(counts))
   const total = Object.values(counts).reduce((s, n) => s + n, 0)
@@ -103,7 +105,8 @@ export function velocitySeries(findings, rangeKey, now = Date.now()) {
   const stamped = (findings ?? [])
     .map((f) => {
       const ts = findingTs(f)
-      return ts ? new Date(ts).getTime() : null
+      // OPTIMIZATION: use parseTimestamp to avoid new Date() instantiation overhead in loops
+      return ts ? parseTimestamp(ts) : null
     })
     .filter((t) => t !== null && !Number.isNaN(t))
 
@@ -147,13 +150,14 @@ export const ACTIVITY_RANGES = [
 /** Most-recent findings within the window, newest first, capped at `limit`. */
 export function recentActivity(findings, rangeKey, limit = 8, now = Date.now()) {
   const range = ACTIVITY_RANGES.find((r) => r.key === rangeKey) ?? ACTIVITY_RANGES[0]
+  // OPTIMIZATION: use parseTimestamp to avoid new Date() instantiation overhead in hot loops
   return (findings ?? [])
     .filter((f) => {
       if (range.ms === Infinity) return true
       const ts = findingTs(f)
-      return ts ? now - new Date(ts).getTime() < range.ms : false
+      return ts ? now - parseTimestamp(ts) < range.ms : false
     })
     .slice()
-    .sort((a, b) => new Date(findingTs(b) ?? 0) - new Date(findingTs(a) ?? 0))
+    .sort((a, b) => parseTimestamp(findingTs(b) ?? 0) - parseTimestamp(findingTs(a) ?? 0))
     .slice(0, limit)
 }
