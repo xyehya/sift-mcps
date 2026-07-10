@@ -193,6 +193,14 @@ download-free even on the default install path.
 - **Python dep**: `pycti>=6.0` (`packages/opencti-mcp/pyproject.toml:31`),
   `opencti` extra only.
 
+The isolated stack remains the default and is not the resource-saving target.
+Shared mode uses `docker-compose.opencti-shared.yml`, immutable image
+references, a verified OpenSearch CA, and the `opencti*`-only Security role in
+`configs/opensearch/security/opencti-platform-role.yml`. It is reachable only
+through `scripts/setup-addon.sh opencti --shared-opensearch-check`; Security/TLS,
+compatibility, capacity, authorization, outage, and rollback proofs must pass
+before the dedicated OpenCTI datastore is removed.
+
 ### Supabase / Postgres (control plane)
 - **CLI** (#8) pinned (`scripts/setup-supabase.sh:28-31`).
 - **Stack images** (#9) pulled by `supabase start`

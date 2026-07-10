@@ -21,6 +21,7 @@ set -Eeuo pipefail
 # USAGE
 #   ./scripts/setup-addon.sh opencti
 #   ./scripts/setup-addon.sh opencti --provision   # explicit local-stack prep
+#   ./scripts/setup-addon.sh opencti --shared-opensearch-check
 #   ./scripts/setup-addon.sh --help
 #
 # VENV SAFETY (regression we fixed — read before editing the uv calls)
@@ -578,6 +579,14 @@ setup_opensearch() {
 
 setup_opencti() {
   reset_payload
+  if [[ "${SETUP_OPENCTI_SHARED_CHECK:-0}" == "1" ]]; then
+    [[ "${SETUP_OPENCTI_PROVISION:-0}" != "1" ]] || die \
+      "--shared-opensearch-check is read-only; do not combine it with --provision."
+    log "Running the read-only security/compatibility gate for shared OpenSearch mode."
+    bash "$REPO_ROOT/scripts/prepare-opencti-shared-opensearch.sh" --check
+    log "Shared OpenCTI target is prepared only after the gate passes; no cutover or data migration was performed."
+    return 0
+  fi
   PAYLOAD_NAME="opencti-mcp"
   PAYLOAD_MANIFEST="$SIFT_MCPS_ROOT/packages/opencti-mcp/sift-backend.json"
   log "== opencti-mcp (reference backend, provides: reference, threat-intel) =="
@@ -654,14 +663,16 @@ case "${1:-}" in
   opencti)
     shift
     SETUP_OPENCTI_PROVISION=0
+    SETUP_OPENCTI_SHARED_CHECK=0
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --provision) SETUP_OPENCTI_PROVISION=1; shift ;;
+        --shared-opensearch-check) SETUP_OPENCTI_SHARED_CHECK=1; shift ;;
         --offline) SIFT_OFFLINE=1; export SIFT_OFFLINE; shift ;;
-        *) die "Unknown setup-addon opencti option '$1'. Use --provision or --offline." ;;
+        *) die "Unknown setup-addon opencti option '$1'. Use --provision, --shared-opensearch-check, or --offline." ;;
       esac
     done
-    export SETUP_OPENCTI_PROVISION
+    export SETUP_OPENCTI_PROVISION SETUP_OPENCTI_SHARED_CHECK
     setup_opencti
     ;;
   *)

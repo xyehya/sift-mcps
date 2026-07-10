@@ -1,4 +1,29 @@
-# IG-6 — OpenCTI shared-OpenSearch compatibility and capacity gate
+# IG-6/IG-7 — OpenCTI shared-OpenSearch compatibility, security, and migration gate
+
+## Recommendation and target path
+
+The safe resource-saving design is to share the **core OpenSearch cluster as a
+security-isolated datastore**, not to place OpenCTI inside the OpenSearch
+container and not to rely on Docker network isolation alone. The current SIFT
+lab compose intentionally disables the OpenSearch Security plugin, so shared
+mode remains blocked until the core transitions to authenticated TLS and every
+SIFT client is migrated to its own least-privilege identity.
+
+The target artifacts are now committed in:
+
+- `docker-compose.opencti-shared.yml` — OpenCTI platform plus its Redis,
+  RabbitMQ, MinIO, and worker services; no dedicated OpenSearch service.
+- `configs/opensearch/security/opencti-platform-role.yml` — `opencti*`-only
+  OpenSearch role shape.
+- `scripts/prepare-opencti-shared-opensearch.sh --check` — read-only gate for
+  Security/TLS, immutable images, CA/credential staging, role scope, and
+  network/compose shape.
+- `scripts/setup-addon.sh opencti --shared-opensearch-check` — external-helper
+  entrypoint for that read-only gate.
+
+The gate deliberately does **not** enable Security, create credentials, migrate
+indices, or remove the existing OpenCTI datastore. Those actions require a
+separate maintenance/cutover packet after the proof rows below pass.
 
 **Status:** investigation complete; do not migrate yet
 **Scope:** P1.7 / IG-6 design, repository inspection, and read-only test-VM inventory

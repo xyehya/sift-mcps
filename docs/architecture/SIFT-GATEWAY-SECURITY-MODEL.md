@@ -35,6 +35,14 @@ Only two consumer classes exist — a **human operator** over HTTPS to `/portal`
 The lone external dependency, **OpenCTI**, is reached *through* the gateway under a
 query-only contract — the agent never talks to it directly.
 
+If OpenCTI later shares the OpenSearch cluster, that sharing is a conditional
+deployment target, not a second authority boundary: the core Security plugin
+must be enabled with TLS, the OpenCTI platform receives a dedicated `opencti*`
+role, and Redis/RabbitMQ/MinIO/workers remain on an OpenCTI-only network. The
+Gateway must not expose `opencti_*` through case-search tooling. Until those
+compatibility, least-privilege, capacity, outage, and rollback proofs pass, the
+isolated OpenCTI datastore remains the safe deployment.
+
 ## VP-2 — Eight planes, one gate
 Authority flows one way: **Postgres (control plane) is the source of truth**; OpenSearch
 (data plane) is a derived projection rebuilt from artifacts, never trusted as the system of

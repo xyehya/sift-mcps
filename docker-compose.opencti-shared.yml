@@ -1,0 +1,149 @@
+# OpenCTI shared-datastore target path (explicit migration mode only).
+#
+# This file intentionally has no OpenSearch service. The core OpenSearch
+# service must already be running with Security/TLS enabled on the external
+# `sift-net` network. Do not use this file with the current lab compose, which
+# disables the Security plugin.
+#
+# Required operator environment is deliberately not committed here:
+# OPENCTI_PLATFORM_IMAGE / OPENCTI_WORKER_IMAGE (immutable @sha256 images),
+# OPENCTI_ADMIN_TOKEN, OPENCTI_ENCRYPTION_KEY, OPENCTI_HEALTH_ACCESS_KEY,
+# OPENCTI_OPENSEARCH_CA, OPENCTI_OPENSEARCH_USER, and
+# OPENCTI_OPENSEARCH_PASSWORD.
+
+services:
+  opencti:
+    image: "${OPENCTI_PLATFORM_IMAGE:?set an immutable OpenCTI platform image digest}"
+    container_name: sift-opencti
+    restart: unless-stopped
+    networks:
+      - opencti-app-net
+      - sift-net
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=4096
+      - APP__PORT=8080
+      - APP__BASE_URL=http://localhost:8080
+      - APP__ADMIN__EMAIL=admin@sift.local
+      - APP__ADMIN__PASSWORD=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+      - APP__ADMIN__TOKEN=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+      - APP__ENCRYPTION_KEY=${OPENCTI_ENCRYPTION_KEY:?set OpenCTI encryption key}
+      - APP__HEALTH_ACCESS_KEY=${OPENCTI_HEALTH_ACCESS_KEY:?set OpenCTI health access key}
+      - APP__APP_LOGS__LOGS_LEVEL=error
+      - ELASTICSEARCH__URL=https://${SIFT_OPENSEARCH_HOST:-sift-opensearch}:9200
+      - ELASTICSEARCH__ENGINE_SELECTOR=opensearch
+      - ELASTICSEARCH__ENGINE_CHECK=true
+      - ELASTICSEARCH__INDEX_PREFIX=opencti
+      - ELASTICSEARCH__USERNAME=${OPENCTI_OPENSEARCH_USER:?set OpenCTI OpenSearch user}
+      - ELASTICSEARCH__PASSWORD=${OPENCTI_OPENSEARCH_PASSWORD:?set OpenCTI OpenSearch password}
+      - ELASTICSEARCH__SSL__REJECT_UNAUTHORIZED=true
+      - ELASTICSEARCH__SSL__CA=/run/secrets/sift-opensearch-ca
+      - ELASTICSEARCH__NUMBER_OF_SHARDS=1
+      - ELASTICSEARCH__NUMBER_OF_REPLICAS=0
+      - REDIS__HOSTNAME=redis
+      - REDIS__PORT=6379
+      - RABBITMQ__HOSTNAME=rabbitmq
+      - RABBITMQ__PORT=5672
+      - RABBITMQ__USERNAME=opencti
+      - RABBITMQ__PASSWORD=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+      - MINIO__ENDPOINT=minio
+      - MINIO__PORT=9000
+      - MINIO__USE_SSL=false
+      - MINIO__ACCESS_KEY=opencti
+      - MINIO__SECRET_KEY=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+    secrets:
+      - sift-opensearch-ca
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e 'const http=require(\"http\");const key=process.env.APP__HEALTH_ACCESS_KEY;http.get(\"http://localhost:8080/health?health_access_key=\"+encodeURIComponent(key),r=>process.exit(r.statusCode===200?0:1)).on(\"error\",()=>process.exit(1));'",
+        ]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  worker:
+    image: "${OPENCTI_WORKER_IMAGE:?set an immutable OpenCTI worker image digest}"
+    restart: unless-stopped
+    networks:
+      - opencti-app-net
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+      - WORKER_LOG_LEVEL=error
+    depends_on:
+      opencti:
+        condition: service_healthy
+
+  redis:
+    image: "${OPENCTI_REDIS_IMAGE:?set an immutable Redis image digest}"
+    restart: unless-stopped
+    networks:
+      - opencti-app-net
+    volumes:
+      - opencti-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: "${OPENCTI_RABBITMQ_IMAGE:?set an immutable RabbitMQ image digest}"
+    restart: unless-stopped
+    networks:
+      - opencti-app-net
+    volumes:
+      - opencti-rabbitmq:/var/lib/rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=opencti
+      - RABBITMQ_DEFAULT_PASS=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: "${OPENCTI_MINIO_IMAGE:?set an immutable MinIO image digest}"
+    restart: unless-stopped
+    networks:
+      - opencti-app-net
+    volumes:
+      - opencti-minio:/data
+    environment:
+      - MINIO_ROOT_USER=opencti
+      - MINIO_ROOT_PASSWORD=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+    command: server /data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  opencti-redis:
+  opencti-rabbitmq:
+  opencti-minio:
+
+secrets:
+  sift-opensearch-ca:
+    file: "${OPENCTI_OPENSEARCH_CA:?set the verified OpenSearch CA path}"
+
+networks:
+  opencti-app-net:
+    name: sift-opencti-app-net
+    internal: true
+  sift-net:
+    external: true
+    name: "${SIFT_CORE_NETWORK_NAME:-sift-net}"
