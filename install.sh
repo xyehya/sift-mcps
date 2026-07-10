@@ -11,7 +11,9 @@ set -Eeuo pipefail
 #
 # Design invariants:
 #   - Uses /usr/bin/python3.12 (SIFT native).  No uv-managed Python.
-#   - Single native sync path (--extra full): core + OpenSearch + RAG knowledge.
+#   - Mandatory native sync path (--extra core): gateway, portal, operations,
+#     workers, OpenSearch, and opensearch-mcp.
+#   - First-party packs are opt-in only: --with-rag, --with-windows-triage.
 #   - Venv always matches system Python; mismatched venvs are rebuilt.
 #   - OpenCTI is an external add-on; prepare/register it via scripts/setup-addon.sh.
 #   - Supabase is auto-provisioned unless external credentials are supplied.
@@ -38,24 +40,56 @@ sift_source_full_installer_libraries
 # main
 # =============================================================================
 
+run_first_party_core_addons() {
+  local pack_args=(--install)
+  is_offline && pack_args+=(--offline)
+
+  if [[ "${SIFT_WITH_RAG:-0}" == "1" ]]; then
+    log "Installing first-party RAG core add-on."
+    bash "$REPO_DIR/scripts/core-addons/setup-rag.sh" "${pack_args[@]}" || die \
+      "First-party RAG installation failed; refusing a partial core-addon install."
+    RAG_SEEDED=true
+  fi
+
+  if [[ "${SIFT_WITH_WINDOWS_TRIAGE:-0}" == "1" ]]; then
+    local windows_args=("${pack_args[@]}")
+    [[ "${SIFT_WITH_WINDOWS_TRIAGE_REGISTRY:-0}" == "1" ]] && windows_args+=(--with-registry)
+    log "Installing first-party Windows-triage core add-on."
+    bash "$REPO_DIR/scripts/core-addons/setup-windows-triage.sh" "${windows_args[@]}" || die \
+      "First-party Windows-triage installation failed; refusing a partial core-addon install."
+    WINDOWS_TRIAGE_SEEDED=true
+  fi
+}
+
 main() {
   local original_args=("$@")
-  SIFT_CORE_ONLY="${SIFT_CORE_ONLY:-0}"
   local uninstall_mode=0
-  # Track compatibility flags.
-  local flag_no_opencti=0 flag_no_rag=0
+  local with_rag=0 with_windows_triage=0 with_windows_triage_registry=0
+  local interactive=0
   SIFT_EXTERNAL_SUPABASE="${SIFT_EXTERNAL_SUPABASE:-0}"
   # B-MVP-046: AppArmor stays in complain mode unless explicitly opted into enforce.
   SIFT_APPARMOR_ENFORCE="${SIFT_APPARMOR_ENFORCE:-0}"
 
-  # Parse flags (#1: new flags + existing)
+  # Legacy disable controls would make the mandatory core nondeterministic.
+  # Do not silently honor an inherited environment value from an old install.
+  local legacy_core_control
+  for legacy_core_control in SIFT_CORE_ONLY SIFT_OPENSEARCH_ENABLED SIFT_RAG_ENABLED; do
+    if [[ -v "$legacy_core_control" ]]; then
+      die "$legacy_core_control is no longer supported. Use the documented positive --with-* pack flags."
+    fi
+  done
+
+  # Parse positive options. Bare ./install.sh is deliberately non-interactive.
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -y|--yes)               ASSUME_YES=1; shift ;;
-      --core-only)            SIFT_CORE_ONLY=1; shift ;;
       --uninstall|--remove)   uninstall_mode=1; shift ;;
-      --no-opencti)           flag_no_opencti=1; shift ;;
-      --no-rag)               flag_no_rag=1; shift ;;
+      --with-rag)             with_rag=1; shift ;;
+      --with-windows-triage)  with_windows_triage=1; shift ;;
+      --with-windows-triage-registry)
+                              with_windows_triage=1; with_windows_triage_registry=1; shift ;;
+      --with-core-addons)     with_rag=1; with_windows_triage=1; shift ;;
+      --interactive)          interactive=1; shift ;;
       --external-supabase)    SIFT_EXTERNAL_SUPABASE=1; shift ;;
       --offline)              SIFT_OFFLINE=1; shift ;;
       --enable-geoip)         SIFT_GEOIP_ENABLED=1; shift ;;
@@ -66,11 +100,13 @@ main() {
         printf 'No arguments required for install — native components are provisioned idempotently.\n'
         printf 'Run from a normal clone; the installer stages itself into %s before provisioning.\n' "$SIFT_MCPS_INSTALL_ROOT"
         printf 'Re-run safe: every install step is idempotent.\n\n'
-        printf '  --core-only          Install gateway + portal + in-process core tools only.\n'
-        printf '                       Skips OpenSearch, RAG, Docker, and forensic-tool downloads.\n'
-        printf '  --no-rag             Disable forensic-rag-mcp backend.\n'
-        printf '  --no-opencti         Accepted for compatibility; OpenCTI is external and\n'
-        printf '                       never installed by install.sh. Use scripts/setup-addon.sh.\n'
+        printf '  --with-rag           Install the first-party RAG knowledge pack after core.\n'
+        printf '  --with-windows-triage\n'
+        printf '                       Install the first-party Windows-triage baseline pack after core.\n'
+        printf '  --with-windows-triage-registry\n'
+        printf '                       Also install the explicit large Windows registry baseline.\n'
+        printf '  --with-core-addons   Install both first-party packs (not the large registry baseline).\n'
+        printf '  --interactive        Explicitly prompt for first-party pack selection.\n'
         printf '  --external-supabase  Skip Supabase auto-provisioning.  Requires that\n'
         printf '                       SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,\n'
         printf '                       and SIFT_CONTROL_PLANE_DSN are already exported in env.\n'
@@ -95,12 +131,45 @@ main() {
         exit 0
         ;;
       *)
-        warn "Unknown option '$1' — ignored.  Run ./install.sh -h for help."
-        shift
+        die "Unknown or removed option '$1'. Run ./install.sh --help for supported positive options."
         ;;
     esac
   done
-  export SIFT_EXTERNAL_SUPABASE
+
+  _sift_read_pack_env() {
+    local env_name="$1" current="$2" raw="${!1-}"
+    case "$raw" in
+      "") printf '%s' "$current" ;;
+      true) printf '1' ;;
+      false) printf '%s' "$current" ;;
+      *) die "$env_name must be exactly true or false when set." ;;
+    esac
+  }
+
+  with_rag="$(_sift_read_pack_env SIFT_WITH_RAG "$with_rag")"
+  with_windows_triage="$(_sift_read_pack_env SIFT_WITH_WINDOWS_TRIAGE "$with_windows_triage")"
+  with_windows_triage_registry="$(_sift_read_pack_env SIFT_WITH_WINDOWS_TRIAGE_REGISTRY "$with_windows_triage_registry")"
+  [[ "$with_windows_triage_registry" == "1" ]] && with_windows_triage=1
+
+  if [[ "$interactive" == "1" ]]; then
+    local reply
+    read -r -p 'Install first-party RAG pack? [y/N] ' reply
+    [[ "$reply" =~ ^[Yy]$ ]] && with_rag=1
+    read -r -p 'Install first-party Windows-triage pack? [y/N] ' reply
+    [[ "$reply" =~ ^[Yy]$ ]] && with_windows_triage=1
+    if [[ "$with_windows_triage" == "1" ]]; then
+      read -r -p 'Install the explicit large Windows registry baseline? [y/N] ' reply
+      [[ "$reply" =~ ^[Yy]$ ]] && with_windows_triage_registry=1
+    fi
+  fi
+
+  # Installer-control-plane state only; no child-process credentials flow here.
+  SIFT_OPENSEARCH_ENABLED=true
+  SIFT_RAG_ENABLED=false
+  SIFT_OPENCTI_ENABLED=false
+  export SIFT_EXTERNAL_SUPABASE SIFT_OPENSEARCH_ENABLED SIFT_RAG_ENABLED SIFT_OPENCTI_ENABLED
+  export SIFT_WITH_RAG="$with_rag" SIFT_WITH_WINDOWS_TRIAGE="$with_windows_triage"
+  export SIFT_WITH_WINDOWS_TRIAGE_REGISTRY="$with_windows_triage_registry"
   # B-MVP-004: propagate offline/geoip/model-cache controls to all sub-steps
   # (including scripts/setup-supabase.sh invoked by preflight_supabase).
   export SIFT_OFFLINE SIFT_GEOIP_ENABLED SIFT_HF_HOME
@@ -130,40 +199,12 @@ main() {
   # daemon is merely stopped.
   ensure_docker_ready_for_supabase
 
-  # --- native backend enablement (#1) ---
-  # OpenCTI and other external add-ons are prepared/registerable via
-  # scripts/setup-addon.sh, not installed by this native path.
-  if [[ "$SIFT_CORE_ONLY" == "1" ]]; then
-    log "CORE-ONLY install: gateway + portal + in-process core tools."
-    SIFT_OPENCTI_ENABLED="false"
-    SIFT_RAG_ENABLED="false"
-    SIFT_OPENSEARCH_ENABLED="false"
-  else
-    # RAG: --no-rag flag or explicit env=false overrides.
-    if [[ "$flag_no_rag" -eq 1 || "${SIFT_RAG_ENABLED:-}" == "false" ]]; then
-      SIFT_RAG_ENABLED="false"
-      log "RAG backend disabled (--no-rag or SIFT_RAG_ENABLED=false)."
-    else
-      SIFT_RAG_ENABLED="${SIFT_RAG_ENABLED:-true}"
-    fi
-
-    # OpenSearch: default enabled.
-    SIFT_OPENSEARCH_ENABLED="${SIFT_OPENSEARCH_ENABLED:-true}"
-
-    if [[ "$flag_no_opencti" -eq 1 ]]; then
-      log "OpenCTI is external; --no-opencti is accepted as a no-op compatibility flag."
-    elif [[ "${SIFT_OPENCTI_ENABLED:-}" == "true" ]]; then
-      warn "SIFT_OPENCTI_ENABLED=true is ignored by install.sh."
-      warn "  Prepare OpenCTI with scripts/setup-addon.sh, then register it via Portal -> Backends."
-    fi
-    SIFT_OPENCTI_ENABLED="false"
-    log "OpenCTI native install disabled: external add-on only (scripts/setup-addon.sh)."
-  fi
-  export SIFT_CORE_ONLY SIFT_OPENCTI_ENABLED SIFT_RAG_ENABLED SIFT_OPENSEARCH_ENABLED
+  log "Mandatory core selected: gateway, portal, operations, workers, OpenSearch, and opensearch-mcp."
+  log "OpenCTI remains an external integration: scripts/setup-addon.sh opencti."
 
   # --- preflight: Supabase (integration contract) ---
   # Must run before write_supabase_env / write_control_plane_env so those see
-  # the exported vars. Skipped for --core-only or --external-supabase.
+  # the exported vars. Skipped only for explicitly supplied external credentials.
   preflight_supabase
 
   # --- install ---
@@ -196,16 +237,14 @@ main() {
   # Apply DB migrations BEFORE bootstrap_supabase_operator and seed_addon_backends
   # so the schema is in place when those functions run (#2).
   DB_MIGRATIONS_RESULT="skipped"
-  if [[ "$SIFT_CORE_ONLY" != "1" ]]; then
-    if apply_db_migrations; then
-      DB_MIGRATIONS_RESULT="applied"
-      # G1: the sift_audit_writer role is created by a migration INSIDE
-      # apply_db_migrations, so it only exists now. Mint its password + write the
-      # scoped SIFT_AUDIT_WRITER_DSN so least-privilege is ACTIVE (fail-soft).
-      provision_audit_writer
-    else
-      DB_MIGRATIONS_RESULT="failed"
-    fi
+  if apply_db_migrations; then
+    DB_MIGRATIONS_RESULT="applied"
+    # G1: the sift_audit_writer role is created by a migration INSIDE
+    # apply_db_migrations, so it only exists now. Mint its password + write the
+    # scoped SIFT_AUDIT_WRITER_DSN so least-privilege is ACTIVE (fail-soft).
+    provision_audit_writer
+  else
+    DB_MIGRATIONS_RESULT="failed"
   fi
 
   write_gateway_config
@@ -217,47 +256,38 @@ main() {
   OPENSEARCH_SEEDED=false
   RAG_SEEDED=false
 
-  if [[ "$SIFT_CORE_ONLY" != "1" ]]; then
-    if [[ "${SIFT_RAG_ENABLED:-true}" == "true" ]]; then
-      load_rag_pgvector
-    fi
-    install_hayabusa
-    write_opensearch_config
-    write_opensearch_env    # FM-2: write gateway env file for OPENSEARCH_CONFIG/OPENSEARCH_HOST (#3)
-    start_opensearch        # sets OPENSEARCH_UP=1 if healthy
-
-    # FM-1/FM-2 (#5): gate OpenSearch cluster config and seeding on real availability.
-    if [[ "$OPENSEARCH_UP" -eq 1 ]]; then
-      configure_opensearch_cluster
-      configure_geoip_pipeline
-      install_opensearch_templates
-      configure_opensearch_detections   # PMI1: keep Sigma disabled; clean dead detectors/monitors; seed aliases
-    else
-      warn "OpenSearch not available — skipping cluster config, GeoIP pipeline, and template install."
-      warn "  opensearch-mcp backend will NOT be seeded; set SIFT_OPENSEARCH_ENABLED=false to suppress."
-      SIFT_OPENSEARCH_ENABLED="false"
-      export SIFT_OPENSEARCH_ENABLED
-    fi
-
-    install_hayabusa_system_links
-    report_hayabusa_status
-    install_zimmerman_symlinks
-    install_complementary_tools
-  else
-    log "CORE-ONLY: skipped add-on backends, OpenSearch/Docker, and forensic-tool downloads."
+  install_hayabusa
+  write_opensearch_config
+  write_opensearch_env    # gateway env refs for the mandatory opensearch-mcp
+  start_opensearch        # sets OPENSEARCH_UP=1 if healthy
+  if [[ "$OPENSEARCH_UP" -ne 1 ]]; then
+    die "Mandatory core OpenSearch did not become healthy; refusing a partial installation. Fix Docker/OpenSearch and re-run."
   fi
+  configure_opensearch_cluster
+  configure_geoip_pipeline
+  install_opensearch_templates
+  configure_opensearch_detections
+  install_hayabusa_system_links
+  report_hayabusa_status
+  install_zimmerman_symlinks
+  install_complementary_tools
 
   # OSX1: seed enabled add-on backends into app.mcp_backends BEFORE the gateway
   # starts so its first registry read (Gateway.__init__) already includes
   # opensearch-mcp. This removes the historical "no tools until restart" race —
   # seed_addon_backends talks to Postgres directly (it does NOT need the gateway
   # running), it only needs the schema (apply_db_migrations ran above) and a
-  # resolvable control-plane DSN. Gated on OPENSEARCH_UP: if OpenSearch never came
-  # healthy, SIFT_OPENSEARCH_ENABLED was set to false above, so this is a no-op.
+  # resolvable control-plane DSN. OpenSearch is mandatory and has already passed
+  # its health check above, so the core backend must be seeded before services.
   # Belt-and-suspenders: even if a row is seeded later (operator registers via the
   # portal), the gateway's _late_start_checker now re-reads app.mcp_backends and
   # mounts late-seeded backends without a restart (Gateway.reload_backend_registry).
   seed_addon_backends
+
+  # First-party packs are explicitly selected positive additions. They run
+  # after mandatory core/backend reconciliation and before the initial service
+  # start, so a fresh gateway sees every selected registry entry on first boot.
+  run_first_party_core_addons
 
   # A1-BOOTSTRAP: validate evidence/cases root before starting services.
   validate_evidence_root

@@ -26,6 +26,18 @@ _MANIFEST = json.loads(
 )
 _TOOL_NAMES = {tool["name"] for tool in _MANIFEST["tools"]}
 
+# Keep the optional-output contract explicit.  These are the fields most likely
+# to be lost if a gateway-owned handler is changed to reconstruct results by
+# hand without passing through the typed *Out model.
+SURFACE_OPTIONAL_KEYS = {
+    "kb_search_knowledge": {
+        "technique_filter": "T1003",
+        "warning": "corpus is stale",
+        "source_ref": "knowledge/sigma/rule.yml",
+        "evidence_object_id": "knowledge-obj-1",
+    }
+}
+
 
 class _FakeGatewayRagService:
     control_plane_dsn = "postgresql://gateway-only"
@@ -39,6 +51,29 @@ class _FakeGatewayRagService:
             "source_count": 23,
             "embedding_dim": 768,
             "embedding_model": "BAAI/bge-base-en-v1.5",
+        }
+
+    def _search(self, **_: object) -> dict[str, object]:
+        return {
+            "status": "ok",
+            "query": "credential dumping",
+            "results": [
+                {
+                    "chunk_id": "chunk-1",
+                    "provenance_id": "prov-1",
+                    "document_provenance_id": "doc-prov-1",
+                    "document_title": "Credential Dumping",
+                    "collection_name": "sigma",
+                    "content": "Use a credential-dumping detection.",
+                    "kind": "knowledge",
+                    "case_id": None,
+                    "distance": 0.12,
+                    "source_ref": SURFACE_OPTIONAL_KEYS["kb_search_knowledge"]["source_ref"],
+                    "evidence_object_id": SURFACE_OPTIONAL_KEYS["kb_search_knowledge"]["evidence_object_id"],
+                }
+            ],
+            "technique_filter": SURFACE_OPTIONAL_KEYS["kb_search_knowledge"]["technique_filter"],
+            "warning": SURFACE_OPTIONAL_KEYS["kb_search_knowledge"]["warning"],
         }
 
 
@@ -115,6 +150,25 @@ def test_gateway_owned_rag_tools_reach_agent_catalog_with_typed_output_surface()
         assert_passes_output_schema(
             health.output_schema, result, tool_name="kb_get_knowledge_stats"
         )
+
+    asyncio.run(_run())
+
+
+def test_rag_optional_keys_surface_through_typed_dispatch():
+    """Fail if conditional RAG output fields disappear before the agent surface."""
+    from sift_gateway.rag_tools import dispatch_gateway_rag_tool
+
+    async def _run() -> None:
+        result = await dispatch_gateway_rag_tool(
+            _gateway(), "kb_search_knowledge", {"query": "credential dumping"}
+        )
+        assert result.structured_content is not None
+        content = result.structured_content
+        assert content["technique_filter"] == SURFACE_OPTIONAL_KEYS["kb_search_knowledge"]["technique_filter"]
+        assert content["warning"] == SURFACE_OPTIONAL_KEYS["kb_search_knowledge"]["warning"]
+        hit = content["results"][0]
+        assert hit["source_ref"] == SURFACE_OPTIONAL_KEYS["kb_search_knowledge"]["source_ref"]
+        assert hit["evidence_object_id"] == SURFACE_OPTIONAL_KEYS["kb_search_knowledge"]["evidence_object_id"]
 
     asyncio.run(_run())
 

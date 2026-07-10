@@ -261,4 +261,6 @@ def test_help_output_unchanged_marker() -> None:
     )
     assert res.returncode == 0, f"--help failed through the modular entrypoint:\n{res.stderr}"
     assert "Usage: ./install.sh [OPTIONS]" in res.stdout
-    assert "--core-only" in res.stdout and "--uninstall" in res.stdout
+    assert "--with-rag" in res.stdout and "--with-windows-triage" in res.stdout
+    assert "--core-only" not in res.stdout
+    assert "--uninstall" in res.stdout

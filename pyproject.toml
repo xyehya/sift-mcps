@@ -50,14 +50,14 @@ core = [
     "forensic-knowledge",
     "sift-common",
     "sift-gateway",
-]
-standard = [
-    "sift-mcps[core]",
     "opensearch-mcp",
 ]
-full = [
-    "sift-mcps[standard]",
+rag = [
     "rag-mcp",
+]
+core-addons = [
+    "sift-mcps[rag]",
+    "sift-mcps[windows-triage]",
 ]
 opencti = [
     "opencti-mcp",

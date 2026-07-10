@@ -56,7 +56,8 @@ PY
 # Only registers backends whose install-time enablement flag is "true" AND whose
 # manifest file exists. Raw OpenSearch credentials, DSNs, and MCP tokens are NEVER
 # stored — only env-ref metadata (env_refs pointing to gateway process env vars).
-# If SIFT_CONTROL_PLANE_DSN is absent this is a no-op; core-only mode skips it.
+# If SIFT_CONTROL_PLANE_DSN is absent this is a no-op; mandatory core setup
+# always attempts the OpenSearch registry seed when the manifest is present.
 # Seed one stdio add-on backend into app.mcp_backends (idempotent upsert).
 # Args: $1 = backend name, $2 = manifest path, $3 = venv entry-point script,
 #       $4 = JSON object of env_refs (gateway-env -> child-env), default "{}".

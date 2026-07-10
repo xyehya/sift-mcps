@@ -24,7 +24,7 @@ _opensearch_api() {
 start_opensearch() {
   if ! command -v docker >/dev/null 2>&1; then
     warn "Docker not found — skipping OpenSearch.  Install Docker and re-run."
-    warn "  opensearch-mcp backend will NOT be seeded (set SIFT_OPENSEARCH_ENABLED=false to silence)."
+    warn "  The mandatory core install will fail closed after this preflight."
     OPENSEARCH_UP=0
     return 0
   fi
@@ -35,7 +35,7 @@ start_opensearch() {
     sleep 2
   fi
   if ! docker ps >/dev/null 2>&1; then
-    warn "Docker not usable — skipping OpenSearch.  opensearch-mcp backend will NOT be seeded."
+    warn "Docker not usable — skipping OpenSearch.  The mandatory core install will fail closed after this preflight."
     OPENSEARCH_UP=0
     return 0
   fi
@@ -63,7 +63,7 @@ start_opensearch() {
     sleep 2
   done
   if [[ "$OPENSEARCH_UP" -eq 0 ]]; then
-    warn "OpenSearch not healthy after 600 s (last api=${api_status:-unknown}, docker=${docker_health:-unknown}) — opensearch-mcp backend will NOT be seeded."
+    warn "OpenSearch not healthy after 600 s (last api=${api_status:-unknown}, docker=${docker_health:-unknown}) — the mandatory core install will fail closed."
     warn "  Check: docker logs opensearch  |  docker compose -f $REPO_DIR/docker-compose.yml ps"
   fi
 }
@@ -278,4 +278,3 @@ PY
     warn "OpenSearch template bootstrap failed — opensearch-mcp retries at startup."
   fi
 }
-

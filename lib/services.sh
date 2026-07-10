@@ -42,25 +42,22 @@ install_systemd_service() {
   fi
   _render_file "$REPO_DIR/configs/systemd/sift-job-worker.service" "$JOB_WORKER_SERVICE_FILE" 0644 root
 
-  # feat/opensearch-workers: dedicated OpenSearch ingest/enrich worker template.
-  # Only when OpenSearch is enabled — the FUSE-mount ingest pipeline runs here
-  # (the only unit with CAP_SYS_ADMIN + host mount namespace for FUSE), NOT in the
-  # hardened gateway/job-worker.
+  # Mandatory OpenSearch ingest/enrich worker template. The FUSE-mount ingest
+  # pipeline runs here (the only unit with CAP_SYS_ADMIN + host mount namespace
+  # for FUSE), NOT in the hardened gateway/job-worker.
   local _os_worker_instances=()
-  if [[ "${SIFT_OPENSEARCH_ENABLED:-true}" == "true" ]]; then
-    if [[ -x "$VENV_DIR/bin/sift-opensearch-worker" ]]; then
-      _render_file "$REPO_DIR/configs/systemd/sift-opensearch-worker@.service" \
-        "$OPENSEARCH_WORKER_SERVICE_FILE" 0644 root
-      local _n="${SIFT_OPENSEARCH_WORKERS:-2}"
-      [[ "$_n" =~ ^[0-9]+$ && "$_n" -ge 1 ]] || _n=2
-      local _i
-      for _i in $(seq 1 "$_n"); do
-        _os_worker_instances+=("sift-opensearch-worker@${_i}.service")
-      done
-      log "OpenSearch ingest/enrich workers: ${_n} instance(s) (override with SIFT_OPENSEARCH_WORKERS)."
-    else
-      warn "Missing OpenSearch worker entrypoint: $VENV_DIR/bin/sift-opensearch-worker (ingest will not run decoupled)."
-    fi
+  if [[ -x "$VENV_DIR/bin/sift-opensearch-worker" ]]; then
+    _render_file "$REPO_DIR/configs/systemd/sift-opensearch-worker@.service" \
+      "$OPENSEARCH_WORKER_SERVICE_FILE" 0644 root
+    local _n="${SIFT_OPENSEARCH_WORKERS:-2}"
+    [[ "$_n" =~ ^[0-9]+$ && "$_n" -ge 1 ]] || _n=2
+    local _i
+    for _i in $(seq 1 "$_n"); do
+      _os_worker_instances+=("sift-opensearch-worker@${_i}.service")
+    done
+    log "OpenSearch ingest/enrich workers: ${_n} instance(s) (override with SIFT_OPENSEARCH_WORKERS)."
+  else
+    die "Mandatory OpenSearch worker entrypoint is missing: $VENV_DIR/bin/sift-opensearch-worker"
   fi
 
   if ! command -v systemctl >/dev/null 2>&1; then
@@ -116,7 +113,7 @@ poll_gateway() {
       'import json,sys; d=json.load(sys.stdin); print(d.get("reason") or d.get("error") or "")' \
       2>/dev/null || true)"
     [[ -n "$reason" ]] && warn "  Reason: $reason"
-    if [[ "${SIFT_CORE_ONLY:-0}" != "1" && "$supabase_status" != "ok" && "$supabase_status" != "unknown" ]]; then
+    if [[ "$supabase_status" != "ok" && "$supabase_status" != "unknown" ]]; then
       warn "  Supabase connection is not OK ($supabase_status)."
       warn "  Verify SUPABASE_URL/ANON_KEY/SERVICE_ROLE_KEY are set and the Supabase project is reachable."
     fi

@@ -6,15 +6,10 @@ set -Eeuo pipefail
 # =============================================================================
 #
 # PURPOSE
-#   This is a PREP-ONLY helper for the add-on backends that ./install.sh does
-#   NOT wire on its own — notably windows-triage and opencti. The SIFT Protocol
-#   Gateway core (gateway + portal + opensearch + forensic-rag) is ALREADY
-#   complete after ./install.sh; you do NOT need this script for those. Add-on
-#   backends (OpenCTI, windows-triage, or ANY backend written to the SIFT MCP
-#   Backend Contract) are EXTERNAL, INDEPENDENT, and OPTIONAL — the ones shipped
-#   here are reference implementations. Run zero, one, or several — or bring your
-#   own. (forensic-rag-mcp is the knowledge reference backend — kb_search_knowledge
-#   etc. — backed by Supabase pgvector; install.sh already seeds it.)
+#   This is the external-integration helper. The shipped external choice is
+#   OpenCTI; the mandatory core and first-party RAG/Windows packs belong to
+#   install.sh and scripts/core-addons/*.sh. The gateway remains the only
+#   policy/registration boundary.
 #
 # WHEN / PREREQUISITES
 #   Run this AFTER ./install.sh, from the STAGED runtime root (default
@@ -24,46 +19,26 @@ set -Eeuo pipefail
 #   .venv is missing, the script fails fast with remediation.
 #
 # USAGE
-#   sudo ./scripts/setup-addon.sh        # interactive menu (option 4 = windows-triage)
+#   ./scripts/setup-addon.sh opencti
+#   ./scripts/setup-addon.sh opencti --provision   # explicit local-stack prep
 #   ./scripts/setup-addon.sh --help
-#
-#   windows-triage menu answers (sensible defaults):
-#     - Triage baseline DB dir: keep the default /var/lib/sift/windows-triage
-#       (= the add-on's OWN config default) so the backend resolves it with NO
-#       gateway env-ref and registers out of the box. A different dir keeps an
-#       env-ref you must wire first.
-#     - Baselines: the base known_good.db / context.db cover most checks.
-#     - The OPTIONAL full registry baseline (known_good_registry.db, ~12 GB on
-#       disk, needs ~15 GB free) is OPT-IN — only `wintriage_check_registry`
-#       needs it; decline it unless you run that check.
 #
 # VENV SAFETY (regression we fixed — read before editing the uv calls)
 #   `uv sync` / `uv run` are DECLARATIVE: syncing a venv with only an add-on's
 #   extra (e.g. `--extra windows-triage`) PRUNES every package outside that
-#   selection. install.sh builds the shared runtime venv with `--extra full`
-#   (or `--extra core` for core-only); a naive add-on sync would tear `full`'s
+#   selection. install.sh builds the shared runtime venv with `--extra core`; a
+#   naive add-on sync would tear the core's
 #   opensearch-mcp / forensic-rag-mcp / psycopg / sift-gateway deps OUT of that
 #   venv and brick the gateway (it imports psycopg, so it could not restart).
 #   Therefore EVERY runtime-venv sync/run here is ADDITIVE via `--inexact`, which
 #   keeps already-installed packages. NEVER drop `--inexact` from a uv sync/run
 #   that targets the staged runtime venv.
 #
-# PREP-ONLY — REGISTRATION IS PORTAL-MANAGED
-#   This script changes NOTHING in the running gateway: it NEVER registers a
-#   backend and NEVER edits gateway.yaml. Per backend you select it (1) optionally
-#   provisions prerequisites (downloads / Docker stacks / index bootstrap),
-#   (2) prompts for + ECHOes every config/env var, and (3) writes a ready-to-submit
-#   register payload to  ~/.sift/addon-register/<name>.json  (operator-owned, 0700
-#   dir). You then drive registration yourself:
-#       Portal -> Backends -> Add backend
-#         - Command  = the ABSOLUTE console-script path, e.g.
-#                       /opt/sift-mcps/.venv/bin/windows-triage-mcp
-#                       (bare path, NO stray characters / quotes / trailing args —
-#                        the gateway execs it verbatim as the sift-service user)
-#         - Manifest = packages/<name>/sift-backend.json
-#       -> Validate -> Register -> hot-reload.
-#   That is the same door a community backend uses; the emitted payload carries an
-#   explicit `manifest_path`, exactly as an external backend would.
+# EXTERNAL CONTRACT — REGISTRATION IS GATEWAY-MEDIATED
+#   This script never sources or starts install.sh, never writes gateway.yaml,
+#   and never stores raw OpenCTI credentials. It emits an env-ref-only payload
+#   for the gateway's validate/register path. The payload is operator material;
+#   registration remains an explicit gateway/portal action.
 #
 # OWNERSHIP / PRIVILEGES (why sudo)
 #   The staged runtime tree + its .venv (/opt/sift-mcps) are OPERATOR-owned, but
@@ -73,7 +48,8 @@ set -Eeuo pipefail
 #   running backend can read its DBs.
 #
 # Usage:
-#   ./scripts/setup-addon.sh            # interactive menu
+#   ./scripts/setup-addon.sh opencti
+#   ./scripts/setup-addon.sh opencti --provision
 #   ./scripts/setup-addon.sh --help
 # =============================================================================
 
@@ -118,7 +94,7 @@ fi
 
 # --- resolve the bits the payloads need ------------------------------------
 UV_BIN="$(resolve_uv)"
-[[ -n "$UV_BIN" ]] || die "uv not found. Run ./install.sh --core-only first."
+[[ -n "$UV_BIN" ]] || die "uv not found. Run ./install.sh first."
 
 # B-MVP-049 (path independence): the runtime tree the gateway's sift-service user
 # actually execs from is the STAGED root, NOT wherever this script file happens to
@@ -223,15 +199,17 @@ stage_runtime_command() {
   # (stage_repo_to_install_root chowns to the install operator; sync_workspace
   # builds .venv in place as that operator). So this script — run by the same
   # operator — can `uv sync` the add-on's extra into that .venv. The native
-  # installer only syncs `--extra full` (core + opensearch + rag), so
-  # opensearch-mcp / rag-mcp console scripts already exist there, while
+  # installer syncs the mandatory `--extra core`, so core console scripts already
+  # exist there, while
   # windows-triage-mcp / opencti-mcp must have their extra synced in here.
-  # `--inexact` keeps the already-installed `full` packages instead of pruning
+  # `--inexact` keeps the already-installed `core` packages instead of pruning
   # them, so syncing an add-on extra never tears down the core backends.
   local console_script="$1"
   shift || true
   local stdio_entry="$console_script"
   local -a extras=("$@")
+  local -a offline_flags=()
+  is_offline && offline_flags+=(--offline)
 
   # B-MVP-040(b): set -u does NOT catch a set-but-empty variable, so an empty
   # SIFT_MCPS_ROOT / PYTHON_BIN would silently build a broken --project ''/
@@ -270,6 +248,7 @@ stage_runtime_command() {
     if ! UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never \
         "$UV_BIN" sync --inexact \
           "${sync_extra_flags[@]}" \
+          "${offline_flags[@]}" \
           --project "$SIFT_MCPS_ROOT" \
           --python "$PYTHON_BIN" \
           --no-managed-python --no-python-downloads; then
@@ -310,7 +289,7 @@ stage_runtime_command() {
   warn "Falling back to operator-uv command ($UV_BIN). The gateway runs backends"
   warn "as sift-service, which cannot exec the operator's uv — this backend will"
   warn "start RED. To fix: sync the extra into the staged runtime venv, e.g."
-  warn "  $UV_BIN sync --inexact${extra_hint} --project \"$SIFT_MCPS_ROOT\" --python \"$PYTHON_BIN\" --no-managed-python --no-python-downloads"
+  warn "  $UV_BIN sync --inexact${extra_hint} ${offline_flags[*]:-} --project \"$SIFT_MCPS_ROOT\" --python \"$PYTHON_BIN\" --no-managed-python --no-python-downloads"
   warn "then re-run this helper, or register with command=$console_path."
   stdio_args "$stdio_entry" "${extras[@]}"
   PAYLOAD_COMMAND="$UV_BIN"
@@ -482,40 +461,6 @@ echo_vars_and_emit() {
 }
 
 # =============================================================================
-# Reference add-on backends (examples of the contract — not special-cased core)
-# =============================================================================
-# BATCH-OSX-RAG: forensic-rag-mcp is restored as the knowledge reference
-# backend (kb_search_knowledge / kb_list_knowledge_sources /
-# kb_get_knowledge_stats), backed by Supabase pgvector. The gateway
-# rag_search_case shim that PMI2 added has been removed. The Chroma->pgvector
-# importers remain as CLI helpers for the knowledge load step:
-#   python -m rag_mcp.pgvector_chroma_import
-#   python -m rag_mcp.pgvector_seed
-setup_rag() {
-  reset_payload
-  PAYLOAD_NAME="forensic-rag-mcp"
-  PAYLOAD_MANIFEST="$SIFT_MCPS_ROOT/packages/forensic-rag-mcp/sift-backend.json"
-  log "== forensic-rag-mcp (reference backend, provides: reference; pgvector knowledge) =="
-  print_manifest_summary "$PAYLOAD_MANIFEST" || true
-  warn "This backend reads the shared knowledge corpus from Supabase pgvector."
-  warn "Ensure the knowledge corpus is loaded (rag-mcp-import-chroma-pgvector / rag-mcp-seed-pgvector)."
-  warn "It resolves the control-plane DSN from the SIFT_CONTROL_PLANE_DSN env ref;"
-  warn "no raw DSN is stored in the register payload."
-  warn "RAG_MODEL_NAME (query embedding model) is read from the gateway's own"
-  warn "environment; set it there (default BAAI/bge-base-en-v1.5) before registering."
-  # B-MVP-034: register a sift-service-executable console-script command from the
-  # staged runtime venv (rag-mcp ships in --extra full, already synced by the
-  # native installer), matching install.sh::_seed_one_addon_backend.
-  stage_runtime_command "rag-mcp" "full"
-  # env_refs only (CHILD=GATEWAY name->name): the gateway resolves both names
-  # from its OWN process env at backend startup. No raw DSN or value is stored.
-  PAYLOAD_ENV_REFS=(
-    "SIFT_CONTROL_PLANE_DSN=SIFT_CONTROL_PLANE_DSN"
-    "RAG_MODEL_NAME=RAG_MODEL_NAME"
-  )
-  echo_vars_and_emit
-}
-
 setup_wintriage() {
   reset_payload
   PAYLOAD_NAME="windows-triage-mcp"
@@ -544,7 +489,7 @@ setup_wintriage() {
     # VENV SAFETY: `uv run --extra windows-triage` triggers a project sync before
     # executing the downloader. `--inexact` makes that sync ADDITIVE so it can
     # NEVER prune packages outside the windows-triage selection — without it a
-    # sync of only `windows-triage` would tear the `full` extra (opensearch-mcp,
+    # sync of only `windows-triage` would tear the `core` extra (opensearch-mcp,
     # forensic-rag-mcp, psycopg, sift-gateway deps) out of the shared runtime
     # venv and brick the gateway (which itself imports psycopg). Mirrors the
     # explicit `--inexact` on the stage_runtime_command sync below. Also pass
@@ -620,9 +565,9 @@ setup_opensearch() {
   warn "(e.g. OPENSEARCH_CONFIG=$SIFT_HOME/opensearch.yaml,"
   warn " OPENSEARCH_HOST=http://127.0.0.1:9200) before registering."
   # B-MVP-034: register a sift-service-executable console-script command from the
-  # staged runtime venv (opensearch-mcp ships in --extra standard/full, already
+  # staged runtime venv (opensearch-mcp ships in the mandatory `core` extra,
   # synced by the native installer), matching install.sh::_seed_one_addon_backend.
-  stage_runtime_command "opensearch-mcp" "standard"
+  stage_runtime_command "opensearch-mcp" "core"
   # env_refs only: name->name, resolved from gateway env. Matches install.sh.
   PAYLOAD_ENV_REFS=(
     "OPENSEARCH_CONFIG=OPENSEARCH_CONFIG"
@@ -640,10 +585,14 @@ setup_opencti() {
   if ! command -v docker >/dev/null 2>&1; then
     warn "Docker not found — OpenCTI's own stack cannot be started here. You can still point at an external OpenCTI."
   fi
-  if command -v docker >/dev/null 2>&1 && ask_yes "Provision prerequisites (prepare secrets, start OpenCTI stack + feeds — needs >=14 GB RAM)?"; then
+  if [[ "${SETUP_OPENCTI_PROVISION:-0}" == "1" ]] && command -v docker >/dev/null 2>&1; then
     SIFT_OPENCTI_ENABLED=true
     { prepare_opencti_secrets && install_opencti && install_opencti_feeds; } \
       || warn "OpenCTI provisioning incomplete — backend will be UNAVAILABLE until reachable."
+  elif [[ "${SETUP_OPENCTI_PROVISION:-0}" == "1" ]]; then
+    warn "--provision requested but Docker is unavailable; emitting the external payload only."
+  else
+    log "OpenCTI stack provisioning not requested; preparing an external registration payload only."
   fi
   warn "OpenCTI credentials are NEVER written to the register payload. The child"
   warn "OPENCTI_URL / OPENCTI_TOKEN are resolved by the gateway from its OWN env"
@@ -696,46 +645,26 @@ setup_custom() {
   echo_vars_and_emit
 }
 
-# =============================================================================
-# Menu
-# =============================================================================
-
-main_menu() {
-  hr
-  log "SPG add-on integration helper — SPG core is already complete on its own."
-  log "Select OPTIONAL external add-on backends to prepare (any subset, or a custom one):"
-  printf '   1) opensearch-mcp        (provides: search, ingest, enrichment; needs Docker)\n'
-  printf '   2) opencti-mcp           (provides: reference, threat-intel; needs Docker + RAM)\n'
-  printf '   3) forensic-rag-mcp      (provides: reference; pgvector knowledge corpus)\n'
-  printf '   4) windows-triage-mcp    (provides: reference, baseline; offline known-good/bad DBs)\n'
-  printf '   5) custom / community backend (bring your own conformant manifest)\n'
-  printf '   a) all reference backends (1-4)\n'
-  printf '   q) quit\n'
-  hr
-  local sel
-  sel="$(ask 'Selection (e.g. "1 2" or "a")' '')"
-  [[ -z "$sel" || "$sel" == "q" ]] && { log "Nothing selected — exiting."; exit 0; }
-  if [[ "$sel" == "a" ]]; then sel="1 2 3 4"; fi
-  sel="${sel//,/ }"
-  local tok
-  for tok in $sel; do
-    case "$tok" in
-      1) setup_opensearch ;;
-      2) setup_opencti ;;
-      3) setup_rag ;;
-      4) setup_wintriage ;;
-      5) setup_custom ;;
-      *) warn "Unknown selection: $tok (ignored)" ;;
-    esac
-  done
-
-  hr
-  log "Done. Register payloads are in: $REGISTER_DIR"
-  log "Reminder: this script changed NOTHING in the gateway. Integration happens"
-  log "through the portal/REST contract door — validate first, then register."
-  log "After registering: confirm with tools/list (namespaced tools appear) and"
-  log "environment_summary (backend health). Disabling it makes its tools vanish;"
-  log "the SPG core never goes down with it."
-}
-
-main_menu
+# External helper entrypoint. No argument means no implicit interactive menu and
+# no core side effect; OpenCTI is the sole shipped external integration.
+case "${1:-}" in
+  --help|-h)
+    sed -n '4,78p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    ;;
+  opencti)
+    shift
+    SETUP_OPENCTI_PROVISION=0
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --provision) SETUP_OPENCTI_PROVISION=1; shift ;;
+        --offline) SIFT_OFFLINE=1; export SIFT_OFFLINE; shift ;;
+        *) die "Unknown setup-addon opencti option '$1'. Use --provision or --offline." ;;
+      esac
+    done
+    export SETUP_OPENCTI_PROVISION
+    setup_opencti
+    ;;
+  *)
+    die "Usage: $0 opencti [--provision] [--offline] (or --help). The core and first-party packs use install.sh.";
+    ;;
+esac
