@@ -88,14 +88,13 @@ RestrictRealtime=true
 LockPersonality=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 # The bounding set must contain BOTH:
-#  - CAP_LINUX_IMMUTABLE: the venv interpreter carries cap_linux_immutable+ep (set
-#    by install.sh configure_immutable_capability so the gateway can set/clear the
-#    +i flag on sealed evidence). A file-capability binary cannot exec if its caps
-#    are outside the unit bounding set -> status=203/EXEC "Operation not permitted".
+#  - CAP_LINUX_IMMUTABLE: granted to this service process only, so the gateway
+#    can set/clear the +i flag without privileging the system Python binary.
 #  - CAP_SETUID/CAP_SETGID/CAP_SETPCAP/CAP_AUDIT_WRITE: retained for the existing
 #    ingest/mount sudo paths owned by this broader gateway unit. RUN-3 run_command
 #    itself now uses transient systemd scopes plus dfir-exec-launcher.
 CapabilityBoundingSet=CAP_LINUX_IMMUTABLE CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_AUDIT_WRITE
+AmbientCapabilities=CAP_LINUX_IMMUTABLE
 # MemoryDenyWriteExecute is NOT set: CPython/torch JITs and some native extensions
 # allocate W+X pages; enabling it crashes the embedder. Documented exclusion.
 # === end BATCH-HR3 hardening =================================================

@@ -77,10 +77,10 @@ RestrictRealtime=true
 LockPersonality=true
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-# Keep exactly CAP_LINUX_IMMUTABLE: the shared venv interpreter carries
-# cap_linux_immutable+ep, and a file-capability binary cannot exec if that cap is
-# absent from the bounding set (status=203/EXEC). All other caps are dropped.
+# Keep exactly CAP_LINUX_IMMUTABLE, granted to this service process rather than
+# the shared system Python binary. All other capabilities are dropped.
 CapabilityBoundingSet=CAP_LINUX_IMMUTABLE
+AmbientCapabilities=CAP_LINUX_IMMUTABLE
 # === end RUN-3 B-AA hardening ===============================================
 
 [Install]

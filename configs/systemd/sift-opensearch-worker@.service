@@ -91,10 +91,11 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 # Bounding set: the gateway's privilege-drop caps (CAP_SETUID/SETGID/SETPCAP for
 # `sudo -n` to root, CAP_AUDIT_WRITE for the sudoers audit plugin, omitting them
 # gives `sudo: unable to change to root gid: Operation not permitted`) + the
-# file-cap venv interpreter's CAP_LINUX_IMMUTABLE + CAP_SYS_ADMIN for the FUSE
+# service-scoped CAP_LINUX_IMMUTABLE + CAP_SYS_ADMIN for the FUSE
 # channel. This is the gateway's set plus CAP_SYS_ADMIN (the gateway mounts in
 # its own privileged path; this isolated worker needs the explicit bound).
 CapabilityBoundingSet=CAP_LINUX_IMMUTABLE CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_AUDIT_WRITE CAP_SYS_ADMIN
+AmbientCapabilities=CAP_LINUX_IMMUTABLE
 # === end hardening ==========================================================
 
 [Install]

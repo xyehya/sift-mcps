@@ -20,15 +20,14 @@ configure_immutable_capability() {
   fi
   local cap_target
   cap_target="$(readlink -f "$VENV_PYTHON" 2>/dev/null || printf '%s' "$VENV_PYTHON")"
-  if sudo_if_needed setcap cap_linux_immutable+ep "$cap_target" 2>/dev/null; then
-    if command -v getcap &>/dev/null && getcap "$cap_target" 2>/dev/null | grep -q 'cap_linux_immutable'; then
-      log "setcap cap_linux_immutable+ep verified on $cap_target."
-    else
-      warn "setcap returned success but CAP_LINUX_IMMUTABLE is not visible on $cap_target."
-    fi
-  else
-    warn "Could not apply CAP_LINUX_IMMUTABLE to $cap_target; evidence immutable flags will remain best-effort until Phase 3.4."
+  # Never grant a file capability to the resolved venv interpreter: on SIFT it
+  # is /usr/bin/python3.12, which would privilege every local Python process.
+  # The systemd units grant CAP_LINUX_IMMUTABLE only to SIFT service processes.
+  if command -v getcap &>/dev/null && getcap "$cap_target" 2>/dev/null | grep -q 'cap_linux_immutable'; then
+    sudo_if_needed setcap -r "$cap_target" || die \
+      "Could not remove unsafe global CAP_LINUX_IMMUTABLE from $cap_target."
   fi
+  log "CAP_LINUX_IMMUTABLE is confined to SIFT systemd service processes."
 }
 
 configure_auditd() {
@@ -86,11 +85,9 @@ configure_auditd() {
   fi
 }
 
-# Load an AppArmor profile in either complain (default) or enforce mode.
-# B-MVP-046: complain mode (apparmor_parser -C -r) is the install default; the
-# proven enforce posture (RUN-3/B-MVP-026) is reached deliberately via
-# `install.sh --apparmor-enforce` or scripts/../harden.sh, both of which set
-# SIFT_APPARMOR_ENFORCE=1 so this loads with `apparmor_parser -r` (no -C).
+# Load an AppArmor profile in enforce mode (default) or explicit development complain mode.
+# Enforce mode is the secure install default. Complain mode is an explicit
+# local-development override and cannot be mistaken for acceptance posture.
 _apparmor_load_profile() {
   local profile_dst="$1"
   if [[ "${SIFT_APPARMOR_ENFORCE:-0}" == "1" ]]; then

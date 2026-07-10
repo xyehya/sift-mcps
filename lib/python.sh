@@ -129,10 +129,19 @@ sync_workspace() {
   # The core extra is mandatory and includes opensearch-mcp. First-party packs
   # are additive and selected only by the explicit --with-* installer contract.
   # External integrations such as OpenCTI are never pulled by this path.
-  local sync_extra="core"
-  log "Mandatory workspace extra: $sync_extra"
+  local sync_extras=(--extra core)
+  local sync_labels=(core)
+  if [[ "${SIFT_WITH_RAG:-0}" == "1" ]]; then
+    sync_extras+=(--extra rag)
+    sync_labels+=(rag)
+  fi
+  if [[ "${SIFT_WITH_WINDOWS_TRIAGE:-0}" == "1" ]]; then
+    sync_extras+=(--extra windows-triage)
+    sync_labels+=(windows-triage)
+  fi
+  log "Workspace extras: ${sync_labels[*]}"
   "$UV_BIN" sync \
-    --extra "$sync_extra" \
+    "${sync_extras[@]}" \
     --project "$REPO_DIR" \
     --python "$SYSTEM_PYTHON" \
     --no-managed-python \
@@ -150,7 +159,7 @@ sync_workspace() {
   if [[ "$ok" -eq 0 ]]; then
     warn "Some imports failed.  Attempting one retry with --reinstall..."
     "$UV_BIN" sync \
-      --extra "$sync_extra" \
+      "${sync_extras[@]}" \
       --project "$REPO_DIR" \
       --python "$SYSTEM_PYTHON" \
       --no-managed-python \

@@ -99,6 +99,21 @@ if [[ "$(id -un)" != "$SIFT_GATEWAY_SERVICE_USER" ]]; then
   as_gateway_service=(sudo -u "$SIFT_GATEWAY_SERVICE_USER")
 fi
 log "Verifying pinned RAG corpus and seeding pgvector through the gateway authority path."
+rag_provision_args=(
+  --knowledge-dir "$KNOWLEDGE_DIR"
+  --manifest "$KNOWLEDGE_MANIFEST"
+  --model-name "$RAG_MODEL_NAME"
+  --model-revision "$RAG_MODEL_REVISION"
+)
+if (
+  cd "$SIFT_STATE_DIR"
+  "${as_gateway_service[@]}" env \
+    SIFT_CONTROL_PLANE_DSN="$cp_dsn" \
+    "$VENV_PYTHON" -m sift_gateway.rag_provision \
+      "${rag_provision_args[@]}" --check-current
+); then
+  log "RAG corpus and model pin already match pgvector; skipping unchanged embeddings."
+else
 if ! (
   cd "$SIFT_STATE_DIR"
   "${as_gateway_service[@]}" env \
@@ -107,15 +122,13 @@ if ! (
     HF_HUB_OFFLINE="$hf_offline" \
     TRANSFORMERS_OFFLINE="$hf_offline" \
     "$VENV_PYTHON" -m sift_gateway.rag_provision \
-      --knowledge-dir "$KNOWLEDGE_DIR" \
-      --manifest "$KNOWLEDGE_MANIFEST" \
-      --model-name "$RAG_MODEL_NAME" \
-      --model-revision "$RAG_MODEL_REVISION"
+      "${rag_provision_args[@]}"
 ); then
   if is_offline; then
     die "Offline RAG provisioning failed. Stage canonical BGE model revision $RAG_MODEL_REVISION under $SIFT_HF_HOME and verify the shipped corpus manifest before rerunning $0 --install --offline."
   fi
   die "RAG pgvector provisioning failed. Check the control plane and pinned model/corpus artifacts, then rerun $0 --install."
+fi
 fi
 
 reconcile_first_party_gateway_backend "forensic-rag-mcp" "$RAG_MANIFEST" || die \

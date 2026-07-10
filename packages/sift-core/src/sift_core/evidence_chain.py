@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # dedicated non-admin account. Ownership of sealed bytes is reported as
 # informational context only (never enforced); the load-bearing integrity
 # property is the immutable flag, which the service user can set/clear in-process
-# via CAP_LINUX_IMMUTABLE (granted to the venv interpreter by install.sh).
+# via CAP_LINUX_IMMUTABLE (granted only to the SIFT systemd services).
 DEFAULT_SERVICE_USER = "sift-service"
 
 
@@ -771,7 +771,7 @@ def get_immutable_flag(path: Path) -> bool | None:
 #
 # On seal, evidence bytes must carry the immutable flag (FS_IMMUTABLE_FL). The
 # runtime user is the NON-root service account, but install.sh grants the venv
-# interpreter CAP_LINUX_IMMUTABLE (configure_immutable_capability), so the
+# service-scoped CAP_LINUX_IMMUTABLE (configure_immutable_capability), so the
 # gateway can set AND clear +i IN-PROCESS even on a root:root world-readable
 # (0644) file. +i is the load-bearing, owner-independent integrity property: no
 # one — not even root — can modify, delete, or rename the file until +i is
@@ -826,8 +826,8 @@ def harden_sealed_evidence(
 
     For each path (relative to ``case_dir``, resolving strictly inside
     ``evidence/``), set FS_IMMUTABLE_FL via the in-process ioctl helper. NO
-    chown, NO privileged helper: the venv interpreter carries
-    CAP_LINUX_IMMUTABLE (install.sh configure_immutable_capability), so +i works
+    chown, NO privileged helper: the SIFT systemd service process carries
+    CAP_LINUX_IMMUTABLE, so +i works
     in-process even on a root:root world-readable (0644) file.
 
     Fails CLOSED:
@@ -855,8 +855,7 @@ def harden_sealed_evidence(
                 "evidence is often root-owned, so chown it to the service user at "
                 "intake (e.g. `sudo chown "
                 f"{DEFAULT_SERVICE_USER}:{DEFAULT_SERVICE_USER} <evidence-file>`) — "
-                "AND (b) the interpreter carrying CAP_LINUX_IMMUTABLE (install.sh "
-                "configure_immutable_capability)."
+                "AND (b) the SIFT service carrying CAP_LINUX_IMMUTABLE."
             )
 
         immutable = get_immutable_flag(abs_path)
@@ -908,8 +907,8 @@ def unharden_sealed_evidence(case_dir: Path, rel_paths: list[str]) -> list[dict]
         if get_immutable_flag(abs_path):
             raise EvidenceHardeningError(
                 f"Immutable flag is STILL PRESENT on sealed evidence {rel_path!r} "
-                "after attempting to clear it. The interpreter must carry "
-                "CAP_LINUX_IMMUTABLE (install.sh configure_immutable_capability). "
+                "after attempting to clear it. The SIFT service process must carry "
+                "CAP_LINUX_IMMUTABLE. "
                 "The evidence was NOT made mutable on disk."
             )
 

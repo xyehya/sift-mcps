@@ -33,6 +33,7 @@ def test_positive_pack_cli_contract_is_documented() -> None:
         "--with-windows-triage-registry",
         "--with-core-addons",
         "--interactive",
+        "--apparmor-complain",
     ):
         assert option in result.stdout
     for removed in ("--core-only", "--no-rag", "--no-opencti"):
@@ -109,8 +110,29 @@ def test_core_sync_and_opensearch_health_are_mandatory() -> None:
     """Installer source must fail rather than silently omit core OpenSearch."""
     installer = INSTALL_SH.read_text(encoding="utf-8")
     python_lib = (REPO_ROOT / "lib" / "python.sh").read_text(encoding="utf-8")
-    assert 'local sync_extra="core"' in python_lib
+    assert 'local sync_extras=(--extra core)' in python_lib
+    assert 'sync_extras+=(--extra rag)' in python_lib
+    assert 'sync_extras+=(--extra windows-triage)' in python_lib
     assert "Mandatory core OpenSearch did not become healthy" in installer
     assert 'SIFT_OPENSEARCH_ENABLED=true' in installer
     assert "scripts/core-addons/setup-rag.sh" in installer
     assert "scripts/core-addons/setup-windows-triage.sh" in installer
+
+
+def test_secure_os_hardening_is_default_and_service_scoped() -> None:
+    installer = INSTALL_SH.read_text(encoding="utf-8")
+    hardening = (REPO_ROOT / "lib" / "hardening.sh").read_text(encoding="utf-8")
+    units = [
+        REPO_ROOT / "configs" / "systemd" / "sift-gateway.service",
+        REPO_ROOT / "configs" / "systemd" / "sift-job-worker.service",
+        REPO_ROOT / "configs" / "systemd" / "sift-opensearch-worker@.service",
+    ]
+
+    assert "SIFT_APPARMOR_ENFORCE=1" in installer
+    assert "--apparmor-complain" in installer
+    assert "setcap cap_linux_immutable+ep" not in hardening
+    assert 'setcap -r "$cap_target"' in hardening
+    for unit in units:
+        assert "AmbientCapabilities=CAP_LINUX_IMMUTABLE" in unit.read_text(
+            encoding="utf-8"
+        )

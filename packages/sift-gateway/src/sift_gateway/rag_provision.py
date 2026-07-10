@@ -89,6 +89,36 @@ def provision_rag(
     return result.public_dict()
 
 
+def check_rag_current(
+    *, knowledge_dir: Path, manifest_path: Path, model_name: str, model_revision: str
+) -> dict[str, object]:
+    """Return current only when the verified corpus plan matches pgvector exactly."""
+    from rag_mcp.pgvector_seed import seed_knowledge_from_dir
+    from rag_mcp.pgvector_store import PgVectorRagStore
+    from rag_mcp.utils import CANONICAL_MODEL_NAME, CANONICAL_MODEL_REVISION
+
+    if model_name != CANONICAL_MODEL_NAME or model_revision != CANONICAL_MODEL_REVISION:
+        raise RagProvisionError("rag_model_pin_mismatch")
+    dsn = os.environ.get("SIFT_CONTROL_PLANE_DSN", "").strip()
+    if not dsn:
+        raise RagProvisionError("rag_control_plane_dsn_unavailable")
+    verify_knowledge_manifest(knowledge_dir, manifest_path)
+    expected = seed_knowledge_from_dir(
+        dsn=None,
+        knowledge_dir=knowledge_dir,
+        dry_run=True,
+        model_name=model_name,
+    ).public_dict()
+    actual = PgVectorRagStore(dsn).knowledge_stats()
+    current = (
+        actual["chunk_count"] == expected["chunks"]
+        and actual["document_count"] == expected["documents"]
+        and actual["collection_count"] == expected["collections"]
+        and actual["embedding_model"] == model_name
+    )
+    return {"status": "ok", "current": current, **actual}
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -103,9 +133,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--model-name", required=True)
     parser.add_argument("--model-revision", required=True)
+    parser.add_argument("--check-current", action="store_true")
     args = parser.parse_args(argv)
     try:
-        result = provision_rag(
+        operation = check_rag_current if args.check_current else provision_rag
+        result = operation(
             knowledge_dir=args.knowledge_dir,
             manifest_path=args.manifest,
             model_name=args.model_name,
@@ -120,6 +152,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "error", "reason": "rag_pgvector_seed_failed"}))
         return 2
     print(json.dumps(result, sort_keys=True))
+    if args.check_current and not result["current"]:
+        return 3
     return 0
 
 

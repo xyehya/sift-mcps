@@ -67,8 +67,9 @@ main() {
   local with_rag=0 with_windows_triage=0 with_windows_triage_registry=0
   local interactive=0
   SIFT_EXTERNAL_SUPABASE="${SIFT_EXTERNAL_SUPABASE:-0}"
-  # B-MVP-046: AppArmor stays in complain mode unless explicitly opted into enforce.
-  SIFT_APPARMOR_ENFORCE="${SIFT_APPARMOR_ENFORCE:-0}"
+  # Secure fresh installs enforce the proven AppArmor floor by default. The
+  # explicit complain option exists only for local profile development.
+  SIFT_APPARMOR_ENFORCE=1
 
   # Legacy disable controls would make the mandatory core nondeterministic.
   # Do not silently honor an inherited environment value from an old install.
@@ -100,6 +101,7 @@ main() {
       --offline)              SIFT_OFFLINE=1; shift ;;
       --enable-geoip)         SIFT_GEOIP_ENABLED=1; shift ;;
       --apparmor-enforce)     SIFT_APPARMOR_ENFORCE=1; shift ;;
+      --apparmor-complain)    SIFT_APPARMOR_ENFORCE=0; shift ;;
       -h|--help)
         printf 'Usage: ./install.sh [OPTIONS]\n\n'
         printf 'Provisions (or removes) a sift-mcps stack on SIFT Workstation.\n'
@@ -122,9 +124,8 @@ main() {
         printf '                       Supabase CLI). Equivalent to SIFT_OFFLINE=1.\n'
         printf '  --enable-geoip       Enable the OpenSearch ip2geo datasource (off by default; it\n'
         printf '                       fetches from a live endpoint). Equivalent to SIFT_GEOIP_ENABLED=1.\n'
-        printf '  --apparmor-enforce   Load the SIFT AppArmor profiles in ENFORCE mode instead of\n'
-        printf '                       the complain-mode default. Opt-in hardening (B-MVP-046); the\n'
-        printf '                       same posture is available post-install via ./harden.sh.\n'
+        printf '  --apparmor-enforce   Explicitly select the default ENFORCE posture.\n'
+        printf '  --apparmor-complain  DEVELOPMENT ONLY: load profiles without enforcement.\n'
         printf '  --uninstall          Reverse the SOFTWARE install: delegates to scripts/uninstall.sh\n'
         printf '                       to stop/remove the systemd service + service users, venv,\n'
         printf '                       ~/.sift (config/TLS/secrets), and auditd + AppArmor configs.\n'
