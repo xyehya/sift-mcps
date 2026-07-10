@@ -40,6 +40,9 @@ def get_client(config_path: Path | None = None) -> OpenSearch:
         use_ssl=host_url.startswith("https"),
         verify_certs=config.get("verify_certs", False),
         ca_certs=config.get("ca_certs"),
-        ssl_assert_hostname=True,
+        # opensearch-py expects an explicit hostname string here (not a bool).
+        # The installer connects to https://localhost:9200 and the demo CA's
+        # server certificate carries localhost in its SAN.
+        ssl_assert_hostname="localhost",
         ssl_show_warn=False,
     )
