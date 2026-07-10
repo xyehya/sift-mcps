@@ -2,7 +2,7 @@
 members = ["packages/*"]
 
 [tool.uv]
-package = false
+package = true
 
 [tool.uv.sources]
 sift-core = { workspace = true }
@@ -80,7 +80,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = []
+packages = ["src/sift_mcps"]
 
 [tool.ruff]
 target-version = "py312"

@@ -2828,7 +2828,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "sift-mcps"
-source = { virtual = "." }
+source = { editable = "." }
 
 [package.optional-dependencies]
 core = [

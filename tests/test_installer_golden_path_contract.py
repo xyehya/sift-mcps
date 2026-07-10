@@ -74,6 +74,8 @@ def test_root_extra_taxonomy_makes_opensearch_mandatory() -> None:
     assert "opensearch-mcp" in extras["core"]
     assert "rag-mcp" in extras["rag"]
     assert "windows-triage-mcp" in extras["windows-triage"]
+    assert project["tool"]["uv"]["package"] is True
+    assert (REPO_ROOT / "src" / "sift_mcps" / "__init__.py").is_file()
 
 
 def test_core_sync_and_opensearch_health_are_mandatory() -> None:
