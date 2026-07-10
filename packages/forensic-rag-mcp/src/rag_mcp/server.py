@@ -16,8 +16,11 @@ Agent-facing tools (registered under the manifest ``kb`` namespace):
     kb_get_knowledge_stats    corpus statistics (also the backend health probe)
 
 Configuration:
-    SIFT_CONTROL_PLANE_DSN / DATABASE_URL / POSTGRES_DSN: Postgres service DSN.
     RAG_MODEL_NAME: query embedding model (default BAAI/bge-base-en-v1.5).
+
+The installed RAG pack is gateway-owned: the gateway constructs ``RAGServer``
+with its already-authorized control-plane DSN.  The standalone ``rag-mcp``
+process deliberately does not read a DB credential from its environment.
 
 Security:
     - Model allowlist prevents arbitrary model loading.
@@ -31,7 +34,6 @@ Security:
 from __future__ import annotations
 
 import logging
-import os
 import sys
 
 from mcp.server.fastmcp import FastMCP
@@ -50,23 +52,21 @@ MAX_SOURCE_IDS = 20
 _PLATFORM_ENUM = ("windows", "linux", "macos")
 
 
-def _dsn_from_env() -> str | None:
-    return (
-        os.environ.get("SIFT_CONTROL_PLANE_DSN")
-        or os.environ.get("DATABASE_URL")
-        or os.environ.get("POSTGRES_DSN")
-    )
-
-
 class RAGServer:
     """forensic-rag-mcp server: pgvector-backed knowledge search tools."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, control_plane_dsn: str | None = None) -> None:
         self.mcp = FastMCP("forensic-rag-mcp", instructions=_INSTRUCTIONS)
         self._store = None
         self._embedder: QueryEmbedder | None = None
-        self._model_name = os.environ.get("RAG_MODEL_NAME", DEFAULT_MODEL_NAME)
+        self._control_plane_dsn = (control_plane_dsn or "").strip()
+        self._model_name = DEFAULT_MODEL_NAME
         self._register_tools()
+
+    @property
+    def control_plane_dsn(self) -> str:
+        """Gateway-held DSN used only by the in-process first-party handler."""
+        return self._control_plane_dsn
 
     # -- lazy resources ------------------------------------------------------
 
@@ -74,10 +74,9 @@ class RAGServer:
         if self._store is None:
             from .pgvector_store import PgVectorRagStore
 
-            dsn = _dsn_from_env()
-            if not dsn:
-                raise RuntimeError("rag_control_plane_dsn_unavailable")
-            self._store = PgVectorRagStore(dsn)
+            if not self._control_plane_dsn:
+                raise RuntimeError("rag_gateway_owned")
+            self._store = PgVectorRagStore(self._control_plane_dsn)
         return self._store
 
     def _get_embedder(self) -> QueryEmbedder:
@@ -320,9 +319,9 @@ def main() -> None:
     if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
         print("Usage: rag-mcp [--help]")
         print()
-        print("forensic-rag-mcp: pgvector-backed knowledge search MCP server.")
+        print("forensic-rag-mcp: gateway-owned pgvector knowledge package.")
         print()
-        print("Knowledge load commands:")
+        print("Knowledge load commands (installer/gateway authority only):")
         print("  python -m rag_mcp.pgvector_chroma_import  # Chroma->pgvector import")
         print("  python -m rag_mcp.pgvector_seed            # Seed knowledge documents")
         return

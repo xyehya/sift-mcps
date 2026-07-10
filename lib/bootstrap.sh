@@ -49,3 +49,18 @@ sift_source_full_installer_libraries() {
 sift_source_external_addon_libraries() {
   _sift_source_library_modules common python config opensearch addons
 }
+
+# Source the bounded implementation surface for a trusted first-party core
+# add-on.  These commands run after mandatory core setup and may reconcile only
+# an allow-listed registry record through the installer authority path; they do
+# not source install.sh or gain its CLI behavior.
+sift_source_first_party_addon_libraries() {
+  _sift_source_library_modules common python supabase examiner
+}
+
+# Backward-compatible name for first-party core packs.  Keep one canonical
+# allow-list so a future pack cannot silently broaden the helper surface by
+# defining a second, divergent library set.
+sift_source_core_addon_libraries() {
+  sift_source_first_party_addon_libraries
+}

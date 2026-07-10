@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import jsonschema
 
 from sift_gateway.backends.base import MCPBackend
+from sift_gateway.backends.gateway_backend import GatewayOwnedMCPBackend
 from sift_gateway.backends.egress import EgressTarget, validate_egress_url
 from sift_gateway.backends.http_backend import HttpMCPBackend
 from sift_gateway.backends.stdio_backend import StdioMCPBackend
@@ -238,7 +239,7 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
 
     explicit_path = config.get("manifest_path")
 
-    if backend_type == "stdio":
+    if backend_type in {"stdio", "gateway"}:
         if explicit_path:
             manifest_path = Path(explicit_path)
             manifest_source = str(manifest_path)
@@ -256,9 +257,9 @@ def load_and_validate_manifest(name: str, config: dict) -> dict | None:
                 with open(manifest_path, encoding="utf-8") as f:
                     manifest_data = json.load(f)
             else:
-                logger.warning("Manifest not found for stdio backend %s at %s", name, manifest_path)
+                logger.warning("Manifest not found for local backend %s at %s", name, manifest_path)
         except Exception as e:
-            logger.warning("Failed to load manifest for stdio backend %s from %s: %s", name, manifest_path, e)
+            logger.warning("Failed to load manifest for local backend %s from %s: %s", name, manifest_path, e)
 
     elif backend_type == "http":
         if explicit_path:
@@ -373,6 +374,17 @@ def create_backend(name: str, config: dict, *, manifest: dict | None = None) -> 
     backend_type = config.get("type", "stdio")
     if manifest is None:
         manifest = load_and_validate_manifest(name, config)
+
+    if backend_type == "gateway":
+        if name != "forensic-rag-mcp":
+            raise ValueError(
+                f"Backend {name!r}: gateway transport is reserved for first-party RAG"
+            )
+        if not isinstance(manifest, dict) or manifest.get("transport") != "gateway":
+            raise ValueError(
+                "gateway backend requires a first-party manifest with transport='gateway'"
+            )
+        return GatewayOwnedMCPBackend(name, config, manifest)
 
     if backend_type == "stdio":
         # Validate required keys for stdio

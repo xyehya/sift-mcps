@@ -18,6 +18,7 @@ from fastmcp.server.providers.proxy import FastMCPProxy
 from fastmcp.tools import Tool, ToolResult
 from mcp.types import TextContent, ToolAnnotations
 from pydantic import PrivateAttr
+from sift_common.registry_helpers import tool_output_schema
 from sift_core.agent_tools import call_core_tool, core_tool_specs
 
 from sift_gateway.backends.egress import (
@@ -503,6 +504,15 @@ def mount_single_addon_proxy(
     unmet = [req for req in reqs if not gateway.evaluate_requirement(req)]
     if unmet:
         return False
+    if backend.config.get("type") == "gateway":
+        if backend_name != "forensic-rag-mcp":
+            raise ValueError(
+                f"unsupported gateway-owned backend: {backend_name!r}"
+            )
+        _register_gateway_rag_tools(mcp, gateway)
+        mounted.add(backend_name)
+        return True
+
     proxy = _create_backend_proxy(backend_name, backend.config, manifest)
     namespace = str(manifest.get("namespace") or "") or None
     mcp.mount(
@@ -512,6 +522,47 @@ def mount_single_addon_proxy(
     )
     mounted.add(backend_name)
     return True
+
+
+def _register_gateway_rag_tools(mcp: FastMCP, gateway: Any) -> None:
+    """Mount the first-party RAG pack inside the Gateway policy boundary.
+
+    The registry row is still the source of enablement and manifest metadata,
+    but the query handler runs in this process so a child process is never given
+    a control-plane DSN.  Do not turn this into a generic manifest-to-local-code
+    loader: the registry validates the sole supported gateway transport.
+    """
+    from sift_gateway.rag_tools import (
+        dispatch_gateway_rag_tool,
+        rag_tool_specs,
+    )
+
+    for spec in rag_tool_specs():
+        async def _handler(
+            arguments: dict[str, Any],
+            examiner: str | None,
+            *,
+            _name: str = spec.name,
+        ) -> ToolResult:
+            del examiner
+            return await dispatch_gateway_rag_tool(gateway, _name, arguments)
+
+        mcp.add_tool(
+            GatewayLocalTool(
+                gateway=gateway,
+                handler=_handler,
+                name=spec.name,
+                title=spec.title,
+                description=spec.description,
+                parameters=spec.in_model.model_json_schema(),
+                output_schema=tool_output_schema(spec.out_model),
+                annotations=ToolAnnotations(readOnlyHint=True),
+                meta={
+                    "category": "enrichment",
+                    "recommended_for_phase": spec.phase,
+                },
+            )
+        )
 
 
 def expected_mounted_tool_names(gateway: Any) -> set[str]:
