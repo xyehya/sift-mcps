@@ -80,13 +80,15 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Source install.sh as a function library (it self-guards: main() runs only when
-# install.sh is executed directly). This gives us the provisioning functions and
-# the resolved SIFT_* / REPO_DIR path vars without kicking off an install.
-# shellcheck source=/dev/null
-source "$REPO_ROOT/install.sh"
+# Explicit library boundary: this external-integration helper must never source
+# or invoke install.sh.  It receives only the named helper functions it needs;
+# the installer CLI remains the sole core-install orchestrator.
+REPO_DIR="$REPO_ROOT"
+# shellcheck source=lib/bootstrap.sh
+source "$REPO_ROOT/lib/bootstrap.sh"
+sift_source_external_addon_libraries
 
-# install.sh defines log/warn/die; add a couple of local helpers.
+# lib/common.sh defines log/warn/die; add a couple of local helpers.
 hr()  { printf -- '---------------------------------------------------------------\n'; }
 ask() {
   # ask "Prompt" "default" -> echoes the answer (default if empty)

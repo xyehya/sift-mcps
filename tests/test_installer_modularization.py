@@ -5,9 +5,11 @@ FAIL-ON-REVERT guards for the modularization. These pin the contract that:
 * install.sh stays a THIN entrypoint (it must not regrow back into a monolith);
 * the lib/*.sh modules exist, are source-guarded, and are side-effect-free on
   source (no install step runs merely from `source`);
-* the BASH_SOURCE direct-exec guard is intact, so `source install.sh` (as
-  scripts/setup-addon.sh:87 does) exposes every provisioning function WITHOUT
-  kicking off an install;
+* the BASH_SOURCE direct-exec guard is intact, so test code can source
+  `install.sh` to expose every provisioning function WITHOUT kicking off an
+  install;
+* `scripts/setup-addon.sh` sources its explicit narrow lib/ API and never
+  sources the top-level installer CLI;
 * the functions carried verbatim from #17/#11 (uv SHA-pin, zimmerman,
   complementary tools) and the OpenCTI add-on helpers consumed by
   scripts/setup-addon.sh are still defined after sourcing;
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -100,6 +103,40 @@ def test_entrypoint_sources_lib_and_guards_main() -> None:
     assert "lib" in src and "source" in src, "entrypoint must source the lib/*.sh modules."
     # The direct-exec guard: main runs only when executed directly, not on source.
     assert '"${BASH_SOURCE[0]}" == "${0}"' in src, "the direct-exec main() guard must be preserved."
+
+
+def test_setup_addon_uses_explicit_lib_boundary(tmp_path: Path) -> None:
+    """The external helper must not regain a source dependency on install.sh.
+
+    This is a fail-on-revert boundary test: it runs a copied helper beside a
+    sentinel top-level installer.  If setup-addon ever sources or executes the
+    sentinel, the subprocess fails; the real narrow library API still lets
+    ``--help`` finish without touching an installed runtime.
+    """
+    sandbox = tmp_path / "sandbox"
+    scripts = sandbox / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / "scripts" / "setup-addon.sh", scripts / "setup-addon.sh")
+    shutil.copytree(LIB_DIR, sandbox / "lib")
+    (sandbox / "install.sh").write_text(
+        "echo INSTALL_SH_MUST_NOT_BE_SOURCED >&2\nexit 97\n",
+        encoding="utf-8",
+    )
+
+    res = subprocess.run(
+        ["bash", str(scripts / "setup-addon.sh"), "--help"],
+        cwd=str(sandbox),
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp_path)},
+    )
+    assert res.returncode == 0, f"setup-addon help failed:\n{res.stdout}\n{res.stderr}"
+    assert "INSTALL_SH_MUST_NOT_BE_SOURCED" not in res.stderr
+    assert "OPTIONAL helper to PREPARE" in res.stdout
+
+    source = (REPO_ROOT / "scripts" / "setup-addon.sh").read_text(encoding="utf-8")
+    assert 'source "$REPO_ROOT/install.sh"' not in source
+    assert "sift_source_external_addon_libraries" in source
 
 
 @pytest.mark.parametrize("mod", sorted(p for p in LIB_DIR.glob("*.sh")))

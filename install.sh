@@ -20,52 +20,19 @@ set -Eeuo pipefail
 
 # =============================================================================
 # Thin entrypoint (#18 modularization). The provisioning logic lives in
-# source-guarded lib/*.sh modules; this file derives REPO_DIR, sources the
-# modules (dependency order: common first — it defines every global the other
-# modules read at call time), then runs main() ONLY on direct execution. When
-# sourced (scripts/setup-addon.sh) the functions become available WITHOUT
-# kicking off an install — the BASH_SOURCE guard at the foot of this file
-# preserves that contract.
+# source-guarded lib/*.sh modules; this file derives REPO_DIR, loads the
+# explicit full-installer library surface, then runs main() ONLY on direct
+# execution. External helpers source their own small library set directly;
+# they never source this CLI/orchestrator.
 # =============================================================================
 
 # REPO_DIR = the directory containing THIS install.sh (the repo / staged runtime
-# tree root). Derived from this file's own location so that when
-# scripts/setup-addon.sh sources install.sh, REPO_DIR still resolves to the repo
-# root (not scripts/). lib/common.sh honours this pre-set value.
+# tree root). Derived from this file's own location, never from an environment
+# value, before the trusted bootstrap module is sourced.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Security: install.sh is often run with elevated privileges. Do not allow an
-# operator/user-controlled SIFT_INSTALL_LIB_DIR to redirect the trusted module
-# source path to arbitrary shell files. Keep the variable exported for child
-# diagnostics, but canonicalize it to the repo-owned lib directory before any
-# `source` occurs.
-export SIFT_INSTALL_LIB_DIR="$REPO_DIR/lib"
-
-# Source order: common defines all globals + early helpers FIRST; the rest are
-# pure function-definition modules (bash resolves globals at call time, so their
-# relative order does not matter for correctness — grouped by concern).
-for _sift_lib in \
-  common \
-  preflight \
-  python \
-  state \
-  assets \
-  tls \
-  examiner \
-  supabase \
-  migrations \
-  config \
-  opensearch \
-  addons \
-  services \
-  handoff \
-  hardening \
-  teardown \
-; do
-  # shellcheck source=/dev/null
-  source "$SIFT_INSTALL_LIB_DIR/${_sift_lib}.sh" \
-    || { printf '[sift-mcps] FATAL: cannot source lib/%s.sh\n' "$_sift_lib" >&2; exit 1; }
-done
-unset _sift_lib
+# shellcheck source=lib/bootstrap.sh
+source "$REPO_DIR/lib/bootstrap.sh"
+sift_source_full_installer_libraries
 
 # =============================================================================
 # main
@@ -328,10 +295,9 @@ main() {
   print_summary
 }
 
-# Run main() only when executed directly. When sourced (e.g. by
-# scripts/setup-addon.sh) this file acts as a function library: sourcing it
-# defines the provisioning functions and resolves the path vars without
-# kicking off an install.
+# Run main() only when executed directly.  The guard still permits focused
+# shell-unit tests to source this CLI, but external integration helpers source
+# lib/bootstrap.sh and their narrow library set instead.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   main "$@"
 fi
