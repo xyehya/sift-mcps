@@ -42,3 +42,15 @@ def test_legacy_generic_seeder_cannot_reintroduce_rag_stdio_dsn_wiring():
     assert '"forensic-rag-mcp" \\' not in generic
     assert '"SIFT_CONTROL_PLANE_DSN": "SIFT_CONTROL_PLANE_DSN"' not in generic
     assert "reconcile_first_party_gateway_backend" in source
+
+
+def test_registry_migration_allows_only_credential_free_gateway_shape():
+    migration = next(
+        (REPO_ROOT / "supabase" / "migrations").glob(
+            "202607100900_mcp_backends_gateway_transport.sql"
+        )
+    ).read_text(encoding="utf-8")
+    assert "transport in ('stdio', 'http', 'gateway')" in migration
+    assert "connection->>'type' = 'gateway'" in migration
+    assert "not (connection ? 'env_refs')" in migration
+    assert "not (connection ? 'command')" in migration
