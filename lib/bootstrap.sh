@@ -49,3 +49,11 @@ sift_source_full_installer_libraries() {
 sift_source_external_addon_libraries() {
   _sift_source_library_modules common python config opensearch addons
 }
+
+# Source the deliberately small installer-side API used by first-party core
+# add-on packs. The pack runs as the installer/control-plane authority, so it
+# may use the trusted registry reconciler; its spawned MCP child still receives
+# only the explicit env_refs saved in the registry record.
+sift_source_core_addon_libraries() {
+  _sift_source_library_modules common python supabase examiner
+}

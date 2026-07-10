@@ -11,6 +11,7 @@ the package's ``data/`` source dir instead of the configured dir.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 from windows_triage_mcp.config import reset_config
@@ -19,7 +20,7 @@ from windows_triage_mcp.scripts import download_databases as dd
 
 def _run_main(monkeypatch, argv, env):
     """Invoke main() with patched argv/env, capturing the resolved dest dir."""
-    captured: dict[str, Path] = {}
+    captured: dict[str, object] = {}
 
     def _fake_download(dest_dir, tag="latest", with_registry=False):
         captured["dest"] = Path(dest_dir)
@@ -39,7 +40,7 @@ def _run_main(monkeypatch, argv, env):
     with pytest.raises(SystemExit) as exc:
         dd.main()
     assert exc.value.code == 0
-    return captured["dest"]
+    return cast(Path, captured["dest"])
 
 
 def test_explicit_dest_wins(monkeypatch):
@@ -159,7 +160,7 @@ def test_temp_dir_colocated_with_dest(monkeypatch, tmp_path):
 
     # Stub the network + decompress so only the temp-dir placement is exercised.
     monkeypatch.setattr(dd, "_download_asset", lambda url, p: p.write_bytes(b""))
-    monkeypatch.setattr(dd, "_verify_checksums", lambda temp_dir: True)
+    monkeypatch.setattr(dd, "_verify_checksums", lambda temp_dir, required: True)
     monkeypatch.setattr(dd, "_decompress_zst", lambda src, p: p.write_bytes(b""))
     monkeypatch.setattr(dd, "_verify_database", lambda *a, **k: True)
 
@@ -169,4 +170,46 @@ def test_temp_dir_colocated_with_dest(monkeypatch, tmp_path):
     # single free-space check at dest covers both the .zst and the decompressed
     # DB on one filesystem.
     assert captured["dir_kwarg"] == dest
-    assert captured["temp_dir"].parent == dest
+    assert cast(Path, captured["temp_dir"]).parent == dest
+
+
+def test_registry_checksum_is_required_and_verified(monkeypatch, tmp_path):
+    """The optional 12 GiB registry asset must never bypass SHA-256 verification."""
+    temp_dir = tmp_path / "download"
+    temp_dir.mkdir()
+    registry_asset = temp_dir / dd.REGISTRY_ASSET
+    registry_asset.write_bytes(b"registry")
+    expected = dd._sha256_file(registry_asset)
+
+    (temp_dir / "checksums.sha256").write_text(
+        f"{expected}  {dd.REGISTRY_ASSET}\n", encoding="utf-8"
+    )
+    assert dd._verify_checksums(temp_dir, (dd.REGISTRY_ASSET,)) is True
+
+    # Revert control: a release manifest without the registry hash must fail
+    # closed even if the file was downloaded successfully.
+    (temp_dir / "checksums.sha256").write_text("", encoding="utf-8")
+    assert dd._verify_checksums(temp_dir, (dd.REGISTRY_ASSET,)) is False
+
+
+def test_registry_provenance_records_verified_hash(tmp_path):
+    registry_db = tmp_path / dd.REGISTRY_DB_NAME
+    registry_db.write_bytes(b"decompressed registry baseline")
+    source_hash = "a" * 64
+
+    dd._write_registry_provenance(tmp_path, "triage-db-test", source_hash)
+
+    provenance = tmp_path / f"{dd.REGISTRY_DB_NAME}.provenance.json"
+    content = provenance.read_text(encoding="utf-8")
+    assert '"release_tag": "triage-db-test"' in content
+    assert f'"compressed_asset_sha256": "{source_hash}"' in content
+    assert dd._sha256_file(registry_db) in content
+
+
+def test_programmatic_registry_download_keeps_disk_space_guard(monkeypatch, tmp_path):
+    monkeypatch.setattr(dd, "_check_registry_disk_space", lambda dest: False)
+    monkeypatch.setattr(
+        dd, "_fetch_release", lambda tag="latest": pytest.fail("must not fetch")
+    )
+
+    assert dd.download_databases(tmp_path, with_registry=True) is False

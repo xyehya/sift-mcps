@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -30,6 +31,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 
 from windows_triage_mcp.config import get_config
@@ -137,33 +139,96 @@ def _download_asset(url: str, dest: Path) -> None:
         print()
 
 
-def _verify_checksums(temp_dir: Path) -> bool:
-    """Verify SHA-256 checksums of downloaded compressed files."""
-    checksum_file = temp_dir / "checksums.sha256"
-    if not checksum_file.is_file():
-        print("  No checksums file. Skipping verification.")
-        return True
+def _sha256_file(path: Path) -> str:
+    """Return a file's SHA-256 without loading a large baseline into memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(CHUNK_SIZE), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-    ok = True
-    for line in checksum_file.read_text().strip().splitlines():
-        parts = line.split()
-        if len(parts) < 2:
+
+def _load_checksums(checksum_file: Path) -> dict[str, str] | None:
+    """Read a strict SHA-256 manifest keyed by basename.
+
+    Release metadata is untrusted until verified.  Ignore unrelated entries but
+    reject malformed entries for requested assets rather than silently skipping
+    their integrity check.
+    """
+    if not checksum_file.is_file():
+        print("  Missing checksums.sha256; refusing unverified baseline assets.")
+        return None
+
+    checksums: dict[str, str] = {}
+    for raw_line in checksum_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
             continue
-        expected_hash = parts[0]
-        file_name = parts[1]
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        digest, filename = parts
+        filename = filename.strip().lstrip("*")
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+            continue
+        # A checksum manifest must name a plain release asset, not traverse out
+        # of the temporary download directory.
+        if not filename or Path(filename).name != filename:
+            continue
+        checksums[filename] = digest.lower()
+    return checksums
+
+
+def _verify_checksums(temp_dir: Path, required_assets: tuple[str, ...]) -> bool:
+    """Fail closed unless every requested compressed asset has a valid SHA-256."""
+    checksum_file = temp_dir / "checksums.sha256"
+    checksums = _load_checksums(checksum_file)
+    if checksums is None:
+        return False
+
+    for file_name in required_assets:
         file_path = temp_dir / file_name
         if not file_path.is_file():
-            # Skip files not in our download list (e.g. registry DB)
-            continue
-        actual_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
+            print(f"  Missing downloaded asset: {file_name}")
+            return False
+        expected_hash = checksums.get(file_name)
+        if expected_hash is None:
+            print(f"  Missing SHA-256 manifest entry: {file_name}")
+            return False
+        actual_hash = _sha256_file(file_path)
         if actual_hash == expected_hash:
             print(f"  OK: {file_name}")
         else:
             print(f"  FAILED: {file_name}")
             print(f"    expected: {expected_hash}")
             print(f"    got:      {actual_hash}")
-            ok = False
-    return ok
+            return False
+    return True
+
+
+def _write_registry_provenance(dest: Path, tag_name: str, compressed_sha256: str) -> None:
+    """Persist non-secret provenance after the optional registry DB verifies."""
+    registry_db = dest / REGISTRY_DB_NAME
+    provenance = registry_db.with_name(f"{REGISTRY_DB_NAME}.provenance.json")
+    payload = {
+        "schema": "sift.windows-triage.registry-provenance/v1",
+        "repository": REPO,
+        "release_tag": tag_name,
+        "asset": REGISTRY_ASSET,
+        "compressed_asset_sha256": compressed_sha256,
+        "decompressed_sha256": _sha256_file(registry_db),
+        "verified_at": datetime.now(UTC).isoformat(),
+    }
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=dest, prefix=f".{provenance.name}.", delete=False
+    ) as handle:
+        json.dump(payload, handle, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary = Path(handle.name)
+    os.replace(temporary, provenance)
+    os.chmod(provenance, 0o640)
 
 
 def _free_bytes(path: Path) -> int:
@@ -242,6 +307,10 @@ def download_databases(
     """
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
+    if with_registry and not _check_registry_disk_space(dest):
+        # Keep the free-space gate inside the reusable API as well as main(),
+        # so programmatic callers cannot accidentally bypass the 12 GiB guard.
+        return False
 
     print(f"Fetching release info from {REPO}...")
     try:
@@ -255,7 +324,7 @@ def download_databases(
 
     # Compose the per-run download set: the default baseline assets plus the
     # optional registry asset when explicitly requested.
-    assets = list(ASSETS)
+    assets: list[str] = list(ASSETS)
     if with_registry:
         if _get_asset_url(release, REGISTRY_ASSET) is None:
             print(
@@ -305,7 +374,8 @@ def download_databases(
 
             # Verify checksums
             print("\nVerifying checksums...")
-            if not _verify_checksums(temp_dir):
+            required_assets = tuple(asset for asset in assets if asset != "checksums.sha256")
+            if not _verify_checksums(temp_dir, required_assets):
                 if attempt < MAX_ATTEMPTS:
                     wait = attempt * 5
                     print(f"  Checksum mismatch. Retrying in {wait}s...")
@@ -349,6 +419,13 @@ def download_databases(
                 )
 
             if ok:
+                if with_registry:
+                    checksums = _load_checksums(temp_dir / "checksums.sha256")
+                    registry_sha256 = checksums.get(REGISTRY_ASSET) if checksums else None
+                    if registry_sha256 is None:
+                        print("Registry provenance failed: missing registry SHA-256.")
+                        return False
+                    _write_registry_provenance(dest, tag_name, registry_sha256)
                 print("\nDatabases installed successfully.")
                 return True
             else:
