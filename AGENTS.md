@@ -2,8 +2,10 @@
 
 ## Repo map & where to work
 
-- **`/Users/yk/AI/sift-mcps` is the `main` checkout** — Python MCP gateway
-  + portal. **`main` is the single canonical line.** if launched on a stale linked worktree, treat its branch as a local alias of `main` and push to `main`.
+- **`/Users/yk/AI/sift-mcps` is the canonical `main` checkout** — Python MCP gateway
+  + portal. **`main` is the single integration line.** If launched in another worktree, verify its
+  branch and base explicitly; do not treat a stale branch as an alias and do not push/merge unless the
+  operator asked for it.
 - **Portal frontend:** `packages/case-dashboard/frontend` — carries its own
   `AGENTS.md` / `DESIGN-SYSTEM.md` (design-system contract); read those before
   touching UI. Inside the frontend, that `AGENTS.md` wins.
@@ -12,18 +14,23 @@
 ## Operating model, trackers & lessons (read before substantive work)
 
 Internal ops hub lives **outside this repo** (local): `~/AI/sift-portal-ops/`.
-- **Start there (only these two):** `STATUS.md` (narrative current state) +
-  `trackers/MASTER_TRACKER.md` (the single consolidated tracker — every open / decision-pending /
-  deferred item + the GitHub PR & issue board, in tables). Read it before "discovering" work. The old
+- **Start there (only these two):** `STATUS.md` (short narrative current state) +
+  `trackers/MASTER_TRACKER.md` (the single execution queue with self-contained P0–P4 handoff packets).
+  Read them before "discovering" work. For GitHub review work only, also open
+  `trackers/GITHUB_PR_TRACKER.md`; it is deliberately link-only, and GitHub remains authoritative for
+  live PR state/checks. The old
   per-topic trackers (OPEN_ITEMS_MASTER, MCP_WORKFLOW_FRICTION_TRACKER, P3.5_LIVE_VALIDATION_TRACKER,
   AUDIT_STATE_VERIFICATION, P35-3_AUDIT_ID_FLOW, PORTAL_V3_EXTENSION_BACKLOG) were consolidated into it
   on 2026-06-27 and archived under `_archive-trackers/` — do not cite them. Coder briefs: `briefs/`.
+- **Packet handoffs are scope contracts:** an instruction such as `Finalize P1` means execute the P1
+  actions/acceptance criteria in `MASTER_TRACKER.md`, expand code discovery only as needed, and do not
+  pull in adjacent packets. Update the packet state and proof record when finished.
 - **Surfacing lesson (the #1 repeat bug):** a gateway/add-on fix is INERT live unless it
   lands at the **agent-facing surface** — the registry `*Out` Pydantic model + the worker
   `result_public` envelope + the DB-authority path — NOT the impl function. SDK `outputSchema`
   rejects a result with no `structured_content`. The agent backend has **no DB creds by design**
   (DB-reading logic belongs in the gateway, not the add-on subprocess). Full writeup +
-  pre-merge checklist: `runbooks/LESSONS-MCP-FIX-SURFACING.md`.
+  pre-merge checklist: `~/AI/sift-portal-ops/runbooks/LESSONS-MCP-FIX-SURFACING.md`.
 - **Guard:** a conformance harness now catches that class in CI —
   `packages/sift-common/src/sift_common/testing/surface.py`. When you add/change an MCP tool's
   output, write a **fail-on-revert** surface test with it and add the optional key to
@@ -34,7 +41,16 @@ Internal ops hub lives **outside this repo** (local): `~/AI/sift-portal-ops/`.
 A green test is a hypothesis; the **live gateway is the proof for BEHAVIOR** (the harness covers
 plumbing only). VM deploy = rsync source to `/opt/sift-mcps/packages/.../` → clear
 `__pycache__` → restart `sift-gateway` + `sift-opensearch-worker@{1,2}` + `sift-job-worker` →
-re-run the exact repro live and diff before/after. If the live setup can't reproduce it, say so — never imply a live proof that didn't happen. VM coords + live-MCP connection: see the recalled `reference_harness_mcp_live_connection` / VM-coordinates memories.
+re-run the exact repro live and diff before/after. If the live setup can't reproduce it, say so — never imply a live proof that didn't happen. 
+**The testing VM should reachable via: ssh sift-vm**
+**The VM is our proof and there is nothing on it that is sensitive or unsafe for delete or redoployment, it is purely a SIFT VM based on Ubuntu 24.04 with our repo installed (as root this time by mistake - do not repeat on redeployment - use default user sansfornesics for best practices), the two ingested case images on the VM are maintained offline so they are safe to delete, and all the findings, timelines, etc... are testing data so do not treat this as a real live production environment - no need for rigorous backups unless needed for comparison or live proof - keep it simple***
+**The VM is deployed on the Fedora Host which can be reached via ssh fedora.local if any VM-level changes on are needed like RAM,CPU Storage etc.. It is using virt manager or for troubleshooting connectivity**
+**The Gateway/Portal are running on the VM on the Fedora Host which is not directly reachable from the current MacOS Host - a running background tunnel should be forwarding the gateway portal to https://localhost:4508 so if the tunnel is not active or gateway is not reachable make sure ssh sift-gateway-tunnel is running in the background as its the ssh port forwarding command**
+
+
+Canonical procedures: `~/AI/sift-portal-ops/runbooks/RUN-PORTAL-V3-VM-DEPLOY.md` and
+`~/AI/sift-portal-ops/runbooks/RUN-PORTAL-V3-VM-TEST.md`. Use recalled coordinates only as a convenience;
+the runbooks and observed live state are the authority.
 
 ## Security model (read before any gateway / security / execution work)
 
@@ -65,9 +81,10 @@ ARCHITECTURE / PATTERNS / TRADEOFFS / PHILOSOPHY) in the same graph store as the
 code-discovery tools above — shared across Claude Code, Codex CLI, and OpenCode
 since all three point at the identical local binary + DB.
 
-- **Read it at session start** and before touching gateway / security / execution
-  code: `manage_adr(project="Users-yk-AI-sift-mcps", mode="get")`. Faster and more
-  current than re-reading this file plus both architecture docs from scratch.
+- **Read it at session start when the project is indexed** and before touching gateway / security /
+  execution code: `manage_adr(project="Users-yk-AI-sift-mcps", mode="get")`. If the tool or project is
+  unavailable, report that once and continue from the canonical repo docs and source; do not block the
+  task or create a fresh graph index merely to satisfy this read.
 - **Update it, don't let it rot**: when a PATTERNS/TRADEOFFS entry changes (policy-chain
   stage count, seccomp/AppArmor default posture, an add-on drift gets resolved, etc.),
   re-run `manage_adr(mode="update", content=...)` with the revised section. A stale
@@ -82,18 +99,16 @@ since all three point at the identical local binary + DB.
 ## Spawned agents & agent teams — required loadout
 
 Every spawned subagent and agent-team member (coding, reviewing, verifying,
-exploring) MUST do the following, and the orchestrator MUST bake these into each
-agent prompt by name — plugin skills sometimes do not auto-load in subagents, so
-the explicit prompt text is the required fallback:
+exploring) receives the following loadout in its prompt. Capability absence must be reported, not hidden;
+use the stated fallback instead of blocking or fabricating a tool verdict.
 
-1. **codeguard-security skill** — invoke `codeguard-security:codeguard` for
-   secure-by-default guidance while writing/modifying code (use
-   `codeguard-security:security-review` for a full review pass); report which ran
-   and its verdict in the closeout.
-2. **codebase-memory MCP** — use the graph tools (`search_graph`, `trace_path`,
-   `get_code_snippet`, `query_graph`, `get_architecture`) for code discovery over
-   grep/glob, plus the `codebase-memory` skill for query syntax (same tool as the
-   Code Discovery section above).
+1. **Security guidance** — when installed, invoke `codeguard-security:codeguard` while modifying code
+   (or `codeguard-security:security-review` for a full pass) and report its verdict. If unavailable, use
+   the canonical security model plus a manual secure-by-default review and state that fallback clearly.
+2. **codebase-memory MCP** — when the project is indexed, use the graph tools (`search_graph`,
+   `trace_path`, `get_code_snippet`, `query_graph`, `get_architecture`) for code discovery over grep/glob,
+   plus the `codebase-memory` skill for query syntax. If unavailable/unindexed, fall back to `rg` and
+   exact source reads without turning indexing into task scope.
 3. **LSP validators on changed files before closing** — Python:
    `uv run --extra dev ruff check <paths>` + `uv run --extra dev pyright` (and
    targeted `uv run --extra dev pyright <file>` on each file touched); frontend:
@@ -155,6 +170,8 @@ GitHub is for code review and merge proof.
 - Commit or push only when the operator asks. If on the default branch, branch
   first.
 - Do not enable two-way issue sync unless the operator requests it.
+- For review-queue work, refresh `~/AI/sift-portal-ops/trackers/GITHUB_PR_TRACKER.md` only when the open
+  PR set or recommended disposition changes. Keep diffs, reviews, and CI logs in GitHub, not the tracker.
 
 ## Signoff
 
@@ -171,4 +188,3 @@ Next action:
 
 Never paste secrets, raw tokens, DSNs, passwords, private keys, service-role
 keys, or sensitive full evidence paths into GitHub, docs, or any external service.
-
