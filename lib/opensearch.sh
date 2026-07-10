@@ -317,10 +317,16 @@ PY
 install_opensearch_templates() {
   _opensearch_curl GET "/_cluster/health" >/dev/null 2>&1 || return 0
   log "Installing OpenSearch templates and pipelines."
-  local tmp_config rc
+  local tmp_config tmp_ca rc
   tmp_config="$(mktemp)"
+  tmp_ca="$(mktemp)"
   if svc_test_f "$SIFT_HOME/opensearch.yaml"; then
     svc_read "$SIFT_HOME/opensearch.yaml" > "$tmp_config"
+    # The service's CA path is intentionally inaccessible to the installer
+    # operator.  Give only this short-lived bootstrap client a private copy.
+    svc_read "$(_opensearch_ca_file)" > "$tmp_ca"
+    chmod 600 "$tmp_ca"
+    sed -i "s#^ca_certs:.*#ca_certs: $tmp_ca#" "$tmp_config"
   else
     cat > "$tmp_config" <<'YAML'
 host: https://localhost:9200
@@ -342,7 +348,7 @@ if result.get("status") not in {"ok", "warning"}:
 print(result.get("status", "ok"))
 PY
   rc=$?
-  rm -f "$tmp_config"
+  rm -f "$tmp_config" "$tmp_ca"
   if [[ "$rc" -ne 0 ]]; then
     warn "OpenSearch template bootstrap failed — opensearch-mcp retries at startup."
   fi
