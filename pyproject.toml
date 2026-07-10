@@ -2,7 +2,7 @@
 members = ["packages/*"]
 
 [tool.uv]
-package = false
+package = true
 
 [tool.uv.sources]
 sift-core = { workspace = true }
@@ -50,14 +50,14 @@ core = [
     "forensic-knowledge",
     "sift-common",
     "sift-gateway",
-]
-standard = [
-    "sift-mcps[core]",
     "opensearch-mcp",
 ]
-full = [
-    "sift-mcps[standard]",
+rag = [
     "rag-mcp",
+]
+core-addons = [
+    "sift-mcps[rag]",
+    "sift-mcps[windows-triage]",
 ]
 opencti = [
     "opencti-mcp",
@@ -80,7 +80,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = []
+packages = ["src/sift_mcps"]
 
 [tool.ruff]
 target-version = "py312"

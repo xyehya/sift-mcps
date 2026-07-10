@@ -45,13 +45,14 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync --locked \
-            --extra full \
+            --extra core \
+            --extra rag \
             --extra opencti \
             --extra windows-triage \
             --extra dev
 
       - name: Ruff check (whole repo — single root config, no per-package overrides)
-        run: uv run --locked --extra full --extra dev ruff check .
+        run: uv run --locked --extra core --extra rag --extra dev ruff check .
 
   typecheck:
     name: Pyright typecheck
@@ -79,13 +80,14 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync --locked \
-            --extra full \
+            --extra core \
+            --extra rag \
             --extra opencti \
             --extra windows-triage \
             --extra dev
 
       - name: Pyright sift-gateway policy layer
-        run: uv run --locked --extra full --extra dev pyright -p pyrightconfig.json
+        run: uv run --locked --extra core --extra rag --extra dev pyright -p pyrightconfig.json
 
   test:
     name: Pytest full suite
@@ -113,7 +115,8 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync --locked \
-            --extra full \
+            --extra core \
+            --extra rag \
             --extra opencti \
             --extra windows-triage \
             --extra dev
@@ -124,7 +127,7 @@ jobs:
         # duplicate-module collisions that used to require running pytest
         # once per package — see that section for the full rationale.
         run: |
-          uv run --locked --extra full --extra opencti --extra windows-triage \
+          uv run --locked --extra core --extra rag --extra opencti --extra windows-triage \
             --extra dev pytest tests packages -m "not integration"
 
   coverage:
@@ -153,7 +156,8 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync --locked \
-            --extra full \
+            --extra core \
+            --extra rag \
             --extra opencti \
             --extra windows-triage \
             --extra dev
@@ -161,7 +165,8 @@ jobs:
       - name: Check per-package coverage floors
         run: |
           uv run --locked \
-            --extra full \
+            --extra core \
+            --extra rag \
             --extra opencti \
             --extra windows-triage \
             --extra dev \
@@ -193,13 +198,14 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync --locked \
-            --extra full \
+            --extra core \
+            --extra rag \
             --extra opencti \
             --extra windows-triage \
             --extra dev
 
       - name: Check new-docs cross-references
-        run: uv run --locked --extra full --extra dev python scripts/check_newdocs_refs.py
+        run: uv run --locked --extra core --extra rag --extra dev python scripts/check_newdocs_refs.py
 
   portal-dist:
     # G8: the gateway mounts a COMMITTED frontend build (no node on the install

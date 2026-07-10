@@ -2828,15 +2828,20 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "sift-mcps"
-source = { virtual = "." }
+source = { editable = "." }
 
 [package.optional-dependencies]
 core = [
     { name = "case-dashboard" },
     { name = "forensic-knowledge" },
+    { name = "opensearch-mcp" },
     { name = "sift-common" },
     { name = "sift-core" },
     { name = "sift-gateway" },
+]
+core-addons = [
+    { name = "rag-mcp" },
+    { name = "windows-triage-mcp" },
 ]
 dev = [
     { name = "pyright" },
@@ -2845,25 +2850,11 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
-full = [
-    { name = "case-dashboard" },
-    { name = "forensic-knowledge" },
-    { name = "opensearch-mcp" },
-    { name = "rag-mcp" },
-    { name = "sift-common" },
-    { name = "sift-core" },
-    { name = "sift-gateway" },
-]
 opencti = [
     { name = "opencti-mcp" },
 ]
-standard = [
-    { name = "case-dashboard" },
-    { name = "forensic-knowledge" },
-    { name = "opensearch-mcp" },
-    { name = "sift-common" },
-    { name = "sift-core" },
-    { name = "sift-gateway" },
+rag = [
+    { name = "rag-mcp" },
 ]
 windows-triage = [
     { name = "windows-triage-mcp" },
@@ -2878,32 +2869,23 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "case-dashboard", marker = "extra == 'core'", editable = "packages/case-dashboard" },
-    { name = "case-dashboard", marker = "extra == 'full'", editable = "packages/case-dashboard" },
-    { name = "case-dashboard", marker = "extra == 'standard'", editable = "packages/case-dashboard" },
     { name = "forensic-knowledge", marker = "extra == 'core'", editable = "packages/forensic-knowledge" },
-    { name = "forensic-knowledge", marker = "extra == 'full'", editable = "packages/forensic-knowledge" },
-    { name = "forensic-knowledge", marker = "extra == 'standard'", editable = "packages/forensic-knowledge" },
     { name = "opencti-mcp", marker = "extra == 'opencti'", editable = "packages/opencti-mcp" },
-    { name = "opensearch-mcp", marker = "extra == 'full'", editable = "packages/opensearch-mcp" },
-    { name = "opensearch-mcp", marker = "extra == 'standard'", editable = "packages/opensearch-mcp" },
+    { name = "opensearch-mcp", marker = "extra == 'core'", editable = "packages/opensearch-mcp" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "rag-mcp", marker = "extra == 'full'", editable = "packages/forensic-rag-mcp" },
+    { name = "rag-mcp", marker = "extra == 'core-addons'", editable = "packages/forensic-rag-mcp" },
+    { name = "rag-mcp", marker = "extra == 'rag'", editable = "packages/forensic-rag-mcp" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15" },
     { name = "sift-common", marker = "extra == 'core'", editable = "packages/sift-common" },
-    { name = "sift-common", marker = "extra == 'full'", editable = "packages/sift-common" },
-    { name = "sift-common", marker = "extra == 'standard'", editable = "packages/sift-common" },
     { name = "sift-core", marker = "extra == 'core'", editable = "packages/sift-core" },
-    { name = "sift-core", marker = "extra == 'full'", editable = "packages/sift-core" },
-    { name = "sift-core", marker = "extra == 'standard'", editable = "packages/sift-core" },
     { name = "sift-gateway", marker = "extra == 'core'", editable = "packages/sift-gateway" },
-    { name = "sift-gateway", marker = "extra == 'full'", editable = "packages/sift-gateway" },
-    { name = "sift-gateway", marker = "extra == 'standard'", editable = "packages/sift-gateway" },
+    { name = "windows-triage-mcp", marker = "extra == 'core-addons'", editable = "packages/windows-triage-mcp" },
     { name = "windows-triage-mcp", marker = "extra == 'windows-triage'", editable = "packages/windows-triage-mcp" },
 ]
-provides-extras = ["core", "dev", "full", "opencti", "standard", "windows-triage"]
+provides-extras = ["core", "core-addons", "dev", "opencti", "rag", "windows-triage"]
 
 [package.metadata.requires-dev]
 dev = [

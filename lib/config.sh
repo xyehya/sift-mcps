@@ -175,16 +175,29 @@ write_opensearch_config() {
   # 0700 — write to an operator temp, then install owned sift-service 0600.
   local os_config="$SIFT_HOME/opensearch.yaml"
   if svc_test_f "$os_config"; then
-    log "OpenSearch client config exists — preserving $os_config."
-    return
+    # An old lab config is not a compatible rerun: silently retaining HTTP or
+    # disabled verification would downgrade the secure fresh-install path.
+    if svc_read "$os_config" | grep -Eq '^host: https://localhost:9200$' \
+      && svc_read "$os_config" | grep -Eq '^verify_certs: true$' \
+      && svc_read "$os_config" | grep -Eq '^ca_certs: '; then
+      log "OpenSearch client config exists and remains TLS-verified."
+      return
+    fi
+    die "Existing OpenSearch client config is not TLS-verified. Fresh secure installs refuse to retain the legacy HTTP/unauthenticated configuration; remove $os_config only after deliberately retiring the old lab stack."
   fi
   local tmp
   tmp="$(mktemp)"
-  cat > "$tmp" <<'YAML'
-host: http://127.0.0.1:9200
+  [[ -r "$SIFT_HOME/opensearch-root-ca.pem" ]] || die \
+    "OpenSearch CA is missing; the TLS/authenticated core cannot be configured. Re-run install.sh."
+  local admin_password
+  admin_password="$(svc_read "$SIFT_HOME/opensearch-admin.env" | sed -n 's/^SIFT_OPENSEARCH_ADMIN_PASSWORD=//p' | head -n1)"
+  [[ -n "$admin_password" ]] || die "OpenSearch admin credential is missing; re-run install.sh."
+  cat > "$tmp" <<YAML
+host: https://localhost:9200
 user: admin
-password: admin
-verify_certs: false
+password: ${admin_password}
+verify_certs: true
+ca_certs: ${SIFT_HOME}/opensearch-root-ca.pem
 YAML
   svc_install_file "$tmp" "$os_config" 600
   rm -f "$tmp"
@@ -210,7 +223,7 @@ write_opensearch_env() {
     printf '# OpenSearch env — gateway env_refs for opensearch-mcp backend\n'
     printf '# Written by sift-mcps install.sh. Idempotent — delete to regenerate.\n'
     printf 'OPENSEARCH_CONFIG=%s/opensearch.yaml\n' "$SIFT_HOME"
-    printf 'OPENSEARCH_HOST=http://127.0.0.1:9200\n'
+    printf 'OPENSEARCH_HOST=https://localhost:9200\n'
   } > "$tmp"
   svc_install_file "$tmp" "$os_env_file" 600
   rm -f "$tmp"

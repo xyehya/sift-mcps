@@ -1,7 +1,12 @@
-# OpenCTI stack — optional reference add-on, prepared via scripts/setup-addon.sh
+# OpenCTI stack — optional isolated reference add-on, prepared via
+# scripts/setup-addon.sh.
 #
-# Uses its own Docker network and OpenSearch datastore. It must not write
-# OpenCTI platform indices into the native SIFT forensic OpenSearch cluster.
+# This is the safe default while the core OpenSearch Security/TLS migration is
+# not complete. It uses its own Docker network and OpenSearch datastore. The
+# resource-saving shared target is a separate, explicitly gated artifact:
+# docker-compose.opencti-shared.yml plus
+# scripts/prepare-opencti-shared-opensearch.sh --check. Never point this file at
+# the core cluster by hand; that would remove the index-level security boundary.
 #
 # Bring up:  OPENCTI_ADMIN_TOKEN=<uuid> docker compose -f docker-compose.opencti.yml up -d
 # Tear down: docker compose -f docker-compose.opencti.yml down

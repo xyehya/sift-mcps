@@ -23,7 +23,7 @@
       "enrichment"
     ],
     "requires": [
-      "http://localhost:9200"
+      "https://localhost:9200"
     ],
     "enriches_responses": false
   },

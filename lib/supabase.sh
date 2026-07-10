@@ -31,9 +31,10 @@ _render_file() {
   PYTHON_BIN="$SYSTEM_PYTHON"
   OPENCTI_URL="${OPENCTI_URL:-http://127.0.0.1:8080}"
   OPENCTI_TOKEN="${OPENCTI_TOKEN:-}"
-  # Honor flags already set by main() (e.g. core-only); default to enabled.
-  SIFT_RAG_ENABLED="${SIFT_RAG_ENABLED:-true}"
-  SIFT_OPENSEARCH_ENABLED="${SIFT_OPENSEARCH_ENABLED:-true}"
+  # Core OpenSearch is mandatory. First-party RAG is selected by its dedicated
+  # pack, not by an inherited backend-enable environment switch.
+  SIFT_RAG_ENABLED="${SIFT_RAG_ENABLED:-false}"
+  SIFT_OPENSEARCH_ENABLED=true
   SIFT_OPENCTI_ENABLED="${SIFT_OPENCTI_ENABLED:-false}"
 
   local rendered
@@ -111,12 +112,12 @@ write_supabase_env() {
 #   containing: export SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=...
 #               export SIFT_CONTROL_PLANE_DSN=postgresql://...
 # We source that file, or invoke the script to create it, before any Supabase-dependent
-# step runs. Guarded by --core-only and --external-supabase flags.
+# step runs. Guarded only by --external-supabase.
 
 
 preflight_supabase() {
-  # Not needed for core-only or when operator supplies creds externally.
-  if [[ "${SIFT_CORE_ONLY:-0}" == "1" || "${SIFT_EXTERNAL_SUPABASE:-0}" == "1" ]]; then
+  # Not needed when the operator supplies external credentials.
+  if [[ "${SIFT_EXTERNAL_SUPABASE:-0}" == "1" ]]; then
     return 0
   fi
 
@@ -214,7 +215,7 @@ write_control_plane_env() {
   token_pepper="$(_resolved_token_pepper)"
   # B-MVP-010: the portal session secret value lives here (env-indirection); the
   # gateway config carries only its name. Always resolve it so the portal has a
-  # session secret even on core-only installs with no DSN.
+  # session secret even when no external control-plane DSN is supplied.
   session_secret="$(_resolved_session_secret)"
   existing_dsn="$(_env_file_value "$control_env_file" "SIFT_CONTROL_PLANE_DSN")"
   existing_pepper="$(_env_file_value "$control_env_file" "SIFT_TOKEN_PEPPER")"
@@ -274,4 +275,4 @@ write_control_plane_env() {
 # Uses psycopg3 (available in the venv) with autocommit + simple-query protocol
 # so multi-statement DDL files execute correctly (no parameter binding = no parse
 # step that would reject semicolons).
-# Guards: skips if --core-only or SIFT_CONTROL_PLANE_DSN empty.
+# Guards: skips if SIFT_CONTROL_PLANE_DSN is empty.

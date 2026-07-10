@@ -32,8 +32,6 @@ print_summary() {
   elif [[ -f "$SUPABASE_PROJECT_ENV" ]]; then
     printf 'Supabase:     auto-provisioned via scripts/setup-supabase.sh\n'
     printf '              credentials: %s\n' "$SUPABASE_PROJECT_ENV"
-  elif [[ "${SIFT_CORE_ONLY:-0}" == "1" ]]; then
-    printf 'Supabase:     skipped (core-only install)\n'
   else
     printf 'Supabase:     NOT provisioned — re-run install.sh after running scripts/setup-supabase.sh\n'
   fi
@@ -42,15 +40,17 @@ print_summary() {
   printf 'DB migrations: %s\n' "${DB_MIGRATIONS_RESULT:-skipped}"
 
   # OpenSearch backend.
-  if [[ "${SIFT_CORE_ONLY:-0}" != "1" ]]; then
-    if [[ "${OPENSEARCH_SEEDED:-false}" == "true" ]]; then
-      printf 'OpenSearch:   backend seeded and registered in app.mcp_backends\n'
-    elif [[ "${OPENSEARCH_UP:-0}" -eq 1 ]]; then
-      printf 'OpenSearch:   running but backend seed was skipped\n'
-    else
-      printf 'OpenSearch:   not available (Docker absent or unhealthy)\n'
-    fi
+  if [[ "${OPENSEARCH_SEEDED:-false}" == "true" ]]; then
+    printf 'OpenSearch:   backend seeded and registered in app.mcp_backends\n'
+  elif [[ "${OPENSEARCH_UP:-0}" -eq 1 ]]; then
+    printf 'OpenSearch:   running but backend seed was skipped\n'
+  else
+    printf 'OpenSearch:   not available (Docker absent or unhealthy)\n'
   fi
+
+  printf 'First-party packs: RAG=%s Windows-triage=%s Windows registry baseline=%s\n' \
+    "${SIFT_WITH_RAG:-0}" "${SIFT_WITH_WINDOWS_TRIAGE:-0}" \
+    "${SIFT_WITH_WINDOWS_TRIAGE_REGISTRY:-0}"
 
   # Service scope.
   printf 'Services:     system (run as %s; start at boot via multi-user.target)\n' "$SIFT_GATEWAY_SERVICE_USER"
@@ -91,9 +91,9 @@ print_summary() {
   printf '       python : export REQUESTS_CA_BUNDLE=<ca-cert.pem> SSL_CERT_FILE=<ca-cert.pem>\n'
   printf '       curl   : curl --cacert <ca-cert.pem> https://%s:4508/health\n' "$ip"
   printf '     Leaf renewal (sudo ./scripts/rotate-tls.sh --renew-leaf) keeps this CA, so no re-trust.\n'
-  printf '  6. Add-on backends are OPTIONAL and external. To integrate one, prepare it with\n'
-  printf '     scripts/setup-addon.sh, then register it from Portal -> Backends\n'
-  printf '     (validate -> register -> hot-reload). The core ships with none enabled.\n'
+  printf '  6. OpenCTI and other external integrations are optional. Prepare OpenCTI with\n'
+  printf '     scripts/setup-addon.sh opencti, then register it from Portal -> Backends\n'
+  printf '     (validate -> register -> hot-reload). First-party packs are selected at install time.\n'
 }
 
 # =============================================================================
@@ -169,5 +169,5 @@ do_uninstall() {
   printf 'To remove forensic STATE or docker data too, run scripts/uninstall.sh directly\n'
   printf 'with non-evidence components, e.g.:\n'
   printf '  scripts/uninstall.sh --components state,cache,opensearch,supabase --yes --i-understand\n'
-  printf 'The repo checkout itself was left in place. Reinstall with: ./install.sh [--core-only]\n'
+  printf 'The repo checkout itself was left in place. Reinstall with: ./install.sh\n'
 }

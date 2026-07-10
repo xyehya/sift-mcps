@@ -326,8 +326,19 @@ def normalize_connection_config(config: dict[str, Any]) -> dict[str, Any]:
         )
 
     transport = str(config.get("type") or "stdio")
-    if transport not in {"stdio", "http"}:
-        raise BackendRegistryError("backend type must be 'stdio' or 'http'")
+    if transport not in {"stdio", "http", "gateway"}:
+        raise BackendRegistryError("backend type must be 'stdio', 'http', or 'gateway'")
+
+    if transport == "gateway":
+        disallowed = sorted(
+            key
+            for key in ("command", "args", "cwd", "url", "env_refs", "bearer_token_env", "tls_cert_env")
+            if key in config
+        )
+        if disallowed:
+            raise BackendRegistryError(
+                "gateway backend cannot accept subprocess, network, or environment configuration"
+            )
 
     connection: dict[str, Any] = {"type": transport}
     for key in _CONNECTION_KEYS:
@@ -567,6 +578,13 @@ class McpBackendRegistry:
     ) -> BackendRegistryRecord:
         assert_actor_may_mutate_control_plane(actor)  # SEC-1 defense-in-depth
         connection = normalize_connection_config(config)
+        if connection["type"] == "gateway" and (
+            actor is not None or name != "forensic-rag-mcp" or manifest.get("transport") != "gateway"
+        ):
+            raise BackendRegistryError(
+                "gateway transport is reserved for the trusted installer RAG reconciliation",
+                http_status=403,
+            )
         # The REST registration path loads manifests through
         # load_and_validate_manifest(), which resolves local instructions_path
         # against the source file. Re-validating cached manifests here would not

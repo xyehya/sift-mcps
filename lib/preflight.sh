@@ -80,23 +80,15 @@ install_host_prereqs() {
     fi
   fi
 
-  # Docker presence check for OpenSearch (#8). We do NOT attempt to install
-  # Docker ourselves (distro-specific / risky). Just detect + warn so the
-  # operator knows what to do.  Seeding is gated in main() via OPENSEARCH_UP.
-  if [[ "${SIFT_OPENSEARCH_ENABLED:-true}" == "true" ]]; then
-    if ! command -v docker >/dev/null 2>&1; then
-      warn "Docker not found. OpenSearch requires Docker."
-      warn "  Install Docker (https://docs.docker.com/engine/install/) and re-run."
-      warn "  Continuing without OpenSearch — set SIFT_OPENSEARCH_ENABLED=false to silence this."
-    fi
+  # Docker is mandatory because OpenSearch is part of every core install. We do
+  # not auto-install Docker (distro-specific and high impact), but fail before a
+  # partial core install if it is unavailable.
+  if ! command -v docker >/dev/null 2>&1; then
+    die "Docker is required for mandatory core OpenSearch but was not found. Install Docker Engine and the Compose v2 plugin, then re-run ./install.sh."
   fi
 }
 
 ensure_docker_ready_for_supabase() {
-  if [[ "${SIFT_CORE_ONLY:-0}" == "1" || "${SIFT_EXTERNAL_SUPABASE:-0}" == "1" ]]; then
-    return 0
-  fi
-
   if ! command -v docker >/dev/null 2>&1; then
     die "Docker is required for local Supabase provisioning, but docker was not found.
   Install Docker Engine and the compose plugin, then re-run:

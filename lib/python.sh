@@ -126,14 +126,11 @@ sync_workspace() {
   export UV_NO_MANAGED_PYTHON=1
   export UV_PYTHON_DOWNLOADS=never
 
-  # Default --extra full (OpenSearch + RAG knowledge are native forensic
-  # capabilities). core-only installs use --extra core (gateway + portal +
-  # in-process core tools only). External add-ons such as OpenCTI are never
-  # pulled by the native installer; scripts/setup-addon.sh requests their extras
-  # explicitly when an operator prepares them.
-  local sync_extra="full"
-  [[ "${SIFT_CORE_ONLY:-0}" == "1" ]] && sync_extra="core"
-  log "Workspace extra: $sync_extra"
+  # The core extra is mandatory and includes opensearch-mcp. First-party packs
+  # are additive and selected only by the explicit --with-* installer contract.
+  # External integrations such as OpenCTI are never pulled by this path.
+  local sync_extra="core"
+  log "Mandatory workspace extra: $sync_extra"
   "$UV_BIN" sync \
     --extra "$sync_extra" \
     --project "$REPO_DIR" \

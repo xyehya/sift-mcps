@@ -121,7 +121,7 @@ and wires the local control plane. Development and validation use the repo
 `uv` workspace:
 
 ```bash
-uv run --extra dev --extra full pytest <targeted test paths>
+uv run --extra core --extra rag --extra dev pytest <targeted test paths>
 python3 scripts/validate_docs.py
 git diff --check
 ```

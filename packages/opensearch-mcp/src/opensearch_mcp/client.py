@@ -39,6 +39,7 @@ def get_client(config_path: Path | None = None) -> OpenSearch:
         http_auth=(user, password),
         use_ssl=host_url.startswith("https"),
         verify_certs=config.get("verify_certs", False),
-        ssl_assert_hostname=False,
+        ca_certs=config.get("ca_certs"),
+        ssl_assert_hostname=True,
         ssl_show_warn=False,
     )

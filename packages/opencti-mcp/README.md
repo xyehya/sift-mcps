@@ -49,3 +49,30 @@ A future release will detect the server version and install the
 matching pycti automatically. Until then, this is a manual step
 after setting up a new operator environment or upgrading
 `opencti-mcp`.
+
+## Shared OpenSearch target (gated)
+
+The default SIFT path keeps OpenCTI on its own datastore. The resource-saving
+target shares the core OpenSearch cluster only after the core Security plugin,
+HTTPS certificate verification, a dedicated `opencti*`-only role, compatibility,
+capacity, and rollback gates pass.
+
+Run the read-only gate from the staged runtime:
+
+```bash
+scripts/setup-addon.sh opencti --shared-opensearch-check
+```
+
+This command does not enable Security, migrate indices, or start containers. It
+validates `docker-compose.opencti-shared.yml`, immutable image references, the
+verified OpenSearch CA, the least-privilege role, and the absence of the
+dedicated `opencti-opensearch` service. Do not remove the legacy OpenCTI volume
+until the migration proof and rollback window are complete.
+
+Shared mode uses separate operator-managed values for the OpenCTI administrator,
+worker, OpenSearch, RabbitMQ, and MinIO credentials; do not reuse the admin token
+for the broker or object store.
+
+OpenCTI remains a query-only reference plane at the SIFT Gateway surface. Its
+indices must not be exposed through case-search tooling; intelligence used as
+evidence must enter through the normal evidence/provenance path.

@@ -9,11 +9,6 @@
 _SIFT_LIB_MIGRATIONS_SOURCED=1
 
 apply_db_migrations() {
-  if [[ "${SIFT_CORE_ONLY:-0}" == "1" ]]; then
-    log "apply_db_migrations: core-only — skipping."
-    return 0
-  fi
-
   local cp_dsn
   cp_dsn="$(_resolved_control_plane_dsn)"
   if [[ -z "$cp_dsn" ]]; then
@@ -168,11 +163,6 @@ PY
 #     markers go to stderr. Bash captures the DSN but NEVER passes it (or the
 #     password) to log/warn/echo. The DSN lands only in the 0600 env file.
 provision_audit_writer() {
-  if [[ "${SIFT_CORE_ONLY:-0}" == "1" ]]; then
-    log "provision_audit_writer: core-only — skipping."
-    return 0
-  fi
-
   local cp_dsn
   cp_dsn="$(_resolved_control_plane_dsn)"
   if [[ -z "$cp_dsn" ]]; then

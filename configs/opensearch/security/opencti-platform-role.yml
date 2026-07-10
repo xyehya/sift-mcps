@@ -1,0 +1,28 @@
+# OpenSearch Security role for the OpenCTI platform in shared mode.
+#
+# Apply only through the Security bootstrap/admin path after compatibility
+# testing. This identity is for the OpenCTI platform container, not workers,
+# connectors, the Gateway, or agents. The index boundary is intentionally
+# opencti*; never broaden it to `*` or add SIFT case/system indices.
+sift_opencti_platform:
+  reserved: false
+  hidden: false
+  cluster_permissions:
+    - cluster_composite_ops_ro
+    - cluster_manage_index_templates
+    - cluster:admin/ingest/pipeline/put
+    - cluster:admin/opendistro/ism/policy/write
+    - cluster:monitor/health
+    - cluster:monitor/main
+    - cluster:monitor/state
+    - cluster:monitor/task/get
+    - indices:admin/index_template/put
+    - indices:data/read/scroll
+    - indices:data/read/scroll/clear
+    - indices:data/write/bulk
+  index_permissions:
+    - index_patterns:
+        - opencti*
+      allowed_actions:
+        - indices_all
+  tenant_permissions: []
