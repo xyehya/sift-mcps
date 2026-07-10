@@ -72,12 +72,18 @@ main() {
 
   # Legacy disable controls would make the mandatory core nondeterministic.
   # Do not silently honor an inherited environment value from an old install.
-  local legacy_core_control
-  for legacy_core_control in SIFT_CORE_ONLY SIFT_OPENSEARCH_ENABLED SIFT_RAG_ENABLED; do
-    if [[ -v "$legacy_core_control" ]]; then
-      die "$legacy_core_control is no longer supported. Use the documented positive --with-* pack flags."
-    fi
-  done
+  # The staging boundary re-execs this installer from /opt and deliberately
+  # carries internal mandatory-core state. Reject legacy user input only on the
+  # initial invocation; otherwise the second process would reject its own
+  # exported SIFT_OPENSEARCH_ENABLED/SIFT_RAG_ENABLED values.
+  if [[ "${!SIFT_INSTALL_REEXEC_ENV:-0}" != "1" ]]; then
+    local legacy_core_control
+    for legacy_core_control in SIFT_CORE_ONLY SIFT_OPENSEARCH_ENABLED SIFT_RAG_ENABLED; do
+      if [[ -v "$legacy_core_control" ]]; then
+        die "$legacy_core_control is no longer supported. Use the documented positive --with-* pack flags."
+      fi
+    done
+  fi
 
   # Parse positive options. Bare ./install.sh is deliberately non-interactive.
   while [[ $# -gt 0 ]]; do

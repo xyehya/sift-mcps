@@ -65,6 +65,19 @@ def test_legacy_or_non_strict_environment_controls_fail_closed(
     assert env_name in result.stderr
 
 
+def test_internal_reexec_accepts_its_own_mandatory_core_state() -> None:
+    """The /opt re-exec must not reject installer-owned state as legacy input."""
+    result = _installer(
+        "--help",
+        env={
+            "SIFT_MCPS_INSTALL_REEXECED": "1",
+            "SIFT_OPENSEARCH_ENABLED": "true",
+            "SIFT_RAG_ENABLED": "false",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_root_extra_taxonomy_makes_opensearch_mandatory() -> None:
     """The root package models core and first-party packs without full/standard aliases."""
     project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
