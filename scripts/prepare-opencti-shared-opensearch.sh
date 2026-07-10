@@ -70,7 +70,12 @@ for secret_var in OPENCTI_OPENSEARCH_USER OPENCTI_OPENSEARCH_PASSWORD OPENCTI_AD
   }
 done
 
-if grep -Eq 'index_patterns:.*\*[^*]|index_patterns:.*"\*"|all_access|readall|restapi:admin' "$role_file"; then
+role_body="$(sed '/^[[:space:]]*#/d' "$role_file")"
+wildcard_pattern="^[[:space:]]*-[[:space:]]*[\"']?\\*[\"']?[[:space:]]*$"
+if grep -Eq "$wildcard_pattern" <<<"$role_body" \
+  || grep -Eq 'index_patterns:.*"\*"' <<<"$role_body" \
+  || grep -Eq "index_patterns:.*'\\*'" <<<"$role_body" \
+  || grep -Eq 'all_access|readall|restapi:admin' <<<"$role_body"; then
   printf 'FATAL: OpenCTI role contains a broad index/security permission.\n' >&2
   exit 1
 fi
