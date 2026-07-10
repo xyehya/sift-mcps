@@ -88,3 +88,9 @@ def test_core_addon_uses_narrow_library_boundary() -> None:
     assert "source \"$REPO_DIR/install.sh\"" not in source
     assert "_seed_one_addon_backend" in source
     assert "'{}'" in source
+
+
+def test_core_addon_reads_service_owned_baselines_through_sudo_boundary() -> None:
+    source = CORE_ADDON.read_text(encoding="utf-8")
+    assert 'svc_test_f "$known_good"' in source
+    assert 'sudo_if_needed -u "$SIFT_GATEWAY_SERVICE_USER" env' in source

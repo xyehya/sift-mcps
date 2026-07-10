@@ -113,16 +113,23 @@ wintriage_write_offline_registry_provenance() {
     || die "Offline registry staging requires SIFT_WINDOWS_TRIAGE_REGISTRY_SHA256 (64 hex characters)."
   [[ -n "$source_descriptor" && ${#source_descriptor} -le 512 && "$source_descriptor" != *$'\n'* ]] \
     || die "Offline registry staging requires single-line SIFT_WINDOWS_TRIAGE_REGISTRY_PROVENANCE (at most 512 characters)."
-  [[ -f "$registry_path" ]] \
+  svc_test_f "$registry_path" \
     || die "Offline registry baseline is missing: $registry_path. Stage the verified decompressed file first."
-  verify_sha256 "$registry_path" "${expected_sha,,}" \
+  local actual_sha
+  actual_sha="$(sudo_if_needed sha256sum "$registry_path" | awk '{print $1}')"
+  [[ "$actual_sha" == "${expected_sha,,}" ]] \
     || die "Offline registry baseline hash verification failed: $registry_path"
 
   REGISTRY_PATH="$registry_path" \
   REGISTRY_SHA256="${expected_sha,,}" \
   REGISTRY_SOURCE="$source_descriptor" \
   REGISTRY_PROVENANCE_PATH="$WINTRIAGE_DEFAULT_DATA_DIR/$WINTRIAGE_REGISTRY_PROVENANCE" \
-  "$SYSTEM_PYTHON" - <<'PY'
+  sudo_if_needed -u "$SIFT_GATEWAY_SERVICE_USER" env \
+    REGISTRY_PATH="$registry_path" \
+    REGISTRY_SHA256="${expected_sha,,}" \
+    REGISTRY_SOURCE="$source_descriptor" \
+    REGISTRY_PROVENANCE_PATH="$WINTRIAGE_DEFAULT_DATA_DIR/$WINTRIAGE_REGISTRY_PROVENANCE" \
+    "$SYSTEM_PYTHON" - <<'PY'
 import json
 import os
 import tempfile
@@ -156,9 +163,9 @@ wintriage_stage_or_download_baselines() {
   local context="$WINTRIAGE_DEFAULT_DATA_DIR/context.db"
 
   if is_offline; then
-    [[ -f "$known_good" ]] \
+    svc_test_f "$known_good" \
       || die "SIFT_OFFLINE=1: baseline is missing: $known_good. Stage the verified decompressed file before rerunning."
-    [[ -f "$context" ]] \
+    svc_test_f "$context" \
       || die "SIFT_OFFLINE=1: baseline is missing: $context. Stage the verified decompressed file before rerunning."
     if [[ "$with_registry" == "1" ]]; then
       wintriage_write_offline_registry_provenance
@@ -188,8 +195,9 @@ wintriage_set_service_readable() {
 
 wintriage_validate_backend() {
   local registry_path="$WINTRIAGE_DEFAULT_DATA_DIR/$WINTRIAGE_REGISTRY_DB"
-  SIFT_WINDOWS_TRIAGE_DB_DIR="$WINTRIAGE_DEFAULT_DATA_DIR" \
-  env -u SIFT_CONTROL_PLANE_DSN -u DATABASE_URL -u POSTGRES_DSN \
+  sudo_if_needed -u "$SIFT_GATEWAY_SERVICE_USER" env \
+    -u SIFT_CONTROL_PLANE_DSN -u DATABASE_URL -u POSTGRES_DSN \
+    SIFT_WINDOWS_TRIAGE_DB_DIR="$WINTRIAGE_DEFAULT_DATA_DIR" \
     "$VENV_PYTHON" - "$registry_path" <<'PY'
 import sys
 from pathlib import Path
