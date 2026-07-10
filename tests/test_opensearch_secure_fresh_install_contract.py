@@ -35,4 +35,5 @@ def test_installer_generates_and_uses_a_verified_ca_bound_config() -> None:
     assert "openssl verify -CAfile" in opensearch
     assert "host: https://localhost:9200" in config
     assert "verify_certs: true" in config
+    assert 'svc_test_f "$SIFT_HOME/opensearch-root-ca.pem"' in config
     assert "ca_certs=config.get(\"ca_certs\")" in client

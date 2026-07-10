@@ -187,7 +187,7 @@ write_opensearch_config() {
   fi
   local tmp
   tmp="$(mktemp)"
-  [[ -r "$SIFT_HOME/opensearch-root-ca.pem" ]] || die \
+  svc_test_f "$SIFT_HOME/opensearch-root-ca.pem" || die \
     "OpenSearch CA is missing; the TLS/authenticated core cannot be configured. Re-run install.sh."
   local admin_password
   admin_password="$(svc_read "$SIFT_HOME/opensearch-admin.env" | sed -n 's/^SIFT_OPENSEARCH_ADMIN_PASSWORD=//p' | head -n1)"
