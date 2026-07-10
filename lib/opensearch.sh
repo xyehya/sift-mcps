@@ -57,6 +57,17 @@ _opensearch_api() {
   _opensearch_curl "$method" "$path" "$body" >/dev/null
 }
 
+_stage_opensearch_private_client_config() {
+  local config_out="$1" ca_out="$2"
+  svc_test_f "$SIFT_HOME/opensearch.yaml" || return 1
+  svc_test_f "$(_opensearch_ca_file)" || return 1
+  svc_read "$SIFT_HOME/opensearch.yaml" > "$config_out"
+  svc_read "$(_opensearch_ca_file)" > "$ca_out"
+  chmod 600 "$config_out" "$ca_out"
+  sed -i "s#^ca_certs:.*#ca_certs: $ca_out#" "$config_out"
+  [[ -s "$config_out" && -s "$ca_out" ]]
+}
+
 
 start_opensearch() {
   if ! command -v docker >/dev/null 2>&1; then
@@ -208,7 +219,15 @@ configure_geoip_pipeline() {
 configure_opensearch_detections() {
   _opensearch_curl GET "/_cluster/health" >/dev/null 2>&1 || return 0
   log "Configuring OpenSearch Security Analytics (Sigma detectors disabled — 3.5 regression; detection via Hayabusa)."
-  OPENSEARCH_CONFIG="$SIFT_HOME/opensearch.yaml" "$SYSTEM_PYTHON" - <<'PY' || warn "Security Analytics hygiene skipped (plugin may be unavailable)."
+  local tmp_config tmp_ca
+  tmp_config="$(mktemp)"
+  tmp_ca="$(mktemp)"
+  if ! _stage_opensearch_private_client_config "$tmp_config" "$tmp_ca"; then
+    rm -f "$tmp_config" "$tmp_ca"
+    warn "Security Analytics hygiene skipped: TLS client configuration is unavailable."
+    return 0
+  fi
+  OPENSEARCH_CONFIG="$tmp_config" "$SYSTEM_PYTHON" - <<'PY' || warn "Security Analytics hygiene skipped (plugin may be unavailable)."
 import json, sys, time, urllib.request, urllib.error
 from collections import Counter
 
@@ -312,6 +331,7 @@ for alias, pattern in _ALIAS_PATTERNS.items():
     except Exception:  # noqa: BLE001
         pass  # no matching indices yet — aliases auto-attach via templates
 PY
+  rm -f "$tmp_config" "$tmp_ca"
 }
 
 install_opensearch_templates() {
@@ -320,21 +340,10 @@ install_opensearch_templates() {
   local tmp_config tmp_ca rc
   tmp_config="$(mktemp)"
   tmp_ca="$(mktemp)"
-  if svc_test_f "$SIFT_HOME/opensearch.yaml"; then
-    svc_read "$SIFT_HOME/opensearch.yaml" > "$tmp_config"
-    # The service's CA path is intentionally inaccessible to the installer
-    # operator.  Give only this short-lived bootstrap client a private copy.
-    svc_read "$(_opensearch_ca_file)" > "$tmp_ca"
-    chmod 600 "$tmp_ca"
-    sed -i "s#^ca_certs:.*#ca_certs: $tmp_ca#" "$tmp_config"
-  else
-    cat > "$tmp_config" <<'YAML'
-host: https://localhost:9200
-user: admin
-password: unused
-verify_certs: true
-ca_certs: /dev/null
-YAML
+  if ! _stage_opensearch_private_client_config "$tmp_config" "$tmp_ca"; then
+    rm -f "$tmp_config" "$tmp_ca"
+    warn "OpenSearch template bootstrap skipped: TLS client configuration is unavailable."
+    return 0
   fi
   OPENSEARCH_CONFIG="$tmp_config" OPENSEARCH_HOST="https://localhost:9200" \
     "$UV_BIN" run --project "$REPO_DIR" --python "$SYSTEM_PYTHON" --no-managed-python --no-python-downloads python - <<'PY'

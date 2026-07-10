@@ -177,7 +177,11 @@ wintriage_stage_or_download_baselines() {
   if [[ "$with_registry" == "1" ]]; then
     registry_flag=(--with-registry --yes)
   fi
-  SIFT_WINDOWS_TRIAGE_DB_DIR="$WINTRIAGE_DEFAULT_DATA_DIR" \
+  # The destination is service-owned 0750. Run only the data downloader as the
+  # service identity and strip every control-plane credential from its env.
+  sudo_if_needed -u "$SIFT_GATEWAY_SERVICE_USER" env \
+    -u SIFT_CONTROL_PLANE_DSN -u DATABASE_URL -u POSTGRES_DSN \
+    SIFT_WINDOWS_TRIAGE_DB_DIR="$WINTRIAGE_DEFAULT_DATA_DIR" \
     "$VENV_PYTHON" -m windows_triage_mcp.scripts.download_databases \
       --dest "$WINTRIAGE_DEFAULT_DATA_DIR" "${registry_flag[@]}"
 }

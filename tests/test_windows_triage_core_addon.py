@@ -94,3 +94,21 @@ def test_core_addon_reads_service_owned_baselines_through_sudo_boundary() -> Non
     source = CORE_ADDON.read_text(encoding="utf-8")
     assert 'svc_test_f "$known_good"' in source
     assert 'sudo_if_needed -u "$SIFT_GATEWAY_SERVICE_USER" env' in source
+    assert '-u SIFT_CONTROL_PLANE_DSN -u DATABASE_URL -u POSTGRES_DSN' in source
+
+
+def test_online_downloader_runs_as_service_without_control_plane_credentials() -> None:
+    script = f'''
+set -Eeuo pipefail
+source "{CORE_ADDON}"
+sudo_if_needed() {{ printf 'ARG=%s\n' "$@"; }}
+VENV_PYTHON=/opt/sift-mcps/.venv/bin/python
+wintriage_stage_or_download_baselines 0
+'''
+    result = run_bash(script)
+
+    assert result.returncode == 0, result.stderr
+    assert "ARG=-u" in result.stdout
+    assert "ARG=sift-service" in result.stdout
+    assert "ARG=SIFT_CONTROL_PLANE_DSN" in result.stdout
+    assert "ARG=windows_triage_mcp.scripts.download_databases" in result.stdout

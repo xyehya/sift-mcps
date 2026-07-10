@@ -33,7 +33,8 @@ def test_installer_generates_and_uses_a_verified_ca_bound_config() -> None:
     assert "--cacert" in opensearch
     assert "sudo_if_needed curl" in opensearch
     assert "openssl verify -CAfile" in opensearch
-    assert 'svc_read "$(_opensearch_ca_file)" > "$tmp_ca"' in opensearch
+    assert '_stage_opensearch_private_client_config "$tmp_config" "$tmp_ca"' in opensearch
+    assert 'OPENSEARCH_CONFIG="$tmp_config" "$SYSTEM_PYTHON"' in opensearch
     assert "host: https://localhost:9200" in config
     assert "verify_certs: true" in config
     assert 'svc_test_f "$SIFT_HOME/opensearch-root-ca.pem"' in config
