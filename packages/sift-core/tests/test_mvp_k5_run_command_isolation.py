@@ -467,6 +467,28 @@ def test_durable_lane_denies_windows_style_paths_to_windows_only_zimmerman_tools
     assert "blocked by security policy" in stored.result_public["error"]
 
 
+@pytest.mark.parametrize("wrapper", ["nice", "ionice", "chrt", "taskset", "time", "command"])
+@pytest.mark.parametrize(
+    "target",
+    ["PECmd.exe", "dotnet /opt/zimmermantools/SrumECmd.dll --help"],
+)
+def test_durable_lane_denies_argv_rewriting_launchers_before_windows_tool_bypass(
+    db, sealed_case, wrapper, target
+):
+    """Fail on reversion: durable jobs share the launcher deny floor."""
+    command = f"{wrapper} {target}"
+    job = _enqueue_run_command(
+        db, sealed_case, command=command, purpose="attempt launcher bypass"
+    )
+    w = _worker(db, {"run_command": run_command_job_handler})
+    w.run_once(job_types=["run_command"])
+
+    stored = db.get(job.id)
+    assert stored.status == "succeeded"
+    assert stored.result_public["success"] is False
+    assert "blocked by security policy" in stored.result_public["error"]
+
+
 def test_run_command_cannot_read_secret_env_via_proc(db, sealed_case, monkeypatch):
     """A command that tries to read the parent's secret env sees nothing."""
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sr-secret-should-not-leak")

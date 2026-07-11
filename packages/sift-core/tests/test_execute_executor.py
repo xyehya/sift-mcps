@@ -135,6 +135,37 @@ def test_dotnet_cannot_launch_windows_only_zimmerman_targets_before_executor(
     assert called is False
 
 
+@pytest.mark.parametrize("wrapper", ["nice", "ionice", "chrt", "taskset", "time", "command"])
+@pytest.mark.parametrize(
+    "target",
+    ["PECmd.exe", "dotnet /opt/zimmermantools/SrumECmd.dll --help"],
+)
+def test_argv_rewriting_launchers_are_rejected_before_they_can_bypass_windows_tool_floor(
+    monkeypatch, wrapper, target
+):
+    """Fail on reversion: do not partially parse launchers to find the target.
+
+    Each listed launcher can rewrite argv and execute its own target.  Denying
+    the launcher is intentionally narrower and safer than recursively trying
+    to interpret a collection of incompatible launcher option grammars.
+    """
+    called = False
+
+    def _fail_if_called(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("executor should not run argv-rewriting launchers")
+
+    monkeypatch.setattr(generic, "execute", _fail_if_called)
+
+    with pytest.raises(DeniedBinaryError, match="blocked by security policy"):
+        generic.run_command(
+            [wrapper, *target.split()], purpose="test launcher deny floor"
+        )
+
+    assert called is False
+
+
 def test_allowlist_blocked_command_rejected_before_executor_is_invoked(monkeypatch):
     _set_policy(
         monkeypatch,

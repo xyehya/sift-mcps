@@ -71,6 +71,12 @@ def test_default_policy_is_allowlist_with_contained_unlisted_tier():
         "fish",
         "PECmd",
         "SrumECmd",
+        "nice",
+        "ionice",
+        "chrt",
+        "taskset",
+        "time",
+        "command",
     ):
         assert matches_denied_binary(binary, denied)
 
