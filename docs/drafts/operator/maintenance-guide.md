@@ -436,14 +436,17 @@ re-run-safe (idempotent). No flags are required for a normal install.
 
 | Flag | Effect | Env equivalent |
 |---|---|---|
-| (none) | Full native stack: gateway + portal + core tools + OpenSearch + RAG + Supabase + Hayabusa. Registers `opensearch-mcp` + `forensic-rag-mcp`. | — |
-| `--core-only` | Gateway + portal + in-process core tools only. Skips OpenSearch, RAG, Docker, and forensic-tool downloads. Registers **no** add-on backends. | `SIFT_CORE_ONLY=1` |
-| `--no-rag` | Do not register `forensic-rag-mcp`. | `SIFT_RAG_ENABLED=false` |
-| `--no-opencti` | Accepted for compatibility only; OpenCTI is never installed by `install.sh`. Use `setup-addon.sh`. | `SIFT_OPENCTI_ENABLED` (ignored) |
+| (none) | Mandatory core: gateway, portal, operations, workers, OpenSearch, Supabase, Hayabusa, and `opensearch-mcp`. | — |
+| `--with-rag` | Install and reconcile the first-party RAG pack. | `SIFT_WITH_RAG=true` |
+| `--with-windows-triage` | Install and reconcile the Windows-triage pack. | `SIFT_WITH_WINDOWS_TRIAGE=true` |
+| `--with-windows-triage-registry` | Also install the separate large registry baseline. | `SIFT_WITH_WINDOWS_TRIAGE_REGISTRY=true` |
+| `--with-core-addons` | Select RAG and Windows triage together (not the registry baseline). | — |
+| `--interactive` | Explicit interactive pack selection; bare install is non-interactive. | — |
 | `--external-supabase` | Skip Supabase auto-provisioning. Requires `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SIFT_CONTROL_PLANE_DSN` already exported. | `SIFT_EXTERNAL_SUPABASE=1` |
 | `--offline` | Air-gapped: attempt **no** network downloads; each download step fails loudly pointing at the staged-artifact path it expects (uv, hayabusa, HF model cache, Supabase CLI). | `SIFT_OFFLINE=1` |
 | `--enable-geoip` | Enable the OpenSearch ip2geo datasource (off by default; it fetches from a live endpoint). | `SIFT_GEOIP_ENABLED=1` |
-| `--apparmor-enforce` | Load the SIFT AppArmor profiles in **enforce** mode (default is complain). Same posture as `./harden.sh`. | `SIFT_APPARMOR_ENFORCE=1` |
+| `--apparmor-enforce` | Explicitly select the default AppArmor enforce posture. | `SIFT_APPARMOR_ENFORCE=1` |
+| `--apparmor-complain` | Local profile development only; never use for acceptance. | `SIFT_APPARMOR_ENFORCE=0` |
 | `--uninstall` / `--remove` | Reverse the **software** install. Delegates to `scripts/uninstall.sh` (the single, gated teardown): removes the service + service users, venv, `~/.sift` (config/TLS/secrets/hayabusa), and auditd/AppArmor configs. **Preserves all data** — `/var/lib/sift` state, docker volumes, and `/cases` EVIDENCE are never touched. Dry-run unless `-y`. | — |
 | `-y`, `--yes` | Proceed non-interactively (otherwise `--uninstall` is a dry-run). | — |
 
@@ -456,10 +459,8 @@ re-run-safe (idempotent). No flags are required for a normal install.
 > itself with its multi-gated evidence-removal flags + a typed `DELETE EVIDENCE`
 > confirmation (§14) — never through `install.sh`.
 
-> OpenSearch has no dedicated install flag: it is on by default and registered
-> only if the cluster comes up healthy. Disable it with
-> `SIFT_OPENSEARCH_ENABLED=false` or `--core-only`. `--apparmor-enforce` is also
-> available post-install via `./harden.sh` (and `./harden.sh --complain` reverts).
+> OpenSearch is mandatory and has no public disable switch. The installer
+> registers it only after TLS/authenticated health checks succeed.
 
 ### 8.2 Integrating an add-on end-to-end (VM → Portal)
 

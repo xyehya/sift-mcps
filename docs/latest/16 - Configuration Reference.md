@@ -183,11 +183,13 @@ mandatory isolation variables and loads env files from `~/.sift/`.
 
 | Var name | Read by | Effect | Default |
 |----------|---------|--------|---------|
-| `SIFT_CORE_ONLY` | `install.sh:71` | Install gateway + portal only; skip OpenSearch, RAG, Docker, and forensic-tool downloads | `0` |
 | `SIFT_EXTERNAL_SUPABASE` | `install.sh:75` | Skip Supabase auto-provisioning. Requires `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `SIFT_CONTROL_PLANE_DSN` already exported. | `0` |
 | `SIFT_OFFLINE` | `install.sh:88` | Air-gapped install mode: attempt zero network downloads; each missing artifact fails loudly with the expected staged path | `0` |
 | `SIFT_GEOIP_ENABLED` | `install.sh:89` | Enable the OpenSearch ip2geo pipeline (fetches from a live endpoint) | `0` |
-| `SIFT_APPARMOR_ENFORCE` | `install.sh:90` | Load SIFT AppArmor profiles in enforce mode instead of complain-mode default | `0` |
+| `SIFT_WITH_RAG` | `install.sh` | Install the first-party RAG pack (`true` or `false`) | `false` |
+| `SIFT_WITH_WINDOWS_TRIAGE` | `install.sh` | Install the Windows-triage pack (`true` or `false`) | `false` |
+| `SIFT_WITH_WINDOWS_TRIAGE_REGISTRY` | `install.sh` | Install the separate large registry baseline (`true` or `false`) | `false` |
+| `SIFT_APPARMOR_ENFORCE` | `install.sh` | Internal resolved posture; secure installs enforce AppArmor by default. Use `--apparmor-complain` only for local profile development. | `1` |
 
 ---
 

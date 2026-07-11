@@ -52,29 +52,35 @@ All services run as the `sift-service` user. Secrets (Supabase keys, control-pla
 
 ## Step 2: Installation Variants
 
-All flags combine freely. The defaults (no flags) give you the full stack.
+Bare install is deterministic and non-interactive. It always installs the
+mandatory core: gateway, portal, operations, workers, OpenSearch, and
+`opensearch-mcp`. Optional packs use positive flags only.
 
 ```bash
-# Gateway + Portal + core tools only. Skips OpenSearch, RAG, Docker containers,
-# Hayabusa, and Zimmerman tool downloads (install.sh:97-98).
-./install.sh --core-only
-
 # Use an existing self-hosted Supabase project instead of auto-provisioning one.
 # Export SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, and
 # SIFT_CONTROL_PLANE_DSN before running (install.sh:102-104).
 ./install.sh --external-supabase
 
-# Disable the forensic-rag-mcp backend (installs core + OpenSearch only) (install.sh:99).
-./install.sh --no-rag
+# Add both first-party packs (RAG and Windows triage).
+./install.sh --with-core-addons
+
+# Or select packs independently. The ~12 GiB registry baseline is separate.
+./install.sh --with-rag
+./install.sh --with-windows-triage
+./install.sh --with-windows-triage-registry
 
 # Air-gapped / hardened install: no network downloads. Each download step fails
 # and points at the operator-staged artifact path it expects (install.sh:105-108).
 ./install.sh --offline
 
-# Load AppArmor profiles in ENFORCE mode instead of complain-mode default.
-# Same posture is achievable post-install via ./harden.sh (install.sh:111-113).
-./install.sh --apparmor-enforce
+# Explicit interactive selection; this is the only interactive install mode.
+./install.sh --interactive
 ```
+
+AppArmor enforce mode and the hardened execution floor are defaults. The
+`--apparmor-complain` switch is only for local profile development and is not an
+acceptance posture.
 
 **OpenCTI note:** The installer never installs OpenCTI. That is an external add-on prepared via `scripts/setup-addon.sh` and registered through the Portal > Backends UI (`install.sh:188`).
 

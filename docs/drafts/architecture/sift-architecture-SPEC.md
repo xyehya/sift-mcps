@@ -215,10 +215,10 @@ flowchart TB
 Live-proven (RUN-3): positive forensic matrix green under jail; ~25 negative red-team rows
 fail closed with zero `approval_required`; evidence sha256 unchanged post-run.
 
-> **Posture note (reconciled):** the FLOOR diagram shows the **hardened** end-state. In code the
-> default seccomp mode is `log` and AppArmor installs in `complain`; `kill`/`enforce` is the
-> deployed posture selected by `./install.sh --apparmor-enforce` / `harden.sh` /
-> `SIFT_EXECUTE_SECCOMP_MODE=kill` (`dfir_exec_launcher.py:475-477`, `harden.sh`).
+> **Posture note (reconciled):** the FLOOR diagram is the installer default:
+> seccomp `kill`, AppArmor `enforce`, Landlock required, and runtime-user
+> isolation fail closed. AppArmor complain mode exists only for local profile
+> development and is not an acceptance posture.
 
 ---
 
