@@ -52,10 +52,9 @@ after setting up a new operator environment or upgrading
 
 ## Shared OpenSearch target (gated)
 
-The default SIFT path keeps OpenCTI on its own datastore. The resource-saving
-target shares the core OpenSearch cluster only after the core Security plugin,
-HTTPS certificate verification, a dedicated `opencti*`-only role, compatibility,
-capacity, and rollback gates pass.
+The supported SIFT path is a gated shared OpenSearch target. It requires the
+core Security plugin, HTTPS certificate verification, a dedicated
+`opencti*`-only role, and the compatibility/capacity acceptance gates.
 
 Run the read-only gate from the staged runtime:
 
@@ -65,9 +64,8 @@ scripts/setup-addon.sh opencti --shared-opensearch-check
 
 This command does not enable Security, migrate indices, or start containers. It
 validates `docker-compose.opencti-shared.yml`, immutable image references, the
-verified OpenSearch CA, the least-privilege role, and the absence of the
-dedicated `opencti-opensearch` service. Do not remove the legacy OpenCTI volume
-until the migration proof and rollback window are complete.
+verified OpenSearch CA, the least-privilege role, and the absence of a dedicated
+OpenCTI OpenSearch service.
 
 Shared mode uses separate operator-managed values for the OpenCTI administrator,
 worker, OpenSearch, RabbitMQ, and MinIO credentials; do not reuse the admin token

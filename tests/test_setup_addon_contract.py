@@ -91,3 +91,12 @@ def test_setup_addon_never_sources_top_level_installer() -> None:
     assert 'source "$REPO_ROOT/install.sh"' not in source
     assert "sift_source_external_addon_libraries" in source
     assert "SIFT_CONTROL_PLANE_DSN" not in source
+
+
+def test_setup_addon_keeps_only_the_shipped_external_flow() -> None:
+    """First-party packs belong to install.sh; no obsolete menu handlers remain."""
+    source = SETUP.read_text(encoding="utf-8")
+    for removed in ("setup_opensearch()", "setup_wintriage()", "setup_custom()", "ask_yes()"):
+        assert removed not in source
+    assert 'setup_opencti()' in source
+    assert 'opencti [--provision] [--offline]' in source

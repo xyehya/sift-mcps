@@ -19,7 +19,7 @@ The installer is **idempotent** — re-running it is safe; every step checks whe
 
 ### What it does (in order)
 
-The install runs through these phases (`install.sh:146-323`):
+The install stages the requested source to `/opt/sift-mcps`, then runs these phases:
 
 | Phase | What happens |
 |---|---|
@@ -27,16 +27,16 @@ The install runs through these phases (`install.sh:146-323`):
 | `check_os` / `check_python` | Verifies SIFT/Debian base and `/usr/bin/python3.12`. |
 | `install_host_prereqs` | Installs system packages (`git`, `build-essential`, `fuse3`, auditd, AppArmor tools, etc.). |
 | `ensure_docker_ready_for_supabase` | Confirms Docker daemon is reachable before local Supabase starts. |
-| `preflight_supabase` | Provisions a self-hosted Supabase project (Postgres, Auth, REST API). Skipped if `--external-supabase` or `--core-only` (`install.sh:195`). |
-| `sync_workspace` | Runs `uv sync --extra full` to build the Python venv with all dependencies. |
+| `preflight_supabase` | Provisions a self-hosted Supabase project (Postgres, Auth, REST API). Skipped only by `--external-supabase`. |
+| `sync_workspace` | Builds the mandatory `core` runtime venv, then additively installs selected first-party packs. |
 | `install_state_dirs` | Creates `/var/lib/sift` (state, secrets, enrichment) and `/cases` (evidence root). |
 | `write_gateway_config` | Renders `configs/gateway.yaml.template` into the active gateway config with env-var substitution. |
 | `write_supabase_env` / `write_control_plane_env` | Writes Supabase URL, keys, and the control-plane DSN into `~/.sift/supabase.env` and `~/.sift/control-plane.env` (`install.sh:221-222`). |
-| `start_opensearch` | Starts OpenSearch 3.5.0 via `docker-compose.yml`, bound to `127.0.0.1:9200` only (`docker-compose.yml:22`). Pinned by digest, security plugin disabled for the loopback lab, container runs with `cap_drop: ALL` (`docker-compose.yml:7,14,30-31`). |
+| `start_opensearch` | Starts secured OpenSearch 3.5.0 with TLS/authentication, then verifies and seeds the mandatory core data plane. |
 | `configure_opensearch_cluster` | Seeds OpenSearch index templates, aliases, and the ingestion pipeline. |
 | `install_hayabusa` / `install_zimmerman_symlinks` | Downloads Hayabusa (Sigma-based detection), places it on `PATH`, and creates symlinks for Zimmerman forensic tools. |
 | `install_systemd_service` | Installs three systemd services: `sift-gateway`, `sift-job-worker`, and `sift-opensearch-worker@{1,2}`. All run as the `sift-service` user (`configs/systemd/sift-gateway.service:10`). |
-| `poll_gateway "initial"` | Waits for the gateway to respond on `http://localhost:4508/health` (`install.sh:303`). |
+| `poll_gateway "initial"` | Waits for the gateway to respond through its configured TLS endpoint. |
 | `bootstrap_supabase_operator` | Creates the initial operator account in Supabase Auth and registers it in the portal's control-plane DB. Runs only after the gateway is up so Postgres is reachable (`install.sh:313`). |
 | `write_handoff` | Prints operator credentials and next steps (`install.sh:322`). |
 
@@ -82,18 +82,25 @@ AppArmor enforce mode and the hardened execution floor are defaults. The
 `--apparmor-complain` switch is only for local profile development and is not an
 acceptance posture.
 
-**OpenCTI note:** The installer never installs OpenCTI. That is an external add-on prepared via `scripts/setup-addon.sh` and registered through the Portal > Backends UI (`install.sh:188`).
+**OpenCTI note:** The installer never installs OpenCTI. After the core install, run the one external
+setup command from the staged runtime; it provisions the pinned shared target and emits an env-ref-only
+registration payload. Validate and register that payload through Portal > Backends, then restart the gateway:
+
+```bash
+/opt/sift-mcps/scripts/setup-addon.sh opencti --provision
+```
 
 ## Step 3: Wait for Gateway Health
 
 The installer polls the gateway until it responds (`install.sh:303`). If you need to check manually:
 
 ```bash
-curl http://localhost:4508/health
+curl --cacert /var/lib/sift/.sift/tls/ca-cert.pem https://localhost:4508/health
 # Expected: HTTP 200 with JSON status body
 ```
 
-The gateway listens on `0.0.0.0:4508` (`configs/gateway.yaml.template:2-3`). If TLS is enabled, use `https://<host>:4508/health` instead; certs live at `SIFT_TLS_DIR`.
+The gateway listens on `0.0.0.0:4508` with TLS. Use `https://<host>:4508/health`; the
+installer-managed CA lives under the SIFT TLS directory.
 
 ## Step 4: First Operator
 

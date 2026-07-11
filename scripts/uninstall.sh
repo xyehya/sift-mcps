@@ -335,8 +335,8 @@ _purge_tree() {
 # (Each is labelled with the install.sh function it reverses.)
 # ---------------------------------------------------------------------------
 
-# Reverses: install_opencti + install_opencti_feeds (Phase 9) and prepare_opencti_secrets
-#           docker-compose.opencti.yml / docker-compose.opencti-connectors.yml
+# Reverses: scripts/provision-opencti-shared-target.sh.
+# The shared OpenSearch cluster is mandatory core and must remain untouched.
 teardown_opencti() {
   if ! command -v docker >/dev/null 2>&1; then
     warn "docker not found — skipping OpenCTI teardown."
@@ -350,65 +350,27 @@ teardown_opencti() {
     run_if_live docker compose -f "$connectors_compose" down --remove-orphans 2>/dev/null || true
   fi
 
-  # Main OpenCTI compose (opensearch, redis, rabbitmq, minio, opencti, worker)
-  # Named volumes: opencti-opensearch-data, opencti-redis, opencti-rabbitmq, opencti-minio
-  # Network: sift-opencti-net
-  local opencti_compose="$REPO_DIR/docker-compose.opencti.yml"
+  # Shared-target OpenCTI owns only its application services and volumes. Its
+  # core OpenSearch connection is external, so this cannot remove core data.
+  local opencti_compose="$REPO_DIR/docker-compose.opencti-shared.yml"
   if [[ -f "$opencti_compose" ]]; then
     action "docker compose down -v" "OpenCTI stack + named volumes ($opencti_compose)"
     run_if_live docker compose -f "$opencti_compose" down -v --remove-orphans 2>/dev/null || true
   fi
 
-  # Remove OpenCTI images to reclaim ~4.4 GB
-  action "docker image rm (if unused)" "opencti/platform opencti/worker opencti/connector-mitre opencti/connector-cisa-known-exploited-vulnerabilities"
-  if [[ "$DRY_RUN" -eq 0 ]]; then
-    local img
-    for img in \
-      "opencti/platform:latest" \
-      "opencti/worker:latest" \
-      "opencti/connector-mitre:latest" \
-      "opencti/connector-cisa-known-exploited-vulnerabilities:latest" \
-      "redis:7.4" \
-      "rabbitmq:4.0-management" \
-      "minio/minio:latest"; do
-      docker image rm "$img" 2>/dev/null || true
-    done
-    # OpenSearch image used only by the OpenCTI compose stack.
-    # NOTE: the native sift-opensearch uses the pinned digest image, not a tag;
-    # only remove the tag reference used by opencti if opensearch teardown is NOT
-    # being requested alongside (to avoid removing a shared image prematurely).
-    if [[ "${COMPONENTS[opensearch]+_}" != "_" ]]; then
-      : # opensearch teardown will remove that image in its own step
-    else
-      docker image rm "opensearchproject/opensearch:3.5.0" 2>/dev/null || true
-    fi
-  fi
-
-  # Connector ID files under SIFT_HOME (install_opencti_feeds: svc_install_file):
-  #   $SIFT_HOME/opencti-connector-mitre-id
-  #   $SIFT_HOME/opencti-connector-cisa-kev-id
-  # prepare_opencti_secrets files:
-  #   $SIFT_HOME/opencti-token
-  #   $SIFT_HOME/opencti-encryption-key
-  #   $SIFT_HOME/opencti-health-key
+  # Remove generated OpenCTI-only secrets and the gateway's query-only env.
+  # Do not remove OpenSearch credentials, the core TLS CA, or shared networks.
   local f
   for f in \
-    "$SIFT_HOME/opencti-token" \
-    "$SIFT_HOME/opencti-encryption-key" \
-    "$SIFT_HOME/opencti-health-key" \
-    "$SIFT_HOME/opencti-connector-mitre-id" \
-    "$SIFT_HOME/opencti-connector-cisa-kev-id"; do
+    "$SIFT_HOME/opencti-stack.env" \
+    "$SIFT_HOME/opencti-shared.env" \
+    "$SIFT_HOME/opencti-connectors.env" \
+    "$SIFT_HOME/opencti-query.env"; do
     if sudo_if_needed test -f "$f" 2>/dev/null; then
       action "remove" "$f (OpenCTI secret)"
       run_if_live sudo_if_needed rm -f "$f"
     fi
   done
-
-  # Remove the sift-opencti-net Docker network if present.
-  if command -v docker >/dev/null 2>&1 && docker network inspect sift-opencti-net >/dev/null 2>&1; then
-    action "docker network rm" "sift-opencti-net"
-    run_if_live docker network rm sift-opencti-net 2>/dev/null || true
-  fi
 }
 
 # Reverses: start_opensearch + write_opensearch_config + write_opensearch_env (Phase 7/8)
@@ -946,7 +908,7 @@ main() {
   # Run teardown in a safe order: add-ons first, then core.
   # Add-ons can be removed without touching SPG core; core teardown last.
 
-  # 1. OpenCTI (external add-on — reverses install_opencti + install_opencti_feeds)
+  # 1. OpenCTI (external add-on — reverses the shared-target provisioner)
   if [[ "${COMPONENTS[opencti]+_}" == "_" ]]; then
     log "--- OpenCTI teardown ---"
     teardown_opencti

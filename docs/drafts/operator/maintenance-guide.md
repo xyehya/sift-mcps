@@ -417,17 +417,16 @@ are the DB authority. To rebuild, re-run ingest against sealed evidence.
 A backend becomes usable in **two independent steps** that operators routinely
 conflate:
 
-1. **Python package on disk** — installed by a uv *extra* (`full` = core +
-   opensearch + rag; `windows-triage` and `opencti` are *separate* extras, NOT in
-   `full`). Installing an extra registers nothing.
-2. **Registered in the control plane** — a row in `app.mcp_backends`. Only
-   registered **and** enabled backends are aggregated by the gateway and exposed
-   on `/mcp`.
+1. **First-party package and registration** — `install.sh` installs mandatory
+   `core`, and its positive pack flags install and reconcile RAG and Windows
+   triage through the DB-authoritative installer/gateway path.
+2. **External integration registration** — `setup-addon.sh opencti` prepares the
+   OpenCTI runtime and emits an env-ref-only payload. Validate and register it
+   through the gateway; only registered and enabled backends are exposed on `/mcp`.
 
-A **default `./install.sh`** registers exactly two backends: `opensearch-mcp`
-(when the cluster comes up healthy) and `forensic-rag-mcp`. `windows-triage-mcp`
-and `opencti-mcp` are **never** registered by the installer — they are add-ons
-you integrate yourself (§8.2).
+A default `./install.sh` provisions only mandatory core, including
+`opensearch-mcp`. `--with-rag` and `--with-windows-triage` add and reconcile the
+two first-party packs. OpenCTI is the sole shipped external integration (§8.2).
 
 ### 8.1 Installer flags (`./install.sh`)
 
@@ -462,74 +461,42 @@ re-run-safe (idempotent). No flags are required for a normal install.
 > OpenSearch is mandatory and has no public disable switch. The installer
 > registers it only after TLS/authenticated health checks succeed.
 
-### 8.2 Integrating an add-on end-to-end (VM → Portal)
+### 8.2 OpenCTI external integration (VM -> Portal)
 
-Every add-on — `windows-triage-mcp`, `opencti-mcp`, or a third-party backend —
-uses the **same single door**: prepare on the VM, Register in the portal, then
-restart. Worked example: **windows-triage-mcp**.
-
-**Step 1 — Prepare on the VM (`scripts/setup-addon.sh`).** Interactive helper; it
-provisions prerequisites and writes a ready-to-submit register payload, but
-**registers nothing itself**.
+Install first-party RAG and Windows triage through the positive `install.sh`
+flags in §8.1. The only follow-on setup command is OpenCTI:
 
 ```bash
-# On the VM, from the repo checkout. Interactive menu (no positional args).
-./scripts/setup-addon.sh
-#   1) opensearch-mcp   2) opencti-mcp   3) forensic-rag-mcp
-#   4) windows-triage-mcp   5) custom/community   a) all reference (1-4)
-# Select e.g. "4". It stages the windows-triage extra into /opt/sift-mcps/.venv,
-# offers to download the baseline DBs, and writes the payload to
-#   ~/.sift/addon-register/windows-triage-mcp.json
+/opt/sift-mcps/scripts/setup-addon.sh opencti --provision
 ```
 
-**Step 2 — (windows-triage only) baseline databases.** The known-good/known-bad
-DBs download separately; the optional registry baseline is ~12 GB (opt-in):
+It stages the additive OpenCTI package, performs the pinned secure shared-target
+provisioning, and writes `~/.sift/addon-register/opencti-mcp.json`. It does not
+register the backend, write gateway configuration, or store raw credentials in
+the payload. In Portal -> Backends, validate then register that payload; the
+gateway resolves `OPENCTI_URL` and `OPENCTI_TOKEN` only from its own environment.
 
-```bash
-# Default dest is /var/lib/sift/windows-triage (the add-on's default DB dir).
-python -m windows_triage_mcp.scripts.download_databases             # known-good + context only
-python -m windows_triage_mcp.scripts.download_databases \
-  --with-registry --yes                                             # ALSO the ~12 GB registry baseline
-```
-
-**Step 3 — Register in the Portal.** `Portal -> Backends -> Register New Backend`.
-Submit the payload `setup-addon.sh` wrote, or fill the form:
-
-- **Transport** `stdio`, **Name** `windows-triage-mcp`
-- **Manifest path** `packages/windows-triage-mcp/sift-backend.json` (a
-  `manifest_path` is **required** — inline manifests are validate-only)
-- **Command** `/opt/sift-mcps/.venv/bin/windows-triage-mcp` (the staged console
-  script the `sift-service` user can exec)
-- **Env var references** only if the DB dir differs from the default; never raw
-  secrets — only `CHILD_ENV = GATEWAY_ENV` name pairs.
-
-Click **Validate** (checks manifest schema + contract; shows provided tools and
-requirements), then **Register** (re-auth: examiner password). This persists the
-`app.mcp_backends` row and returns `restart_required`.
-
-**Step 4 — Apply (restart-to-apply, D34).** Registering does not hot-load into the
-running gateway:
+**Apply (restart-to-apply).** Registering does not hot-load into the running gateway:
 
 ```bash
 sudo systemctl restart sift-gateway.service
 ```
 
-**Step 5 — Verify.** On `Portal -> Backends` the row should read
-**ENABLED · Ready · on-demand · OK** (§8.5). Or from the VM:
+**Verify.** On `Portal -> Backends` the row should read
+**ENABLED · Ready · on-demand · OK** (§8.5). Then prove `cti_get_health` and a
+representative `cti_*` lookup through `/mcp`, not a direct OpenCTI request.
 
 ```bash
-curl -sk https://127.0.0.1:4508/health | python3 -m json.tool | grep -A3 windows-triage
+curl -sk https://127.0.0.1:4508/health | python3 -m json.tool | grep -A3 opencti
 ```
 
 ### 8.3 `scripts/setup-addon.sh` reference
 
-Interactive only (`./scripts/setup-addon.sh`, or `--help`). Per backend you
-select it (1) optionally provisions prerequisites (downloads / Docker stacks /
-index bootstrap), (2) prompts for and echoes every config + env var, then (3)
-writes `~/.sift/addon-register/<name>.json`. It **never** registers a backend and
-**never** edits `gateway.yaml` — you drive Validate → Register → restart yourself
-(Steps 3-4). Menu: `1` opensearch-mcp, `2` opencti-mcp, `3` forensic-rag-mcp,
-`4` windows-triage-mcp, `5` custom/community, `a` all reference backends (1-4).
+`setup-addon.sh` has one shipped external flow:
+`setup-addon.sh opencti [--provision] [--offline]`. `--shared-opensearch-check`
+runs the read-only preflight only. The script emits a ready-to-submit
+`opencti-mcp` payload but never registers it, edits `gateway.yaml`, or stores
+raw credentials. First-party packs intentionally do not use this helper.
 
 ### 8.4 windows-triage databases (`download_databases`)
 

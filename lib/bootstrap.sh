@@ -21,7 +21,7 @@ _sift_source_library_modules() {
   local module
   for module in "$@"; do
     case "$module" in
-      common|preflight|python|state|assets|tls|examiner|supabase|migrations|config|opensearch|addons|services|handoff|hardening|teardown)
+      common|preflight|python|state|assets|tls|examiner|supabase|migrations|config|opensearch|services|handoff|hardening|teardown)
         ;;
       *)
         printf '[sift-mcps] FATAL: unsupported installer library %q\n' "$module" >&2
@@ -39,15 +39,14 @@ _sift_source_library_modules() {
 sift_source_full_installer_libraries() {
   _sift_source_library_modules \
     common preflight python state assets tls examiner supabase migrations config \
-    opensearch addons services handoff hardening teardown
+    opensearch services handoff hardening teardown
 }
 
 # Source the minimal, explicit API used by the external-integration helper.
-# Inputs: none.  Output: common logging/path helpers, runtime-extra management,
-# OpenSearch compatibility helpers, and OpenCTI preparation helpers.  This is
-# deliberately not the installer CLI and it never invokes main().
+# Inputs: none. Output: common logging/path helpers and runtime-extra management.
+# This is deliberately not the installer CLI and it never invokes main().
 sift_source_external_addon_libraries() {
-  _sift_source_library_modules common python config opensearch addons
+  _sift_source_library_modules common python
 }
 
 # Source the bounded implementation surface for a trusted first-party core

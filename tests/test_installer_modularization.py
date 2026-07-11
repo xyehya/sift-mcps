@@ -10,9 +10,8 @@ FAIL-ON-REVERT guards for the modularization. These pin the contract that:
   install;
 * `scripts/setup-addon.sh` sources its explicit narrow lib/ API and never
   sources the top-level installer CLI;
-* the functions carried verbatim from #17/#11 (uv SHA-pin, zimmerman,
-  complementary tools) and the OpenCTI add-on helpers consumed by
-  scripts/setup-addon.sh are still defined after sourcing;
+ * the functions carried verbatim from #17/#11 (uv SHA-pin, zimmerman,
+   complementary tools) are still defined after sourcing;
 * the verified-dead no-op ``fix_volatility_permissions`` is gone;
 * an extracted lib function (``verify_sha256`` — the #17 supply-chain gate) runs
   correctly when reached through the modular sourcing path.
@@ -31,8 +30,8 @@ from _installer_support import INSTALL_SH, LIB_DIR, REPO_ROOT
 from _installer_support import run_bash as _run_bash
 
 # Functions that MUST remain available after `source install.sh`. Mix of #17/#11
-# carry-overs, the OpenCTI add-on helpers (consumed by setup-addon.sh), and one
-# function from every lib module so a dropped/renamed module is caught.
+# carry-overs and one function from every live library module so a dropped/renamed
+# module is caught.
 REQUIRED_FUNCS = (
     # common.sh / early helpers + staging
     "verify_sha256",
@@ -63,10 +62,6 @@ REQUIRED_FUNCS = (
     "write_gateway_config",
     # opensearch.sh
     "start_opensearch",
-    # addons.sh — OpenCTI helpers consumed by scripts/setup-addon.sh:643
-    "prepare_opencti_secrets",
-    "install_opencti",
-    "install_opencti_feeds",
     # services.sh
     "install_systemd_service",
     "poll_gateway",
@@ -132,11 +127,13 @@ def test_setup_addon_uses_explicit_lib_boundary(tmp_path: Path) -> None:
     )
     assert res.returncode == 0, f"setup-addon help failed:\n{res.stdout}\n{res.stderr}"
     assert "INSTALL_SH_MUST_NOT_BE_SOURCED" not in res.stderr
-    assert "OPTIONAL helper to PREPARE" in res.stdout
+    assert "setup-addon.sh opencti" in res.stdout
 
     source = (REPO_ROOT / "scripts" / "setup-addon.sh").read_text(encoding="utf-8")
     assert 'source "$REPO_ROOT/install.sh"' not in source
     assert "sift_source_external_addon_libraries" in source
+    bootstrap = (LIB_DIR / "bootstrap.sh").read_text(encoding="utf-8")
+    assert "common python config opensearch addons" not in bootstrap
 
 
 @pytest.mark.parametrize("mod", sorted(p for p in LIB_DIR.glob("*.sh")))

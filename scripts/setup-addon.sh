@@ -41,12 +41,11 @@ set -Eeuo pipefail
 #   for the gateway's validate/register path. The payload is operator material;
 #   registration remains an explicit gateway/portal action.
 #
-# OWNERSHIP / PRIVILEGES (why sudo)
-#   The staged runtime tree + its .venv (/opt/sift-mcps) are OPERATOR-owned, but
-#   the baseline DB dir under /var/lib/sift is SIFT-SERVICE-owned — provisioning
-#   touches both, hence `sudo`. After staging you may want to chown the venv back
-#   to the operator and the baseline DB dir to the sift-service user so the
-#   running backend can read its DBs.
+# OWNERSHIP / PRIVILEGES
+#   The staged runtime tree + its .venv (/opt/sift-mcps) are operator-owned.
+#   The secure OpenCTI stack writes root-owned secret files under
+#   /var/lib/sift/.sift, so --provision escalates only to its root-only
+#   orchestrator after the additive runtime sync completes.
 #
 # Usage:
 #   ./scripts/setup-addon.sh opencti
@@ -65,31 +64,23 @@ REPO_DIR="$REPO_ROOT"
 source "$REPO_ROOT/lib/bootstrap.sh"
 sift_source_external_addon_libraries
 
-# lib/common.sh defines log/warn/die; add a couple of local helpers.
+# lib/common.sh defines log/warn/die; add a local separator helper.
 hr()  { printf -- '---------------------------------------------------------------\n'; }
-ask() {
-  # ask "Prompt" "default" -> echoes the answer (default if empty)
-  local prompt="$1" default="${2:-}" reply=""
-  if [[ -n "$default" ]]; then
-    printf '%s [%s]: ' "$prompt" "$default" >&2
-  else
-    printf '%s: ' "$prompt" >&2
-  fi
-  read -r reply || reply=""
-  printf '%s' "${reply:-$default}"
-}
-ask_yes() {
-  # ask_yes "Prompt" -> returns 0 for yes (default Y)
-  local reply=""
-  printf '%s [Y/n]: ' "$1" >&2
-  read -r reply || reply=""
-  [[ -z "$reply" || "$reply" =~ ^[Yy] ]]
+usage() {
+  cat <<'EOF'
+Usage:
+  ./scripts/setup-addon.sh opencti [--provision] [--offline]
+  ./scripts/setup-addon.sh opencti --shared-opensearch-check
+
+The mandatory core plus first-party RAG and Windows-triage packs are installed
+by install.sh. This helper has one external flow: it stages opencti-mcp and
+emits an env-ref-only registration payload. --provision also creates the pinned
+secure shared OpenCTI target; registration remains gateway-mediated.
+EOF
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  # Print the header doc block (lines 4-78: the boxed comment above) with the
-  # leading "# " stripped. Keep this range in sync with the header if it moves.
-  sed -n '4,78p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  usage
   exit 0
 fi
 
@@ -141,7 +132,7 @@ REGISTER_DIR="${SIFT_ADDON_REGISTER_DIR:-$HOME/.sift/addon-register}"
 install -d -m 700 "$REGISTER_DIR"
 
 # Payload globals (reset per backend).
-PAYLOAD_NAME="" PAYLOAD_TYPE="stdio" PAYLOAD_COMMAND="" PAYLOAD_URL="" PAYLOAD_MANIFEST=""
+PAYLOAD_NAME="" PAYLOAD_COMMAND="" PAYLOAD_MANIFEST=""
 declare -a PAYLOAD_ARGS=()
 # AD2: PAYLOAD_ENV_REFS holds CHILD_ENV=GATEWAY_ENV name->name pairs. The
 # register payload must carry env_refs (the only env shape the gateway registry
@@ -150,16 +141,10 @@ declare -a PAYLOAD_ARGS=()
 # its OWN process environment at backend startup, so no secret value is ever
 # written to ~/.sift/addon-register/<name>.json or stored in app.mcp_backends.
 declare -a PAYLOAD_ENV_REFS=()
-# B-MVP-051: per-backend "operator must set this gateway env var first" notes for
-# env-refs we KNOW the gateway needs a value for (else _resolve_env_ref RAISES at
-# backend instantiation). Printed by print_portal_form_block; reset per backend.
-declare -a PAYLOAD_ENV_NOTES=()
-
 reset_payload() {
-  PAYLOAD_NAME="" PAYLOAD_TYPE="stdio" PAYLOAD_COMMAND="" PAYLOAD_URL="" PAYLOAD_MANIFEST=""
+  PAYLOAD_NAME="" PAYLOAD_COMMAND="" PAYLOAD_MANIFEST=""
   PAYLOAD_ARGS=()
   PAYLOAD_ENV_REFS=()
-  PAYLOAD_ENV_NOTES=()
 }
 
 stdio_args() {
@@ -323,17 +308,14 @@ write_payload() {
   args_str="$(printf '%s\n' "${PAYLOAD_ARGS[@]:-}")"
   # AD2: emit env_refs (CHILD=GATEWAY name->name), never a raw env value map.
   env_refs_str="$(printf '%s\n' "${PAYLOAD_ENV_REFS[@]:-}")"
-  PAYLOAD_NAME="$PAYLOAD_NAME" PAYLOAD_TYPE="$PAYLOAD_TYPE" PAYLOAD_COMMAND="$PAYLOAD_COMMAND" \
-  PAYLOAD_URL="$PAYLOAD_URL" PAYLOAD_MANIFEST="$PAYLOAD_MANIFEST" \
+  PAYLOAD_NAME="$PAYLOAD_NAME" PAYLOAD_COMMAND="$PAYLOAD_COMMAND" PAYLOAD_MANIFEST="$PAYLOAD_MANIFEST" \
   PAYLOAD_ARGS_STR="$args_str" PAYLOAD_ENV_REFS_STR="$env_refs_str" \
   "$SYSTEM_PYTHON" - "$out" <<'PY'
 import json, os, re, sys
 out = sys.argv[1]
-config = {"type": os.environ.get("PAYLOAD_TYPE", "stdio"), "enabled": True}
+config = {"type": "stdio", "enabled": True}
 if os.environ.get("PAYLOAD_COMMAND"):
     config["command"] = os.environ["PAYLOAD_COMMAND"]
-if os.environ.get("PAYLOAD_URL"):
-    config["url"] = os.environ["PAYLOAD_URL"]
 args = [a for a in os.environ.get("PAYLOAD_ARGS_STR", "").splitlines() if a]
 if args:
     config["args"] = args
@@ -371,7 +353,7 @@ print_portal_form_block() {
   # "(none)" / "(leave empty)" for empty fields so the operator never guesses.
   hr
   log "Portal 'REGISTER NEW BACKEND' form — copy each field exactly:"
-  printf '  Transport type : %s\n' "$PAYLOAD_TYPE"
+  printf '  Transport type : stdio\n'
   printf '  Backend name   : %s\n' "$PAYLOAD_NAME"
   if [[ -n "$PAYLOAD_MANIFEST" ]]; then
     printf '  Manifest path  : %s\n' "$PAYLOAD_MANIFEST"
@@ -382,9 +364,6 @@ print_portal_form_block() {
     printf '  Command        : %s\n' "$PAYLOAD_COMMAND"
   else
     printf '  Command        : (leave empty)\n'
-  fi
-  if [[ -n "$PAYLOAD_URL" ]]; then
-    printf '  URL            : %s\n' "$PAYLOAD_URL"
   fi
   # Arguments: one per line so the operator can paste straight into the form's
   # arg list (or a JSON array). Explicit "(none)" when there are no args — the
@@ -410,14 +389,6 @@ print_portal_form_block() {
   else
     printf '  Env refs       : (leave empty)\n'
   fi
-  # B-MVP-051: surface any "you must set this gateway env var first" notes right
-  # next to the form so the operator does not register a backend that will RAISE.
-  if [[ ${#PAYLOAD_ENV_NOTES[@]} -gt 0 ]]; then
-    local note
-    for note in "${PAYLOAD_ENV_NOTES[@]}"; do
-      warn "$note"
-    done
-  fi
 }
 
 _json_array_inline() {
@@ -434,9 +405,8 @@ echo_vars_and_emit() {
   hr
   log "Resolved configuration for '$PAYLOAD_NAME' (every value shown — nothing hidden):"
   printf '  name        : %s\n' "$PAYLOAD_NAME"
-  printf '  transport   : %s\n' "$PAYLOAD_TYPE"
+  printf '  transport   : stdio\n'
   [[ -n "$PAYLOAD_COMMAND" ]] && printf '  command     : %s\n' "$PAYLOAD_COMMAND"
-  [[ -n "$PAYLOAD_URL" ]]     && printf '  url         : %s\n' "$PAYLOAD_URL"
   if [[ ${#PAYLOAD_ARGS[@]} -gt 0 ]]; then
     printf '  args        : %s\n' "${PAYLOAD_ARGS[*]}"
   fi
@@ -459,122 +429,6 @@ echo_vars_and_emit() {
   printf '    curl -k -X POST https://<host>:4508/api/v1/backends/validate -d @%s\n' "$out"
   printf '    curl -k -X POST https://<host>:4508/api/v1/backends          -d @%s\n' "$out"
   hr
-}
-
-# =============================================================================
-setup_wintriage() {
-  reset_payload
-  PAYLOAD_NAME="windows-triage-mcp"
-  PAYLOAD_MANIFEST="$SIFT_MCPS_ROOT/packages/windows-triage-mcp/sift-backend.json"
-  log "== windows-triage-mcp (reference backend, provides: reference, baseline) =="
-  print_manifest_summary "$PAYLOAD_MANIFEST" || true
-  warn "Query-only OFFLINE Windows baseline validation (known-good/known-bad:"
-  warn "LOLBAS, LOLDrivers, HijackLibs, process expectations). UNKNOWN is neutral."
-  # B-MVP-051: the add-on's OWN config default (windows_triage_mcp/config.py: when
-  # neither SIFT_WINDOWS_TRIAGE_DB_DIR nor WT_DATA_DIR is set) is
-  # /var/lib/sift/windows-triage. If the operator keeps THIS dir, the running
-  # backend resolves it WITHOUT any gateway env var — so we emit NO env-ref and
-  # the payload registers out of the box. If they pick a different dir, we keep
-  # the env-ref but tell them to set the gateway env var first (else the gateway
-  # _resolve_env_ref RAISES at backend instantiation).
-  local wt_config_default="/var/lib/sift/windows-triage"
-  SIFT_WINDOWS_TRIAGE_DB_DIR="$(ask 'Triage baseline DB dir' "${SIFT_WINDOWS_TRIAGE_DB_DIR:-$wt_config_default}")"
-  if ask_yes "Provision prerequisites (download baseline databases via the add-on's own downloader)?"; then
-    # XYE-27: the optional full registry baseline (known_good_registry.db) is
-    # ~12 GB on disk and is fetched ONLY on explicit opt-in. The downloader
-    # additionally enforces a disk-space check (~15 GB free) before pulling it.
-    local wt_registry_flags=()
-    if ask_yes "Also download the OPTIONAL full registry baseline (~12 GB on disk; needs ~15 GB free)?"; then
-      wt_registry_flags=(--with-registry --yes)
-    fi
-    # VENV SAFETY: `uv run --extra windows-triage` triggers a project sync before
-    # executing the downloader. `--inexact` makes that sync ADDITIVE so it can
-    # NEVER prune packages outside the windows-triage selection — without it a
-    # sync of only `windows-triage` would tear the `core` extra (opensearch-mcp,
-    # forensic-rag-mcp, psycopg, sift-gateway deps) out of the shared runtime
-    # venv and brick the gateway (which itself imports psycopg). Mirrors the
-    # explicit `--inexact` on the stage_runtime_command sync below. Also pass
-    # --no-managed-python / --no-python-downloads to match the staging sync and
-    # keep the run pinned to the system interpreter.
-    SIFT_WINDOWS_TRIAGE_DB_DIR="$SIFT_WINDOWS_TRIAGE_DB_DIR" \
-    UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never \
-      "$UV_BIN" run --inexact --project "$SIFT_MCPS_ROOT" --extra windows-triage \
-      --python "$PYTHON_BIN" --no-managed-python --no-python-downloads \
-      python -m windows_triage_mcp.scripts.download_databases "${wt_registry_flags[@]}" \
-      || warn "Baseline DB download incomplete — backend may start degraded (UNKNOWN-only)."
-  fi
-  # XYE-27: offline/air-gapped staging. The runtime reads its DBs from the dir
-  # resolved above; to pre-stage by hand, place the decompressed files there:
-  #   $SIFT_WINDOWS_TRIAGE_DB_DIR/known_good.db, context.db, and (optional, ~12GB)
-  #   known_good_registry.db  — see packages/windows-triage-mcp/README.md.
-  log "Offline staging: place decompressed known_good.db / context.db (and the"
-  log "optional ~12GB known_good_registry.db) in $SIFT_WINDOWS_TRIAGE_DB_DIR"
-  log "(see packages/windows-triage-mcp/README.md for SHA-256 verification)."
-  # B-MVP-034: the native installer does NOT sync the windows-triage extra, so
-  # this stages it into the runtime venv and registers the sift-service-
-  # executable console script (.venv/bin/windows-triage-mcp) — the launch shape
-  # the LV1 live test proved, matching the seeded opensearch/rag backends.
-  stage_runtime_command "windows-triage-mcp" "windows-triage"
-  # B-MVP-051: only emit the env-ref when the chosen dir is NOT the add-on config
-  # default. At the default, the running backend finds its DBs without any gateway
-  # env var, so an env-ref would only make the gateway RAISE (it exports no such
-  # var). When it IS overridden, keep the env-ref AND queue the operator note.
-  if [[ "$SIFT_WINDOWS_TRIAGE_DB_DIR" == "$wt_config_default" ]]; then
-    log "DB dir is the add-on config default ($wt_config_default) — emitting NO"
-    log "env-ref; the backend resolves its DBs without any gateway env var, so the"
-    log "payload registers out of the box."
-    PAYLOAD_ENV_REFS=()
-  else
-    warn "DB dir differs from the add-on config default ($wt_config_default)."
-    warn "SIFT_WINDOWS_TRIAGE_DB_DIR is resolved from the GATEWAY's own environment;"
-    warn "you MUST set it there before registering or the gateway will refuse to"
-    warn "instantiate the backend (_resolve_env_ref raises on a missing env var)."
-    # env_refs only (CHILD=GATEWAY name->name); no raw path is stored in the payload.
-    PAYLOAD_ENV_REFS=(
-      "SIFT_WINDOWS_TRIAGE_DB_DIR=SIFT_WINDOWS_TRIAGE_DB_DIR"
-    )
-    # The sift-gateway.service unit reads EnvironmentFile=-${SIFT_HOME}/*.env
-    # (SIFT_HOME=/var/lib/sift/.sift, sift-service-owned), e.g. opensearch.env /
-    # forensic-knowledge.env. Add the var to such a file the unit reads, then
-    # restart. (Adding a NEW EnvironmentFile line is a unit edit — out of scope
-    # for this helper; reuse one the unit already references, or have the
-    # installer wire one.)
-    PAYLOAD_ENV_NOTES+=(
-      "Before registering: add  SIFT_WINDOWS_TRIAGE_DB_DIR=$SIFT_WINDOWS_TRIAGE_DB_DIR  to a gateway EnvironmentFile the sift-gateway.service unit reads (an EnvironmentFile=-${SIFT_HOME}/*.env entry, sift-service-owned), then: sudo systemctl restart sift-gateway.service"
-    )
-  fi
-  echo_vars_and_emit
-}
-
-setup_opensearch() {
-  reset_payload
-  PAYLOAD_NAME="opensearch-mcp"
-  PAYLOAD_MANIFEST="$SIFT_MCPS_ROOT/packages/opensearch-mcp/sift-backend.json"
-  log "== opensearch-mcp (reference backend, provides: search, ingest, enrichment) =="
-  print_manifest_summary "$PAYLOAD_MANIFEST" || true
-  if ! command -v docker >/dev/null 2>&1; then
-    warn "Docker not found. This backend declares requires:[\"https://localhost:9200\"];"
-    warn "without a reachable OpenSearch the portal will register it but mark it UNAVAILABLE (core stays up)."
-  fi
-  if command -v docker >/dev/null 2>&1 && ask_yes "Provision prerequisites (write config, start OpenSearch via Docker, configure cluster/geoip/templates)?"; then
-    { write_opensearch_config && start_opensearch && configure_opensearch_cluster \
-        && configure_geoip_pipeline && install_opensearch_templates; } \
-      || warn "OpenSearch provisioning incomplete — check Docker and retry; backend will be UNAVAILABLE until reachable."
-  fi
-  warn "OPENSEARCH_CONFIG / OPENSEARCH_HOST are resolved from the gateway's own"
-  warn "environment (matching install.sh seed_addon_backends). Set them there"
-  warn "(e.g. OPENSEARCH_CONFIG=$SIFT_HOME/opensearch.yaml,"
-  warn " OPENSEARCH_HOST=http://127.0.0.1:9200) before registering."
-  # B-MVP-034: register a sift-service-executable console-script command from the
-  # staged runtime venv (opensearch-mcp ships in the mandatory `core` extra,
-  # synced by the native installer), matching install.sh::_seed_one_addon_backend.
-  stage_runtime_command "opensearch-mcp" "core"
-  # env_refs only: name->name, resolved from gateway env. Matches install.sh.
-  PAYLOAD_ENV_REFS=(
-    "OPENSEARCH_CONFIG=OPENSEARCH_CONFIG"
-    "OPENSEARCH_HOST=OPENSEARCH_HOST"
-  )
-  echo_vars_and_emit
 }
 
 setup_opencti() {
@@ -623,44 +477,11 @@ setup_opencti() {
   echo_vars_and_emit
 }
 
-setup_custom() {
-  reset_payload
-  log "== Custom / community backend (your own conformant SIFT MCP backend) =="
-  log "This is the SAME path the reference backends use — proving the contract is open."
-  PAYLOAD_NAME="$(ask 'Backend name (lowercase, digits, hyphens)')"
-  [[ "$PAYLOAD_NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { warn "Invalid backend name — skipping."; return; }
-  PAYLOAD_TYPE="$(ask 'Transport (stdio/http)' 'stdio')"
-  if [[ "$PAYLOAD_TYPE" == "http" ]]; then
-    PAYLOAD_URL="$(ask 'Backend base URL (e.g. https://host:port)')"
-    PAYLOAD_MANIFEST="$(ask 'Manifest path or URL (sift-backend.json)')"
-  else
-    PAYLOAD_COMMAND="$(ask 'Command to launch the backend (e.g. uv or an executable)')"
-    local raw_args
-    raw_args="$(ask 'Args (space-separated, optional)' '')"
-    if [[ -n "$raw_args" ]]; then
-      # shellcheck disable=SC2206
-      PAYLOAD_ARGS=($raw_args)
-    fi
-    PAYLOAD_MANIFEST="$(ask 'Manifest path (local sift-backend.json the gateway can read)')"
-  fi
-  log "Add env_refs as CHILD_ENV=GATEWAY_ENV (the child var <- the gateway env"
-  log "var the gateway resolves it from). Secrets stay in the gateway env, never"
-  log "in the payload. Blank line to finish."
-  while true; do
-    local kv
-    kv="$(ask '  env_ref (CHILD=GATEWAY)' '')"
-    [[ -z "$kv" ]] && break
-    [[ "$kv" == *=* ]] || { warn "  expected CHILD_ENV=GATEWAY_ENV; skipped"; continue; }
-    PAYLOAD_ENV_REFS+=("$kv")
-  done
-  echo_vars_and_emit
-}
-
 # External helper entrypoint. No argument means no implicit interactive menu and
 # no core side effect; OpenCTI is the sole shipped external integration.
 case "${1:-}" in
   --help|-h)
-    sed -n '4,78p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    usage
     ;;
   opencti)
     shift

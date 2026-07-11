@@ -32,8 +32,10 @@ Primary service config dir: `/var/lib/sift/.sift/` — mode `0700`, owner
 | `opensearch.env` | `0600` | `sift-service` | `OPENSEARCH_CONFIG`, `OPENSEARCH_HOST` | low |
 | `opensearch.yaml` | `0600` | `sift-service` | `host`, `user`, `password=<redacted>`, `verify_certs` | yes (password) |
 | `forensic-knowledge.env` | `0644` | `sift-service` | `FK_DATA_DIR` (non-secret pointer) | no |
-| `opencti-connector-mitre-id` | `0600` | `sift-service` | add-on connector id `<redacted>` | yes (add-on) |
-| `opencti-connector-cisa-kev-id` | `0600` | `sift-service` | add-on connector id `<redacted>` | yes (add-on) |
+| `opencti-stack.env` | `0600` | `root` | OpenCTI administrator, worker, broker, object-store, encryption, and health secrets | yes (add-on) |
+| `opencti-shared.env` | `0600` | `root` | dedicated OpenCTI OpenSearch identity, password, CA pointer | yes (add-on) |
+| `opencti-connectors.env` | `0600` | `root` | per-connector identities and tokens | yes (add-on) |
+| `opencti-query.env` | `0600` | `sift-service` | `SIFT_OPENCTI_URL`, `SIFT_OPENCTI_TOKEN` query-only gateway values | yes (add-on) |
 
 TLS / CA material — `/var/lib/sift/.sift/tls/` (dir `0700`, `sift-service`).
 Profile: internal/local CA (BATCH-TLS1 / B-MVP-001). CA RSA-4096 / 10y

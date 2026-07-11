@@ -30,7 +30,7 @@ execution runs in an **OS-sandboxed `run_command`** plane.
 | 3 | **Core in-process tools** | `sift-core`, `sift-common` | — | run_command sandbox, findings/timeline, case/evidence, reporting |
 | 4 | **Control plane — AUTHORITATIVE** | Supabase / Postgres (`supabase/migrations`) | source of truth | Identity, cases, evidence custody, jobs, audit, reports, registries |
 | 5 | **Add-on MCP backends** | `opensearch-mcp`, `forensic-rag-mcp`, `opencti-mcp` | — | Registered in `app.mcp_backends`; reached only via Gateway |
-| 6 | **Data plane — DERIVED** | OpenSearch 3.5.0 + N ingest workers | never authoritative | case-* indices, full-text/vector/timeline (opencti_* indices live in the OpenCTI add-on's separate isolated cluster — see ⑤/§6) |
+| 6 | **Data plane — DERIVED** | OpenSearch 3.5.0 + N ingest workers | never authoritative | case-* indices, full-text/vector/timeline; a gated OpenCTI shared target may use `opencti_*` only under its dedicated role and never through case-search tooling (see ⑤/§6) |
 | 7 | **Execution plane** | `sift-job-worker`, `sift-opensearch-worker@` | — | Claim durable jobs; sandboxed exec; ingest/parse/report |
 | 8 | **Evidence & Reports** | Evidence Vault (filesystem), Reports | immutable / approved-only | Raw sealed bytes + hashes; HTML/PDF/JSON bundles |
 
@@ -110,7 +110,7 @@ flowchart TB
   GW -- "opensearch_* tools" --> OSMCP
   GW -- "kb_* tools" --> RAGMCP
   GW -- "cti_* tools" --> CTIMCP
-  CTIMCP -- "GraphQL query-only (cti_*)" --> OCTI["OpenCTI platform + its OWN isolated<br/>opencti-opensearch cluster (opencti_* indices)<br/>docker-compose.opencti.yml — NOT the SIFT cluster"]
+  CTIMCP -- "GraphQL query-only (cti_*)" --> OCTI["OpenCTI platform<br/>gated shared OpenSearch target: opencti_* only,<br/>dedicated role; never exposed to case-search"]
   CP == "workers CLAIM durable jobs (poll + lease)" ==> EXEC
   EXEC -- "status · steps · logs · proposed findings · audit" --> CP
   EXEC -- "parsed artifacts · timeline · IOC index (+provenance)" --> OS
@@ -280,7 +280,7 @@ OpenSearch ingest specifically fans out to **N least-privilege opensearch worker
 |---------|------|-------|-----------|
 | `opensearch-mcp` | CORE (install.sh) | `opensearch_*` (16) | `registry.py` typed contract → `server.py` engine; `client`, `ingest`, `bulk`, `paths`, `discover`, `parse_csv`, `host_dictionary` |
 | `forensic-rag-mcp` | CORE (install.sh) | `kb_search_knowledge`, `kb_list_knowledge_sources`, `kb_get_knowledge_stats` | pgvector, knowledge-only (no case evidence) |
-| `opencti-mcp` | EXTERNAL (setup-addon.sh) | `cti_*` (8, query-only) | GraphQL query-only to the OpenCTI platform; the `opencti_*` indices live in the add-on's OWN isolated `opencti-opensearch` cluster (`docker-compose.opencti.yml`), NOT the SIFT forensic cluster |
+| `opencti-mcp` | EXTERNAL (setup-addon.sh) | `cti_*` (8, query-only) | GraphQL query-only to the OpenCTI platform. The supported shared-target mode uses `opencti_*` on secured core OpenSearch only through a dedicated OpenCTI role; case-search tooling must never expose those indices. |
 
 ---
 
