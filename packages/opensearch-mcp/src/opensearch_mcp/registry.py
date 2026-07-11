@@ -19,7 +19,6 @@ from __future__ import annotations
 import inspect
 import json
 import os
-import re
 from enum import Enum
 from typing import Any, Literal
 
@@ -40,7 +39,6 @@ from sift_common.registry_helpers import (
     register_all as _register_all,
 )
 
-from .case_scoped import artifact_index_pattern, resolve_active_case_prefix
 from .contracts import ErrorCode, ResultMeta, ToolDef, ToolError
 
 REGISTRY: list[ToolDef] = []
@@ -1419,82 +1417,13 @@ async def opensearch_index_catalog_resource() -> str:
     return _json_from_tool_result(await run_opensearch_status(StatusIn()))
 
 
-def _flatten_mapping_props(props: dict[str, Any], prefix: str = "") -> list[dict[str, str]]:
-    fields: list[dict[str, str]] = []
-    for key, value in props.items():
-        full = f"{prefix}.{key}" if prefix else key
-        if isinstance(value, dict) and "properties" in value:
-            fields.extend(_flatten_mapping_props(value["properties"], full))
-        elif isinstance(value, dict):
-            fields.append({"field": full, "type": str(value.get("type", "object"))})
-        else:
-            fields.append({"field": full, "type": "unknown"})
-    return fields
-
-
 async def opensearch_field_catalog_resource(
     artifact_type: str,
     case_dir: str = "",
 ) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", artifact_type):
-        return _json_text(
-            {
-                "artifact_type": artifact_type,
-                "fields": [],
-                "error": "artifact_type contains unsupported characters.",
-            }
-        )
-    if not case_dir.strip():
-        return _json_text(
-            {
-                "artifact_type": artifact_type,
-                "fields": [],
-                "total_fields": 0,
-                "error": (
-                    "active case unavailable; field catalog requires "
-                    "gateway-injected active-case context."
-                ),
-            }
-        )
-    prefix = resolve_active_case_prefix(case_dir=case_dir)
-    if not prefix:
-        return _json_text(
-            {
-                "artifact_type": artifact_type,
-                "fields": [],
-                "total_fields": 0,
-                "error": "active case unavailable; field catalog is empty.",
-            }
-        )
-    try:
-        client = _impl_server()._get_os()
-        target = artifact_index_pattern(prefix, artifact_type)
-        indices = client.cat.indices(
-            index=target,
-            params={"format": "json", "h": "index"},
-        )
-        first = next((item.get("index") for item in indices or [] if item.get("index")), None)
-        if not first:
-            return _json_text({"artifact_type": artifact_type, "fields": [], "total_fields": 0})
-        mapping = client.indices.get_mapping(index=first)
-        props = mapping.get(first, {}).get("mappings", {}).get("properties", {})
-        fields = sorted(_flatten_mapping_props(props), key=lambda item: item["field"])[:500]
-        return _json_text(
-            {
-                "artifact_type": artifact_type,
-                "sample_index": first,
-                "fields": fields,
-                "total_fields": len(fields),
-            }
-        )
-    except Exception as exc:
-        return _json_text(
-            {
-                "artifact_type": artifact_type,
-                "fields": [],
-                "error": f"{type(exc).__name__}: field catalog unavailable.",
-            }
-        )
+    return _json_text(
+        _impl_server().opensearch_field_catalog(artifact_type=artifact_type, case_dir=case_dir)
+    )
 
 
 async def run_opensearch_fix_host_mapping(params: FixHostMappingIn) -> ToolResult:

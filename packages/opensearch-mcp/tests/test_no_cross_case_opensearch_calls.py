@@ -159,6 +159,19 @@ def test_no_data_bearing_cross_case_reads() -> None:
     )
 
 
+def test_cross_case_guard_rejects_direct_cached_client_search_revert() -> None:
+    """Fail-on-revert: a resource cannot hide a broad search behind _get_os()."""
+    tree = ast.parse(
+        """
+async def opensearch_field_catalog_resource():
+    return _get_os().search(index='case-*')
+"""
+    )
+    flagged: set[tuple[str, str, str]] = set()
+    _walk(tree, enclosing="<module>", flagged=flagged)
+    assert flagged == {("opensearch_field_catalog_resource", "search", "case-*")}
+
+
 class _FieldCatalogCat:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -190,21 +203,21 @@ class _FieldCatalogClient:
         self.indices = _FieldCatalogIndices()
 
 
-class _FieldCatalogImpl:
-    def __init__(self, client: _FieldCatalogClient) -> None:
-        self._client = client
-
-    def _get_os(self) -> _FieldCatalogClient:
-        return self._client
-
-
 def test_field_catalog_resource_uses_active_case_artifact_pattern(monkeypatch) -> None:
+    from opensearch_mcp import server
+
     client = _FieldCatalogClient()
-    monkeypatch.setattr(reg, "_impl_server", lambda: _FieldCatalogImpl(client))
+    monkeypatch.setattr(server, "_get_os", lambda: client)
+    resource = next(
+        item
+        for item in reg.RESOURCE_REGISTRY
+        if item.uri == "opensearch://catalog/fields/{artifact_type}"
+    )
+    assert resource.fn is reg.opensearch_field_catalog_resource
 
     payload = json.loads(
         asyncio.run(
-            reg.opensearch_field_catalog_resource(
+            resource.fn(
                 "evtx",
                 case_dir="/cases/case-alpha",
             )
@@ -217,10 +230,12 @@ def test_field_catalog_resource_uses_active_case_artifact_pattern(monkeypatch) -
 
 
 def test_field_catalog_resource_fails_closed_without_active_case(monkeypatch) -> None:
-    def fail_impl() -> None:
+    from opensearch_mcp import server
+
+    def fail_client() -> None:
         raise AssertionError("field catalog must not touch OpenSearch without active case")
 
-    monkeypatch.setattr(reg, "_impl_server", fail_impl)
+    monkeypatch.setattr(server, "_get_os", fail_client)
 
     payload = json.loads(asyncio.run(reg.opensearch_field_catalog_resource("evtx")))
 
