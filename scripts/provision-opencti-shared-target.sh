@@ -9,7 +9,9 @@ SHARED_ENV="/var/lib/sift/.sift/opencti-shared.env"
 TUPLE="$ROOT/configs/opencti/shared-target-versions.env"
 
 command -v docker >/dev/null || { printf 'FATAL: Docker is required.\n' >&2; exit 1; }
-install -d -m 700 -o root -g root /var/lib/sift/.sift
+# The directory is the gateway service home and must remain service-owned.
+# Root owns only the OpenCTI stack secret files inside it.
+mkdir -p /var/lib/sift/.sift
 if [[ ! -f "$STACK_ENV" ]]; then
   umask 077
   cat >"$STACK_ENV" <<EOF

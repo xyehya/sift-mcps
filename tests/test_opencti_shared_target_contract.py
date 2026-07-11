@@ -143,3 +143,4 @@ def test_shared_orchestrator_is_fail_closed_and_uses_pinned_compose() -> None:
     assert "docker-compose.opencti-shared.yml" in source
     assert "docker-compose.opencti.yml" not in source
     assert "|| warn" not in source
+    assert "install -d -m 700 -o root -g root /var/lib/sift/.sift" not in source
