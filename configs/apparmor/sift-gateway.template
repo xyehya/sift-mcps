@@ -152,6 +152,10 @@ profile sift-gateway {
   /sbin/losetup                              rix,
   # Sudo execution: needed for passwordless mount operations via /etc/sudoers.d/sift-*
   /usr/bin/sudo                              rix,
+  # sudo's root-owned loader library and policy plugins live outside the
+  # standard multiarch library path on Ubuntu 24.04.
+  /usr/libexec/sudo/                         r,
+  /usr/libexec/sudo/**                       mr,
 
   # DENY shell execution
   deny /bin/bash                             x,

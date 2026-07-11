@@ -144,6 +144,7 @@ def test_secure_os_hardening_is_default_and_service_scoped() -> None:
     assert 'die "Mandatory gateway is not reachable.' in services
     assert 'die "Mandatory gateway is DEGRADED' in services
     assert "sift-addon-systemd-sandbox" in gateway_profile
+    assert "/usr/libexec/sudo/**                       mr," in gateway_profile
     assert "configure_addon_systemd_sandbox" in installer
     assert "SIFT_ADDON_SANDBOX_HELPER" in gateway_unit
     assert "pix ->" not in gateway_profile
