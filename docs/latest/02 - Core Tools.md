@@ -98,7 +98,7 @@ agent_tools._run_command() → tools.generic.run_command() → executor.execute(
 **execute/security.py** — Policy (Ceiling):
 - `DENY_FLOOR`: 130+ glob patterns (shells, interpreters, device tools, system tools, editors, debuggers)
 - `MVP_FORENSIC_ALLOWLIST`: ~90 forensic tools (Sleuth Kit, Zimmerman Tools, volatility, hayabusa, curl/wget)
-- `DEFAULT_SECURITY_POLICY`: `"allowlist"` mode; unlisted = `"contained"`
+- `DEFAULT_SECURITY_POLICY`: `"allowlist"` mode; unlisted = `"reject"`
 - `build_security_policy(operator_policy)`: Operator can only add restrictions
 - `validate_shell_command()`: Full pipeline — control chars → IFS → proc/environ → process substitution → destructive patterns → split → per-subcommand validation
 - `sanitize_extra_args()`: Blocks dangerous flags, shell metacharacters, program-text constructs (awk `system()`, sed `e`, sqlite3 `.shell`)

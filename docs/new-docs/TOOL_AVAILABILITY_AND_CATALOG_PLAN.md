@@ -14,7 +14,7 @@
 A tool is usable by the agent only when THREE conditions align:
 
 1. **Cataloged** — entry in a `packages/sift-core/data/catalog/*.yaml` file (enriched help + correct `binary`). Lookup key = `name`; real argv[0] = `binary` (defaults to name). `catalog.py:53-72,108-147`.
-2. **Admitted by policy** — argv[0] **basename** is not matched by a `DENY_FLOOR` glob, then either allowlisted (`MVP_FORENSIC_ALLOWLIST`, `security_policy.py:136-247`) or run under the default `unlisted_policy: contained` (security_policy.py:252 — unlisted ⇒ *contained*, NOT rejected). Basename-only check; **no `.py`/script/shebang rejection** (`security.py:905,912,917-921`).
+2. **Admitted by policy** — argv[0] **basename** is not matched by a `DENY_FLOOR` glob and must be in the reviewed `MVP_FORENSIC_ALLOWLIST` (or an explicit operator-reviewed extension). `unlisted_policy: reject` means an installed binary is never admitted merely because the kernel jail would contain it. Approved script wrappers remain fixed entrypoints; generic argv-rewriting launchers are denied rather than recursively parsed.
 3. **Resolvable** — `find_binary(binary)` returns a path, else run_command dies `ValueError: not found` (`security.py:924-926`). Same resolver feeds the availability flag (`discovery.py:163,194,279`), so the flag is honest (no false positives) but **fails closed** (false negatives for subdir/`/opt/*/bin` installs).
 
 `find_binary` (`environment.py:46-65`): `shutil.which(name)` → else fallback dirs `[/usr/local/bin, /opt/zimmermantools, /opt/volatility3, /opt/hayabusa]`, checking only `Path(d)/name` `is_file()&X_OK`. **Gaps:** (a) never checks `Path(d)/name/name` → EZ subdir layout unresolvable; (b) case-sensitive → uppercase catalog name misses lowercase wrapper; (c) fallback omits `/opt/*/bin`.
@@ -42,7 +42,7 @@ A tool is usable by the agent only when THREE conditions align:
 
 ## 3. Add-candidate proposals (task 8)
 
-Bucket-D tools are Python-venv tools, each with a `/usr/local/bin` wrapper (⇒ on PATH ⇒ `find_binary` resolves via `shutil.which`). All proposed basenames are **DENY_FLOOR-glob clear** (none start `python*/perl*/ruby*/node*/lua*` or end `*sh`). They run **today** under `unlisted_policy: contained`; cataloging+allowlisting promotes them to enriched + normal.
+Bucket-D tools are Python-venv tools, each with a `/usr/local/bin` wrapper (⇒ on PATH ⇒ `find_binary` resolves via `shutil.which`). All proposed basenames are **DENY_FLOOR-glob clear** (none start `python*/perl*/ruby*/node*/lua*` or end `*sh`). They require an explicit reviewed allowlist entry before the agent can run them; cataloging plus allowlisting promotes them to enriched + executable.
 
 ### KEEP — High value, unique, read-only
 
@@ -251,10 +251,11 @@ wrappers that run `dotnet /opt/zimmermantools/<Tool>.dll`. Findings:
      is writable but NOT executable (rx and write floors are disjoint), so a
      W+X dotnet temp would need an executable-writable grant — a meaningful
      widening.
-  - The bash wrapper itself also means a direct un-wrapped path would need a
-    `dotnet`-launching wrapper (today `dotnet` is unlisted → `contained` tier,
-    not denied; bash-as-shebang is followed by the kernel, not gated by the
-    argv[0] basename check).
+  - The bash wrapper is an installer-owned fixed chain to one DLL. The agent
+    cannot invoke `dotnet` directly: it is absent from the reviewed allowlist
+    and unlisted entrypoints are rejected. Only an allowlisted wrapper name can
+    reach its fixed assembly target; bash-as-shebang is followed by the kernel,
+    not supplied as an agent argv[0].
 - **Recommendation: leave dotnet EZ tools ingest/operator-side (status quo).**
   Do not loosen the env scrubber or write floor to make them run under the agent
   sandbox without a dedicated, separately-reviewed decision. The dotnet honesty

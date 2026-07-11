@@ -119,7 +119,7 @@ def test_windows_style_paths_to_windows_only_zimmerman_tools_are_rejected_before
 def test_dotnet_cannot_launch_windows_only_zimmerman_targets_before_executor(
     monkeypatch, command
 ):
-    """Fail on reversion: the contained dotnet launcher cannot bypass the floor."""
+    """Fail on reversion: direct dotnet cannot bypass the Windows-only floor."""
     called = False
 
     def _fail_if_called(*args, **kwargs):
@@ -135,13 +135,27 @@ def test_dotnet_cannot_launch_windows_only_zimmerman_targets_before_executor(
     assert called is False
 
 
-@pytest.mark.parametrize("wrapper", ["nice", "ionice", "chrt", "taskset", "time", "command"])
 @pytest.mark.parametrize(
-    "target",
-    ["PECmd.exe", "dotnet /opt/zimmermantools/SrumECmd.dll --help"],
+    "command",
+    [
+        ["nice", "PECmd.exe"],
+        ["ionice", "PECmd.exe"],
+        ["chrt", "PECmd.exe"],
+        ["taskset", "PECmd.exe"],
+        ["time", "PECmd.exe"],
+        ["command", "PECmd.exe"],
+        ["setsid", "PECmd.exe", "--help"],
+        ["setsid", "dotnet", "/opt/zimmermantools/SrumECmd.dll", "--help"],
+        ["prlimit", "--", "PECmd.exe", "--help"],
+        ["flock", "/tmp/lock", "PECmd.exe", "--help"],
+        ["setpriv", "--", "PECmd.exe", "--help"],
+        ["runuser", "--", "PECmd.exe", "--help"],
+        ["start-stop-daemon", "--start", "--exec", "PECmd.exe"],
+        ["systemd-run", "PECmd.exe", "--help"],
+    ],
 )
 def test_argv_rewriting_launchers_are_rejected_before_they_can_bypass_windows_tool_floor(
-    monkeypatch, wrapper, target
+    monkeypatch, command
 ):
     """Fail on reversion: do not partially parse launchers to find the target.
 
@@ -159,8 +173,26 @@ def test_argv_rewriting_launchers_are_rejected_before_they_can_bypass_windows_to
     monkeypatch.setattr(generic, "execute", _fail_if_called)
 
     with pytest.raises(DeniedBinaryError, match="blocked by security policy"):
+        generic.run_command(command, purpose="test launcher deny floor")
+
+    assert called is False
+
+
+def test_unlisted_dotnet_is_rejected_before_executor(monkeypatch):
+    """Only fixed, reviewed Zimmerman wrappers may select a .NET assembly."""
+    called = False
+
+    def _fail_if_called(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("executor should not run direct dotnet")
+
+    monkeypatch.setattr(generic, "execute", _fail_if_called)
+
+    with pytest.raises(DeniedBinaryError, match="allowlist mode"):
         generic.run_command(
-            [wrapper, *target.split()], purpose="test launcher deny floor"
+            ["dotnet", "/opt/zimmermantools/EvtxECmd.dll", "--help"],
+            purpose="test positive entrypoint policy",
         )
 
     assert called is False
@@ -688,7 +720,7 @@ def test_mount_denied_before_privileged_execution(tmp_path, monkeypatch):
     monkeypatch.setattr(shutil, "which", fake_which)
 
     _set_policy(monkeypatch, {
-        "mode": "denylist",
+        "mode": "allowlist",
         "denied_binaries": [],
         "allowed_binaries": [],
         "dangerous_flags": [],
@@ -718,7 +750,7 @@ def test_mount_sudo_fallback_is_not_available(tmp_path, monkeypatch):
     monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
 
     _set_policy(monkeypatch, {
-        "mode": "denylist",
+        "mode": "allowlist",
         "denied_binaries": [],
         "allowed_binaries": [],
         "dangerous_flags": [],
@@ -763,7 +795,7 @@ def test_mount_non_permission_path_is_not_reached(tmp_path, monkeypatch):
     monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
 
     _set_policy(monkeypatch, {
-        "mode": "denylist",
+        "mode": "allowlist",
         "denied_binaries": [],
         "allowed_binaries": [],
         "dangerous_flags": [],
@@ -799,7 +831,7 @@ def test_privileged_validators_fail_before_execution(tmp_path, monkeypatch):
     monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
 
     _set_policy(monkeypatch, {
-        "mode": "denylist",
+        "mode": "allowlist",
         "denied_binaries": [],
         "allowed_binaries": [],
         "dangerous_flags": [],
@@ -883,7 +915,7 @@ def test_validate_shell_command_safety_checks(tmp_path, monkeypatch):
     monkeypatch.setattr(shutil, "which", fake_which)
 
     _set_policy(monkeypatch, {
-        "mode": "denylist",
+        "mode": "allowlist",
         "denied_binaries": ["env"],
         "allowed_binaries": [],
         "dangerous_flags": [],
@@ -988,6 +1020,7 @@ def test_basename_evasion_prevention(tmp_path, monkeypatch):
     case_dir.mkdir()
     (case_dir / "CASE.yaml").write_text("case_id: EXEC-012\n", encoding="utf-8")
     monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    _set_policy(monkeypatch, {"allowed_binaries": ["evil_bin"]})
 
     import shutil
     def fake_which(cmd):
@@ -1015,6 +1048,7 @@ def test_evidence_write_delete_mutation_blocked(tmp_path, monkeypatch):
     (evidence_dir / "sealed.bin").write_text("sealed", encoding="utf-8")
     (tmp_dir / "work.bin").write_text("work", encoding="utf-8")
     monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    _set_policy(monkeypatch, {"allowed_binaries": ["cp", "rm", "mv"]})
 
     import shutil
 
@@ -1245,6 +1279,7 @@ def test_exotic_fd_redirect_rejected(tmp_path, monkeypatch):
     case_dir.mkdir()
     (case_dir / "CASE.yaml").write_text("case_id: EXEC-016\n", encoding="utf-8")
     monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    _set_policy(monkeypatch, {"allowed_binaries": ["tool"]})
 
     import shutil
     monkeypatch.setattr(shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
@@ -1682,7 +1717,10 @@ def test_run_command_sigpipe_on_nonfinal_stage_is_not_a_partial_failure(
     pipe early. That is a normal pipeline event, not an inaccessible-input
     failure, so partial_failure must NOT be set (no false alarms)."""
     case_dir = _exec_case_dir(tmp_path, monkeypatch)  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
-    _set_policy(monkeypatch, {"denied_binaries": ["env"]})
+    _set_policy(
+        monkeypatch,
+        {"denied_binaries": ["env"], "allowed_binaries": ["yes", "head"]},
+    )
 
     res = generic.run_command("yes | head -1", purpose="sigpipe exemption")
 

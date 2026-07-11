@@ -292,13 +292,13 @@ def test_live_gate_runbook_covers_floor_only_negative_rows() -> None:
     assert missing == []
 
 
-def test_run3_default_policy_is_allowlist_with_contained_tier() -> None:
+def test_run3_default_policy_is_a_true_allowlist() -> None:
     policy = build_security_policy()
     missing: list[str] = []
     if policy.get("mode") != "allowlist":
         missing.append("default mode is not allowlist")
-    if policy.get("unlisted_policy") != "contained":
-        missing.append("unlisted_policy is not contained")
+    if policy.get("unlisted_policy") != "reject":
+        missing.append("unlisted_policy is not reject")
     if "vol" not in set(policy.get("allowed_binaries", [])):
         missing.append("@mvp_forensic is not seeded into the default allowlist")
 
@@ -356,17 +356,13 @@ def test_run3_dotnet_is_not_silently_executable_via_allowlist() -> None:
 
     Unlike the python interpreters, ``dotnet`` is NOT on DENY_FLOOR. This test
     documents the real state so the security posture is explicit: ``dotnet`` is
-    an *unlisted* binary and therefore runs at the ``contained`` tier, not the
-    ``standard`` tier. It is not on the @mvp_forensic allowlist, and this PR
-    does not change that — making the dotnet EZ tools runnable under run_command
-    is a deferred follow-up (it would require write/seccomp/env-scrubber
-    changes; see TOOL_AVAILABILITY_AND_CATALOG_PLAN.md §7).
+    not an agent entrypoint. It is absent from @mvp_forensic and an unlisted
+    binary is rejected; only a reviewed Zimmerman wrapper may select its fixed
+    assembly target.
     """
     policy = build_security_policy()
     assert "dotnet" not in set(policy.get("allowed_binaries", []))
-    # dotnet is not denied today; it classifies as the deterministic
-    # contained tier (default unlisted_policy=contained), never standard.
-    assert security.classify_binary_risk("dotnet") == "contained"
+    assert security.classify_binary_risk("dotnet") == "reject"
 
 
 def test_windows_only_dotnet_targets_are_denied_without_blocking_other_zimmerman_wrappers(

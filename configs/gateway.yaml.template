@@ -23,14 +23,15 @@ execute:
   # tests.
   runtime_user: "${SIFT_EXECUTE_AS_USER}"
   security:
-    # Allowlist-default executor policy. Operators may add entries here, but
-    # the gateway always unions this with a non-weakenable built-in deny floor.
-    # Unlisted non-denied forensic binaries run in the contained kernel-jailed
-    # tier; they are never blocked waiting for human approval.
+    # Allowlist-default executor policy. Operators may add reviewed forensic
+    # entrypoints here, but the gateway always unions this with a
+    # non-weakenable built-in deny floor. Unlisted binaries are rejected: the
+    # kernel sandbox constrains capability but does not authorize a generic
+    # launcher to select a second program after policy validation.
     mode: "allowlist"
     allowed_binaries:
       - "@mvp_forensic"
-    unlisted_policy: "contained"
+    unlisted_policy: "reject"
     dangerous_flags:
       - "-e"
       - "--exec"

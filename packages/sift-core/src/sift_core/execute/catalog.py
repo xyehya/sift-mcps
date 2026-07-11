@@ -204,7 +204,7 @@ def load_security_policy() -> dict:
 
         doc = build_security_policy()
     _security_cache = {
-        "mode": doc.get("mode", "denylist"),
+        "mode": doc.get("mode", "allowlist"),
         "allowed_binaries": frozenset(doc.get("allowed_binaries", [])),
         "dangerous_flags": set(doc.get("dangerous_flags", [])),
         "tool_allowed_flags": {

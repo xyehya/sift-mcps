@@ -83,9 +83,7 @@ def _flag_matches(flag: str, blocked_flags: set[str] | frozenset[str]) -> bool:
     return False
 
 
-def sanitize_extra_args(
-    extra_args: list[str], tool_name: str = "", *, risk_tier: str = "standard"
-) -> list[str]:
+def sanitize_extra_args(extra_args: list[str], tool_name: str = "") -> list[str]:
     """Validate extra_args to block dangerous flags and shell metacharacters.
 
     Raises ValueError if a dangerous flag or pattern is detected.
@@ -97,9 +95,6 @@ def sanitize_extra_args(
     tool_key = tool_name.lower()
     tool_allowed = policy["tool_allowed_flags"].get(tool_key, set())
     tool_blocked = policy["tool_blocked_flags"].get(tool_key, set())
-    output_flags = policy.get("output_flags", frozenset())
-    contained = risk_tier == "contained"
-
     sanitized = []
     for arg in extra_args:
         if not isinstance(arg, str):
@@ -122,12 +117,7 @@ def sanitize_extra_args(
         flag = arg.lower().split("=")[0]
         if _flag_matches(flag, tool_blocked):
             raise ValueError(f"Blocked dangerous flag '{arg}' for {tool_name}")
-        if contained and _flag_matches(flag, output_flags) and flag != "-o":
-            raise ValueError(
-                f"Blocked output flag '{arg}' for contained unlisted tool {tool_name}; "
-                "only -o may write to the case output jail"
-            )
-        if flag in policy["dangerous_flags"] and (contained or flag not in tool_allowed):
+        if flag in policy["dangerous_flags"] and flag not in tool_allowed:
             raise ValueError(
                 f"Blocked dangerous flag '{arg}' in extra_args for {tool_name}"
             )
@@ -159,12 +149,6 @@ def sanitize_extra_args(
                     "Blocked dangerous sqlite3 dot-command in program text: "
                     ".shell, .system, .load, import/export, and backup commands are not allowed"
                 )
-        if contained:
-            raise ValueError(
-                f"Unlisted program-text tool '{tool_name}' must be allowlisted "
-                "before program text can be executed"
-            )
-
     return sanitized
 
 
@@ -200,19 +184,15 @@ def is_allowed_by_mode(binary_name: str) -> bool:
 
 
 def classify_binary_risk(binary_name: str) -> str:
-    """Return ``standard`` or ``contained`` for a non-denied binary.
+    """Return ``standard`` or ``reject`` for a non-denied binary.
 
-    In allowlist mode, unlisted binaries are not an approval gate. They are
-    deterministic contained-tier runs unless the operator explicitly set
-    ``unlisted_policy: reject``.
+    The agent command boundary admits only reviewed allowlist entrypoints.  A
+    kernel sandbox constrains a program's capabilities; it must not be used as
+    permission to launch arbitrary installed programs.
     """
     policy = _get_policy()
-    if policy.get("mode") != "allowlist":
-        return "standard"
     if matches_allowed_binary(binary_name, policy.get("allowed_binaries", frozenset())):
         return "standard"
-    if str(policy.get("unlisted_policy") or "contained").lower() == "contained":
-        return "contained"
     return "reject"
 
 
@@ -943,11 +923,10 @@ def validate_shell_command(
         if binary == "sudo":
             raise DeniedBinaryError("Agent-supplied sudo is blocked. Commands must be run directly.")
 
-        # ``dotnet`` remains an unlisted, contained-tier launcher by design;
-        # do not turn this into a blanket launcher deny.  These two
-        # Windows-only Zimmerman cards are the exception: accepting their DLL
-        # or EXE aliases here would bypass the non-overridable direct-binary
-        # deny floor and contradict their agent-facing availability contract.
+        # An explicit operator policy can admit ``dotnet`` only for local
+        # maintenance; these two Windows-only Zimmerman cards remain forbidden
+        # even then.  The agent's default policy rejects unlisted ``dotnet``;
+        # approved Zimmerman wrappers select a fixed installer-owned DLL.
         if binary.casefold() == "dotnet" and any(
             is_windows_only_zimmerman_target(arg) for arg in argv[1:]
         ):
@@ -1049,7 +1028,7 @@ def validate_shell_command(
                 prev_was_output_flag = False
             
         # Sanitize extra args
-        sanitize_extra_args(argv[1:], tool_name=binary, risk_tier=risk_tier)
+        sanitize_extra_args(argv[1:], tool_name=binary)
         
         # rm protection
             

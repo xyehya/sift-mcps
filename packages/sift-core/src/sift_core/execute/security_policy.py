@@ -12,8 +12,37 @@ SECURITY_POLICY_ENV = "SIFT_EXECUTE_SECURITY_POLICY"
 
 # These curated knowledge cards describe Windows-only tools.  They must never
 # acquire a Linux ``run_command`` lane, whether invoked directly or as an
-# assembly passed to the unlisted (contained-tier) dotnet launcher.
+# assembly passed to a launcher.
 WINDOWS_ONLY_ZIMMERMAN_TOOLS = frozenset({"pecmd", "srumecmd"})
+
+# A command from this set changes process attributes and then executes a
+# caller-selected program.  Do not try to parse each utility's incompatible
+# option grammar recursively: partial parsing is a policy bypass.  The agent
+# has no supported forensic need to invoke these generic dispatchers; approved
+# script-backed forensic tools remain direct, fixed entrypoints in
+# ``MVP_FORENSIC_ALLOWLIST``.
+ARGV_REWRITING_LAUNCHERS = frozenset(
+    {
+        "nice",
+        "ionice",
+        "chrt",
+        "taskset",
+        "time",
+        "command",
+        "setsid",
+        "prlimit",
+        "flock",
+        "setpriv",
+        "runuser",
+        "su",
+        "sg",
+        "newgrp",
+        "start-stop-daemon",
+        "daemon",
+        "systemd-run",
+        "systemd-nspawn",
+    }
+)
 
 
 def is_windows_only_zimmerman_target(value: str) -> bool:
@@ -116,18 +145,6 @@ DENY_FLOOR = frozenset(
         "nohup",
         "timeout",
         "stdbuf",
-        # These launchers rewrite argv before executing another program.  The
-        # command validator intentionally does not implement each launcher's
-        # option grammar recursively, because a partial parser would create a
-        # bypass around the direct-binary and dotnet Zimmerman deny floors.
-        # They have no required agent-facing forensic role; invoke the
-        # approved forensic binary directly instead.
-        "nice",
-        "ionice",
-        "chrt",
-        "taskset",
-        "time",
-        "command",
         # Added — additional interpreters / shell-escape vectors. These have no
         # legitimate non-interactive forensic use and each can spawn a shell or
         # execute arbitrary code (interpreters), or shell out via '!' (pagers /
@@ -167,6 +184,7 @@ DENY_FLOOR = frozenset(
         "screen",
         "tmux",
     }
+    | ARGV_REWRITING_LAUNCHERS
 )
 
 # BATCH-I1: a tight MVP allowlist of forensic tools an operator can opt into by
@@ -307,7 +325,10 @@ MVP_FORENSIC_ALLOWLIST = frozenset(
 DEFAULT_SECURITY_POLICY: dict[str, Any] = {
     "mode": "allowlist",
     "allowed_binaries": ["@mvp_forensic"],
-    "unlisted_policy": "contained",
+    # The agent execution boundary is a positive entrypoint policy.  A
+    # kernel-jail label is not authorization to execute an arbitrary installed
+    # binary: generic launchers can rewrite argv after the policy has run.
+    "unlisted_policy": "reject",
     "dangerous_flags": [
         "-e",
         "--exec",
@@ -427,10 +448,11 @@ def _merge_maps(base: dict[str, list[str]], overlay: dict[str, list[str]]) -> di
 
 
 def _unlisted_policy(value: Any) -> str:
-    policy = "contained" if value is None else str(value).strip().lower()
-    if policy not in {"contained", "reject"}:
+    policy = "reject" if value is None else str(value).strip().lower()
+    if policy != "reject":
         raise ValueError(
-            "execute.security.unlisted_policy must be 'contained' or 'reject'"
+            "execute.security.unlisted_policy must be 'reject'; arbitrary "
+            "contained entrypoints are not supported"
         )
     return policy
 
@@ -458,10 +480,13 @@ def build_security_policy(
     base = deepcopy(DEFAULT_SECURITY_POLICY)
     operator = deepcopy(operator_policy)
     mode = str(operator.get("mode") or base["mode"]).strip().lower()
-    if mode not in {"denylist", "allowlist"}:
-        raise ValueError("execute.security.mode must be 'denylist' or 'allowlist'")
+    if mode != "allowlist":
+        raise ValueError(
+            "execute.security.mode must be 'allowlist'; denylist mode admits "
+            "unreviewed entrypoints"
+        )
     unlisted_policy = _unlisted_policy(
-        operator.get("unlisted_policy", base.get("unlisted_policy", "contained"))
+        operator.get("unlisted_policy", base.get("unlisted_policy", "reject"))
     )
 
     policy = {

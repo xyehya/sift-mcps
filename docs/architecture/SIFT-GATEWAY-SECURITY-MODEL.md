@@ -116,9 +116,10 @@ as the `agent_runtime` uid on the SIFT VM. Two stacked layers gate it before any
 binary runs. The ceiling reasons about *intent*; the floor enforces *capability* at the kernel.
 
 **CEILING — policy** (`sift-core/execute/security.py`):
-allowlist `@mvp_forensic` (`unlisted_policy = contained`, fail-closed) · program-text scanners
+positive allowlist `@mvp_forensic` (`unlisted_policy = reject`, fail-closed) · generic
+argv-rewriting launchers denied without partial recursive parsing · program-text scanners
 (sed/sqlite3/tshark/vol/exiftool) · block shells & interpreters (sh/bash/python/perl/ruby/node ·
-awk system/getline) · env deny-after-allow (dotnet/ld*/python/…) · `/var/lib/sift` hard block +
+awk system/getline) · direct `dotnet` denied (approved Zimmerman wrappers select fixed targets) · `/var/lib/sift` hard block +
 cross-case access denied · output sanitation (ANSI/OSC strip · untrusted label · secret redaction).
 
 **FLOOR — kernel/OS** (`dfir_exec_launcher.py` + `worker.py`):

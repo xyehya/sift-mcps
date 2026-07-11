@@ -29,7 +29,7 @@ def test_sequential_outputs(tmp_path, monkeypatch):
     monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
     
     _set_policy(monkeypatch, {
-        "mode": "denylist",
+        "mode": "allowlist",
         "denied_binaries": [],
         "allowed_binaries": [],
         "dangerous_flags": [],
@@ -54,7 +54,7 @@ def test_redirect_cwd(tmp_path, monkeypatch):
     outputs_dir.mkdir(parents=True, exist_ok=True)
     
     _set_policy(monkeypatch, {
-        "mode": "denylist",
+        "mode": "allowlist",
         "denied_binaries": [],
         "allowed_binaries": [],
         "dangerous_flags": [],

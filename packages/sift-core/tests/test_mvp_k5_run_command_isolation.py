@@ -105,13 +105,13 @@ def test_sandbox_env_keeps_safe_runtime_allowlist(monkeypatch):
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     monkeypatch.setenv("SIFT_CASE_DIR", "/cases/case-x")
     monkeypatch.setenv("SIFT_EXECUTE_AS_USER", "agent_runtime")
-    monkeypatch.setenv(SECURITY_POLICY_ENV, '{"mode":"denylist"}')
+    monkeypatch.setenv(SECURITY_POLICY_ENV, '{"mode":"allowlist","unlisted_policy":"reject"}')
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sr-secret")
     env = build_sandbox_env()
     assert env["PATH"] == "/usr/bin:/bin"
     assert env["SIFT_CASE_DIR"] == "/cases/case-x"
     assert env["SIFT_EXECUTE_AS_USER"] == "agent_runtime"
-    assert env[SECURITY_POLICY_ENV] == '{"mode":"denylist"}'
+    assert env[SECURITY_POLICY_ENV] == '{"mode":"allowlist","unlisted_policy":"reject"}'
     # Non-interactive hardening defaults applied.
     assert env["TERM"] == "dumb"
     # G9: PYTHON* env names (code-injection vectors) never survive scrubbing,
@@ -467,16 +467,29 @@ def test_durable_lane_denies_windows_style_paths_to_windows_only_zimmerman_tools
     assert "blocked by security policy" in stored.result_public["error"]
 
 
-@pytest.mark.parametrize("wrapper", ["nice", "ionice", "chrt", "taskset", "time", "command"])
 @pytest.mark.parametrize(
-    "target",
-    ["PECmd.exe", "dotnet /opt/zimmermantools/SrumECmd.dll --help"],
+    "command",
+    [
+        "nice PECmd.exe",
+        "ionice PECmd.exe",
+        "chrt PECmd.exe",
+        "taskset PECmd.exe",
+        "time PECmd.exe",
+        "command PECmd.exe",
+        "setsid PECmd.exe --help",
+        "setsid dotnet /opt/zimmermantools/SrumECmd.dll --help",
+        "prlimit -- PECmd.exe --help",
+        "flock /tmp/lock PECmd.exe --help",
+        "setpriv -- PECmd.exe --help",
+        "runuser -- PECmd.exe --help",
+        "start-stop-daemon --start --exec PECmd.exe",
+        "systemd-run PECmd.exe --help",
+    ],
 )
 def test_durable_lane_denies_argv_rewriting_launchers_before_windows_tool_bypass(
-    db, sealed_case, wrapper, target
+    db, sealed_case, command
 ):
     """Fail on reversion: durable jobs share the launcher deny floor."""
-    command = f"{wrapper} {target}"
     job = _enqueue_run_command(
         db, sealed_case, command=command, purpose="attempt launcher bypass"
     )

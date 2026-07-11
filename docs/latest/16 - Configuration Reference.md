@@ -33,9 +33,9 @@ sets this to `~/.sift/gateway.yaml`). Environment variable interpolation
 | Key | Type | Default | Effect | Source |
 |-----|------|---------|--------|--------|
 | `execute.runtime_user` | string | `$SIFT_EXECUTE_AS_USER` | Linux user for `run_command` sandboxing. `"__current__"` only for local dev (never production). | `gateway.yaml.template:24` |
-| `execute.security.mode` | string | `"allowlist"` | Executor policy mode: `allowlist` (default) or `denylist` | `gateway.yaml.template:30` |
+| `execute.security.mode` | string | `"allowlist"` | Executor policy mode: only `allowlist` is supported; `denylist` would admit unreviewed entrypoints | `gateway.yaml.template:30` |
 | `execute.security.allowed_binaries` | list | `["@mvp_forensic"]` | Whitelist binary groups/tools; `@mvp_forensic` resolves to the bundled SIFT forensic toolset | `gateway.yaml.template:31-32` |
-| `execute.security.unlisted_policy` | string | `"contained"` | Policy for non-denied binaries absent from the allowlist: `contained` (kernel-jailed, never blocked) | `gateway.yaml.template:33` |
+| `execute.security.unlisted_policy` | string | `"reject"` | Policy for binaries absent from the reviewed allowlist: only `reject` is supported; a kernel jail does not authorize an arbitrary entrypoint | `gateway.yaml.template:33` |
 | `execute.security.dangerous_flags` | list | `["-e","--exec","--command","-enc","-encodedcommand","--script","--invoke"]` | Globally prohibited command flags (shell/code execution escapes) — enforced before per-tool rules | `gateway.yaml.template:34-41` |
 | `execute.security.tool_allowed_flags` | map | `run_bulk_extractor: ["-e","-x"]` | Per-tool flag exemptions that override the global dangerous_flags block for that specific tool | `gateway.yaml.template:42-45` |
 | `execute.security.tool_blocked_flags` | map | `find: [-exec,-execdir,-delete,-fls,-fprint,-fprint0,-fprintf]`; `sed: [-i,--in-place]`; `tar: [-x,--extract,--get,-c,--create,--delete,--append,--checkpoint-action,--use-compress-program,--to-command]`; `unzip: [-o,-n]` | Per-tool additional blocked flags (blocked even if not in dangerous_flags). The built-in deny floor always applies. | `gateway.yaml.template:46-71` |

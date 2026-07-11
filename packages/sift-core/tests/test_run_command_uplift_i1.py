@@ -30,6 +30,7 @@ from sift_core.execute.security_policy import (
     build_security_policy,
     matches_allowed_binary,
 )
+from sift_core.execute.tools import generic
 
 _KEY = b"i1-run-command-uplift-derived-key32"
 
@@ -348,6 +349,40 @@ def test_run_command_unknown_evidence_ref_fails_closed(sealed_case):
     )
     assert out["success"] is False
     assert "nope.E01" in out["error"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "setsid PECmd.exe --help",
+        "setsid dotnet /opt/zimmermantools/SrumECmd.dll --help",
+        "prlimit -- PECmd.exe --help",
+        "flock /tmp/lock PECmd.exe --help",
+        "dotnet /opt/zimmermantools/EvtxECmd.dll --help",
+    ],
+)
+def test_run_command_surface_rejects_unreviewed_entrypoints_before_execution(
+    sealed_case, monkeypatch, command
+):
+    """Issue #50: sync MCP execution must fail before its executor boundary."""
+    called = False
+
+    def _execute_should_not_run(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("unreviewed command reached the executor")
+
+    monkeypatch.setattr(generic, "execute", _execute_should_not_run)
+    out = _run_command(
+        {"command": command, "purpose": "attempt launcher-wrapper bypass"},
+        examiner="analyst",
+        audit=AuditWriter(mcp_name="sift-core"),
+    )
+
+    assert called is False
+    assert out["success"] is False
+    assert out["audit_id"]
+    assert "allowlist mode" in out["error"] or "blocked by security policy" in out["error"]
 
 
 def test_run_command_stdout_paths_sanitized(sealed_case):

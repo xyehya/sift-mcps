@@ -23,10 +23,10 @@ def test_empty_operator_policy_is_rejected():
         build_security_policy({}, require_operator_policy=True)
 
 
-def test_default_policy_is_allowlist_with_contained_unlisted_tier():
+def test_default_policy_is_a_true_allowlist_with_unlisted_rejection():
     policy = build_security_policy()
     assert policy["mode"] == "allowlist"
-    assert policy["unlisted_policy"] == "contained"
+    assert policy["unlisted_policy"] == "reject"
     assert matches_allowed_binary("mmls", policy["allowed_binaries"])
     assert matches_allowed_binary("strings", policy["allowed_binaries"])
     assert not matches_allowed_binary("ssh", policy["allowed_binaries"])
@@ -77,6 +77,13 @@ def test_default_policy_is_allowlist_with_contained_unlisted_tier():
         "taskset",
         "time",
         "command",
+        "setsid",
+        "prlimit",
+        "flock",
+        "setpriv",
+        "runuser",
+        "start-stop-daemon",
+        "systemd-run",
     ):
         assert matches_denied_binary(binary, denied)
 
@@ -135,12 +142,18 @@ def test_allowlist_mode_without_operator_allowlist_uses_mvp_seed():
 
 def test_invalid_unlisted_policy_is_rejected():
     with pytest.raises(ValueError, match="unlisted_policy"):
-        build_security_policy({"unlisted_policy": "approve"}, require_operator_policy=True)
+        build_security_policy({"unlisted_policy": "contained"}, require_operator_policy=True)
 
 
 def test_invalid_policy_mode_is_rejected():
     with pytest.raises(ValueError, match="mode must be"):
         build_security_policy({"mode": "blocklist"}, require_operator_policy=True)
+
+
+def test_legacy_denylist_mode_is_rejected():
+    """A config cannot reopen arbitrary-entrypoint admission."""
+    with pytest.raises(ValueError, match="denylist mode admits unreviewed entrypoints"):
+        build_security_policy({"mode": "denylist"}, require_operator_policy=True)
 
 
 def test_grep_e_and_E_flags_are_allowed():
@@ -168,25 +181,11 @@ def test_e_flag_still_blocked_for_exec_style_tools():
             sanitize_extra_args(["-e", "payload"], tool_name=tool)
 
 
-def test_allowlist_unlisted_policy_classifies_contained_or_reject(monkeypatch):
+def test_allowlist_mode_rejects_every_unlisted_entrypoint(monkeypatch):
     from sift_core.execute.catalog import clear_catalog_cache
     from sift_core.execute.security import classify_binary_risk, is_allowed_by_mode
 
-    contained = build_security_policy(
-        {
-            "mode": "allowlist",
-            "allowed_binaries": ["date"],
-            "unlisted_policy": "contained",
-        },
-        require_operator_policy=True,
-    )
-    monkeypatch.setenv("SIFT_EXECUTE_SECURITY_POLICY", policy_to_env_json(contained))
-    clear_catalog_cache()
-    assert classify_binary_risk("date") == "standard"
-    assert classify_binary_risk("customtool") == "contained"
-    assert is_allowed_by_mode("customtool") is True
-
-    rejected = build_security_policy(
+    policy = build_security_policy(
         {
             "mode": "allowlist",
             "allowed_binaries": ["date"],
@@ -194,8 +193,9 @@ def test_allowlist_unlisted_policy_classifies_contained_or_reject(monkeypatch):
         },
         require_operator_policy=True,
     )
-    monkeypatch.setenv("SIFT_EXECUTE_SECURITY_POLICY", policy_to_env_json(rejected))
+    monkeypatch.setenv("SIFT_EXECUTE_SECURITY_POLICY", policy_to_env_json(policy))
     clear_catalog_cache()
+    assert classify_binary_risk("date") == "standard"
     assert classify_binary_risk("customtool") == "reject"
     assert is_allowed_by_mode("customtool") is False
 
@@ -233,15 +233,6 @@ def test_tool_blocked_flags_close_code_exec_primitives(tool, args):
 
     with pytest.raises(ValueError, match="Blocked dangerous flag"):
         sanitize_extra_args(args, tool_name=tool)
-
-
-def test_contained_tier_blocks_program_text_and_non_o_output_flags():
-    from sift_core.execute.security import sanitize_extra_args
-
-    with pytest.raises(ValueError, match="Unlisted program-text tool"):
-        sanitize_extra_args(["print $1"], tool_name="awk", risk_tier="contained")
-    with pytest.raises(ValueError, match="only -o"):
-        sanitize_extra_args(["--json", "out.json"], tool_name="customtool", risk_tier="contained")
 
 
 class TestInCaseWritePosture:
