@@ -434,3 +434,29 @@ def test_parse_int_env_invalid_raises(monkeypatch):
     monkeypatch.setenv("WT_CACHE_SIZE", "not_an_int")
     with pytest.raises(ConfigurationError):
         _parse_int_env("WT_CACHE_SIZE", 10000)
+
+def test_production_read_only_connections_are_immutable_snapshots(monkeypatch, tmp_path):
+    captured: list[tuple[str, bool]] = []
+
+    class FakeConnection:
+        row_factory = None
+
+        def execute(self, _sql):
+            return None
+
+    def fake_connect(target, *, uri=False):
+        captured.append((str(target), uri))
+        return FakeConnection()
+
+    monkeypatch.setattr("sqlite3.connect", fake_connect)
+    for db_type, name in (
+        (KnownGoodDB, "known_good.db"),
+        (ContextDB, "context.db"),
+        (RegistryDB, "known_good_registry.db"),
+    ):
+        db_type(tmp_path / name, read_only=True, cache_size=0).connect()
+
+    assert captured == [
+        (f"file:{tmp_path / name}?mode=ro&immutable=1", True)
+        for name in ("known_good.db", "context.db", "known_good_registry.db")
+    ]

@@ -80,7 +80,10 @@ class KnownGoodDB:
         if self._conn is None:
             if self.read_only:
                 # Open in read-only mode using URI
-                uri = f"file:{self.db_path}?mode=ro"
+                # Installer-pinned baselines are immutable snapshots. immutable=1
+                # prevents SQLite from requiring WAL/SHM writes in the strictly
+                # read-only sift-addon AppArmor domain.
+                uri = f"file:{self.db_path}?mode=ro&immutable=1"
                 self._conn = sqlite3.connect(uri, uri=True)
             else:
                 self._conn = sqlite3.connect(str(self.db_path))

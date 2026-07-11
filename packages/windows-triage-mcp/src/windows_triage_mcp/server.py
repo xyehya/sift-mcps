@@ -275,19 +275,24 @@ class WindowsTriageServer:
         import sqlite3
 
         try:
-            # Test known_good.db connectivity
-            kg_stats = self.known_good_db.get_stats()
-            logger.info(
-                f"known_good.db: {kg_stats.get('files', 0)} files, "
-                f"{kg_stats.get('hashes', 0)} hashes"
+            # Startup must be constant-time and fail closed. Full COUNT(*) scans
+            # over the 2.68M-row baseline delayed gateway readiness and could
+            # turn SQLite lock errors into misleading zero counts. Detailed
+            # counts remain available through the explicit status tool.
+            probes = (
+                (self.known_good_db.connect(), "baseline_files", "known_good.db"),
+                (self.context_db.connect(), "lolbins", "context.db lolbins"),
+                (
+                    self.context_db.connect(),
+                    "vulnerable_drivers",
+                    "context.db vulnerable_drivers",
+                ),
             )
-
-            # Test context.db connectivity
-            ctx_stats = self.context_db.get_stats()
-            logger.info(
-                f"context.db: {ctx_stats.get('lolbins', 0)} lolbins, "
-                f"{ctx_stats.get('vulnerable_drivers', 0)} drivers"
-            )
+            for connection, table, label in probes:
+                row = connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+                if row is None:
+                    raise DatabaseError(f"{label} is empty")
+            logger.info("Pinned Windows-triage databases passed startup probes")
 
         except sqlite3.OperationalError as e:
             raise DatabaseError(f"SQLite error during validation: {e}") from e

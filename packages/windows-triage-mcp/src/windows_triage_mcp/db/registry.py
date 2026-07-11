@@ -72,7 +72,7 @@ class RegistryDB:
         if self._conn is None:
             if self.read_only:
                 # Open in read-only mode using URI
-                uri = f"file:{self.db_path}?mode=ro"
+                uri = f"file:{self.db_path}?mode=ro&immutable=1"
                 self._conn = sqlite3.connect(uri, uri=True)
             else:
                 self._conn = sqlite3.connect(str(self.db_path))
