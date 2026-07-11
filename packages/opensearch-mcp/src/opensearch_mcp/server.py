@@ -32,6 +32,11 @@ from opensearchpy.exceptions import ConnectionError as OSConnectionError
 from sift_common.audit import AuditWriter
 from sift_core.case_io import cases_root, resolve_case_path
 
+from opensearch_mcp.case_scoped import (
+    artifact_index_pattern,
+    in_active_case,
+    resolve_active_case_prefix,
+)
 from opensearch_mcp.client import get_client
 from opensearch_mcp.host_dictionary import detect_host_id_mapping_type
 from opensearch_mcp.paths import build_index_pattern, normalize_case_key
@@ -1513,6 +1518,86 @@ def opensearch_field_values(
     if aid:
         resp["audit_id"] = aid
     return resp
+
+
+def opensearch_field_catalog(artifact_type: str, case_dir: str = "") -> dict:
+    """Return field metadata from one active-case artifact family only.
+
+    This is the implementation boundary for the agent-facing resource.  The
+    registry deliberately does not receive a raw client: this operation resolves
+    the Gateway-injected case context, derives the artifact target through
+    :mod:`case_scoped`, and fails closed before any OpenSearch I/O.
+    """
+    if not _re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", artifact_type):
+        return {
+            "artifact_type": artifact_type,
+            "fields": [],
+            "error": "artifact_type contains unsupported characters.",
+        }
+    if not case_dir.strip():
+        return {
+            "artifact_type": artifact_type,
+            "fields": [],
+            "total_fields": 0,
+            "error": "active case unavailable; field catalog requires gateway-injected active-case context.",
+        }
+
+    prefix = resolve_active_case_prefix(case_dir=case_dir)
+    if not prefix:
+        return {
+            "artifact_type": artifact_type,
+            "fields": [],
+            "total_fields": 0,
+            "error": "active case unavailable; field catalog is empty.",
+        }
+
+    try:
+        client = _get_os()
+        target = artifact_index_pattern(prefix, artifact_type)
+        indices = _os_call(
+            client.cat.indices,
+            index=target,
+            params={"format": "json", "h": "index"},
+        )
+        first = next(
+            (
+                item.get("index")
+                for item in indices or []
+                if in_active_case(str(item.get("index", "")), prefix)
+            ),
+            None,
+        )
+        if not first:
+            return {"artifact_type": artifact_type, "fields": [], "total_fields": 0}
+        mapping = _os_call(client.indices.get_mapping, index=first)
+        props = mapping.get(first, {}).get("mappings", {}).get("properties", {})
+        fields = sorted(_flatten_mapping_props(props), key=lambda item: item["field"])[:500]
+        return {
+            "artifact_type": artifact_type,
+            "sample_index": first,
+            "fields": fields,
+            "total_fields": len(fields),
+        }
+    except Exception as exc:
+        return {
+            "artifact_type": artifact_type,
+            "fields": [],
+            "error": f"{type(exc).__name__}: field catalog unavailable.",
+        }
+
+
+def _flatten_mapping_props(props: dict, prefix: str = "") -> list[dict[str, str]]:
+    """Flatten the active-case mapping for the resource's typed JSON payload."""
+    fields: list[dict[str, str]] = []
+    for key, value in props.items():
+        full = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict) and "properties" in value:
+            fields.extend(_flatten_mapping_props(value["properties"], full))
+        elif isinstance(value, dict):
+            fields.append({"field": full, "type": str(value.get("type", "object"))})
+        else:
+            fields.append({"field": full, "type": "unknown"})
+    return fields
 
 
 def _hayabusa_health() -> dict:
