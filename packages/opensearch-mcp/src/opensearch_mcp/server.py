@@ -2616,7 +2616,7 @@ def opensearch_ingest(
                 except Exception:
                     pass
             ok, reason = check_shard_headroom(
-                get_client(),
+                _get_os(),
                 expected_new_shards=_estimate_new_shards("evtx") * len(containers_found),
                 min_headroom_pct=10.0,
             )
@@ -2849,7 +2849,7 @@ def opensearch_ingest(
         check_shard_headroom,
     )
 
-    client = get_client()
+    client = _get_os()
     ok, reason = check_shard_headroom(
         client,
         expected_new_shards=_estimate_new_shards("evtx"),
@@ -3742,7 +3742,7 @@ def _launch_background(
     )
 
     ok, reason = check_shard_headroom(
-        get_client(),
+        _get_os(),
         expected_new_shards=_estimate_new_shards(subcommand),
         min_headroom_pct=10.0,
     )
@@ -4010,7 +4010,7 @@ def idx_ingest_memory(
     )
 
     ok, reason = check_shard_headroom(
-        get_client(),
+        _get_os(),
         expected_new_shards=_estimate_new_shards("memory"),
         min_headroom_pct=10.0,
     )
