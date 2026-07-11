@@ -89,8 +89,7 @@ poll_gateway() {
     sleep 1
   done
   if [[ -z "$body" ]]; then
-    warn "Gateway not reachable.  Check: sudo journalctl -u sift-gateway -n 50"
-    return
+    die "Mandatory gateway is not reachable. Check: sudo journalctl -u sift-gateway -n 50"
   fi
 
   # Parse JSON body: verify status=ok and surface any degraded subsystems.
@@ -105,19 +104,8 @@ poll_gateway() {
   if [[ "$gw_status" == "ok" ]]; then
     log "Gateway health OK [${label}]: status=$gw_status supabase=$supabase_status"
   elif [[ "$gw_status" == "degraded" ]]; then
-    warn "Gateway is DEGRADED [${label}].  Full health body:"
-    warn "  $body"
-    # Surface the specific failing subsystem if we can parse it.
-    local reason
-    reason="$(printf '%s' "$body" | "$SYSTEM_PYTHON" -c \
-      'import json,sys; d=json.load(sys.stdin); print(d.get("reason") or d.get("error") or "")' \
-      2>/dev/null || true)"
-    [[ -n "$reason" ]] && warn "  Reason: $reason"
-    if [[ "$supabase_status" != "ok" && "$supabase_status" != "unknown" ]]; then
-      warn "  Supabase connection is not OK ($supabase_status)."
-      warn "  Verify SUPABASE_URL/ANON_KEY/SERVICE_ROLE_KEY are set and the Supabase project is reachable."
-    fi
+    die "Mandatory gateway is DEGRADED [${label}]: $body"
   else
-    warn "Gateway returned unexpected status '$gw_status' [${label}] — body: $body"
+    die "Mandatory gateway returned unexpected status '$gw_status' [${label}]: $body"
   fi
 }

@@ -100,6 +100,8 @@ profile sift-gateway {
   /proc/mounts                               r,
   /proc/sys/fs/inotify/**                    r,
   /sys/kernel/security/ima/**                r,
+  # Python's mimetypes module reads the system registry during FastMCP import.
+  /etc/mime.types                            r,
 
   # Network: localhost only (OpenSearch :9200, MCP clients :4508)
   network inet tcp,
