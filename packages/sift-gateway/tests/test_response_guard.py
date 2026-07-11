@@ -62,6 +62,34 @@ class TestScanToolResult:
         assert key not in redacted
         assert "[REDACTED:OpenAI API Key]" in redacted
 
+    @pytest.mark.parametrize("delimiter", [" ", "=", ":", "\"", "(", "["])
+    @pytest.mark.parametrize("prefix", ["sk-proj", "sk-svcacct"])
+    def test_openai_project_and_service_keys_redact_at_token_delimiters(
+        self, delimiter: str, prefix: str
+    ):
+        """Config, JSON, and prose delimiters must retain modern-key redaction."""
+        key = f"{prefix}-12345678901234567890_key-material"
+        redacted, findings = redact_tool_result(f"value{delimiter}{key};")
+        assert "OpenAI API Key" in [finding["pattern_name"] for finding in findings]
+        assert key not in redacted
+
+    @pytest.mark.parametrize("prefix", ["sk-proj", "sk-svcacct"])
+    @pytest.mark.parametrize(
+        "candidate_template",
+        [
+            "artifact_{key}",
+            "case-{key}-artifact",
+        ],
+    )
+    def test_openai_project_and_service_key_identifier_embeddings_are_not_detected(
+        self, prefix: str, candidate_template: str
+    ):
+        """Modern-key-shaped substrings inside ordinary identifiers are safe."""
+        key = f"{prefix}-12345678901234567890_key-material"
+        candidate = candidate_template.format(key=key)
+        findings = scan_tool_result(f"identifier={candidate}")
+        assert "OpenAI API Key" not in [finding["pattern_name"] for finding in findings]
+
     @pytest.mark.parametrize(
         "candidate",
         [
