@@ -10,8 +10,8 @@ from urllib.parse import urlparse
 import jsonschema
 
 from sift_gateway.backends.base import MCPBackend
-from sift_gateway.backends.gateway_backend import GatewayOwnedMCPBackend
 from sift_gateway.backends.egress import EgressTarget, validate_egress_url
+from sift_gateway.backends.gateway_backend import GatewayOwnedMCPBackend
 from sift_gateway.backends.http_backend import HttpMCPBackend
 from sift_gateway.backends.stdio_backend import StdioMCPBackend
 
