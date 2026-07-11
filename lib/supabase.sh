@@ -80,12 +80,7 @@ write_supabase_env() {
     return
   fi
 
-  if svc_test_f "$supabase_env_file"; then
-    log "Supabase env file already exists — preserving $supabase_env_file."
-    return
-  fi
-
-  log "Writing Supabase env file: $supabase_env_file"
+  log "Reconciling Supabase env file from the authoritative preflight result: $supabase_env_file"
   # Write to an operator-owned temp, then install it owned sift-service 0600 so
   # the running service can read it but it never lives operator-owned. SIFT_HOME
   # is created by install_state_dirs (owned sift-service 0700).
@@ -121,16 +116,11 @@ preflight_supabase() {
     return 0
   fi
 
-  # Step 1: source the env file if SUPABASE_URL is absent and the file exists.
-  if [[ -z "${SUPABASE_URL:-}" && -f "$SUPABASE_PROJECT_ENV" ]]; then
-    log "Sourcing Supabase env from $SUPABASE_PROJECT_ENV"
-    # shellcheck disable=SC1090
-    source "$SUPABASE_PROJECT_ENV"
-  fi
-
-  # Step 2: env still absent → invoke setup-supabase.sh (the Supabase agent's script).
-  if [[ -z "${SUPABASE_URL:-}" && -f "$REPO_DIR/scripts/setup-supabase.sh" ]]; then
-    log "SUPABASE_URL not set — running scripts/setup-supabase.sh to provision Supabase."
+  # Local Supabase credentials are derived from the persisted project JWT secret
+  # and the running CLI-managed stack. Always reconcile them; a handoff or
+  # previously exported key is not authoritative after a reinstall/restart.
+  if [[ -f "$REPO_DIR/scripts/setup-supabase.sh" ]]; then
+    log "Reconciling the local Supabase stack and credentials."
     bash "$REPO_DIR/scripts/setup-supabase.sh" \
       || die "scripts/setup-supabase.sh failed.  Cannot continue without Supabase."
     if [[ -f "$SUPABASE_PROJECT_ENV" ]]; then
@@ -139,7 +129,7 @@ preflight_supabase() {
     fi
   fi
 
-  # Step 3: still empty → die with an actionable message.
+  # Still empty → die with an actionable message.
   if [[ -z "${SUPABASE_URL:-}" || -z "${SIFT_CONTROL_PLANE_DSN:-}" ]]; then
     die "Supabase credentials not found.
   Option A (auto-provision): ensure scripts/setup-supabase.sh exists in the repo.

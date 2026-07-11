@@ -34,12 +34,19 @@
 
 create schema if not exists app;
 
+-- Fresh-install consolidation: remove the historical case/derived-capable
+-- overloads entirely rather than retaining revoked compatibility surfaces.
+drop function if exists app.rag_search(vector, uuid, int, boolean, boolean);
+drop function if exists app.rag_search(
+  vector, uuid, int, boolean, boolean, text, text[], text, text
+);
+
 -- ---------------------------------------------------------------------------
 -- 1. knowledge-only app.rag_search (6 args; removes case_id / include_* params)
 -- ---------------------------------------------------------------------------
 
 create or replace function app.rag_search(
-  p_query_embedding vector(768),
+  p_query_embedding vector(1024),
   p_top_k int default 5,
   p_source text default null,
   p_source_ids text[] default null,

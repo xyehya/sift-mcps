@@ -188,7 +188,7 @@ main() {
   # (including scripts/setup-supabase.sh invoked by preflight_supabase).
   export SIFT_OFFLINE SIFT_GEOIP_ENABLED SIFT_HF_HOME
   export SIFT_UV_VERSION SIFT_UV_TARBALL_SHA256 SIFT_HAYABUSA_TAG SIFT_HAYABUSA_SHA256
-  export SIFT_RAG_MODEL_NAME SIFT_RAG_MODEL_REVISION SIFT_RAG_INDEX_TAG
+  export SIFT_RAG_MODEL_NAME SIFT_RAG_MODEL_REVISION
   if is_offline; then
     log "OFFLINE MODE (SIFT_OFFLINE=1): no network downloads will be attempted; staged artifacts required."
   fi

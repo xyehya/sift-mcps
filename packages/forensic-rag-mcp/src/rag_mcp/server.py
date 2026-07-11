@@ -16,7 +16,7 @@ Agent-facing tools (registered under the manifest ``kb`` namespace):
     kb_get_knowledge_stats    corpus statistics (also the backend health probe)
 
 Configuration:
-    RAG_MODEL_NAME: query embedding model (default BAAI/bge-base-en-v1.5).
+    RAG_MODEL_NAME: pinned query embedding model (Qwen3-Embedding-0.6B).
 
 The installed RAG pack is gateway-owned: the gateway constructs ``RAGServer``
 with its already-authorized control-plane DSN.  The standalone ``rag-mcp``
@@ -37,6 +37,7 @@ import logging
 import sys
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from sift_common.instructions import FORENSIC_RAG as _INSTRUCTIONS
 
 from .oplog import setup_logging
@@ -89,7 +90,7 @@ class RAGServer:
     def _register_tools(self) -> None:
         mcp = self.mcp
 
-        @mcp.tool(annotations={"readOnlyHint": True})
+        @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
         def kb_search_knowledge(
             query: str,
             top_k: int = 5,
@@ -135,7 +136,7 @@ class RAGServer:
                 platform=platform,
             )
 
-        @mcp.tool(annotations={"readOnlyHint": True})
+        @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
         def kb_list_knowledge_sources() -> dict:
             """List all available knowledge sources in the corpus.
 
@@ -146,7 +147,7 @@ class RAGServer:
             """
             return self._list_sources()
 
-        @mcp.tool(annotations={"readOnlyHint": True})
+        @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
         def kb_get_knowledge_stats() -> dict:
             """Get knowledge corpus statistics and backend health.
 
@@ -322,8 +323,7 @@ def main() -> None:
         print("forensic-rag-mcp: gateway-owned pgvector knowledge package.")
         print()
         print("Knowledge load commands (installer/gateway authority only):")
-        print("  python -m rag_mcp.pgvector_chroma_import  # Chroma->pgvector import")
-        print("  python -m rag_mcp.pgvector_seed            # Seed knowledge documents")
+        print("  python -m rag_mcp.pgvector_snapshot_import /path/to/snapshot")
         return
 
     setup_logging("forensic-rag-mcp")

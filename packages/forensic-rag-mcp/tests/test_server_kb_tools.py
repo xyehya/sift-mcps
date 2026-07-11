@@ -43,8 +43,8 @@ class _FakeStore:
             "document_count": 26586,
             "collection_count": 12,
             "source_count": 23,
-            "embedding_dim": 768,
-            "embedding_model": "BAAI/bge-base-en-v1.5",
+            "embedding_dim": 1024,
+            "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
         }
         self.hits = [
             RagHit(
@@ -78,7 +78,7 @@ class _FakeEmbedder:
 
     def embed(self, query):
         self.queries.append(query)
-        return [0.1] * 768
+        return [0.1] * 1024
 
 
 @pytest.fixture
@@ -202,7 +202,7 @@ def test_get_stats(server):
     out = s._get_stats()
     assert out["status"] == "ok"
     assert out["chunk_count"] == 26586
-    assert out["embedding_model"] == "BAAI/bge-base-en-v1.5"
+    assert out["embedding_model"] == "Qwen/Qwen3-Embedding-0.6B"
 
 
 def test_kb_tools_registered_on_mcp():

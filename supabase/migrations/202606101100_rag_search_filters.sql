@@ -23,7 +23,7 @@
 create schema if not exists app;
 
 create or replace function app.rag_search(
-  p_query_embedding vector(768),
+  p_query_embedding vector(1024),
   p_case_id uuid default null,
   p_top_k int default 5,
   p_include_knowledge boolean default true,

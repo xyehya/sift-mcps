@@ -27,7 +27,7 @@ class _FakeStore:
         return "document-id"
 
     def upsert_chunk(self, **kwargs):
-        assert len(kwargs["embedding"]) == 768
+        assert len(kwargs["embedding"]) == 1024
         self.chunks.append(kwargs)
         return f"chunk-{len(self.chunks)}"
 
@@ -60,7 +60,7 @@ def test_seed_knowledge_documents_are_shared_case_study_collection(tmp_path):
     documents = plan_knowledge_seed(knowledge_dir)
     store = _FakeStore()
     def _embed_texts(texts: list[str]) -> list[list[float]]:
-        return [[float(idx)] * 768 for idx, _text in enumerate(texts, start=1)]
+        return [[float(idx)] * 1024 for idx, _text in enumerate(texts, start=1)]
 
     result = seed_knowledge_documents(
         cast(Any, store), documents, embed_texts=_embed_texts
@@ -74,8 +74,8 @@ def test_seed_knowledge_documents_are_shared_case_study_collection(tmp_path):
     assert store.documents[0]["source_ref"] == "ForensicCases/credential-theft.jsonl"
     assert all(call["case_id"] is None for call in store.documents)
     assert [chunk["embedding"] for chunk in store.chunks] == [
-        [1.0] * 768,
-        [2.0] * 768,
+        [1.0] * 1024,
+        [2.0] * 1024,
     ]
 
 

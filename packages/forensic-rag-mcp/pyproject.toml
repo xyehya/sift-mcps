@@ -24,6 +24,8 @@ dependencies = [
     # sentence-transformers stays a REQUIRED runtime dependency: it embeds the
     # query for kb_search_knowledge against the pgvector store (BATCH-OSX-RAG).
     "sentence-transformers>=2.2",
+    "numpy>=1.26",
+    "psycopg[binary]>=3.2",
     "pyyaml>=6.0",
     "toml>=0.10",
     "sift-common",
@@ -38,8 +40,7 @@ dev = [
 
 [project.scripts]
 rag-mcp = "rag_mcp.server:main"
-rag-mcp-seed-pgvector = "rag_mcp.pgvector_seed:main"
-rag-mcp-import-chroma-pgvector = "rag_mcp.pgvector_chroma_import:main"
+rag-mcp-import-qwen-pgvector = "rag_mcp.pgvector_snapshot_import:main"
 
 # Version single source of truth (#15/I-PS1): derived from the git release tag
 # via hatch-vcs — no hand-edited literal. See root pyproject.toml for the full

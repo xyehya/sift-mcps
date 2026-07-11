@@ -91,6 +91,19 @@ DOCKERERR
 }
 
 # ── Supabase CLI install / path ────────────────────────────────────────────────
+supabase_cli_version() {
+  local bin_dir="$1" candidate version
+  for candidate in "$bin_dir/supabase" "$bin_dir/supabase-go"; do
+    [[ -x "$candidate" ]] || continue
+    version="$("$candidate" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+    if [[ -n "$version" ]]; then
+      printf '%s' "$version"
+      return 0
+    fi
+  done
+  return 1
+}
+
 resolve_supabase_cli() {
   # 1. Already on PATH at the right version?
   if command -v supabase >/dev/null 2>&1; then
@@ -98,7 +111,7 @@ resolve_supabase_cli() {
     supabase_path="$(command -v supabase)"
     supabase_dir="$(dirname "$supabase_path")"
     local ver
-    ver="$(supabase --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+    ver="$(supabase_cli_version "$supabase_dir" || true)"
     if [[ "$ver" == "$SUPABASE_CLI_VERSION" && -x "$supabase_dir/supabase-go" ]]; then
       log "supabase CLI v${SUPABASE_CLI_VERSION} already on PATH."
       return
@@ -113,7 +126,7 @@ resolve_supabase_cli() {
   # 2. Already installed in our bin dir?
   if [[ -x "$SIFT_BIN_DIR/supabase" && -x "$SIFT_BIN_DIR/supabase-go" ]]; then
     local ver
-    ver="$("$SIFT_BIN_DIR/supabase" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+    ver="$(supabase_cli_version "$SIFT_BIN_DIR" || true)"
     if [[ "$ver" == "$SUPABASE_CLI_VERSION" ]]; then
       log "supabase CLI v${SUPABASE_CLI_VERSION} found at $SIFT_BIN_DIR/supabase."
       export PATH="$SIFT_BIN_DIR:$PATH"
@@ -202,18 +215,32 @@ install_supabase_cli() {
 # auth.jwt_secret (config.toml). When unset it falls back to the PUBLIC demo
 # secret, so `supabase status` would emit the well-known public anon/service_role
 # keys — anyone could mint a service_role token. We generate a unique secret per
-# install and persist it to supabase/.env, which the CLI auto-loads on every
-# `supabase start` (keys stay stable across restarts, including manual ones).
+# install and persist it outside the replaceable runtime checkout. The installer
+# exports it for every CLI operation (keys stay stable across upgrades/restarts).
 # config.toml references it via env(SUPABASE_AUTH_JWT_SECRET).
 _DEMO_JWT_SECRET="super-secret-jwt-token-with-at-least-32-characters-long"
 ensure_jwt_secret() {
-  local env_file="$REPO_DIR/supabase/.env"
-  mkdir -p "$REPO_DIR/supabase"
+  local env_file="${SIFT_SUPABASE_JWT_ENV:-$HOME/.sift/supabase-project/supabase-jwt.env}"
+  local legacy_env_file="$REPO_DIR/supabase/.env"
+  local auth_container live_secret
+  mkdir -p "$(dirname "$env_file")"
+  auth_container="$(docker ps --format '{{.Names}}' 2>/dev/null | grep '^supabase_auth_' | head -1 || true)"
+  live_secret=""
+  if [[ -n "$auth_container" ]]; then
+    live_secret="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$auth_container" 2>/dev/null \
+      | sed -n 's/^GOTRUE_JWT_SECRET=//p' | head -1)"
+  fi
   if [[ -n "${SUPABASE_AUTH_JWT_SECRET:-}" ]]; then
     : # explicit env wins (operator override); persisted below for reuse.
+  elif [[ -n "$live_secret" ]]; then
+    SUPABASE_AUTH_JWT_SECRET="$live_secret"
+    log "Reconciling the persisted JWT secret from the running local Auth service."
   elif [[ -f "$env_file" ]] && grep -q '^SUPABASE_AUTH_JWT_SECRET=' "$env_file" 2>/dev/null; then
     SUPABASE_AUTH_JWT_SECRET="$(grep '^SUPABASE_AUTH_JWT_SECRET=' "$env_file" | head -1 | cut -d= -f2-)"
-    log "Reusing the persisted Supabase JWT secret from supabase/.env."
+    log "Reusing the persisted Supabase JWT secret from the operator state directory."
+  elif [[ -f "$legacy_env_file" ]] && grep -q '^SUPABASE_AUTH_JWT_SECRET=' "$legacy_env_file" 2>/dev/null; then
+    SUPABASE_AUTH_JWT_SECRET="$(grep '^SUPABASE_AUTH_JWT_SECRET=' "$legacy_env_file" | head -1 | cut -d= -f2-)"
+    log "Migrating the legacy checkout-local Supabase JWT secret into operator state."
   else
     command -v openssl >/dev/null 2>&1 || die "openssl required to generate the Supabase JWT secret."
     SUPABASE_AUTH_JWT_SECRET="$(openssl rand -hex 32)"  # 256-bit; CLI requires >=16 chars
@@ -222,14 +249,23 @@ ensure_jwt_secret() {
   [[ "$SUPABASE_AUTH_JWT_SECRET" != "$_DEMO_JWT_SECRET" ]] \
     || die "SUPABASE_AUTH_JWT_SECRET is the PUBLIC demo default. Refusing to provision a default-key install (B-MVP-012). Unset it and re-run to auto-generate a unique secret."
   export SUPABASE_AUTH_JWT_SECRET
-  # Persist (600) to supabase/.env so the CLI loads it on every start. The file
-  # is gitignored (.env). Rewrite the single key idempotently.
+  # Persist mode 600 outside /opt/sift-mcps so checkout replacement cannot rotate
+  # the Auth secret while leaving stale API keys and handoff material behind.
   local tmp; tmp="$(mktemp)"
   if [[ -f "$env_file" ]]; then grep -v '^SUPABASE_AUTH_JWT_SECRET=' "$env_file" > "$tmp" || true; fi
   printf 'SUPABASE_AUTH_JWT_SECRET=%s\n' "$SUPABASE_AUTH_JWT_SECRET" >> "$tmp"
   install -m 600 "$tmp" "$env_file"
   rm -f "$tmp"
-  log "Supabase JWT secret persisted to supabase/.env (chmod 600, gitignored)."
+  if [[ "$legacy_env_file" != "$env_file" && -e "$legacy_env_file" ]]; then
+    if [[ -w "$(dirname "$legacy_env_file")" ]]; then
+      rm -f -- "$legacy_env_file"
+    elif sudo -n true 2>/dev/null; then
+      sudo rm -f -- "$legacy_env_file"
+    else
+      die "Cannot remove the obsolete checkout-local Supabase JWT file: $legacy_env_file"
+    fi
+  fi
+  log "Supabase JWT secret persisted in operator state (chmod 600)."
 }
 
 # ── Ensure config.toml exists ─────────────────────────────────────────────────
@@ -279,9 +315,20 @@ supabase_start() {
     log "  Reusing docker network: $net_id"
   fi
 
-  # `supabase start` is idempotent: if already running, it prints status and exits 0.
-  (cd "$REPO_DIR" && supabase start --network-id "$net_id") \
-    || die "'supabase start' failed. Check: supabase status  /  docker ps  /  docker logs"
+  # `supabase start` prints API credentials on success. Capture its transcript so
+  # installer logs never disclose even partial keys; status is read separately.
+  local start_log
+  start_log="$(mktemp)"
+  if ! (cd "$REPO_DIR" && supabase start --network-id "$net_id") >"$start_log" 2>&1; then
+    sed -E \
+      -e '/(ANON_KEY|SERVICE_ROLE_KEY|Publishable|Secret)/d' \
+      -e 's/(postgres(ql)?:\/\/)[^ ]+@/\1<redacted>@/g' \
+      "$start_log" >&2
+    rm -f "$start_log"
+    die "'supabase start' failed. Check: supabase status / docker ps / docker logs"
+  fi
+  rm -f "$start_log"
+  log "Supabase local stack is running."
 }
 
 # ── Capture credentials ───────────────────────────────────────────────────────
@@ -367,7 +414,7 @@ report_migrations() {
 # ── Reset ─────────────────────────────────────────────────────────────────────
 do_reset() {
   if [[ "$RESET_YES" -eq 0 ]]; then
-    printf '[setup-supabase] WARNING: --reset runs `supabase db reset` which DROPS and recreates\n'
+    printf '%s\n' '[setup-supabase] WARNING: --reset runs the Supabase DB reset command, which DROPS and recreates'
     printf '  the local database from migrations. All data is lost.\n'
     printf '  Type YES to confirm: '
     read -r confirm
@@ -414,9 +461,7 @@ main() {
 [setup-supabase] Supabase stack is up.
 
   SUPABASE_URL:             ${SUPABASE_URL}
-  ANON_KEY (first 24):      ${SUPABASE_ANON_KEY:0:24}...
-  SERVICE_ROLE_KEY (24):    ${SUPABASE_SERVICE_ROLE_KEY:0:24}...
-  SIFT_CONTROL_PLANE_DSN:   ${SIFT_CONTROL_PLANE_DSN%@*}@...  (password omitted)
+  Credentials:              reconciled (values written only to the mode-600 env file)
 
   Output env file:  ${OUT_ENV_FILE}
 

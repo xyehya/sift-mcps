@@ -48,8 +48,8 @@ _ABS_PATH_RE = re.compile(
 )
 _BAD_SOURCE_REF_RE = re.compile(r"(^/)|(^|/)\.\.(/|$)|^[a-zA-Z]:[\\/]")
 
-# Embedding dimension contract — must match vector(768) in the migration.
-EMBEDDING_DIM = 768
+# Embedding dimension contract — must match vector(1024) in the migration.
+EMBEDDING_DIM = 1024
 MAX_TOP_K = 50
 _ZERO_UUID = "00000000-0000-0000-0000-000000000000"
 _UUID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://sift.local/rag")
@@ -458,7 +458,7 @@ class PgVectorRagStore:
             "collection_count": int(row[2] or 0),
             "source_count": int(row[3] or 0),
             "embedding_dim": EMBEDDING_DIM,
-            "embedding_model": "BAAI/bge-base-en-v1.5",
+            "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
         }
 
     # -- ingest -------------------------------------------------------------

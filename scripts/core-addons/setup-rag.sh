@@ -5,7 +5,7 @@ set -Eeuo pipefail
 #
 # This command is intentionally separate from scripts/setup-addon.sh: RAG is a
 # SIFT-owned pack, not an external integration.  It installs the `rag` extra
-# additively, verifies the shipped corpus SHA-256 manifest, seeds pgvector
+# additively, verifies the shipped portable snapshot, imports pgvector
 # through an installer-owned gateway module, and reconciles the trusted
 # gateway-owned registry record.  The resulting RAG runtime is in-process in
 # sift-gateway; no RAG stdio subprocess is given a control-plane DSN.
@@ -13,8 +13,8 @@ set -Eeuo pipefail
 # Usage:
 #   scripts/core-addons/setup-rag.sh --install [--offline]
 #
-# Offline mode does no network I/O.  Stage the hash-pinned wheels in the uv
-# cache and the canonical BGE model revision under $SIFT_HF_HOME first.
+# Offline mode does no network I/O. Stage the hash-pinned wheels and canonical
+# Qwen model revision under $SIFT_HF_HOME first; the snapshot ships with SIFT.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -52,16 +52,29 @@ if [[ "$offline_requested" -eq 1 ]]; then
   export SIFT_OFFLINE=1
 fi
 
-readonly RAG_MODEL_NAME="BAAI/bge-base-en-v1.5"
-readonly RAG_MODEL_REVISION="a5beb1e3e68b9ab74eb54cfd186867f64f240e1a"
-readonly KNOWLEDGE_DIR="$REPO_DIR/packages/forensic-rag-mcp/knowledge"
-readonly KNOWLEDGE_MANIFEST="$KNOWLEDGE_DIR/manifest.sha256"
+readonly RAG_MODEL_NAME="Qwen/Qwen3-Embedding-0.6B"
+readonly RAG_MODEL_REVISION="97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
+readonly RAG_SNAPSHOT_ARCHIVE="$REPO_DIR/artifacts/qwen3-embedding-0.6b-1024-sift-rag-v1.tar.zst"
+readonly RAG_SNAPSHOT_SHA256="1030d3901d116c1c4fe7e82148da2eb07857afaebb0702a01aa2532273b870b4"
 readonly RAG_MANIFEST="$REPO_DIR/packages/forensic-rag-mcp/sift-backend.json"
 
 [[ -x "$VENV_PYTHON" ]] || die \
   "SIFT core runtime venv is missing at $VENV_PYTHON. Run ./install.sh first."
-[[ -d "$KNOWLEDGE_DIR" && -f "$KNOWLEDGE_MANIFEST" && -f "$RAG_MANIFEST" ]] || die \
-  "RAG pack artifacts are incomplete. Restore the shipped knowledge corpus and manifest, then rerun $0 --install."
+[[ -f "$RAG_SNAPSHOT_ARCHIVE" && -f "$RAG_MANIFEST" ]] || die \
+  "RAG pack artifacts are incomplete. Restore the pinned Qwen snapshot and backend manifest, then rerun $0 --install."
+verify_sha256 "$RAG_SNAPSHOT_ARCHIVE" "$RAG_SNAPSHOT_SHA256" || die \
+  "RAG snapshot SHA-256 verification failed; restore the canonical release artifact."
+require_cmd tar
+
+mapfile -t snapshot_members < <(tar --zstd -tf "$RAG_SNAPSHOT_ARCHIVE" | LC_ALL=C sort)
+expected_members=(
+  "qwen3-embedding-0.6b-1024/"
+  "qwen3-embedding-0.6b-1024/embeddings.f32.npy"
+  "qwen3-embedding-0.6b-1024/manifest.json"
+  "qwen3-embedding-0.6b-1024/records.jsonl"
+)
+[[ "${snapshot_members[*]}" == "${expected_members[*]}" ]] || die \
+  "RAG snapshot member set is invalid; refusing extraction."
 
 UV_BIN="$(resolve_uv)"
 [[ -n "$UV_BIN" ]] || die "uv is required to install the RAG pack; install uv then rerun $0 --install."
@@ -98,22 +111,12 @@ as_gateway_service=()
 if [[ "$(id -un)" != "$SIFT_GATEWAY_SERVICE_USER" ]]; then
   as_gateway_service=(sudo -u "$SIFT_GATEWAY_SERVICE_USER")
 fi
-log "Verifying pinned RAG corpus and seeding pgvector through the gateway authority path."
-rag_provision_args=(
-  --knowledge-dir "$KNOWLEDGE_DIR"
-  --manifest "$KNOWLEDGE_MANIFEST"
-  --model-name "$RAG_MODEL_NAME"
-  --model-revision "$RAG_MODEL_REVISION"
-)
-if (
-  cd "$SIFT_STATE_DIR"
-  "${as_gateway_service[@]}" env \
-    SIFT_CONTROL_PLANE_DSN="$cp_dsn" \
-    "$VENV_PYTHON" -m sift_gateway.rag_provision \
-      "${rag_provision_args[@]}" --check-current
-); then
-  log "RAG corpus and model pin already match pgvector; skipping unchanged embeddings."
-else
+snapshot_stage="$(sudo_if_needed mktemp -d -p "$SIFT_STATE_DIR" rag-qwen-snapshot.XXXXXX)"
+trap 'sudo_if_needed rm -rf -- "${snapshot_stage:-}"' EXIT
+sudo_if_needed chown "$SIFT_GATEWAY_SERVICE_USER:$SIFT_GATEWAY_SERVICE_USER" "$snapshot_stage"
+"${as_gateway_service[@]}" tar --zstd -xf "$RAG_SNAPSHOT_ARCHIVE" -C "$snapshot_stage"
+
+log "Verifying the pinned Qwen model/snapshot and importing pgvector through installer authority."
 if ! (
   cd "$SIFT_STATE_DIR"
   "${as_gateway_service[@]}" env \
@@ -121,15 +124,19 @@ if ! (
     HF_HOME="$SIFT_HF_HOME" \
     HF_HUB_OFFLINE="$hf_offline" \
     TRANSFORMERS_OFFLINE="$hf_offline" \
-    "$VENV_PYTHON" -m sift_gateway.rag_provision \
-      "${rag_provision_args[@]}"
+    RAG_MODEL_NAME="$RAG_MODEL_NAME" \
+    RAG_MODEL_REVISION="$RAG_MODEL_REVISION" \
+    "$VENV_PYTHON" -m rag_mcp.pgvector_snapshot_import \
+      "$snapshot_stage/qwen3-embedding-0.6b-1024"
 ); then
   if is_offline; then
-    die "Offline RAG provisioning failed. Stage canonical BGE model revision $RAG_MODEL_REVISION under $SIFT_HF_HOME and verify the shipped corpus manifest before rerunning $0 --install --offline."
+    die "Offline RAG provisioning failed. Stage canonical Qwen revision $RAG_MODEL_REVISION under $SIFT_HF_HOME and verify the shipped snapshot before rerunning $0 --install --offline."
   fi
-  die "RAG pgvector provisioning failed. Check the control plane and pinned model/corpus artifacts, then rerun $0 --install."
+  die "RAG pgvector provisioning failed. The importer refuses a non-empty mismatched corpus; rebuild the disposable database or restore the canonical snapshot, then rerun $0 --install."
 fi
-fi
+sudo_if_needed rm -rf -- "$snapshot_stage"
+snapshot_stage=""
+trap - EXIT
 
 reconcile_first_party_gateway_backend "forensic-rag-mcp" "$RAG_MANIFEST" || die \
   "RAG corpus was seeded but registry reconciliation failed. Restore gateway control-plane access and rerun $0 --install."
@@ -144,7 +151,7 @@ if command -v systemctl >/dev/null 2>&1 && sudo_if_needed systemctl is-active --
     "sift-gateway did not return active after RAG reconciliation; inspect systemctl status sift-gateway."
 fi
 
-log "RAG core add-on ready: pinned corpus seeded, gateway-owned registry reconciled."
+log "RAG core add-on ready: pinned Qwen snapshot imported, gateway-owned registry reconciled."
 rerun="$0 --install"
 [[ "$offline_requested" -eq 1 ]] && rerun+=" --offline"
 log "Health probe: kb_get_knowledge_stats. Rerun: $rerun"

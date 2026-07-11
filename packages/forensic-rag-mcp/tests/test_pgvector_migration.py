@@ -28,7 +28,8 @@ def test_migration_exists():
 def test_pgvector_extension_and_dim():
     sql = _sql()
     assert "create extension if not exists vector" in sql
-    assert "vector(768)" in sql
+    assert "vector(1024)" in sql
+    assert "using hnsw (embedding vector_cosine_ops)" in sql.lower()
 
 
 def test_kind_case_invariant_present_on_all_tables():

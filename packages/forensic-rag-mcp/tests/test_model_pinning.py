@@ -10,8 +10,8 @@ from rag_mcp.utils import (
 )
 
 
-def test_default_is_canonical_bge():
-    assert DEFAULT_MODEL_NAME == "BAAI/bge-base-en-v1.5"
+def test_default_is_canonical_qwen():
+    assert DEFAULT_MODEL_NAME == "Qwen/Qwen3-Embedding-0.6B"
     assert CANONICAL_MODEL_NAME == DEFAULT_MODEL_NAME
 
 

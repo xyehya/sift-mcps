@@ -8,25 +8,13 @@ forensic-rag-mcp add-on, now backed by the Supabase pgvector store
 that PMI2 introduced has been removed; RAG has a single agent-facing home again
 in this add-on.
 
-Modules available for the knowledge load pipeline:
+Modules available for the canonical knowledge load pipeline:
     pgvector_store: Supabase pgvector adapter (PgVectorRagStore)
-    pgvector_chroma_import: Chroma->pgvector batch importer
-    pgvector_seed: Seed knowledge documents from the knowledge/ directory
-
-Legacy Chroma-backed modules (refresh, sources, ingest, config) remain on disk
-as internal helpers for the Chroma->pgvector import/download step only (the
-bundle-fetch entrypoint ``scripts/download_index.py`` lazily re-embeds user
-docs via ``refresh``) and are NOT part of the public API. The Chroma
-index-build/refresh/analyze tooling (index, build, status, analyze_queries,
-tuning_config, fs_safety, scripts/build_release) was removed in BATCH-OSX-PURGE
-as dead after the pgvector port.
+    pgvector_snapshot_import: verified Qwen snapshot importer
 
 Usage:
-    # Import Chroma collection into pgvector
-    python -m rag_mcp.pgvector_chroma_import
-
-    # Seed knowledge documents
-    python -m rag_mcp.pgvector_seed
+    # Verify the canonical snapshot/model and import pgvector
+    python -m rag_mcp.pgvector_snapshot_import /path/to/extracted-snapshot
 
     # Use pgvector store directly
     from rag_mcp.pgvector_store import PgVectorRagStore
