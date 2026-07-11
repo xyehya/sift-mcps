@@ -132,7 +132,11 @@ def main() -> None:
         user = users.get(email)
         if user is None:
             user = graphql(admin_token, add, {"input": {"name": name, "user_email": email, "password": secrets.token_urlsafe(64), "groups": [group["id"]], "user_service_account": True}}, "user create")["userAdd"]
-        token = stack.get(token_key, "")
+            # A fresh OpenCTI datastore invalidates any locally retained token
+            # from a previous disposable deployment.
+            token = ""
+        else:
+            token = stack.get(token_key, "")
         if not token:
             token = graphql(admin_token, token_add, {"userId": user["id"], "input": {"name": "sift-managed", "duration": "UNLIMITED"}}, "token create")["userAdminTokenAdd"]["plaintext_token"]
         me = graphql(token, "query { me { id user_email capabilities { name } } }", operation="token verify")["me"]
