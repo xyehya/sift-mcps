@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "codebase-memory-mcp": {
-      "command": "codebase-memory-mcp",
+      "command": "/Users/yk/.local/bin/codebase-memory-mcp",
       "args": []
     }
   }

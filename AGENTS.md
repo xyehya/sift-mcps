@@ -71,7 +71,8 @@ Prefer **repo** config over user-global installs. Canonical locations:
 
 CodeGuard is vendored as `.cursor/rules/codeguard-*.mdc` + `.cursor/agents/codeguard-reviewer.md` — do not also enable the CodeGuard marketplace plugin in this project.
 
-`codebase-memory-mcp` must be on `PATH` (e.g. `~/.local/bin`). Keep `~/.cursor/mcp.json` empty for this machine so the project `.cursor/mcp.json` owns it.
+Keep `~/.cursor/mcp.json` empty so project `.cursor/mcp.json` owns memory MCP.
+Cursor uses `${userHome}/.local/bin/codebase-memory-mcp` (GUI apps often lack `~/.local/bin` on `PATH`).
 
 ## Code Discovery
 
