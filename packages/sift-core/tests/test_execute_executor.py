@@ -58,6 +58,27 @@ def test_denied_command_rejected_before_executor_is_invoked(monkeypatch):
     assert called is False
 
 
+@pytest.mark.parametrize("binary", ["PECmd", "SrumECmd"])
+def test_windows_only_zimmerman_tools_are_rejected_before_linux_execution(
+    monkeypatch, binary
+):
+    """Fail on reversion: a detected Windows helper must not gain a Linux lane."""
+    _set_policy(monkeypatch, {"mode": "allowlist", "allowed_binaries": [binary]})
+    called = False
+
+    def _fail_if_called(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("executor should not run Windows-only tools")
+
+    monkeypatch.setattr(generic, "execute", _fail_if_called)
+
+    with pytest.raises(DeniedBinaryError, match="blocked by security policy"):
+        generic.run_command([binary, "--help"], purpose="test platform policy")
+
+    assert called is False
+
+
 def test_allowlist_blocked_command_rejected_before_executor_is_invoked(monkeypatch):
     _set_policy(
         monkeypatch,

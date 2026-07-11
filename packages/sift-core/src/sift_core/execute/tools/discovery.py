@@ -414,7 +414,15 @@ def suggest_tools(artifact_type: str, question: str = "") -> dict:
             entry = {
                 "tool": tool_name,
                 "artifact": art_name,
-                "available": find_binary(td.binary) is not None if td else False,
+                # A detectable binary alone is not an execution grant. Some
+                # catalog cards intentionally retain forensic knowledge for
+                # tools that belong to a different execution plane (for
+                # example, Windows-only wintools-mcp helpers). Keep
+                # suggestions consistent with list/check/help inventory and
+                # never advertise those as runnable by the Linux agent.
+                "available": bool(
+                    td and td.agent_executable and find_binary(td.binary) is not None
+                ),
                 "description": fk.get("description", "") if fk else "",
                 "what_it_reveals": artifact.get("proves", []),
                 "what_it_does_not_reveal": artifact.get("does_not_prove", []),

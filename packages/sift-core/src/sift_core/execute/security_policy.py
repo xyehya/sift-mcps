@@ -60,6 +60,13 @@ DENY_FLOOR = frozenset(
         "cryptsetup",
         "dmsetup",
         "hdparm",
+        # These curated knowledge cards are Windows-only and must be invoked
+        # through an operator-provisioned wintools-mcp backend, never through
+        # the Linux run_command lanes. Keep this in the non-overridable deny
+        # floor so a detected binary or an operator allowlist cannot contradict
+        # the catalog's execution boundary.
+        "pecmd",
+        "srumecmd",
         # Added — nested interpreters (P0.3)
         "*sh",
         "busybox",
@@ -162,8 +169,6 @@ MVP_FORENSIC_ALLOWLIST = frozenset(
         "mftecmd",
         "RECmd",
         "recmd",
-        "PECmd",
-        "pecmd",
         "AmcacheParser",
         "amcacheparser",
         "AppCompatCacheParser",
@@ -176,8 +181,6 @@ MVP_FORENSIC_ALLOWLIST = frozenset(
         "sbecmd",
         "RBCmd",
         "rbcmd",
-        "SrumECmd",
-        "srumecmd",
         "SQLECmd",
         "sqlecmd",
         "bstrings",
