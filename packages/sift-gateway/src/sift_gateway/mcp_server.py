@@ -25,6 +25,7 @@ from sift_gateway.backends.egress import (
     make_pinned_egress_factory,
     validate_egress_url,
 )
+from sift_gateway.backends.stdio_backend import _capability_dropped_command
 from sift_gateway.mcp_endpoint import (
     SiftTokenVerifier,
     _build_gateway_instructions,
@@ -615,8 +616,9 @@ def _stdio_transport(config: dict) -> StdioTransport:
     env.update(configured_env)
     env = {str(k): str(v) for k, v in env.items() if v}
     args = [str(arg) for arg in config.get("args", [])]
+    command, args = _capability_dropped_command(str(command), args)
     return StdioTransport(
-        command=str(command),
+        command=command,
         args=args,
         env=env,
         cwd=config.get("cwd"),

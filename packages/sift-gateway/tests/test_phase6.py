@@ -552,6 +552,26 @@ def test_stdio_proxy_env_does_not_inherit_unreferenced_process_secrets(monkeypat
     assert "SIFT_BACKEND_SECRET" not in transport.env
 
 
+def test_live_stdio_proxy_uses_capability_dropping_transition(monkeypatch):
+    monkeypatch.setenv("SIFT_DROP_BACKEND_CAPABILITIES", "1")
+    monkeypatch.setattr("sift_gateway.backends.stdio_backend.os.path.isfile", lambda _: True)
+    monkeypatch.setattr("sift_gateway.backends.stdio_backend.os.access", lambda *_: True)
+
+    transport = _stdio_transport(
+        {"type": "stdio", "command": "/opt/addon", "args": ["--serve"]}
+    )
+
+    assert transport.command == "/usr/bin/setpriv"
+    assert transport.args == [
+        "--no-new-privs",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--",
+        "/opt/addon",
+        "--serve",
+    ]
+
+
 def test_stdio_proxy_env_propagates_db_active_authority_flag(monkeypatch):
     # The stdio add-on backend (opensearch-mcp) must agree with the gateway on
     # Postgres ingest-status authority; SIFT_DB_ACTIVE is a non-secret boolean and
