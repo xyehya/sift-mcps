@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -46,6 +47,32 @@ _CONNECTION_KEYS = frozenset(
         "tls_cert_env",
         "env_refs",
     }
+)
+
+# Gateway authority credentials are never valid add-on connection references.
+# Legitimate add-on credentials (for example SIFT_OPENCTI_TOKEN) remain allowed,
+# but a registry row must not turn the gateway's control-plane/auth secrets into
+# either a subprocess environment variable or an outbound HTTP credential.
+_FORBIDDEN_AUTHORITY_ENV_REFS = frozenset(
+    {
+        "DATABASE_URL",
+        "POSTGRES_DSN",
+        "SIFT_AUDIT_WRITER_DSN",
+        "SIFT_CONTROL_PLANE_DSN",
+        "SIFT_DB_DSN",
+        "SIFT_GATEWAY_TOKEN",
+        "SIFT_HMAC_KEY",
+        "SIFT_PORTAL_SESSION_SECRET",
+        "SIFT_SERVICE_TOKEN",
+        "SIFT_TOKEN_PEPPER",
+        "SUPABASE_ANON_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY",
+    }
+)
+_ALLOWED_ADDON_ENV_REF_PREFIXES = (
+    "OPENSEARCH_",
+    "SIFT_BACKEND_",
+    "SIFT_OPENCTI_",
 )
 
 
@@ -311,6 +338,33 @@ def _validate_env_name(value: Any, *, field: str) -> str:
     return value
 
 
+def _validate_connection_env_ref(
+    value: Any, *, field: str, require_approved_source: bool = False
+) -> str:
+    """Validate an add-on env reference without exposing gateway authority.
+
+    This guard intentionally applies at both persistence and runtime load.  The
+    latter prevents a legacy or directly-tampered registry row from bypassing
+    the registration-time check.
+    """
+    name = _validate_env_name(value, field=field)
+    if (
+        name in _FORBIDDEN_AUTHORITY_ENV_REFS
+        or name.endswith("_DSN")
+        or name.endswith("_DATABASE_URL")
+    ):
+        raise BackendRegistryError(
+            f"{field} cannot reference a gateway authority credential"
+        )
+    if require_approved_source and not name.startswith(
+        _ALLOWED_ADDON_ENV_REF_PREFIXES
+    ):
+        raise BackendRegistryError(
+            f"{field} is outside the approved add-on credential namespace"
+        )
+    return name
+
+
 def normalize_connection_config(config: dict[str, Any]) -> dict[str, Any]:
     """Return DB-storable non-secret backend connection metadata.
 
@@ -346,14 +400,22 @@ def normalize_connection_config(config: dict[str, Any]) -> dict[str, Any]:
             continue
         value = config[key]
         if key in {"bearer_token_env", "tls_cert_env"}:
-            value = _validate_env_name(value, field=key)
+            value = _validate_connection_env_ref(
+                value, field=key, require_approved_source=True
+            )
         elif key == "env_refs":
             if not isinstance(value, dict):
                 raise BackendRegistryError("env_refs must be an object")
             refs: dict[str, str] = {}
             for target, source in value.items():
-                target_name = _validate_env_name(target, field="env_refs key")
-                refs[target_name] = _validate_env_name(source, field=f"env_refs.{target_name}")
+                target_name = _validate_connection_env_ref(
+                    target, field="env_refs key"
+                )
+                refs[target_name] = _validate_connection_env_ref(
+                    source,
+                    field=f"env_refs.{target_name}",
+                    require_approved_source=True,
+                )
             value = refs
         elif key == "args":
             if not isinstance(value, list):
@@ -387,22 +449,42 @@ def resolve_runtime_config(connection: dict[str, Any], *, environ: dict[str, str
 
     bearer_token_env = config.pop("bearer_token_env", None)
     if bearer_token_env:
-        config["bearer_token"] = _resolve_env_ref(str(bearer_token_env), env_source, "bearer_token_env")
+        bearer_token_env = _validate_connection_env_ref(
+            bearer_token_env,
+            field="bearer_token_env",
+            require_approved_source=True,
+        )
+        config["bearer_token"] = _resolve_env_ref(
+            bearer_token_env, env_source, "bearer_token_env"
+        )
 
     tls_cert_env = config.pop("tls_cert_env", None)
     if tls_cert_env:
-        config["tls_cert"] = _resolve_env_ref(str(tls_cert_env), env_source, "tls_cert_env")
+        tls_cert_env = _validate_connection_env_ref(
+            tls_cert_env, field="tls_cert_env", require_approved_source=True
+        )
+        config["tls_cert"] = _resolve_env_ref(
+            tls_cert_env, env_source, "tls_cert_env"
+        )
 
     env_refs = config.pop("env_refs", {}) or {}
     if env_refs:
         resolved_env: dict[str, str] = {}
         for target, source in env_refs.items():
-            resolved_env[str(target)] = _resolve_env_ref(str(source), env_source, f"env_refs.{target}")
+            target_name = _validate_connection_env_ref(target, field="env_refs key")
+            source_name = _validate_connection_env_ref(
+                source,
+                field=f"env_refs.{target_name}",
+                require_approved_source=True,
+            )
+            resolved_env[target_name] = _resolve_env_ref(
+                source_name, env_source, f"env_refs.{target_name}"
+            )
         config["env"] = resolved_env
     return config
 
 
-def _resolve_env_ref(name: str, environ: dict[str, str], field: str) -> str:
+def _resolve_env_ref(name: str, environ: Mapping[str, str], field: str) -> str:
     if name not in environ or environ[name] == "":
         raise BackendRegistryError(f"{field} references missing environment variable")
     return str(environ[name])

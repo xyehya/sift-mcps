@@ -114,3 +114,111 @@ def test_missing_runtime_env_reference_blocks_backend_load():
 
     with pytest.raises(BackendRegistryError, match="missing environment variable"):
         resolve_runtime_config(stored, environ={})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("bearer_token_env", "SIFT_CONTROL_PLANE_DSN"),
+        ("tls_cert_env", "SUPABASE_SERVICE_ROLE_KEY"),
+        ("bearer_token_env", "VENDOR_DATABASE_DSN"),
+    ],
+)
+def test_http_refs_reject_gateway_authority_credentials(field, value):
+    with pytest.raises(BackendRegistryError, match="gateway authority credential"):
+        normalize_connection_config(
+            {"type": "http", "url": "https://backend.example/mcp", field: value}
+        )
+
+
+@pytest.mark.parametrize(
+    "env_refs",
+    [
+        {"BACKEND_DSN": "SIFT_BACKEND_API_TOKEN"},
+        {"BACKEND_DATABASE_URL": "SIFT_BACKEND_API_TOKEN"},
+        {"BACKEND_TOKEN": "SIFT_AUDIT_WRITER_DSN"},
+        {"SUPABASE_ANON_KEY": "SIFT_BACKEND_API_TOKEN"},
+    ],
+)
+def test_stdio_refs_reject_authority_source_and_target_names(env_refs):
+    with pytest.raises(BackendRegistryError, match="gateway authority credential"):
+        normalize_connection_config(
+            {
+                "type": "stdio",
+                "command": "/opt/backend/bin/server",
+                "env_refs": env_refs,
+            }
+        )
+
+
+def test_unknown_gateway_env_ref_namespace_is_rejected():
+    with pytest.raises(BackendRegistryError, match="approved add-on credential namespace"):
+        normalize_connection_config(
+            {
+                "type": "stdio",
+                "command": "/opt/backend/bin/server",
+                "env_refs": {"BACKEND_TOKEN": "UNSCOPED_GATEWAY_TOKEN"},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "connection",
+    [
+        {
+            "type": "stdio",
+            "command": "/opt/backend/bin/server",
+            "env_refs": {"BACKEND_TOKEN": "SIFT_CONTROL_PLANE_DSN"},
+        },
+        {
+            "type": "http",
+            "url": "https://backend.example/mcp",
+            "bearer_token_env": "SIFT_AUDIT_WRITER_DSN",
+        },
+        {
+            "type": "http",
+            "url": "https://backend.example/mcp",
+            "tls_cert_env": "SUPABASE_SERVICE_ROLE_KEY",
+        },
+    ],
+)
+def test_runtime_rejects_persisted_authority_reference_bypass(connection):
+    with pytest.raises(BackendRegistryError, match="gateway authority credential"):
+        resolve_runtime_config(
+            connection,
+            environ={
+                "SIFT_CONTROL_PLANE_DSN": "postgresql://authority",
+                "SIFT_AUDIT_WRITER_DSN": "postgresql://audit",
+                "SUPABASE_SERVICE_ROLE_KEY": "service-role",
+            },
+        )
+
+
+def test_legitimate_opencti_and_opensearch_refs_remain_allowed():
+    stored = normalize_connection_config(
+        {
+            "type": "stdio",
+            "command": "/opt/backend/bin/server",
+            "env_refs": {
+                "OPENCTI_TOKEN": "SIFT_OPENCTI_TOKEN",
+                "OPENCTI_URL": "SIFT_OPENCTI_URL",
+                "OPENSEARCH_CONFIG": "OPENSEARCH_CONFIG",
+                "OPENSEARCH_HOST": "OPENSEARCH_HOST",
+            },
+        }
+    )
+    runtime = resolve_runtime_config(
+        stored,
+        environ={
+            "SIFT_OPENCTI_TOKEN": "token",
+            "SIFT_OPENCTI_URL": "https://opencti.example",
+            "OPENSEARCH_CONFIG": "/var/lib/sift/.sift/opensearch.yaml",
+            "OPENSEARCH_HOST": "https://127.0.0.1:9200",
+        },
+    )
+    assert set(runtime["env"]) == {
+        "OPENCTI_TOKEN",
+        "OPENCTI_URL",
+        "OPENSEARCH_CONFIG",
+        "OPENSEARCH_HOST",
+    }

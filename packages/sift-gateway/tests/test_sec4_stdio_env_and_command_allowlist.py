@@ -104,15 +104,14 @@ def test_build_minimal_env_passes_only_memory_preflight_tuning():
     assert "SIFT_UNRELATED_TUNING" not in env
 
 
-def test_build_minimal_env_overlay_is_the_only_secret_channel():
-    """An approved env_ref (e.g. RAG's knowledge-corpus DSN) still reaches the
-    child — but only because it is explicitly overlaid, not inherited."""
+def test_build_minimal_env_overlay_is_the_only_addon_credential_channel():
+    """A registry-validated add-on credential reaches the child only by overlay."""
     base = {"PATH": "/usr/bin", "SIFT_CONTROL_PLANE_DSN": "inherited"}
     # No overlay -> inherited DSN is dropped.
     assert "SIFT_CONTROL_PLANE_DSN" not in _build_minimal_backend_env(base, {})
-    # Explicit overlay (resolved env_ref) -> present, by design.
-    env = _build_minimal_backend_env(base, {"SIFT_CONTROL_PLANE_DSN": "approved"})
-    assert env["SIFT_CONTROL_PLANE_DSN"] == "approved"
+    # A legitimate credential resolved by the registry is overlaid.
+    env = _build_minimal_backend_env(base, {"OPENCTI_TOKEN": "approved"})
+    assert env["OPENCTI_TOKEN"] == "approved"
 
 
 async def test_spawned_stdio_env_excludes_secrets(monkeypatch):
