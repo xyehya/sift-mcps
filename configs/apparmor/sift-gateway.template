@@ -113,6 +113,13 @@ profile sift-gateway {
   # the only source of CAP_LINUX_IMMUTABLE; this rule merely permits AppArmor
   # use of that already-bounded capability.
   capability linux_immutable,
+  # The trusted gateway reaches only root-owned validating brokers through
+  # command-specific sudoers rules. These capabilities are bounded by systemd
+  # and are removed entirely from every spawned add-on service.
+  capability setuid,
+  capability setgid,
+  capability setpcap,
+  capability audit_write,
 
   # Backend subprocesses — only uv-managed Python and console scripts
   /opt/sift-mcps/.venv/bin/**                rix,
@@ -156,6 +163,17 @@ profile sift-gateway {
   # standard multiarch library path on Ubuntu 24.04.
   /usr/libexec/sudo/                         r,
   /usr/libexec/sudo/**                       mr,
+  /etc/sudo.conf                             r,
+  /etc/sudoers                               r,
+  /etc/sudoers.d/                            r,
+  /etc/sudoers.d/**                          r,
+  /etc/pam.d/sudo                            r,
+  /etc/pam.d/sudo-i                          r,
+  /etc/security/**                           r,
+  /run/sudo/                                 rw,
+  /run/sudo/**                               rwk,
+  /var/lib/sudo/                             rw,
+  /var/lib/sudo/**                           rwk,
 
   # DENY shell execution
   deny /bin/bash                             x,

@@ -150,6 +150,8 @@ def test_secure_os_hardening_is_default_and_service_scoped() -> None:
     assert "pix ->" not in gateway_profile
     assert "pux ->" not in gateway_profile
     assert "capability linux_immutable," in gateway_profile
+    assert "capability setuid," in gateway_profile
+    assert "capability setgid," in gateway_profile
     assert "/var/lib/sift/.sift/opensearch.yaml       r," in gateway_profile
     assert "/var/lib/sift/.sift/opensearch-root-ca.pem r," in gateway_profile
     addon_profile = gateway_profile.split("profile sift-addon {", 1)[1]
