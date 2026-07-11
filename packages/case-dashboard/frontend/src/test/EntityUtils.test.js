@@ -7,6 +7,7 @@ import {
   getAccountsForFinding,
   timeRange,
   fmtTs,
+  parseTimestamp,
   normEventType,
   humanizeGap,
   filterTimeline,
@@ -60,6 +61,16 @@ describe('entity-utils — account extraction', () => {
 })
 
 describe('entity-utils — time formatting', () => {
+  it('parses ISO strings, epoch milliseconds, and Date values without coercing invalid inputs', () => {
+    const expected = Date.parse('2026-01-02T03:04:05.000Z')
+    expect(parseTimestamp('2026-01-02T03:04:05.000Z')).toBe(expected)
+    expect(parseTimestamp(expected)).toBe(expected)
+    expect(parseTimestamp(new Date(expected))).toBe(expected)
+    expect(Number.isNaN(parseTimestamp('not-a-date'))).toBe(true)
+    expect(Number.isNaN(parseTimestamp(null))).toBe(true)
+    expect(Number.isNaN(parseTimestamp(Number.POSITIVE_INFINITY))).toBe(true)
+  })
+
   it('fmtTs renders UTC "YYYY-MM-DD HH:MM:SS" or — for junk', () => {
     expect(fmtTs('2026-01-02T03:04:05.000Z')).toBe('2026-01-02 03:04:05')
     expect(fmtTs('not-a-date')).toBe('—')
@@ -103,6 +114,15 @@ describe('entity-utils — timeline', () => {
     expect(filterTimeline(tl, { host: 'WS-1' }).map((e) => e.id)).toEqual(['b', 'c'])
     // Search (description, case-insensitive).
     expect(filterTimeline(tl, { search: 'BRAVO' }).map((e) => e.id)).toEqual(['b'])
+  })
+
+  it('keeps valid timestamps ordered when invalid timestamps are present', () => {
+    const tl = [
+      { id: 'late', timestamp: '2026-01-02T05:00:00Z' },
+      { id: 'invalid', timestamp: 'not-a-date' },
+      { id: 'early', timestamp: '2026-01-02T03:00:00Z' },
+    ]
+    expect(filterTimeline(tl).map((event) => event.id)).toEqual(['late', 'invalid', 'early'])
   })
 })
 

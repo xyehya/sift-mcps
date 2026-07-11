@@ -9,6 +9,8 @@
 // Never build a token class by interpolation (`text-${x}`) — it won't generate.
 // ─────────────────────────────────────────────────────────────────────────
 
+import { parseTimestamp } from '@/lib/timestamp-utils'
+
 /**
  * Confidence == the forensic severity dimension. Order = high → low.
  * Three canonical tiers only — High / Medium / Low (P0 model-shift, handoff §3).
@@ -210,9 +212,9 @@ export function effectiveFinding(finding, stagedItem) {
 export function contextWindow(finding, timeline) {
   const rawTs = finding?.event_timestamp || finding?.timestamp
   if (!rawTs || !timeline?.length) return []
-  const ts = new Date(rawTs).getTime()
+  const ts = parseTimestamp(rawTs)
   const TWO_H = 2 * 3600 * 1000
   return timeline
-    .filter((e) => Math.abs(new Date(e.timestamp).getTime() - ts) <= TWO_H)
-    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+    .filter((e) => Math.abs(parseTimestamp(e.timestamp) - ts) <= TWO_H)
+    .sort((a, b) => parseTimestamp(a.timestamp) - parseTimestamp(b.timestamp))
 }
