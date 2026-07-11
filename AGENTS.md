@@ -130,6 +130,32 @@ LSP/diagnostics catch import/signature/optional-value/rename slips early; they d
 NOT prove policy/runtime/DB/live-VM behavior. codebase-memory is first for
 call-graphs/architecture; tests + deploy-and-prove remain the final authority.
 
+## Security reporting — evidence before implication
+
+Do not report an architectural possibility as an agent-reachable vulnerability. Before
+raising, escalating, or acting on a security finding, establish the complete current
+path and distinguish a demonstrated exposure from defense-in-depth hardening.
+
+Every security report must state:
+
+1. The exact MCP tool or resource URI, its registration site, and whether a real agent
+   can invoke it.
+2. The gateway route and the policy gates that apply (identity, authorization,
+   active-case binding, audit, evidence, response guard, and dispatch as applicable).
+3. The supplied versus gateway-injected arguments and the exact backend entrypoint.
+4. The precise downstream operation: database/OpenSearch method, target index/query,
+   filesystem path, network target, or process/command.
+5. The OS/process footprint: whether `run_command`, a worker, a subprocess, evidence
+   access, or the execution sandbox is involved. “Agent-facing” alone is not evidence.
+6. A current reachability reproduction. If it cannot be reproduced, label it clearly as
+   a potential hardening/design concern and give the missing proof; do not call it a
+   vulnerability or block unrelated work on implication alone.
+
+For case-scoping claims, prove the active-case source, propagation path, and final
+index/query scope. For resource reads, prove that resource-read context—not merely
+tool-call middleware—carries the required identity and active-case authority. Code wins
+over design docs; report any drift precisely.
+
 ## Agent Worktrees
 
 The harness `isolation: worktree` flag does NOT create isolated working
