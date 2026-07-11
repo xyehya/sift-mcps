@@ -160,8 +160,10 @@ def list_available_tools(category: str | None = None) -> list[dict]:
     results = []
     for t in tools:
         td = get_tool_def(t["name"])
-        available = find_binary(td.binary) is not None if td else False
+        available = bool(td and td.agent_executable and find_binary(td.binary) is not None)
         entry = {**t, "available": available, "enriched": True}
+        if td and td.availability_note:
+            entry["availability_note"] = td.availability_note
         if td and available:
             entry["binary_path"] = find_binary(td.binary)
         results.append(entry)
@@ -191,7 +193,7 @@ def build_tool_inventory() -> dict:
         binary = td.binary if td else t["name"]
         cataloged_keys.add(t["name"].lower())
         cataloged_keys.add(binary.lower())
-        available = find_binary(binary) is not None
+        available = td.agent_executable and find_binary(binary) is not None if td else False
         if available:
             available_count += 1
         entry: dict = {
@@ -204,6 +206,8 @@ def build_tool_inventory() -> dict:
         # Example: catalog name "regripper" → invocable binary "rip.pl".
         if binary != t["name"]:
             entry["invoke_as"] = binary
+        if td and td.availability_note:
+            entry["availability_note"] = td.availability_note
         tools.append(entry)
 
     # run_command's security allowlist permits binaries beyond the catalog;
@@ -221,8 +225,10 @@ def build_tool_inventory() -> dict:
         "tools": tools,
         "allowlisted_extra": allowlisted_extra,
         "hint": (
-            "run_command accepts any allowlisted binary, cataloged or not. "
-            "Cataloged tools get enriched help: get_tool_help('<name>')."
+            "run_command is the synchronous lane; use run_command_job for "
+            "long-running or parallel work and poll running_commands_status. "
+            "run_command accepts allowlisted binaries; cataloged tools get "
+            "enriched help: get_tool_help('<name>')."
         ),
     }
     return _INVENTORY_CACHE
@@ -265,6 +271,18 @@ def get_tool_help(tool_name: str) -> dict:
                 "Not sure which binaries are installed? get_tool_help('inventory') "
                 "returns every cataloged + allowlisted binary with an availability flag."
             ),
+            "execution_lanes": {
+                "synchronous": {
+                    "tool": "run_command",
+                    "result": "inline preview and rc-* receipt; not a durable job",
+                    "use_for": "quick, bounded commands",
+                },
+                "durable": {
+                    "tool": "run_command_job",
+                    "result": "pollable UUID job_id; poll with running_commands_status",
+                    "use_for": "long-running or parallel commands while the job worker is healthy",
+                },
+            },
         }
     td = get_tool_def(tool_name)
     if not td:
@@ -276,7 +294,7 @@ def get_tool_help(tool_name: str) -> dict:
             )
         }
 
-    available = find_binary(td.binary) is not None
+    available = td.agent_executable and find_binary(td.binary) is not None
     result = {
         "name": td.name,
         "binary": td.binary,
@@ -289,6 +307,8 @@ def get_tool_help(tool_name: str) -> dict:
         "common_flags": td.common_flags,
         "available": available,
     }
+    if td.availability_note:
+        result["availability_note"] = td.availability_note
     # This help reflects the catalog + curated forensic-knowledge entry, which
     # may not cover every flag. For the tool's own complete CLI reference, run it
     # with its help flag via run_command (e.g. run_command(['EvtxECmd','--help'])).

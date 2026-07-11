@@ -18,12 +18,17 @@ tools:
 
   - name: PECmd
     binary: PECmd
+    # This Linux gateway keeps the knowledge card so agents can recognize the
+    # artifact, but must not advertise an executable path it cannot safely run.
+    # Use the separately provisioned Windows wintools-mcp for PECmd.
+    agent_executable: false
+    availability_note: "Windows-only via an operator-provisioned wintools-mcp backend; unavailable in Linux run_command and run_command_job lanes. Use the Prefetch/OpenSearch parser on SIFT instead."
     input_style: flag
     input_flag: "-f"
     output_format: csv
     timeout_seconds: 300
     interactive: false
-    description: "Parse Windows Prefetch files"
+    description: "Windows PECmd Prefetch parser (via optional wintools-mcp, not the Linux execution lanes)"
     fk_tool_name: PECmd
     common_flags:
       - flag: "--csv"
@@ -154,12 +159,14 @@ tools:
 
   - name: SrumECmd
     binary: SrumECmd
+    agent_executable: false
+    availability_note: "Windows-only via an operator-provisioned wintools-mcp backend; unavailable in Linux run_command and run_command_job lanes. Use the SRUM/OpenSearch parser on SIFT instead."
     input_style: flag
     input_flag: "-f"
     output_format: csv
     timeout_seconds: 600
     interactive: false
-    description: "Parse SRUM database"
+    description: "Windows SrumECmd parser (via optional wintools-mcp, not the Linux execution lanes)"
     fk_tool_name: SrumECmd
     common_flags:
       - flag: "--csv"

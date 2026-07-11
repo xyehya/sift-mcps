@@ -36,7 +36,7 @@ def test_tool_help_inventory_returns_availability_booleans():
     for entry in inv["tools"]:
         # "invoke_as" is present only when the catalog name differs from the
         # invocable binary (e.g. "regripper" → invoke_as "rip.pl").
-        assert set(entry) <= {"name", "category", "available", "invoke_as"}
+        assert set(entry) <= {"name", "category", "available", "invoke_as", "availability_note"}
         assert {"name", "category", "available"} <= set(entry)
         assert isinstance(entry["available"], bool)
 
@@ -98,6 +98,44 @@ def test_tool_help_unknown_tool_errors_helpfully():
 def test_run_command_help_mentions_inventory_discovery():
     help_card = get_tool_help("run_command")
     assert "get_tool_help('inventory')" in help_card["discovery"]
+
+
+def test_run_command_help_distinguishes_synchronous_and_durable_lanes():
+    """Agents must not mistake an rc receipt for a pollable durable job."""
+    help_card = get_tool_help("run_command")
+
+    assert help_card["execution_lanes"]["synchronous"] == {
+        "tool": "run_command",
+        "result": "inline preview and rc-* receipt; not a durable job",
+        "use_for": "quick, bounded commands",
+    }
+    assert help_card["execution_lanes"]["durable"] == {
+        "tool": "run_command_job",
+        "result": "pollable UUID job_id; poll with running_commands_status",
+        "use_for": "long-running or parallel commands while the job worker is healthy",
+    }
+
+
+@pytest.mark.parametrize("tool_name", ["PECmd", "SrumECmd"])
+def test_windows_only_zimmerman_tools_are_not_advertised_as_linux_executable(tool_name):
+    """Fail on reversion: these remain knowledge cards, not Linux execution promises."""
+    inventory = get_tool_help("inventory")
+    entry = next(tool for tool in inventory["tools"] if tool["name"] == tool_name)
+    help_card = get_tool_help(tool_name)
+
+    assert entry["available"] is False
+    assert "Windows-only" in entry["availability_note"]
+    assert help_card["available"] is False
+    assert "Linux run_command and run_command_job lanes" in help_card["availability_note"]
+    assert "usage_hint" not in help_card
+
+
+def test_yara_help_does_not_claim_a_bundled_rules_inventory():
+    """Fail on reversion: rules are an operator input, never a shipped catalog asset."""
+    help_card = get_tool_help("yara")
+
+    assert "operator-provisioned read-only rule file" in help_card["description"]
+    assert "no YARA rules inventory" in help_card["description"]
 
 
 def test_inventory_regripper_shows_invoke_as_rip_pl():
