@@ -933,7 +933,11 @@ def validate_shell_command(
         if not argv:
             raise ValueError("Empty subcommand in pipeline/logical chain")
             
-        binary = argv[0].split('/')[-1]
+        # Commands are parsed on Linux, but callers can submit Windows-style
+        # paths. Normalize both separators before applying the non-overridable
+        # deny floor so ``C:\\Zimmerman\\PECmd.exe`` cannot bypass it merely
+        # because ``str.split('/')`` treats the entire path as a basename.
+        binary = argv[0].replace("\\", "/").rsplit("/", 1)[-1]
         
         # Deny sudo
         if binary == "sudo":

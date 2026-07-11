@@ -443,6 +443,30 @@ def test_durable_lane_denies_windows_only_zimmerman_launcher_targets(db, sealed_
     assert "Windows-only Zimmerman tool target" in stored.result_public["error"]
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"'C:\\Zimmerman\\{tool}{suffix}' --help"
+        for tool in ("PECmd", "SrumECmd")
+        for suffix in ("", ".exe", ".dll")
+    ],
+)
+def test_durable_lane_denies_windows_style_paths_to_windows_only_zimmerman_tools(
+    db, sealed_case, command
+):
+    """Fail on reversion: durable commands normalize ``\\`` before DENY_FLOOR."""
+    job = _enqueue_run_command(
+        db, sealed_case, command=command, purpose="attempt Windows-only direct execution"
+    )
+    w = _worker(db, {"run_command": run_command_job_handler})
+    w.run_once(job_types=["run_command"])
+
+    stored = db.get(job.id)
+    assert stored.status == "succeeded"
+    assert stored.result_public["success"] is False
+    assert "blocked by security policy" in stored.result_public["error"]
+
+
 def test_run_command_cannot_read_secret_env_via_proc(db, sealed_case, monkeypatch):
     """A command that tries to read the parent's secret env sees nothing."""
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sr-secret-should-not-leak")
