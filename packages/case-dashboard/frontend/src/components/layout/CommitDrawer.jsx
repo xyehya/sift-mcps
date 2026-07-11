@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Layers, Lock, Pencil, X } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { commitFailureMessage } from '@/lib/commit-errors'
 import { useStoreSlice } from '@/store/useStore'
 import { useDeltaRefetch } from '@/hooks/useDeltaRefetch'
 import { deleteDelta, postCommit } from '@/api/endpoints'
@@ -113,8 +114,8 @@ export function CommitDrawer() {
         setOpen(false)
       }, 2200)
     } catch (ex) {
-      console.error('Commit failed:', ex)
-      setErr('Commit failed — check your password and try again.')
+      console.error('Commit failed')
+      setErr(commitFailureMessage(ex))
     }
   }
 
