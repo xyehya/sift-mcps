@@ -1,0 +1,92 @@
+#!/usr/bin/python3
+"""Unprivileged MCP stdio relay into the root validating add-on broker."""
+
+from __future__ import annotations
+
+import os
+import re
+import secrets
+import subprocess
+import sys
+import threading
+from pathlib import Path
+from typing import NoReturn
+
+
+def fail(message: str) -> NoReturn:
+    print(f"sift-addon-stdio-relay: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def relay(source_fd: int, destination_fd: int) -> None:
+    try:
+        while chunk := os.read(source_fd, 65536):
+            view = memoryview(chunk)
+            while view:
+                view = view[os.write(destination_fd, view) :]
+    except (BrokenPipeError, OSError):
+        return
+
+
+def main() -> int:
+    if os.geteuid() == 0:
+        fail("must run as the gateway service user")
+    if len(sys.argv) != 7 or sys.argv[1] != "--backend-name" or sys.argv[3] != "--network-policy" or sys.argv[5] != "--":
+        fail("invalid invocation shape")
+    backend_name, network_policy, command = sys.argv[2], sys.argv[4], sys.argv[6]
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", backend_name) is None:
+        fail("invalid backend name")
+    runtime = Path("/run/sift-addon-client")
+    if not runtime.is_dir() or runtime.stat().st_uid != os.geteuid():
+        fail("trusted runtime directory is unavailable")
+    nonce = secrets.token_hex(16)
+    input_path = runtime / f"stdin.{nonce}"
+    output_path = runtime / f"stdout.{nonce}"
+    input_fd = output_fd = None
+    try:
+        os.mkfifo(input_path, 0o644)
+        os.mkfifo(output_path, 0o622)
+        # Gateway UMask=0077 is correct for ordinary files; explicitly restore
+        # the directional FIFO modes validated by the root broker.
+        os.chmod(input_path, 0o644)
+        os.chmod(output_path, 0o622)
+        input_fd = os.open(input_path, os.O_RDWR | os.O_CLOEXEC)
+        output_fd = os.open(output_path, os.O_RDWR | os.O_CLOEXEC)
+        approved = {
+            "opensearch-mcp": ("OPENSEARCH_CONFIG", "OPENSEARCH_HOST"),
+            "windows-triage-mcp": ("WT_DATA_DIR",),
+            "opencti-mcp": ("OPENCTI_URL", "OPENCTI_TOKEN"),
+        }.get(backend_name)
+        if approved is None:
+            fail("backend has no relay policy")
+        preserve = [name for name in approved if os.environ.get(name)]
+        sudo_args = ["/usr/bin/sudo", "-n"]
+        if preserve:
+            sudo_args.append(f"--preserve-env={','.join(preserve)}")
+        sudo_args.extend(
+            (
+                "/usr/local/sbin/sift-addon-systemd-sandbox",
+                "--backend-name", backend_name,
+                "--network-policy", network_policy,
+                "--stdin-path", str(input_path),
+                "--stdout-path", str(output_path),
+                "--", command,
+            )
+        )
+        process = subprocess.Popen(sudo_args)
+        threading.Thread(target=relay, args=(0, input_fd), daemon=True).start()
+        threading.Thread(target=relay, args=(output_fd, 1), daemon=True).start()
+        return process.wait()
+    finally:
+        for fd in (input_fd, output_fd):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        input_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

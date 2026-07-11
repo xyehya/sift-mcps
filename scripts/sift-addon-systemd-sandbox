@@ -7,6 +7,7 @@ import os
 import pwd
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,18 @@ def environment_line(name: str, value: str) -> str:
     return f'{name}="{escaped}"\n'
 
 
+def validate_fifo(raw: str, service_uid: int, prefix: str, expected_mode: int) -> Path:
+    path = Path(raw)
+    if path.parent != Path("/run/sift-addon-client") or re.fullmatch(
+        rf"{prefix}\.[0-9a-f]{{32}}", path.name
+    ) is None:
+        fail("invalid relay FIFO path")
+    info = path.lstat()
+    if not stat.S_ISFIFO(info.st_mode) or info.st_uid != service_uid or stat.S_IMODE(info.st_mode) != expected_mode:
+        fail("relay endpoint ownership/type/mode check failed")
+    return path
+
+
 def main() -> int:
     if os.geteuid() != 0:
         fail("must run as root")
@@ -38,9 +51,10 @@ def main() -> int:
         fail(f"cannot verify AppArmor broker attachment: {exc}")
     if apparmor_label != "sift-addon-broker (enforce)":
         fail("AppArmor broker attachment is not enforced")
-    if len(sys.argv) != 7 or sys.argv[1] != "--backend-name" or sys.argv[3] != "--network-policy" or sys.argv[5] != "--":
+    if len(sys.argv) != 11 or sys.argv[1] != "--backend-name" or sys.argv[3] != "--network-policy" or sys.argv[5] != "--stdin-path" or sys.argv[7] != "--stdout-path" or sys.argv[9] != "--":
         fail("invalid invocation shape")
-    backend_name, network_policy, command_path = sys.argv[2], sys.argv[4], sys.argv[6]
+    backend_name, network_policy = sys.argv[2], sys.argv[4]
+    command_path = sys.argv[10]
     if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", backend_name) is None:
         fail("invalid backend name")
     if network_policy not in {"none", "loopback"}:
@@ -50,6 +64,8 @@ def main() -> int:
     if service_user == "root" or re.fullmatch(r"[a-z_][a-z0-9_-]*[$]?", service_user) is None:
         fail("invalid invoking service user")
     account = pwd.getpwnam(service_user)
+    input_path = validate_fifo(sys.argv[6], account.pw_uid, "stdin", 0o644)
+    output_path = validate_fifo(sys.argv[8], account.pw_uid, "stdout", 0o622)
     service_group = str(account.pw_gid)
 
     resolved_command = str(Path(command_path).resolve(strict=True))
@@ -81,7 +97,14 @@ def main() -> int:
     run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(run_dir, 0o700)
     env_path: Path | None = None
+    input_fd: int | None = None
+    output_fd: int | None = None
     try:
+        # Pin validated FIFO objects before asking PID 1 to open them. Refer to
+        # these broker-owned handles below so a compromised service user cannot
+        # replace a path between validation and transient-unit creation.
+        input_fd = os.open(input_path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        output_fd = os.open(output_path, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", prefix="environment.", dir=run_dir, delete=False
         ) as env_file:
@@ -95,10 +118,10 @@ def main() -> int:
             env_file.write(environment_line("LOGNAME", service_user))
         os.chmod(env_path, 0o600)
 
-        unit_name = f"sift-addon-{backend_name}-{secrets.token_hex(8)}.service"
+        nonce = secrets.token_hex(8)
+        unit_name = f"sift-addon-{backend_name}-{nonce}.service"
         systemd_args = [
             "/usr/bin/systemd-run",
-            "--pipe",
             "--wait",
             "--quiet",
             "--collect",
@@ -125,6 +148,9 @@ def main() -> int:
             "--property=OOMPolicy=kill",
             "--property=IPAddressDeny=any",
             "--property=IPAccounting=yes",
+            f"--property=StandardInput=file:/proc/{os.getpid()}/fd/{input_fd}",
+            f"--property=StandardOutput=file:/proc/{os.getpid()}/fd/{output_fd}",
+            "--property=StandardError=journal",
             f"--property=EnvironmentFile={env_path}",
         ]
         if network_policy == "loopback":
@@ -162,10 +188,17 @@ def main() -> int:
                 process.terminate()
                 fail("transient add-on unit did not become active")
             time.sleep(0.05)
-        return process.wait()
+        status = process.wait()
+        return status
     finally:
         if env_path is not None:
             env_path.unlink(missing_ok=True)
+        for fd in (input_fd, output_fd):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
 
 if __name__ == "__main__":

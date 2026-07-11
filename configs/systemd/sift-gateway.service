@@ -86,6 +86,8 @@ ReadWritePaths=/var/lib/sift /cases /var/cache/sift
 # must stay writable; /home and /root are not needed and stay hidden via tmpfs.
 ProtectHome=tmpfs
 PrivateTmp=true
+RuntimeDirectory=sift-addon-client
+RuntimeDirectoryMode=0711
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true

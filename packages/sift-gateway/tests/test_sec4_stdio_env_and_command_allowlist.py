@@ -51,11 +51,8 @@ def test_production_stdio_child_drops_all_capability_sets(monkeypatch):
         {"OPENCTI_URL": "http://127.0.0.1:8080", "OPENCTI_TOKEN": "secret"},
     )
 
-    assert command == "/usr/bin/sudo"
+    assert command == "/usr/local/sbin/sift-addon-stdio-relay"
     assert args == [
-        "-n",
-        "--preserve-env=OPENCTI_TOKEN,OPENCTI_URL",
-        "/usr/local/sbin/sift-addon-systemd-sandbox",
         "--backend-name",
         "opencti-mcp",
         "--network-policy",
@@ -67,8 +64,8 @@ def test_production_stdio_child_drops_all_capability_sets(monkeypatch):
 
 def test_production_stdio_child_fails_closed_without_sandbox_helper(monkeypatch):
     monkeypatch.setenv("SIFT_DROP_BACKEND_CAPABILITIES", "1")
-    monkeypatch.setattr(sb.os.path, "isfile", lambda path: path == sb._SUDO)
-    monkeypatch.setattr(sb.os, "access", lambda path, _mode: path == sb._SUDO)
+    monkeypatch.setattr(sb.os.path, "isfile", lambda _path: False)
+    monkeypatch.setattr(sb.os, "access", lambda _path, _mode: False)
 
     with pytest.raises(RuntimeError, match="sandbox helper is unavailable"):
         sb._capability_dropped_command(

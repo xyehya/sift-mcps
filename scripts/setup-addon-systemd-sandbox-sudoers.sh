@@ -4,13 +4,16 @@ set -Eeuo pipefail
 DEFAULT_SERVICE_USER="${SUDO_USER:-$(id -un 2>/dev/null || printf 'sift-service')}"
 SERVICE_USER="${SIFT_GATEWAY_SERVICE_USER:-$DEFAULT_SERVICE_USER}"
 HELPER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sift-addon-systemd-sandbox"
+RELAY_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sift-addon-stdio-relay"
 HELPER_DST="/usr/local/sbin/sift-addon-systemd-sandbox"
+RELAY_DST="/usr/local/sbin/sift-addon-stdio-relay"
 SUDOERS_FILE="/etc/sudoers.d/sift-addon-systemd-sandbox"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --service-user) SERVICE_USER="${2:?missing service user}"; shift 2 ;;
     --helper-src) HELPER_SRC="${2:?missing helper source}"; shift 2 ;;
+    --relay-src) RELAY_SRC="${2:?missing relay source}"; shift 2 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -18,11 +21,13 @@ done
 [[ "${EUID}" -eq 0 ]] || { printf 'ERROR: run as root\n' >&2; exit 1; }
 id -u "$SERVICE_USER" >/dev/null 2>&1 || { printf 'ERROR: service user not found\n' >&2; exit 1; }
 [[ -f "$HELPER_SRC" ]] || { printf 'ERROR: helper source not found\n' >&2; exit 1; }
+[[ -f "$RELAY_SRC" ]] || { printf 'ERROR: relay source not found\n' >&2; exit 1; }
 VISUDO_BIN="$(command -v visudo || true)"
 [[ -z "$VISUDO_BIN" && -x /usr/sbin/visudo ]] && VISUDO_BIN=/usr/sbin/visudo
 [[ -n "$VISUDO_BIN" ]] || { printf 'ERROR: visudo not found\n' >&2; exit 1; }
 
 install -o root -g root -m 0755 "$HELPER_SRC" "$HELPER_DST"
+install -o root -g root -m 0755 "$RELAY_SRC" "$RELAY_DST"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 cat >"$tmp" <<EOF

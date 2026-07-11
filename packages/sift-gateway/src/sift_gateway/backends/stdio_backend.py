@@ -26,17 +26,11 @@ _STOP_TIMEOUT = 15
 # the underlying backend's blocking I/O for 300s+ before the gateway
 # noticed. 30s is generous for healthy backends, fail-fast for hung.
 _INITIALIZE_TIMEOUT = 30
-_SUDO = "/usr/bin/sudo"
-_DEFAULT_ADDON_SANDBOX_HELPER = "/usr/local/sbin/sift-addon-systemd-sandbox"
+_DEFAULT_ADDON_STDIO_RELAY = "/usr/local/sbin/sift-addon-stdio-relay"
 _NETWORK_POLICY_BY_BACKEND = {
     "opensearch-mcp": "loopback",
     "windows-triage-mcp": "none",
     "opencti-mcp": "loopback",
-}
-_PRESERVED_ENV_BY_BACKEND = {
-    "opensearch-mcp": frozenset({"OPENSEARCH_CONFIG", "OPENSEARCH_HOST"}),
-    "windows-triage-mcp": frozenset({"WT_DATA_DIR"}),
-    "opencti-mcp": frozenset({"OPENCTI_URL", "OPENCTI_TOKEN"}),
 }
 
 
@@ -49,11 +43,7 @@ def _capability_dropped_command(
     """Wrap an add-on in the fail-closed systemd capability/egress boundary."""
     if os.environ.get("SIFT_DROP_BACKEND_CAPABILITIES") != "1":
         return command, args
-    helper = os.environ.get(
-        "SIFT_ADDON_SANDBOX_HELPER", _DEFAULT_ADDON_SANDBOX_HELPER
-    )
-    if not os.path.isfile(_SUDO) or not os.access(_SUDO, os.X_OK):
-        raise RuntimeError("SIFT add-on sandbox requires executable /usr/bin/sudo")
+    helper = os.environ.get("SIFT_ADDON_STDIO_RELAY", _DEFAULT_ADDON_STDIO_RELAY)
     if not os.path.isfile(helper) or not os.access(helper, os.X_OK):
         raise RuntimeError(
             "SIFT_DROP_BACKEND_CAPABILITIES=1 but the add-on systemd sandbox "
@@ -64,16 +54,7 @@ def _capability_dropped_command(
         raise RuntimeError(
             f"stdio backend {backend_name!r} has no approved network sandbox policy"
         )
-    approved_names = _PRESERVED_ENV_BY_BACKEND[backend_name]
-    preserve_names = sorted(
-        name for name, value in env.items() if value and name in approved_names
-    )
-    sudo_args = ["-n"]
-    if preserve_names:
-        sudo_args.append(f"--preserve-env={','.join(preserve_names)}")
-    return _SUDO, [
-        *sudo_args,
-        helper,
+    return helper, [
         "--backend-name",
         backend_name,
         "--network-policy",

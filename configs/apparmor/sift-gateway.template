@@ -135,6 +135,9 @@ profile sift-gateway flags=(attach_disconnected) {
   /usr/bin/python3*                          rix,
   /usr/local/sbin/sift-run-command-systemd-scope rix,
   /usr/local/sbin/sift-addon-systemd-sandbox px -> sift-addon-broker,
+  /usr/local/sbin/sift-addon-stdio-relay        rix,
+  /run/sift-addon-client/                       rw,
+  /run/sift-addon-client/**                     rwk,
   /usr/bin/systemd-run                       rix,
   /usr/bin/systemctl                         rix,
 
@@ -221,6 +224,8 @@ profile sift-addon-broker flags=(attach_disconnected) {
   /usr/bin/systemctl                        rix,
   /run/sift-addon/                          rw,
   /run/sift-addon/**                        rwk,
+  /run/sift-addon-client/                   r,
+  /run/sift-addon-client/**                 rw,
   /run/systemd/private                      rw,
   /run/dbus/system_bus_socket               rw,
   /proc/@{pid}/attr/current                 r,
@@ -228,7 +233,6 @@ profile sift-addon-broker flags=(attach_disconnected) {
   /proc/@{pid}/fd/**                        rw,
 
   signal (receive) peer=sift-gateway,
-
   network unix,
   dbus (send, receive) bus=system,
 
