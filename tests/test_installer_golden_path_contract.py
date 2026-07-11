@@ -136,14 +136,17 @@ def test_secure_os_hardening_is_default_and_service_scoped() -> None:
     assert "--apparmor-complain" in installer
     assert "setcap cap_linux_immutable+ep" not in hardening
     assert 'setcap -r "$cap_target"' in hardening
-    assert "profile sift-gateway {" in gateway_profile
+    assert "profile sift-gateway flags=(attach_disconnected) {" in gateway_profile
+    assert "abi <abi/4.0>," in gateway_profile
     assert "profile sift-addon {" in gateway_profile
+    assert "profile sift-addon-broker flags=(attach_disconnected) {" in gateway_profile
     assert gateway_profile.count("/opt/sift-mcps/.venv/lib/**") == 2
     assert "/etc/mime.types" in gateway_profile
     services = (REPO_ROOT / "lib" / "services.sh").read_text(encoding="utf-8")
     assert 'die "Mandatory gateway is not reachable.' in services
     assert 'die "Mandatory gateway is DEGRADED' in services
     assert "sift-addon-systemd-sandbox" in gateway_profile
+    assert "sift-addon-systemd-sandbox px -> sift-addon-broker" in gateway_profile
     assert "/usr/libexec/sudo/**                       mr," in gateway_profile
     assert "configure_addon_systemd_sandbox" in installer
     assert "SIFT_ADDON_SANDBOX_HELPER" in gateway_unit
@@ -152,6 +155,9 @@ def test_secure_os_hardening_is_default_and_service_scoped() -> None:
     assert "capability linux_immutable," in gateway_profile
     assert "capability setuid," in gateway_profile
     assert "capability setgid," in gateway_profile
+    assert "network netlink," in gateway_profile
+    assert "deny network inet raw," in gateway_profile
+    assert "signal (send) peer=sift-addon-broker," in gateway_profile
     assert "/var/lib/sift/.sift/opensearch.yaml       r," in gateway_profile
     assert "/var/lib/sift/.sift/opensearch-root-ca.pem r," in gateway_profile
     addon_profile = gateway_profile.split("profile sift-addon {", 1)[1]

@@ -1,115 +1,146 @@
-#!/usr/bin/env bash
-# Root-owned broker for first-party stdio MCP add-ons.
-#
-# The gateway may invoke only this helper through a command-specific sudoers
-# rule. The helper validates the backend/command pair, copies only the exact
-# approved environment names into a root-only transient EnvironmentFile, and
-# launches the add-on in a resource-bounded systemd service with default-deny
-# IP egress and the sift-addon AppArmor profile.
-set -Eeuo pipefail
+#!/usr/bin/python3
+"""Root-owned, argument-validating systemd broker for stdio MCP add-ons."""
 
-die() {
-  printf 'sift-addon-systemd-sandbox: %s\n' "$*" >&2
-  exit 2
-}
+from __future__ import annotations
 
-[[ "${EUID}" -eq 0 ]] || die "must run as root"
-service_user="${SUDO_USER:-}"
-[[ "$service_user" =~ ^[a-z_][a-z0-9_-]*[$]?$ && "$service_user" != root ]] \
-  || die "invalid invoking service user"
-service_group="$(id -gn "$service_user" 2>/dev/null)" || die "service user not found"
+import os
+import pwd
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import NoReturn
 
-backend_name=""
-network_policy=""
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --backend-name) backend_name="${2:-}"; shift 2 ;;
-    --network-policy) network_policy="${2:-}"; shift 2 ;;
-    --) shift; break ;;
-    *) die "unknown option" ;;
-  esac
-done
 
-[[ "$backend_name" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || die "invalid backend name"
-[[ "$network_policy" == none || "$network_policy" == loopback ]] \
-  || die "invalid network policy"
-[[ $# -eq 1 ]] || die "approved add-ons do not accept command arguments"
+def fail(message: str) -> NoReturn:
+    print(f"sift-addon-systemd-sandbox: {message}", file=sys.stderr)
+    raise SystemExit(2)
 
-command_path="$1"
-[[ "$command_path" == /* && -x "$command_path" ]] || die "command must be absolute and executable"
-resolved_command="$(realpath "$command_path")" || die "command cannot be resolved"
-case "$resolved_command" in
-  /opt/sift-mcps/.venv/bin/opensearch-mcp)
-    [[ "$backend_name" == opensearch-mcp && "$network_policy" == loopback ]] \
-      || die "OpenSearch backend policy mismatch"
-    approved_env=(OPENSEARCH_CONFIG OPENSEARCH_HOST)
-    ;;
-  /opt/sift-mcps/.venv/bin/windows-triage-mcp)
-    [[ "$backend_name" == windows-triage-mcp && "$network_policy" == none ]] \
-      || die "Windows-triage backend policy mismatch"
-    approved_env=(WT_DATA_DIR)
-    ;;
-  /opt/sift-mcps/.venv/bin/opencti-mcp)
-    [[ "$backend_name" == opencti-mcp && "$network_policy" == loopback ]] \
-      || die "OpenCTI backend policy mismatch"
-    approved_env=(OPENCTI_URL OPENCTI_TOKEN)
-    ;;
-  *) die "command is not an approved installed add-on launcher" ;;
-esac
 
-install -d -o root -g root -m 0700 /run/sift-addon
-env_file="$(mktemp /run/sift-addon/environment.XXXXXX)"
-chmod 0600 "$env_file"
-cleanup() { rm -f "$env_file"; }
-trap cleanup EXIT
+def environment_line(name: str, value: str) -> str:
+    if "\n" in value or "\r" in value:
+        fail("environment value contains a newline")
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'{name}="{escaped}"\n'
 
-write_env() {
-  local name="$1" value="${!1:-}"
-  [[ -n "$value" ]] || return 0
-  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "environment value contains a newline"
-  value="${value//\\/\\\\}"
-  value="${value//\"/\\\"}"
-  printf '%s="%s"\n' "$name" "$value" >>"$env_file"
-}
-for env_name in "${approved_env[@]}"; do
-  write_env "$env_name"
-done
-printf 'HOME="/tmp"\nUSER="%s"\nLOGNAME="%s"\n' \
-  "$service_user" "$service_user" >>"$env_file"
 
-systemd_args=(
-  --pipe --wait --quiet --collect --service-type=exec
-  --property="User=${service_user}"
-  --property="Group=${service_group}"
-  --property=AppArmorProfile=sift-addon
-  --property=NoNewPrivileges=yes
-  --property=CapabilityBoundingSet=
-  --property=AmbientCapabilities=
-  --property=PrivateTmp=yes
-  --property=PrivateDevices=yes
-  --property=ProtectSystem=strict
-  --property=ProtectHome=tmpfs
-  --property=ProtectKernelTunables=yes
-  --property=ProtectKernelModules=yes
-  --property=ProtectKernelLogs=yes
-  --property=ProtectControlGroups=yes
-  --property=LockPersonality=yes
-  --property=RestrictSUIDSGID=yes
-  --property=MemoryMax=4G
-  --property=TasksMax=64
-  --property=OOMPolicy=kill
-  --property=IPAddressDeny=any
-  --property=IPAccounting=yes
-  --property="EnvironmentFile=${env_file}"
-)
-if [[ "$network_policy" == loopback ]]; then
-  systemd_args+=(
-    --property="RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"
-    --property=IPAddressAllow=127.0.0.0/8
-    --property=IPAddressAllow=::1/128
-  )
-else
-  systemd_args+=(--property="RestrictAddressFamilies=AF_UNIX")
-fi
+def main() -> int:
+    if os.geteuid() != 0:
+        fail("must run as root")
+    try:
+        apparmor_label = Path("/proc/self/attr/current").read_text(
+            encoding="utf-8"
+        ).strip()
+    except OSError as exc:
+        fail(f"cannot verify AppArmor broker attachment: {exc}")
+    if apparmor_label != "sift-addon-broker (enforce)":
+        fail("AppArmor broker attachment is not enforced")
+    if len(sys.argv) != 7 or sys.argv[1] != "--backend-name" or sys.argv[3] != "--network-policy" or sys.argv[5] != "--":
+        fail("invalid invocation shape")
+    backend_name, network_policy, command_path = sys.argv[2], sys.argv[4], sys.argv[6]
+    if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", backend_name) is None:
+        fail("invalid backend name")
+    if network_policy not in {"none", "loopback"}:
+        fail("invalid network policy")
 
-/usr/bin/systemd-run "${systemd_args[@]}" -- "$resolved_command"
+    service_user = os.environ.get("SUDO_USER", "")
+    if service_user == "root" or re.fullmatch(r"[a-z_][a-z0-9_-]*[$]?", service_user) is None:
+        fail("invalid invoking service user")
+    account = pwd.getpwnam(service_user)
+    service_group = str(account.pw_gid)
+
+    resolved_command = str(Path(command_path).resolve(strict=True))
+    policies: dict[str, tuple[str, str, frozenset[str]]] = {
+        "/opt/sift-mcps/.venv/bin/opensearch-mcp": (
+            "opensearch-mcp",
+            "loopback",
+            frozenset({"OPENSEARCH_CONFIG", "OPENSEARCH_HOST"}),
+        ),
+        "/opt/sift-mcps/.venv/bin/windows-triage-mcp": (
+            "windows-triage-mcp",
+            "none",
+            frozenset({"WT_DATA_DIR"}),
+        ),
+        "/opt/sift-mcps/.venv/bin/opencti-mcp": (
+            "opencti-mcp",
+            "loopback",
+            frozenset({"OPENCTI_URL", "OPENCTI_TOKEN"}),
+        ),
+    }
+    policy = policies.get(resolved_command)
+    if policy is None:
+        fail("command is not an approved installed add-on launcher")
+    expected_backend, expected_network, approved_env = policy
+    if (backend_name, network_policy) != (expected_backend, expected_network):
+        fail("backend command/network policy mismatch")
+
+    run_dir = Path("/run/sift-addon")
+    run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(run_dir, 0o700)
+    env_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", prefix="environment.", dir=run_dir, delete=False
+        ) as env_file:
+            env_path = Path(env_file.name)
+            for name in sorted(approved_env):
+                value = os.environ.get(name)
+                if value:
+                    env_file.write(environment_line(name, value))
+            env_file.write(environment_line("HOME", "/tmp"))
+            env_file.write(environment_line("USER", service_user))
+            env_file.write(environment_line("LOGNAME", service_user))
+        os.chmod(env_path, 0o600)
+
+        systemd_args = [
+            "/usr/bin/systemd-run",
+            "--pipe",
+            "--wait",
+            "--quiet",
+            "--collect",
+            "--service-type=exec",
+            f"--property=User={service_user}",
+            f"--property=Group={service_group}",
+            "--property=AppArmorProfile=sift-addon",
+            "--property=NoNewPrivileges=yes",
+            "--property=CapabilityBoundingSet=",
+            "--property=AmbientCapabilities=",
+            "--property=PrivateTmp=yes",
+            "--property=PrivateDevices=yes",
+            "--property=ProtectSystem=strict",
+            "--property=ProtectHome=tmpfs",
+            "--property=ProtectKernelTunables=yes",
+            "--property=ProtectKernelModules=yes",
+            "--property=ProtectKernelLogs=yes",
+            "--property=ProtectControlGroups=yes",
+            "--property=LockPersonality=yes",
+            "--property=RestrictSUIDSGID=yes",
+            "--property=MemoryMax=4G",
+            "--property=TasksMax=64",
+            "--property=OOMPolicy=kill",
+            "--property=IPAddressDeny=any",
+            "--property=IPAccounting=yes",
+            f"--property=EnvironmentFile={env_path}",
+        ]
+        if network_policy == "loopback":
+            systemd_args.extend(
+                (
+                    "--property=RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+                    "--property=IPAddressAllow=127.0.0.0/8",
+                    "--property=IPAddressAllow=::1/128",
+                )
+            )
+        else:
+            systemd_args.append("--property=RestrictAddressFamilies=AF_UNIX")
+        completed = subprocess.run(
+            [*systemd_args, "--", resolved_command], check=False
+        )
+        return completed.returncode
+    finally:
+        if env_path is not None:
+            env_path.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -28,6 +28,7 @@ trap 'rm -f "$tmp"' EXIT
 cat >"$tmp" <<EOF
 # Managed by sift-mcps. Only the validating add-on sandbox broker may preserve
 # its explicitly allowlisted environment into a root-only EnvironmentFile.
+Defaults:${SERVICE_USER} !pam_acct_mgmt, !pam_session, !pam_setcred
 Cmnd_Alias SIFT_ADDON_SANDBOX = ${HELPER_DST} *
 ${SERVICE_USER} ALL=(root) NOPASSWD:SETENV: SIFT_ADDON_SANDBOX
 EOF

@@ -19,9 +19,11 @@
 #     after a dedicated non-FUSE mount helper (bwrap/nsjail shim) is in place.
 # See enforce-flip runbook below for aa-logprof workflow against live traffic.
 
+abi <abi/4.0>,
+
 #include <tunables/global>
 
-profile sift-gateway {
+profile sift-gateway flags=(attach_disconnected) {
   #include <abstractions/base>
   #include <abstractions/python>
   #include <abstractions/ssl_certs>
@@ -106,8 +108,12 @@ profile sift-gateway {
   # Network: localhost only (OpenSearch :9200, MCP clients :4508)
   network inet tcp,
   network inet6 tcp,
+  # sudo emits the kernel audit record for the two exact root-owned broker
+  # commands. CAP_AUDIT_WRITE and AF_NETLINK remain systemd-bounded.
+  network netlink,
   deny network udp,
-  deny network raw,
+  deny network inet raw,
+  deny network inet6 raw,
 
   # Evidence seal/unseal uses FS_IOC_SETFLAGS in-process. The systemd unit is
   # the only source of CAP_LINUX_IMMUTABLE; this rule merely permits AppArmor
@@ -120,6 +126,7 @@ profile sift-gateway {
   capability setgid,
   capability setpcap,
   capability audit_write,
+  signal (send) peer=sift-addon-broker,
 
   # Backend subprocesses — only uv-managed Python and console scripts
   /opt/sift-mcps/.venv/bin/**                rix,
@@ -127,13 +134,9 @@ profile sift-gateway {
   /home/*/.local/bin/uv                      rix,
   /usr/bin/python3*                          rix,
   /usr/local/sbin/sift-run-command-systemd-scope rix,
-  /usr/local/sbin/sift-addon-systemd-sandbox rix,
+  /usr/local/sbin/sift-addon-systemd-sandbox px -> sift-addon-broker,
   /usr/bin/systemd-run                       rix,
   /usr/bin/systemctl                         rix,
-  # The root-owned systemd broker attaches stdio children directly to the
-  # sift-addon profile and applies capability/egress/resource controls.
-  /run/sift-addon/                          rw,
-  /run/sift-addon/**                        rwk,
 
   # Forensic tooling (Zimmerman tools, mount helpers, FUSE tools).
   # NOTE: after the opensearch-worker decoupling (2026-06-14) the gateway no
@@ -169,11 +172,31 @@ profile sift-gateway {
   /etc/sudoers.d/**                          r,
   /etc/pam.d/sudo                            r,
   /etc/pam.d/sudo-i                          r,
+  /etc/pam.d/other                           r,
+  /etc/pam.d/common-account                  r,
+  /etc/pam.d/common-auth                     r,
+  /etc/pam.d/common-password                 r,
+  /etc/pam.d/common-session                  r,
+  /etc/pam.d/common-session-noninteractive   r,
+  /etc/login.defs                            r,
+  /etc/environment                           r,
+  /etc/nologin                               r,
   /etc/security/**                           r,
+  /usr/lib/@{multiarch}/security/            r,
+  /usr/lib/@{multiarch}/security/pam_*.so    mr,
+  owner /proc/@{pid}/loginuid                rw,
+  /proc/@{pid}/stat                          r,
+  /proc/sys/kernel/seccomp/actions_avail     r,
+  /run/systemd/journal/dev-log               w,
   /run/sudo/                                 rw,
   /run/sudo/**                               rwk,
   /var/lib/sudo/                             rw,
   /var/lib/sudo/**                           rwk,
+  owner /proc/@{pid}/mounts                  r,
+
+  # The broker path is deliberately non-interactive (`sudo -n`); suppress
+  # sudo's optional controlling-terminal probe without granting terminal I/O.
+  deny /dev/tty                              rw,
 
   # DENY shell execution
   deny /bin/bash                             x,
@@ -181,6 +204,40 @@ profile sift-gateway {
   deny /usr/bin/bash                         x,
   deny /usr/bin/sh                           x,
   deny /bin/dash                             x,
+}
+
+# Privileged broker domain: entered only after command-specific sudoers has
+# authenticated the exact root-owned helper path. It can create constrained
+# transient units but cannot read gateway state, cases, or service credentials.
+profile sift-addon-broker flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/python>
+  #include <abstractions/nameservice>
+
+  /usr/local/sbin/                           r,
+  /usr/local/sbin/sift-addon-systemd-sandbox r,
+  /usr/bin/python3*                         rix,
+  /usr/bin/systemd-run                      rix,
+  /run/sift-addon/                          rw,
+  /run/sift-addon/**                        rwk,
+  /run/systemd/private                      rw,
+  /run/dbus/system_bus_socket               rw,
+  /proc/@{pid}/attr/current                 r,
+  /proc/@{pid}/fd/                          r,
+  /proc/@{pid}/fd/**                        rw,
+
+  signal (receive) peer=sift-gateway,
+
+  network unix,
+  dbus (send, receive) bus=system,
+
+  deny network inet,
+  deny network inet6,
+  deny network raw,
+  deny mount,
+  deny remount,
+  deny umount,
+  deny ptrace,
 }
 
 # Stdio add-ons are untrusted extensions, not part of the gateway policy
