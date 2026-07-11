@@ -8,9 +8,9 @@
 #
 # Usage:
 #   Run ON the SIFT VM (as the login or service-capable user):
-#     ./scripts/inventory-sift-tools.sh
+#     ./archive/legacy-operator-tools/inventory-sift-tools.sh
 #   Or from the host over SSH:
-#     sshpass -p '<pw>' ssh sansforensics@<vm> 'bash -s' < scripts/inventory-sift-tools.sh
+#     sshpass -p '<pw>' ssh sansforensics@<vm> 'bash -s' < archive/legacy-operator-tools/inventory-sift-tools.sh
 #
 # sudo (for root-owned config/TLS modes) is used only if available and
 # passwordless or pre-authenticated; otherwise those sections are skipped with

@@ -14,7 +14,7 @@ Agent checks (MCP over HTTPS):
   - F-A regression: corrupt evidence → gate blocks
 
 Run from /home/sansforensics/sift-mcps/:
-  python3 scripts/phase2_gate_test.py [--setup-only | --checks-only]
+  python3 archive/legacy-operator-tools/phase2_gate_test.py [--setup-only | --checks-only]
 
   --setup-only   Create case + seal + restart gateway (then wait for health)
   --checks-only  Skip setup; run agent checks against already-running gateway

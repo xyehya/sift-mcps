@@ -92,7 +92,7 @@ they live in `lib/` files.
 | `scripts/rotate-tls.sh` | 270 | TLS leaf renewal / CA rotation |
 | `scripts/setup-agent-runtime.sh` | 180 | `agent_runtime` user + ACL sandbox |
 | `scripts/setup-ingest-mount-sudoers.sh` | 125 | Narrow NOPASSWD mount allowlist |
-| `scripts/inventory-sift-tools.sh` | 135 | Read-only tool inventory |
+| `archive/legacy-operator-tools/inventory-sift-tools.sh` | 135 | Read-only tool inventory |
 | `scripts/verify-ingest-prereqs.sh` | 90 | Read-only ingest preflight |
 | `scripts/setup-run-command-systemd-scope-sudoers.sh` | 86 | RUN-3 scope helper + sudoers |
 | `scripts/stage-evidence.sh` | 115 | Operator evidence copy-in |
@@ -143,7 +143,7 @@ line:
 Observations:
 - Flags are **ungrouped and order-independent but un-validated** — `--core-only --offline --enable-geoip`
   produces no conflict check (e.g. core-only ignores geoip silently).
-- `--apparmor-enforce` overlaps with a separate `./harden.sh` (`:3444` references it) — two posture paths.
+- `--apparmor-enforce` overlaps with a separate `./archive/legacy-operator-tools/harden.sh` (`:3444` references it) — two posture paths.
 - No `--dry-run`, `--non-interactive`, `--log-file`, or `--version` for install.
 
 ### 2.3 Riskiest sections (with `file:line`)
@@ -170,7 +170,7 @@ Observations:
   necessary today (separate processes) but a prime candidate for a shared `lib/teardown.sh`.
 - **Duplicated path/var constants:** `install.sh:105-153` re-declared by `scripts/uninstall.sh` and
   consumed by `setup-addon.sh` via sourcing — a single `lib/constants.sh` removes drift.
-- **Two hardening entrypoints:** `configure_apparmor` (`:3084`) + a separate `./harden.sh` referenced
+- **Two hardening entrypoints:** `configure_apparmor` (`:3084`) + a separate `./archive/legacy-operator-tools/harden.sh` referenced
   at `:3444`.
 
 ### 2.5 Teardown audit (from `scripts/uninstall.sh`, 1,033 lines)

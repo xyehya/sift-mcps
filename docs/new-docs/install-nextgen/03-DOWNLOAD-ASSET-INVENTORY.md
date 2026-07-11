@@ -127,7 +127,7 @@ fetch was performed. This is a pure static read of code, scripts, and manifests.
 - **Python deps**: `opensearch-py`, `evtx`, `regipy`, `defusedxml`, `fastmcp`
   (`packages/opensearch-mcp/pyproject.toml:7-17`) via PyPI.
 - **GeoIP datasource** (#18): opt-in live fetch
-  (`install.sh:2476-2518`; also `setup-opensearch.sh:186`).
+  (`install.sh:2476-2518`).
 - Templates/pipelines/detector hygiene are **API calls to local loopback :9200**,
   not external downloads (`install.sh:2453-2662`).
 
@@ -352,8 +352,7 @@ HTTPS-only + size cap — no content/commit pinning.
   trigger/skip_online `forensic-rag-mcp/src/rag_mcp/refresh.py:70-73,127,449`;
   install passes skip_online=True `download_index.py:379`
 - BGE alternate models (m7): `forensic-rag-mcp/src/rag_mcp/utils.py:40-42,67-71`
-- OpenSearch image/up/templates/geoip: `docker-compose.yml:7`;
-  `install.sh:2406-2662`; `packages/opensearch-mcp/scripts/setup-opensearch.sh:106,186`
+- OpenSearch image/up/templates/geoip: `docker-compose.yml:7`; `install.sh:2406-2662`
 - OpenCTI: `install.sh:2668-2724`; `docker-compose.opencti.yml:14,44,58,75,93,151`;
   `docker-compose.opencti-connectors.yml:10,25`
 - Supabase CLI + stack: `scripts/setup-supabase.sh:28-31,261-284`;

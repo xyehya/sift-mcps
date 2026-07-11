@@ -1,4 +1,4 @@
-"""Tests for Phase 4 configuration: docker-compose, setup script structure."""
+"""Tests for the packaged OpenSearch Docker topology."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import yaml
 
 _REPO_ROOT = Path(__file__).parent.parent
 _DOCKER_COMPOSE = _REPO_ROOT / "docker" / "docker-compose.yml"
-_SETUP_SCRIPT = _REPO_ROOT / "scripts" / "setup-opensearch.sh"
 _TEMPLATE_PATH = _REPO_ROOT / "src" / "opensearch_mcp" / "mappings" / "evtx_ecs_template.json"
 
 
@@ -61,93 +60,11 @@ class TestDockerCompose:
 
 
 # ---------------------------------------------------------------------------
-# Setup Script Structure
-# ---------------------------------------------------------------------------
-
-
-class TestSetupScript:
-    @pytest.fixture
-    def script(self):
-        return _SETUP_SCRIPT.read_text()
-
-    def test_geoip_datasource_created(self, script):
-        assert "ip2geo/datasource/maxmind-city" in script
-
-    def test_geoip_pipeline_created(self, script):
-        assert "_ingest/pipeline/sift-geoip" in script
-
-    def test_geoip_pipeline_has_on_failure(self, script):
-        assert "on_failure" in script
-
-    def test_geoip_ignore_missing(self, script):
-        assert "ignore_missing" in script
-
-    def test_geoip_target_field(self, script):
-        assert "source.geo" in script
-
-    def test_geoip_applied_to_existing_indices(self, script):
-        """Pipeline must be applied to existing indices, not just new ones."""
-        assert "case-*-evtx-*" in script
-        assert "_settings" in script
-        assert "default_pipeline" in script
-
-    def test_sigma_rules_fetched(self, script):
-        """Setup must query pre-packaged rules (two-step process)."""
-        assert "pre_packaged=true" in script
-        assert "category" in script and "windows" in script
-
-    def test_sigma_detectors_disabled(self, script):
-        """Sigma detectors disabled on 3.5 due to field alias regression."""
-        assert "disabled" in script.lower()
-        assert "_security_analytics/detectors" in script
-
-    def test_hayabusa_template_registered(self, script):
-        """Hayabusa template install moved from setup-opensearch.sh to
-        ensure_winlog_pipeline (2026-04-22). Setup script no longer
-        installs templates; guard that the runtime installer does."""
-        from opensearch_mcp.mappings import _TEMPLATES_REGISTRY
-
-        names = {n for n, _ in _TEMPLATES_REGISTRY}
-        assert "sift-hayabusa" in names
-
-    def test_no_hardcoded_password(self, script):
-        """Password comes from $OS_PASSWORD variable, never hardcoded."""
-        lines = script.splitlines()
-        for line in lines:
-            if line.strip().startswith("#"):
-                continue
-            # OS_PASSWORD variable is OK, but literal passwords are not
-            assert "admin:admin" not in line
-
-    def test_template_registration_before_geoip(self, script):
-        """Template must be registered before GeoIP pipeline."""
-        template_pos = script.find("index_template/sift-evtx-ecs")
-        geoip_pos = script.find("_ingest/pipeline/sift-geoip")
-        assert template_pos < geoip_pos, "Template must be registered before GeoIP pipeline"
-
-    def test_geoip_before_detector(self, script):
-        """GeoIP pipeline setup before SA detector (ordering)."""
-        geoip_pos = script.find("_ingest/pipeline/sift-geoip")
-        detector_pos = script.find("_security_analytics/detectors")
-        assert geoip_pos < detector_pos
-
-
-# ---------------------------------------------------------------------------
 # Template + Pipeline coherence
 # ---------------------------------------------------------------------------
 
 
 class TestTemplateCoherence:
-    def test_geoip_pipeline_applied_via_settings(self):
-        """GeoIP pipeline applied post-hoc via _settings API, not in template."""
-        template = json.loads(_TEMPLATE_PATH.read_text())
-        settings = template.get("template", {}).get("settings", {})
-        assert "default_pipeline" not in settings, (
-            "default_pipeline decoupled from template — applied in setup script"
-        )
-        script = _SETUP_SCRIPT.read_text()
-        assert "sift-geoip" in script
-
     def test_geo_fields_in_template(self):
         """All GeoIP output fields must have explicit mappings to avoid
         text+keyword default dynamic mapping."""

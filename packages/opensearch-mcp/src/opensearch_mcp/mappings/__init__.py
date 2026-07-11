@@ -29,9 +29,8 @@ _COMPONENT_TEMPLATES_REGISTRY: list[tuple[str, str]] = [
 ]
 
 _PIPELINE_ID = "winlog_data_normalize_v1"
-# Canonical evtx template name. scripts/setup-opensearch.sh uses the
-# same name. Earlier versions installed under "sift-evtx"; that legacy
-# name is DELETEd in ensure_winlog_pipeline so upgraded clusters don't
+# Canonical evtx template name. Earlier versions installed under "sift-evtx";
+# that legacy name is DELETEd in ensure_winlog_pipeline so upgraded clusters don't
 # retain two templates matching case-*-evtx-* at identical priority
 # (undefined-winner bug).
 _TEMPLATE_NAME = "sift-evtx-ecs"
@@ -44,11 +43,8 @@ _TEMPLATE_PRIORITY = 100
 # validate-before-PUT against the pipeline script. The templates below
 # are plain mapping installs with no such dependency.
 #
-# Names match scripts/setup-opensearch.sh — keep in sync. setup-opensearch.sh
-# runs once at deployment time; without install_all_templates() running on
-# every MCP startup/ingest, edits to these JSON files on disk never reach
-# upgraded deployments (confirmed by Test agent 2026-04-21: delimited/json/
-# vol3 template edits were dead code without this installer).
+# install_all_templates() runs on every MCP startup/ingest, so edits to these
+# JSON files on disk reach upgraded deployments.
 _TEMPLATES_REGISTRY: list[tuple[str, str]] = [
     ("sift-csv", "csv_template.json"),
     ("sift-prefetch", "prefetch_template.json"),
@@ -111,7 +107,7 @@ def install_all_templates(client) -> dict[str, Any]:
     first-connection, ingest pre-flight).
     Without this, edits to csv/prefetch/srum/transcripts/w3c/defender/
     tasks/wer/ssh/vol3/json/delimited/accesslog/hayabusa templates on
-    disk never reach the cluster after initial setup-opensearch.sh run.
+    disk reach the cluster on the next MCP startup or ingest pre-flight.
 
     Returns:
         {

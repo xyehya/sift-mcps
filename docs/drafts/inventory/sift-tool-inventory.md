@@ -13,7 +13,7 @@ missing-tool recommendation matrix.
 - This doc records secret **paths, modes, and ownership** on purpose. It never
   records secret **values**. `<redacted>` marks any place a value would appear.
 
-> Reproduce read-only: an optional helper, `scripts/inventory-sift-tools.sh`,
+> Reproduce read-only: an optional helper, `archive/legacy-operator-tools/inventory-sift-tools.sh`,
 > runs the same safe probes against the live VM and prints this data. It performs
 > no writes and starts/stops nothing.
 

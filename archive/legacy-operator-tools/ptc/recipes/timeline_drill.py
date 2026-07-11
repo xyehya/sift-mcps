@@ -6,8 +6,8 @@ from the peak window (saved to disk) → print the top buckets + a sample from t
 One local pass instead of eyeballing a histogram then re-querying by hand.
 
 Usage:
-  python3 scripts/ptc/recipes/timeline_drill.py --query 'event.code:4625'
-  python3 scripts/ptc/recipes/timeline_drill.py --query '*' --interval 1d --fetch 20
+  python3 archive/legacy-operator-tools/ptc/recipes/timeline_drill.py --query 'event.code:4625'
+  python3 archive/legacy-operator-tools/ptc/recipes/timeline_drill.py --query '*' --interval 1d --fetch 20
 """
 from __future__ import annotations
 

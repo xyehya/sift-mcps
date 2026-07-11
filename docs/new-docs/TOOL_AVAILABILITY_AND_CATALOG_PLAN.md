@@ -109,7 +109,7 @@ All installer tool work MUST be **best-effort / non-blocking** (warn-and-continu
 
 **F-7 (optional) preflight honesty.** A post-install report of cataloged-but-unresolved tools so the operator sees the 3-state gap; optionally suppress the agent instruction for absent tools (e.g. don't teach `yara` when absent). Ties to Axis F (XYE-48/49).
 
-**Validation per change:** `bash -n install.sh`; `uv run --extra dev --extra full pytest` for find_binary/discovery; `python3 scripts/validate_docs.py`; live re-check via `capability_guide`/`inventory` after applying to the VM (sanitized proof).
+**Validation per change:** `bash -n install.sh`; `uv run --extra dev --extra full pytest` for find_binary/discovery; `python3 archive/legacy-docs-tools/validate_docs.py`; live re-check via `capability_guide`/`inventory` after applying to the VM (sanitized proof).
 
 ---
 

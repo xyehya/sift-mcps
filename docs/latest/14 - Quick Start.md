@@ -156,7 +156,7 @@ The `/api/v1/tools` endpoint returns every tool registered across all backends â
 If you plan to use the OpenSearch ingest pipeline (E01 disk forensic images), run the prerequisite checker:
 
 ```bash
-./verify-ingest-prereqs.sh
+./scripts/verify-ingest-prereqs.sh
 ```
 
 This checks: `ewfmount`, `fusermount`, `fdisk`, passwordless `sudo mount`, Zimmerman tools (AmcacheParser, AppCompatCacheParser, RECmd, MFTECmd, JLECmd, LECmd, SBECmd), Hayabusa + rules, `python-evtx`, `regipy`, and OpenSearch reachability (`verify-ingest-prereqs.sh:34-89`).

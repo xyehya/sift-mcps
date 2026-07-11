@@ -7,17 +7,17 @@ disk so the bulk never enters the agent's context window — the agent reads onl
 slim summary + a path it can grep/jq locally.
 
 Bridge + auth are reused from this session's .mcp.json (url + Authorization header),
-the same proven path as scripts/phase2_gate_test.py.
+the same proven path as archive/legacy-operator-tools/phase2_gate_test.py.
 
 CLI:
-  python3 scripts/ptc/ptc.py call <tool> '<json-args>'   # one call, save + summarize
-  python3 scripts/ptc/ptc.py tools                       # list tool names + count
+  python3 archive/legacy-operator-tools/ptc/ptc.py call <tool> '<json-args>'   # one call, save + summarize
+  python3 archive/legacy-operator-tools/ptc/ptc.py tools                       # list tool names + count
 
 Library:
   from ptc import MCP
   mcp = MCP()
   res = mcp.call("opensearch_search", {"query": "event.code:4624", "limit": 200})
-  # res is the parsed dict; full JSON also saved under scripts/ptc/out/
+  # res is the parsed dict; full JSON also saved under archive/legacy-operator-tools/ptc/out/
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ OUT_DIR = PTC_DIR / "out"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 _CALL_SEQ = 0  # disambiguates same-second saves within one process
 # Secure-by-default TLS: pin the gateway's CA (fetch once from the VM:
-#   scp sansforensics@192.168.122.81:~/.sift/tls/ca-cert.pem scripts/ptc/ca-cert.pem
+#   scp sansforensics@192.168.122.81:~/.sift/tls/ca-cert.pem archive/legacy-operator-tools/ptc/ca-cert.pem
 # Override path with PTC_CA_CERT. Only PTC_INSECURE_TLS=1 disables verification
 # (lab escape hatch — not for anything but a trusted local VM).
 CA_CERT = Path(os.environ.get("PTC_CA_CERT") or (PTC_DIR / "ca-cert.pem"))
@@ -162,7 +162,7 @@ class MCP:
         """Call a tool and return the parsed result payload.
 
         The gateway returns tool output as text content; we parse JSON when possible.
-        When save=True the full payload is written to scripts/ptc/out/ and is NOT
+        When save=True the full payload is written to archive/legacy-operator-tools/ptc/out/ and is NOT
         what you print — print a summary and grep/jq the file.
         """
         resp = self.call_raw(name, args or {})

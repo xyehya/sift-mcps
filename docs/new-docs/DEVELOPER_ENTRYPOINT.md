@@ -363,8 +363,8 @@ not authority, and verify claims against current source before acting on them.
 For documentation-only changes:
 
 ```bash
-python3 scripts/validate_docs.py
-python3 scripts/validate_migration_docs.py
+python3 archive/legacy-docs-tools/validate_docs.py
+python3 archive/legacy-docs-tools/validate_migration_docs.py
 git diff --check
 ```
 

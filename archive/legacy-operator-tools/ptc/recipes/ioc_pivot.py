@@ -7,8 +7,8 @@ reports which artifact families mention it + how many — then the artifacts whe
 ALL indicators co-occur. Bulk stays on disk; only the footprint enters context.
 
 Usage:
-  python3 scripts/ptc/recipes/ioc_pivot.py 81.30.144.115 213.202.233.104
-  python3 scripts/ptc/recipes/ioc_pivot.py --limit 200 evil.exe a1b2c3...
+  python3 archive/legacy-operator-tools/ptc/recipes/ioc_pivot.py 81.30.144.115 213.202.233.104
+  python3 archive/legacy-operator-tools/ptc/recipes/ioc_pivot.py --limit 200 evil.exe a1b2c3...
 """
 from __future__ import annotations
 

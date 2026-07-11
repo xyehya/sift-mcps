@@ -100,14 +100,15 @@ opensearch-mcp runs as:
 
 ## Quick Start
 
-### 1. Set up OpenSearch
+### 1. Install the SIFT core
 
 ```bash
-cd opensearch-mcp
-./scripts/setup-opensearch.sh
+./install.sh
 ```
 
-This starts a Docker container with OpenSearch 3.5, registers all 15 index templates (including Hayabusa), and creates the GeoIP enrichment pipeline. Detection is handled by Hayabusa (3,700+ Sigma-based rules) which runs automatically after evtx ingest if installed.
+The root installer provisions the secured, TLS-enabled OpenSearch service and
+its least-privilege client configuration. Do not run a package-local OpenSearch
+bootstrap: the package is consumed through the gateway-managed core service.
 
 ### 2. Ingest evidence
 
@@ -176,7 +177,8 @@ Wildcard queries across a case: `idx_search(query="...", index="case-incident-00
 
 ### OpenSearch connection
 
-Created by `setup-opensearch.sh` at `~/.sift/opensearch.yaml`:
+Rendered by the root installer at the service-owned OpenSearch configuration
+path (normally `/var/lib/sift/.sift/opensearch.yaml`):
 
 ```yaml
 host: https://localhost:9200

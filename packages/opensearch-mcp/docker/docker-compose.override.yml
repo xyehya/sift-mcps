@@ -1,5 +1,5 @@
 # Snapshot volume mount for SIFT backup/restore
-# Added by setup-opensearch.sh — do not modify the main docker-compose.yml
+# Optional local snapshot-volume override; do not modify the main compose file.
 services:
   opensearch:
     volumes:

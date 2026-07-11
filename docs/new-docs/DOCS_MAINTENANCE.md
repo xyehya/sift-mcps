@@ -60,7 +60,7 @@ This is the efficient middle: you touch only intersecting sections, never re-map
 2. **Covers-vs-diff drift** — for each doc, if the PR diff touches a path under its `Covers:`
    but the doc's `Last validated:` sha didn't advance, **warn**: "`<doc>` may be stale —
    covered code changed." This points the author at the exact doc/section instead of a rescan.
-3. Scope: `docs/new-docs/` only. Keep separate from `scripts/validate_docs.py` /
+3. Scope: `docs/new-docs/` only. Keep separate from `archive/legacy-docs-tools/validate_docs.py` /
    `validate_migration_docs.py` (those govern `docs/migration/` and are a different contract).
 
 Checker output is advisory-with-teeth: dangling file ref = hard fail; symbol/Covers drift =

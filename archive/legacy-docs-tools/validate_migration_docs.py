@@ -3,7 +3,7 @@
 
 The primary command is now:
 
-    python3 scripts/validate_docs.py
+    python3 archive/legacy-docs-tools/validate_docs.py
 
 This wrapper remains so historical runbooks and archived build prompts that call
 `validate_migration_docs.py` continue to work.

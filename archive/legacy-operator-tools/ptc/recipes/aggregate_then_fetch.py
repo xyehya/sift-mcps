@@ -7,8 +7,8 @@ for a few sample hits, saved to disk. Prints the distribution + sample _id/index
 value so you can opensearch_get_event or jq the saved files next.
 
 Usage:
-  python3 scripts/ptc/recipes/aggregate_then_fetch.py --field event.code
-  python3 scripts/ptc/recipes/aggregate_then_fetch.py --field winlog.provider_name \
+  python3 archive/legacy-operator-tools/ptc/recipes/aggregate_then_fetch.py --field event.code
+  python3 archive/legacy-operator-tools/ptc/recipes/aggregate_then_fetch.py --field winlog.provider_name \
       --query 'event.code:4624' --top 5 --samples 3
 """
 from __future__ import annotations

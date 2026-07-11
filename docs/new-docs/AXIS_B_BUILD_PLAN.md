@@ -206,7 +206,7 @@ full suite, and prove the whole change on the live VM.
 **Changes**
 - Update the 29 test files (`rg -l "CASE.yaml" packages/**/tests`) to set up case metadata via
   DB fixtures; keep file fixtures only where a unit explicitly exercises the export path.
-- Full `pytest` green; `python3 scripts/validate_docs.py` if docs touched.
+- Full `pytest` green; `python3 archive/legacy-docs-tools/validate_docs.py` if docs touched.
 - **Live-VM proof** (manual gate): on `sansforensics@192.168.122.81` with local Supabase —
   create + edit a case from the portal (DB-only, re-auth), confirm CASE.yaml is a regenerated
   export, run `case_info`/`evidence_info` and confirm DB authority + that tampering local files

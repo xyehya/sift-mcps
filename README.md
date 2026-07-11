@@ -122,7 +122,7 @@ and wires the local control plane. Development and validation use the repo
 
 ```bash
 uv run --extra core --extra rag --extra dev pytest <targeted test paths>
-python3 scripts/validate_docs.py
+python3 archive/legacy-docs-tools/validate_docs.py
 git diff --check
 ```
 

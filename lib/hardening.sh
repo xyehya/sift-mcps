@@ -137,8 +137,8 @@ configure_apparmor() {
       "Required sift-gateway AppArmor profile is not loaded."
     log "AppArmor profiles installed (ENFORCE mode)."
   else
-    log "AppArmor profiles installed (complain mode). Run ./harden.sh (or"
-    log "  ./install.sh --apparmor-enforce) for the proven enforce posture."
+    log "AppArmor profiles installed (complain mode). Re-run ./install.sh"
+    log "  --apparmor-enforce for the proven enforce posture."
   fi
 }
 

@@ -98,8 +98,8 @@ Two axes, ranked by leverage. File:line from the qa-expert static pass.
 
 ### Phase 2 (PTC) — LANDED 2026-06-14
 PTC runs host-side (this terminal), not in the run_command jail. Bridge + recipes + how-to skill:
-`scripts/ptc/ptc.py` (CA-pinned MCP-over-HTTPS, live token from `~/.claude.json`),
-`scripts/ptc/recipes/{ioc_pivot,aggregate_then_fetch,timeline_drill}.py`, `scripts/ptc/README.md`,
+`archive/legacy-operator-tools/ptc/ptc.py` (CA-pinned MCP-over-HTTPS, live token from `~/.claude.json`),
+`archive/legacy-operator-tools/ptc/recipes/{ioc_pivot,aggregate_then_fetch,timeline_drill}.py`, `archive/legacy-operator-tools/ptc/README.md`,
 `.claude/skills/ptc/SKILL.md`. Live-proven: 200-hit search = ~256 KB on disk / ~10 lines in context;
 2-IOC pivot over 2M docs correlates both external RDP IPs into vol-netscan+vol-netstat. The on-wire
 fixes below remain complementary (they slim the summaries that DO return).

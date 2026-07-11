@@ -101,9 +101,8 @@ This role assumes the claim is wrong until the evidence says otherwise. It does 
 
 ### `ptc`
 
-- .claude/skills/ptc/SKILL.md required Programmatic tool-calling skill for large MCP payloads and multi-step correlation. It uses the local scripts/ptc/ptc.py bridge, saves full tool output to disk, prints only a slim summary into context, and keeps bulk results in `scripts/ptc/out/`.
-- scripts/ptc/ptc.py required Local MCP bridge used by the skill. It reads the live endpoint and bearer token from ~/.claude.json, verifies TLS against scripts/ptc/ca-cert.pem, and supports chained calls from the terminal.
-- scripts/ptc/ca-cert.pem required TLS CA file used by the bridge for gateway verification.
+- `.claude/skills/ptc/SKILL.md` describes the historical programmatic tool-calling bridge at `archive/legacy-operator-tools/ptc/ptc.py`; it is not supported for the current gateway contract.
+- `archive/legacy-operator-tools/ptc/` retains the old bridge and recipes for traceability only. Do not use its token or certificate assumptions without a separate current-contract review.
 
 The skill is specifically meant for large searches, pivots, aggregate-then-fetch workflows, and timeline drills. It keeps the full payload off the chat context and leaves only the answer and a saved artifact path. Mutations still go through gateway policy and re-authentication; the bridge does not bypass authority.
 

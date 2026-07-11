@@ -452,7 +452,7 @@ NETWORK / REGISTRY
 
 SECURITY / HARDENING
   --apparmor-enforce     Load AppArmor profiles in ENFORCE mode (default: complain).
-                         Can also be done post-install via ./harden.sh.
+                         Can also be done post-install via ./archive/legacy-operator-tools/harden.sh.
 
 WORKERS / TUNING
   --workers N            Number of OpenSearch ingest/enrich worker instances (default: 2).
@@ -496,7 +496,7 @@ EXAMPLES
 
 For teardown options:  scripts/uninstall.sh --help
 For add-on setup:      scripts/setup-addon.sh --help
-For AppArmor harden:   ./harden.sh --help
+For AppArmor harden:   ./archive/legacy-operator-tools/harden.sh --help
 For offline bundling:  scripts/bundle-offline.sh --help
 
 ---

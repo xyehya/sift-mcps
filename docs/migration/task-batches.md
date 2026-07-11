@@ -103,7 +103,7 @@ Acceptance:
 - No `run_command` path returns `approval_required` and no added human-in-loop behavior.
 - `run_command` closes known red-team negative rows at Ceiling layer where appropriate.
 - Targeted `sift-core`/gateway security tests pass.
-- `python3 scripts/validate_docs.py`, `python3 scripts/validate_migration_docs.py`, and `git diff --check` pass.
+- `python3 archive/legacy-docs-tools/validate_docs.py`, `python3 archive/legacy-docs-tools/validate_migration_docs.py`, and `git diff --check` pass.
 
 Validation:
 
@@ -232,7 +232,7 @@ Dependencies: BATCH-OR0.
 Scope:
 
 - New `docs/inventory/sift-tool-inventory.md`
-- `scripts/inventory-sift-tools.sh` (if kept)
+- `archive/legacy-operator-tools/inventory-sift-tools.sh` (if kept)
 - `install.sh` (if non-invasive fix discovered)
 
 Exact work:

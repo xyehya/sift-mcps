@@ -12,23 +12,23 @@ agent's context window.
 This is the answer to the "10% signal / 90% spam" tool-response problem: don't slim the
 MCP response on the wire — script the calls locally and keep raw bulk on disk.
 
-## How it works (the bridge — proven, mirrors `scripts/phase2_gate_test.py`)
+## How it works (the bridge — proven, mirrors `archive/legacy-operator-tools/phase2_gate_test.py`)
 - `ptc.py` reads the **live** gateway endpoint + bearer token from `~/.claude.json`
   (`projects/<repo>/mcpServers/siftgateway`), falling back to `.mcp.json`. The token is
   the session's own; it is **read at call time, never written out or printed**.
-- TLS is **verified against the gateway CA** (`scripts/ptc/ca-cert.pem`, fetched once from
+- TLS is **verified against the gateway CA** (`archive/legacy-operator-tools/ptc/ca-cert.pem`, fetched once from
   the VM `/var/lib/sift/.sift/tls/ca-cert.pem`). `PTC_INSECURE_TLS=1` is a lab-only escape.
 - MCP-over-HTTPS: `initialize` → `Mcp-Session-Id` → `notifications/initialized` →
   `tools/call`. Multi-block results (payload + `case_context` envelope) are parsed; full
-  payload saved under `scripts/ptc/out/<tool>_<ts>_<seq>.json`.
+  payload saved under `archive/legacy-operator-tools/ptc/out/<tool>_<ts>_<seq>.json`.
 - The gateway stays the policy boundary — PTC does NOT bypass auth, the evidence gate, or
   re-auth. Mutations (record_finding etc.) go through the same gateway checks.
 
 ## Usage
 ```bash
 # one call (saves full result, prints summary)
-python3 scripts/ptc/ptc.py call opensearch_search '{"query":"event.code:4625","limit":200}'
-python3 scripts/ptc/ptc.py tools            # list tool names
+python3 archive/legacy-operator-tools/ptc/ptc.py call opensearch_search '{"query":"event.code:4625","limit":200}'
+python3 archive/legacy-operator-tools/ptc/ptc.py tools            # list tool names
 ```
 ```python
 import sys; sys.path.insert(0, "scripts/ptc")

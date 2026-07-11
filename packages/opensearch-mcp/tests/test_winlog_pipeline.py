@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
-import pytest
 from opensearch_mcp.mappings import (
     _EVTX_TEMPLATE_FILE,
     _MAPPINGS_DIR,
@@ -392,17 +391,15 @@ class TestInstallAllTemplates:
     """Verify non-evtx templates actually reach the cluster.
 
     Without install_all_templates(), edits to csv/prefetch/srum/...
-    templates on disk are dead code — setup-opensearch.sh runs once
-    at deployment, and nothing re-applies the JSON files after.
+    templates on disk are dead code without runtime installation.
     Test agent 2026-04-21 caught this live: delimited/json/vol3
     template edits (including replicas=0) never reached the cluster.
     """
 
     def test_registry_has_expected_templates(self):
-        """Registry must match scripts/setup-opensearch.sh names so
-        we don't create orphan templates alongside setup's installs."""
+        """Registry is the single source of truth for runtime templates."""
         names = [n for n, _ in _TEMPLATES_REGISTRY]
-        # All 14 non-evtx templates that setup-opensearch.sh registers.
+        # All 14 non-evtx templates installed by the runtime registry.
         expected = {
             "sift-csv",
             "sift-prefetch",
@@ -473,41 +470,6 @@ class TestInstallAllTemplates:
         assert len(result["failed"]) == 1
         assert result["failed"][0]["template"] == "sift-delimited"
         assert "synthetic" in result["failed"][0]["error"]
-
-    def test_setup_script_does_not_install_templates(self):
-        """Post-2026-04-22 inversion: setup-opensearch.sh must NOT
-        install templates — that duty moved entirely to
-        ensure_winlog_pipeline + install_all_templates at MCP startup.
-        Guard against accidental re-introduction of template installs
-        in the setup script, which would re-create the drift trap
-        (registry + setup script listing different templates).
-
-        Catch-all sift-single-node template is also obsolete now that
-        every template declares replicas=0 explicitly.
-        """
-        import re
-
-        script_path = _MAPPINGS_DIR.parent.parent.parent / "scripts" / "setup-opensearch.sh"
-        if not script_path.exists():
-            pytest.skip(f"setup-opensearch.sh not found at {script_path}")
-        script_text = script_path.read_text()
-
-        # No _index_template/ endpoint PUTs should remain in the setup
-        # script (DELETE of legacy names is tolerated, but the current
-        # script has none).
-        put_matches = re.findall(
-            r"-X\s+PUT\s+[^\n]*_index_template/(sift-[a-z0-9-]+)",
-            script_text,
-        )
-        assert not put_matches, (
-            f"setup-opensearch.sh is re-installing templates "
-            f"({put_matches}) — this duty moved to "
-            f"ensure_winlog_pipeline/install_all_templates at MCP "
-            f"startup. Having both paths install templates is a drift "
-            f"trap: a template added to the registry but forgotten in "
-            f"setup (or vice versa) leaves one installer in the wrong "
-            f"state."
-        )
 
     def test_ensure_winlog_pipeline_status_partial_on_non_evtx_failure(self):
         """If evtx install succeeds but any non-evtx template fails,

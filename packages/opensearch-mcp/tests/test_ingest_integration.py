@@ -26,7 +26,7 @@ def os_client():
     """Get an OpenSearch client or skip if not available.
 
     Also ensures case-* templates are installed on the cluster — post
-    2026-04-22 setup-opensearch.sh no longer installs templates at
+    2026-04-22 OpenSearch provisioning no longer installs templates at
     deployment time (that duty moved to ensure_winlog_pipeline, called
     on MCP startup + ingest pre-flight). Integration tests create
     indices directly without going through MCP, so they need to

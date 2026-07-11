@@ -13,10 +13,10 @@
 # Equivalent to running the installer with: ./install.sh --apparmor-enforce
 #
 # Usage:
-#   sudo ./harden.sh              # flip SIFT AppArmor profiles to enforce
-#   ./harden.sh                   # auto-escalates each privileged step via sudo
-#   ./harden.sh --complain        # revert the SIFT profiles back to complain
-#   ./harden.sh -h | --help
+#   sudo ./archive/legacy-operator-tools/harden.sh              # enforce
+#   ./archive/legacy-operator-tools/harden.sh                   # auto-escalates
+#   ./archive/legacy-operator-tools/harden.sh --complain        # revert
+#   ./archive/legacy-operator-tools/harden.sh -h | --help
 #
 # Idempotent and reversible. Only the SIFT profiles (sift-gateway, dfir-exec) are
 # touched; no other AppArmor profile on the host is changed.
@@ -38,7 +38,7 @@ SIFT_APPARMOR_PROFILES=(
 )
 
 usage() {
-  printf 'Usage: ./harden.sh [--complain] [-h|--help]\n\n'
+  printf 'Usage: ./archive/legacy-operator-tools/harden.sh [--complain] [-h|--help]\n\n'
   printf 'Final opt-in hardening: flip the SIFT AppArmor profiles to ENFORCE mode\n'
   printf '(the install default is complain). Equivalent to ./install.sh --apparmor-enforce.\n\n'
   printf '  --complain   Revert the SIFT profiles to complain mode (undo enforce).\n'
@@ -51,7 +51,7 @@ while [[ $# -gt 0 ]]; do
     --enforce)      MODE="enforce"; shift ;;
     --complain)     MODE="complain"; shift ;;
     -h|--help)      usage; exit 0 ;;
-    *)              warn "Unknown option '$1' — ignored. Run ./harden.sh -h for help."; shift ;;
+    *)              warn "Unknown option '$1' — ignored. Run ./archive/legacy-operator-tools/harden.sh -h for help."; shift ;;
   esac
 done
 

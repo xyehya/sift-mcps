@@ -174,16 +174,9 @@ Relevant current files:
   - Index component sanitization.
   - Timezone resolution for Windows timezone names.
 
-- `scripts/setup-opensearch.sh`
-  - Docker check.
-  - OpenSearch password/config generation.
-  - Snapshot repository setup.
-  - OpenSearch startup.
-  - Health wait.
-  - Shard limit configuration.
-  - Smoke test.
-  - GeoIP pipeline setup.
-  - Security Analytics setup.
+- The root `install.sh` provisions the secured OpenSearch service and writes its
+  service-owned client configuration. Package-local OpenSearch provisioning is
+  intentionally unsupported.
 
 The key migration lesson: do not only port parser code. Port the behavior envelope around parser code.
 
@@ -1441,4 +1434,3 @@ sift-agent timeline --case existing-case --detect-anomalies
 After that, add Rust-native simple ingest and adapter-managed heavy ingest.
 
 This creates value immediately for autonomous agents while avoiding a risky parser rewrite. Once the Rust command contract is stable, the MCP layer can become optional: a thin compatibility surface over the same operations.
-

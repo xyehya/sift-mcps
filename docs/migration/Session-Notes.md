@@ -30,8 +30,8 @@ Changed:
   and must not be copied into Linear, commits, or docs.
 
 Validation:
-- `python3 scripts/validate_docs.py`
-- `python3 scripts/validate_migration_docs.py`
+- `python3 archive/legacy-docs-tools/validate_docs.py`
+- `python3 archive/legacy-docs-tools/validate_migration_docs.py`
 - `git diff --check`
 
 Next:
@@ -54,8 +54,8 @@ Changed:
   start from Linear and use repo docs as the compact invariant/proof bridge.
 
 Validation:
-- `python3 scripts/validate_docs.py`
-- `python3 scripts/validate_migration_docs.py`
+- `python3 archive/legacy-docs-tools/validate_docs.py`
+- `python3 archive/legacy-docs-tools/validate_migration_docs.py`
 - `git diff --check`
 
 Next:
@@ -229,7 +229,7 @@ overlap; each merged `--no-ff` with no conflicts; authoritative `bash -n`/valida
   served⊆manifest regression test that would have caught the original incident.
 - **CARRY-FORWARD (live re-test, orchestrator):** 043 — fresh `./install.sh` shows durable_jobs/FK migrations as
   `migration applied:` and a re-run shows `skip: … already recorded` (verify the version key matches this VM's
-  `schema_migrations` prefix). 046 — `./harden.sh` / `--apparmor-enforce` reaches `aa-status` enforce for
+  `schema_migrations` prefix). 046 — `./archive/legacy-operator-tools/harden.sh` / `--apparmor-enforce` reaches `aa-status` enforce for
   sift-gateway/dfir-exec and run_command still works under enforce.
 
 ### 2026-06-15 - B-MVP-053: wintriage (+opencti) tools denied under an active case — reference-plane case-scope contract gap fixed + live-proven; B-MVP-038/047 CLOSED on fresh install; B-MVP-048 post-seal recheck
@@ -767,7 +767,7 @@ Changed:
   portal-session plane) so the graph/Opus misread does not recur.
 
 Validation:
-- `python3 scripts/validate_docs.py`, `python3 scripts/validate_migration_docs.py`, `git diff --check`.
+- `python3 archive/legacy-docs-tools/validate_docs.py`, `python3 archive/legacy-docs-tools/validate_migration_docs.py`, `git diff --check`.
 
 Next:
 - Architecture diagram revamped: new code-grounded Excalidraw at `docs/architecture/sift-architecture.excalidraw`
@@ -789,8 +789,8 @@ Changed:
   deprecated-unmarked) + SECURITY (opensearch-mcp leaks absolute host paths past the redactor).
 - PTC (programmatic tool calling) runs HOST-SIDE in the local terminal (operator correction), not
   in the run_command jail → full Python, gateway still the policy boundary. Bridge + recipes + skill:
-  `scripts/ptc/ptc.py` (CA-pinned MCP-over-HTTPS, live token from `~/.claude.json`),
-  `scripts/ptc/recipes/{ioc_pivot,aggregate_then_fetch,timeline_drill}.py`, `scripts/ptc/README.md`,
+  `archive/legacy-operator-tools/ptc/ptc.py` (CA-pinned MCP-over-HTTPS, live token from `~/.claude.json`),
+  `archive/legacy-operator-tools/ptc/recipes/{ioc_pivot,aggregate_then_fetch,timeline_drill}.py`, `archive/legacy-operator-tools/ptc/README.md`,
   `.claude/skills/ptc/SKILL.md`. `out/` + `ca-cert.pem` gitignored.
 
 Validation:
@@ -822,7 +822,7 @@ Changed (operator decisions, persisted to task-batches.md Wave Order + the backl
   any remaining legacy code paths/tests. Re-owned to CL2 cleanup discipline.
 
 Validation:
-- `python3 scripts/validate_docs.py`, `python3 scripts/validate_migration_docs.py`, `git diff --check`.
+- `python3 archive/legacy-docs-tools/validate_docs.py`, `python3 archive/legacy-docs-tools/validate_migration_docs.py`, `git diff --check`.
 
 Next:
 - Define the optimization scope (B-MVP-028) and start there before PT2.
@@ -880,8 +880,8 @@ Validation:
 - `uv run --extra dev --extra full pytest packages/sift-core/tests -q`
 - `uv run --extra dev --extra full pytest packages/sift-gateway/tests -q`
 - `SIFT_RUN3_GATE_STRICT=1 uv run --extra dev --extra full pytest packages/sift-core/tests/security -q`
-- `python3 scripts/validate_docs.py`
-- `python3 scripts/validate_migration_docs.py`
+- `python3 archive/legacy-docs-tools/validate_docs.py`
+- `python3 archive/legacy-docs-tools/validate_migration_docs.py`
 - `git diff --check`
 
 Next:
@@ -917,8 +917,8 @@ Changed:
 - AGENTS/CLAUDE were aligned to this model and live proofs were standardized around `/health`, service status, and MCP-auth via portal-issued credentials.
 
 Validation:
-- `python3 scripts/validate_docs.py`
-- `python3 scripts/validate_migration_docs.py`
+- `python3 archive/legacy-docs-tools/validate_docs.py`
+- `python3 archive/legacy-docs-tools/validate_migration_docs.py`
 - `git diff --check`
 
 Next:
@@ -935,7 +935,7 @@ Next:
 | B-MVP-023 | Backlog | DONE | 2026-06-15 (`44b120d`, merge `620dceb`): legacy v1 `/dashboard` mount + `create_dashboard_app`/`serve_index`/v1 static, the `legacy_portal_session_enabled` flag end-to-end, and the `sift_session` cookie + examiner Bearer (`_verify_bearer`) legacy auth branches REMOVED (−3361 lines). Kept shared `_dashboard_api_routes`, `generate_jwt`/`verify_jwt`, logout cookie-clear; v2 `/portal` intact. Auth collapses to Supabase-envelope→401, fail-closed. `/security-review` CLEAN (no bypass). case-dashboard 357 + gateway 519 green. Plan: `docs/B-MVP-023-legacy-dashboard-removal-impact.md`. | BATCH-CL2 |
 | B-MVP-026 | Backlog | DONE | RUN-3 MCP positive/negative matrix, seccomp kill flip, AppArmor enforce flip, and evidence integrity proof all green + committed 4ee3d1f pushed to origin/main 2026-06-14. | BATCH-R3-* |
 | B-MVP-027 | Backlog | DONE | Durable lane KeyError root-caused: handler dropped `_resolved_evidence_refs` + `ActiveCaseContext(db_active=True)` from the sync-lane contract → teardown surfaced as opaque `unhandled worker error: KeyError`. Code fix already landed in `0d440a7` (2026-06-10, AUT2) but row was never closed and had NO regression guard. Added regression coverage 2026-06-15 (`e95692d`): two tests drive the real `JobWorker.run_once` loop (plain + evidence-ref) to exec; evidence-ref test proven to FAIL against the pre-`0d440a7` handler. No prod change needed. | BATCH-R3-* |
-| B-MVP-028 | Backlog | DONE | Optimization track defined + first deliverable landed: tool-surface audit (`docs/optimization/tool-audit-2026-06-14.md`) + host-side PTC bridge/recipes/skill (`scripts/ptc/**`, `.claude/skills/ptc/`), pushed `4138092`. On-wire fixes split to B-MVP-029. | B-MVP-028 |
+| B-MVP-028 | Backlog | DONE | Optimization track defined + first deliverable landed: tool-surface audit (`docs/optimization/tool-audit-2026-06-14.md`) + host-side PTC bridge/recipes/skill (`archive/legacy-operator-tools/ptc/**`, `.claude/skills/ptc/`), pushed `4138092`. On-wire fixes split to B-MVP-029. | B-MVP-028 |
 | B-MVP-029 | Backlog | DONE | On-wire MCP response fixes landed + live-proven 2026-06-15 (`5233cd8`/`ec9b8d6`/`7977fa7`): run_command receipt dedup, opensearch_search large-result autosave + per-hit hoist, `outputSchema` on core tools, ingest-poll wording, opensearch-mcp absolute-path leaks closed (SECURITY; +3 found by audit), `_legacy_*`→`_impl_*` rename. Autosave live-activation required refreshing the stale DB-registered opensearch manifest (case_dir in safe_case_argument_names). DB-job-row injection for real ingest polling deferred → B-MVP-027; manifest-drift auto-refresh → B-MVP-032. | B-MVP-029 |
 | B-MVP-030 | Backlog | DONE | 2026-06-15 (`457dc11`): single-file rename `_legacy_token_id`→`_resolve_db_token_id` in `audit_helpers.py` (helper is module-private, def+call both internal) + docstring reframed as a correctness FK guard (not a legacy shim). New `tests/test_audit_token_fk_guard.py` (3 tests, no DB dep via injected fake conn) asserts a Supabase principal id never lands in `audit_events.actor_token_id` while legitimate agent attribution is still recorded. | BATCH-CL2 |
 | B-MVP-031 | Backlog | DONE | 2026-06-15: closed as tracked (doc-only, no code). Source slice already landed 2026-06-14 (`useStore.js` characterization test + dashboard selectors). Gateway complex-density (21/32 nodes) recorded as a standing review target; no deletion. | BATCH-PT1 |
@@ -967,8 +967,8 @@ Next:
 Run at the end of documentation/planning sessions:
 
 ```bash
-python3 scripts/validate_docs.py
-python3 scripts/validate_migration_docs.py
+python3 archive/legacy-docs-tools/validate_docs.py
+python3 archive/legacy-docs-tools/validate_migration_docs.py
 git diff --check
 ```
 
