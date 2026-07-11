@@ -143,7 +143,9 @@ def test_secure_os_hardening_is_default_and_service_scoped() -> None:
     services = (REPO_ROOT / "lib" / "services.sh").read_text(encoding="utf-8")
     assert 'die "Mandatory gateway is not reachable.' in services
     assert 'die "Mandatory gateway is DEGRADED' in services
-    assert "/usr/bin/setpriv                          px -> sift-addon," in gateway_profile
+    assert "sift-addon-systemd-sandbox" in gateway_profile
+    assert "configure_addon_systemd_sandbox" in installer
+    assert "SIFT_ADDON_SANDBOX_HELPER" in gateway_unit
     assert "pix ->" not in gateway_profile
     assert "pux ->" not in gateway_profile
     assert "capability linux_immutable," in gateway_profile

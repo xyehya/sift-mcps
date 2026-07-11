@@ -164,3 +164,13 @@ configure_run_command_systemd_scope() {
     --service-user "$SIFT_GATEWAY_SERVICE_USER" \
     --helper-src "$REPO_DIR/scripts/sift-run-command-systemd-scope"
 }
+
+configure_addon_systemd_sandbox() {
+  if ! command -v visudo >/dev/null 2>&1 && [[ ! -x /usr/sbin/visudo ]]; then
+    die "Missing required command: visudo"
+  fi
+  log "Configuring destination-constrained stdio add-on sandbox."
+  sudo_if_needed "$REPO_DIR/scripts/setup-addon-systemd-sandbox-sudoers.sh" \
+    --service-user "$SIFT_GATEWAY_SERVICE_USER" \
+    --helper-src "$REPO_DIR/scripts/sift-addon-systemd-sandbox"
+}

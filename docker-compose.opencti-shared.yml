@@ -1,4 +1,4 @@
-# OpenCTI shared-datastore target path (explicit migration mode only).
+# OpenCTI fresh shared-datastore target path. No migration is performed.
 #
 # This file intentionally has no OpenSearch service. The core OpenSearch
 # service must already be running with Security/TLS enabled on the external
@@ -14,9 +14,11 @@
 
 services:
   opencti:
-    image: "${OPENCTI_PLATFORM_IMAGE:?set an immutable OpenCTI platform image digest}"
+    image: "${OPENCTI_PLATFORM_IMAGE:-opencti/platform@sha256:9cbf5b159faeea7eadd33f1643abf96d4d27f8659bc68a15c148085dc4cc77f1}"
     container_name: sift-opencti
     restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     networks:
       - opencti-app-net
       - sift-net
@@ -74,8 +76,10 @@ services:
       start_period: 120s
 
   worker:
-    image: "${OPENCTI_WORKER_IMAGE:?set an immutable OpenCTI worker image digest}"
+    image: "${OPENCTI_WORKER_IMAGE:-opencti/worker@sha256:3cb80d6f9f4816fdd2c4f8565807851388be3e247ef2348ef34a553be8d414ea}"
     restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     networks:
       - opencti-app-net
     environment:
@@ -87,8 +91,10 @@ services:
         condition: service_healthy
 
   redis:
-    image: "${OPENCTI_REDIS_IMAGE:?set an immutable Redis image digest}"
+    image: "${OPENCTI_REDIS_IMAGE:-redis@sha256:2838d5524559494f6f1cd66e97e76b200d64a633a8614200620755ed395daf32}"
     restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     networks:
       - opencti-app-net
     volumes:
@@ -100,8 +106,10 @@ services:
       retries: 5
 
   rabbitmq:
-    image: "${OPENCTI_RABBITMQ_IMAGE:?set an immutable RabbitMQ image digest}"
+    image: "${OPENCTI_RABBITMQ_IMAGE:-rabbitmq@sha256:c1e33461287f4c53049ce525575f0df77b2a00a88e2593776afbb6c1489bdb81}"
     restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     networks:
       - opencti-app-net
     volumes:
@@ -116,8 +124,10 @@ services:
       retries: 10
 
   minio:
-    image: "${OPENCTI_MINIO_IMAGE:?set an immutable MinIO image digest}"
+    image: "${OPENCTI_MINIO_IMAGE:-minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e}"
     restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     networks:
       - opencti-app-net
     volumes:

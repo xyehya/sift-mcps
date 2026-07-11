@@ -602,12 +602,12 @@ def _create_backend_proxy(backend_name: str, config: dict, manifest: dict):
     if backend_type == "http":
         return _create_http_proxy(backend_name, config)
     if backend_type == "stdio":
-        transport = _stdio_transport(config)
+        transport = _stdio_transport(backend_name, config)
         return create_proxy(transport, name=f"sift-gateway/{backend_name}")
     raise ValueError(f"Unknown backend type for proxy: {backend_type!r}")
 
 
-def _stdio_transport(config: dict) -> StdioTransport:
+def _stdio_transport(backend_name: str, config: dict) -> StdioTransport:
     command = config.get("command")
     if not command:
         raise ValueError("stdio backend proxy requires command")
@@ -616,7 +616,9 @@ def _stdio_transport(config: dict) -> StdioTransport:
     env.update(configured_env)
     env = {str(k): str(v) for k, v in env.items() if v}
     args = [str(arg) for arg in config.get("args", [])]
-    command, args = _capability_dropped_command(str(command), args)
+    command, args = _capability_dropped_command(
+        backend_name, str(command), args, env
+    )
     return StdioTransport(
         command=command,
         args=args,

@@ -318,6 +318,7 @@ main() {
   # survive operator logout without per-user lingering.
 
   configure_run_command_systemd_scope
+  configure_addon_systemd_sandbox
   configure_immutable_capability
   configure_auditd
   verify_gateway_apparmor_attachment

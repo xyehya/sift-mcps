@@ -26,21 +26,58 @@ _STOP_TIMEOUT = 15
 # the underlying backend's blocking I/O for 300s+ before the gateway
 # noticed. 30s is generous for healthy backends, fail-fast for hung.
 _INITIALIZE_TIMEOUT = 30
-_SETPRIV = "/usr/bin/setpriv"
+_SUDO = "/usr/bin/sudo"
+_DEFAULT_ADDON_SANDBOX_HELPER = "/usr/local/sbin/sift-addon-systemd-sandbox"
+_NETWORK_POLICY_BY_BACKEND = {
+    "opensearch-mcp": "loopback",
+    "windows-triage-mcp": "none",
+    "opencti-mcp": "loopback",
+}
+_PRESERVED_ENV_BY_BACKEND = {
+    "opensearch-mcp": frozenset({"OPENSEARCH_CONFIG", "OPENSEARCH_HOST"}),
+    "windows-triage-mcp": frozenset({"WT_DATA_DIR"}),
+    "opencti-mcp": frozenset({"OPENCTI_URL", "OPENCTI_TOKEN"}),
+}
 
 
-def _capability_dropped_command(command: str, args: list[str]) -> tuple[str, list[str]]:
-    """Wrap an add-on exec in a fail-closed, empty Linux capability boundary."""
+def _capability_dropped_command(
+    backend_name: str,
+    command: str,
+    args: list[str],
+    env: Mapping[str, str],
+) -> tuple[str, list[str]]:
+    """Wrap an add-on in the fail-closed systemd capability/egress boundary."""
     if os.environ.get("SIFT_DROP_BACKEND_CAPABILITIES") != "1":
         return command, args
-    if not os.path.isfile(_SETPRIV) or not os.access(_SETPRIV, os.X_OK):
+    helper = os.environ.get(
+        "SIFT_ADDON_SANDBOX_HELPER", _DEFAULT_ADDON_SANDBOX_HELPER
+    )
+    if not os.path.isfile(_SUDO) or not os.access(_SUDO, os.X_OK):
+        raise RuntimeError("SIFT add-on sandbox requires executable /usr/bin/sudo")
+    if not os.path.isfile(helper) or not os.access(helper, os.X_OK):
         raise RuntimeError(
-            "SIFT_DROP_BACKEND_CAPABILITIES=1 but /usr/bin/setpriv is unavailable"
+            "SIFT_DROP_BACKEND_CAPABILITIES=1 but the add-on systemd sandbox "
+            "helper is unavailable"
         )
-    return _SETPRIV, [
-        "--no-new-privs",
-        "--inh-caps=-all",
-        "--ambient-caps=-all",
+    network_policy = _NETWORK_POLICY_BY_BACKEND.get(backend_name)
+    if network_policy is None:
+        raise RuntimeError(
+            f"stdio backend {backend_name!r} has no approved network sandbox policy"
+        )
+    approved_names = _PRESERVED_ENV_BY_BACKEND[backend_name]
+    preserve_names = sorted(
+        name for name, value in env.items() if value and name in approved_names
+    )
+    sudo_args = ["-n"]
+    if preserve_names:
+        sudo_args.append(f"--preserve-env={','.join(preserve_names)}")
+    return _SUDO, [
+        *sudo_args,
+        helper,
+        "--backend-name",
+        backend_name,
+        "--network-policy",
+        network_policy,
         "--",
         command,
         *args,
@@ -221,7 +258,7 @@ class StdioMCPBackend(MCPBackend):
                 self.name,
             )
 
-        command, args = _capability_dropped_command(command, args)
+        command, args = _capability_dropped_command(self.name, command, args, env)
         server_params = StdioServerParameters(
             command=command,
             args=args,

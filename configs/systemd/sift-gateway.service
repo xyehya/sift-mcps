@@ -61,6 +61,7 @@ Environment=SIFT_EXECUTE_SYSTEMD_SCOPE_HELPER=/usr/local/sbin/sift-run-command-s
 # fetches and AF_UNIX IPC survive; cgroup IPAddressDeny=any enforces egress.
 Environment=SIFT_EXECUTE_SECCOMP_MODE=kill
 Environment=SIFT_DROP_BACKEND_CAPABILITIES=1
+Environment=SIFT_ADDON_SANDBOX_HELPER=/usr/local/sbin/sift-addon-systemd-sandbox
 
 # === BATCH-HR3 systemd hardening ============================================
 # Minimal, tested containment for a service that (a) spawns forensic tooling via

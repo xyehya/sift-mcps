@@ -35,8 +35,22 @@ EOF
 core_compose="$REPO_DIR/docker-compose.yml"
 shared_compose="$REPO_DIR/docker-compose.opencti-shared.yml"
 role_file="$REPO_DIR/configs/opensearch/security/opencti-platform-role.yml"
-[[ -f "$core_compose" && -f "$shared_compose" && -f "$role_file" ]] \
+tuple_file="$REPO_DIR/configs/opencti/shared-target-versions.env"
+[[ -f "$core_compose" && -f "$shared_compose" && -f "$role_file" && -f "$tuple_file" ]] \
   || { printf 'FATAL: shared OpenCTI target artifacts are incomplete.\n' >&2; exit 1; }
+
+# Trusted repository-owned constants only; this file is forbidden from carrying
+# credentials and every consumed value is validated below.
+# shellcheck disable=SC1090
+source "$tuple_file"
+[[ "$OPENCTI_VERSION" =~ ^7\.[0-9]{6}\.[0-9]+$ ]] \
+  || { printf 'FATAL: invalid pinned OpenCTI version.\n' >&2; exit 1; }
+[[ "$PYCTI_VERSION" == "$OPENCTI_VERSION" ]] \
+  || { printf 'FATAL: pycti must exactly match the pinned OpenCTI version.\n' >&2; exit 1; }
+[[ "$OPENSEARCH_VERSION" == "3.5.0" ]] \
+  || { printf 'FATAL: unsupported shared-target OpenSearch version.\n' >&2; exit 1; }
+export OPENCTI_PLATFORM_IMAGE OPENCTI_WORKER_IMAGE OPENCTI_REDIS_IMAGE
+export OPENCTI_RABBITMQ_IMAGE OPENCTI_MINIO_IMAGE
 
 command -v docker >/dev/null 2>&1 || {
   printf 'FATAL: Docker is required to validate the shared compose contract.\n' >&2
@@ -68,14 +82,64 @@ for image_var in OPENCTI_PLATFORM_IMAGE OPENCTI_WORKER_IMAGE OPENCTI_REDIS_IMAGE
   }
 done
 
+[[ "$OPENCTI_PLATFORM_IMAGE" == "opencti/platform@sha256:9cbf5b159faeea7eadd33f1643abf96d4d27f8659bc68a15c148085dc4cc77f1" ]] \
+  || { printf 'FATAL: OpenCTI platform image does not match the accepted tuple.\n' >&2; exit 1; }
+[[ "$OPENCTI_WORKER_IMAGE" == "opencti/worker@sha256:3cb80d6f9f4816fdd2c4f8565807851388be3e247ef2348ef34a553be8d414ea" ]] \
+  || { printf 'FATAL: OpenCTI worker image does not match the accepted tuple.\n' >&2; exit 1; }
+docker manifest inspect "$OPENCTI_PLATFORM_IMAGE" >/dev/null 2>&1 \
+  || { printf 'FATAL: pinned OpenCTI platform image digest is unavailable.\n' >&2; exit 1; }
+docker manifest inspect "$OPENCTI_WORKER_IMAGE" >/dev/null 2>&1 \
+  || { printf 'FATAL: pinned OpenCTI worker image digest is unavailable.\n' >&2; exit 1; }
+
 [[ -r "${OPENCTI_OPENSEARCH_CA:-}" ]] \
   || { printf 'FATAL: OPENCTI_OPENSEARCH_CA must name a readable verified CA file.\n' >&2; exit 1; }
+command -v openssl >/dev/null 2>&1 \
+  || { printf 'FATAL: openssl is required for CA validation.\n' >&2; exit 1; }
+openssl x509 -in "$OPENCTI_OPENSEARCH_CA" -noout -checkend 0 >/dev/null 2>&1 \
+  || { printf 'FATAL: OpenSearch CA is invalid, expired, or not yet valid.\n' >&2; exit 1; }
+cert_text="$(openssl x509 -in "$OPENCTI_OPENSEARCH_CA" -noout -text 2>/dev/null)"
+grep -Eqi 'Signature Algorithm: (sha256|sha384|sha512)' <<<"$cert_text" \
+  || { printf 'FATAL: OpenSearch CA must use a SHA-2 signature.\n' >&2; exit 1; }
+if grep -q 'Public Key Algorithm: rsaEncryption' <<<"$cert_text"; then
+  grep -Eq 'Public-Key: \((2048|3072|4096|[5-9][0-9]{3,}) bit\)' <<<"$cert_text" \
+    || { printf 'FATAL: OpenSearch CA RSA key is below 2048 bits.\n' >&2; exit 1; }
+fi
 for secret_var in OPENCTI_OPENSEARCH_USER OPENCTI_OPENSEARCH_PASSWORD OPENCTI_ADMIN_TOKEN OPENCTI_WORKER_TOKEN OPENCTI_RABBITMQ_PASSWORD OPENCTI_MINIO_SECRET_KEY OPENCTI_ENCRYPTION_KEY OPENCTI_HEALTH_ACCESS_KEY; do
   [[ -n "${!secret_var:-}" ]] || {
     printf 'FATAL: %s must be supplied through the operator environment/secret store.\n' "$secret_var" >&2
     exit 1
   }
 done
+
+pycti_spec="$(SIFT_REPO_DIR="$REPO_DIR" python3 - <<'PY'
+import os, pathlib, tomllib
+p = tomllib.loads((pathlib.Path(os.environ["SIFT_REPO_DIR"]) / "packages/opencti-mcp/pyproject.toml").read_text())
+print(next(x for x in p["project"]["dependencies"] if x.startswith("pycti")))
+PY
+)"
+[[ "$pycti_spec" == "pycti==${PYCTI_VERSION}" ]] \
+  || { printf 'FATAL: package metadata does not pin the accepted pycti version.\n' >&2; exit 1; }
+
+check_url="${OPENCTI_OPENSEARCH_CHECK_URL:-https://127.0.0.1:9200}"
+export OPENCTI_OPENSEARCH_CHECK_URL
+live_version="$(python3 - 2>/dev/null <<'PY'
+import base64, json, os, ssl, urllib.parse, urllib.request
+url = os.environ["OPENCTI_OPENSEARCH_CHECK_URL"]
+parsed = urllib.parse.urlparse(url)
+if parsed.scheme != "https" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+    raise SystemExit("OpenSearch check URL must be HTTPS loopback")
+ctx = ssl.create_default_context(cafile=os.environ["OPENCTI_OPENSEARCH_CA"])
+token = base64.b64encode(
+    f'{os.environ["OPENCTI_OPENSEARCH_USER"]}:{os.environ["OPENCTI_OPENSEARCH_PASSWORD"]}'.encode()
+).decode()
+request = urllib.request.Request(url, headers={"Authorization": f"Basic {token}"})
+with urllib.request.urlopen(request, context=ctx, timeout=10) as response:
+    payload = json.load(response)
+print(payload["version"]["number"])
+PY
+)" || { printf 'FATAL: authenticated TLS OpenSearch tuple probe failed.\n' >&2; exit 1; }
+[[ "$live_version" == "$OPENSEARCH_VERSION" ]] \
+  || { printf 'FATAL: live OpenSearch version %s does not match accepted %s.\n' "$live_version" "$OPENSEARCH_VERSION" >&2; exit 1; }
 
 role_body="$(sed '/^[[:space:]]*#/d' "$role_file")"
 wildcard_pattern="^[[:space:]]*-[[:space:]]*[\"']?\\*[\"']?[[:space:]]*$"
@@ -108,5 +172,6 @@ docker compose -f "$shared_compose" config --quiet >/dev/null || {
   exit 1
 }
 
-printf 'Shared OpenCTI target preflight passed (read-only).\n'
+printf 'Shared OpenCTI target preflight passed (read-only): OpenCTI=%s pycti=%s OpenSearch=%s.\n' \
+  "$OPENCTI_VERSION" "$PYCTI_VERSION" "$OPENSEARCH_VERSION"
 printf 'Next gates: apply the role through Security admin, run compatibility/capacity tests, then start the fresh empty OpenCTI target.\n'

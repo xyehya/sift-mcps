@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import tomllib
 
 from _installer_support import REPO_ROOT
 
@@ -10,6 +11,8 @@ SHARED_COMPOSE = REPO_ROOT / "docker-compose.opencti-shared.yml"
 ROLE = REPO_ROOT / "configs" / "opensearch" / "security" / "opencti-platform-role.yml"
 CHECK = REPO_ROOT / "scripts" / "prepare-opencti-shared-opensearch.sh"
 SETUP = REPO_ROOT / "scripts" / "setup-addon.sh"
+TUPLE = REPO_ROOT / "configs" / "opencti" / "shared-target-versions.env"
+PROVISION = REPO_ROOT / "scripts" / "provision-opencti-shared-opensearch.py"
 
 
 def test_shared_compose_has_no_dedicated_search_and_keeps_tls_prefix_boundary() -> None:
@@ -29,6 +32,8 @@ def test_shared_compose_has_no_dedicated_search_and_keeps_tls_prefix_boundary() 
     assert "MINIO_ROOT_PASSWORD=${OPENCTI_MINIO_SECRET_KEY" in source
     assert "RABBITMQ__PASSWORD=${OPENCTI_ADMIN_TOKEN" not in source
     assert "MINIO__SECRET_KEY=${OPENCTI_ADMIN_TOKEN" not in source
+    assert source.count("cap_drop: [ALL]") == 5
+    assert source.count("security_opt: [no-new-privileges:true]") == 5
 
 
 def test_opencti_role_is_prefix_only_and_not_security_admin() -> None:
@@ -52,9 +57,31 @@ def test_shared_check_is_read_only_and_requires_secure_core_contract() -> None:
         check=False,
     )
     assert result.returncode != 0
-    assert "must be an immutable @sha256 image reference" in result.stderr
+    assert "OPENCTI_OPENSEARCH_CA" in result.stderr
     assert "OPENSEARCH_INITIAL_ADMIN_PASSWORD" in source
     assert "https://localhost:9200" in source
+    assert "OPENCTI_OPENSEARCH_CHECK_URL" in source
+    assert "ssl.create_default_context" in source
+    assert 'parsed.hostname not in {"127.0.0.1", "localhost", "::1"}' in source
+
+
+def test_acceptance_tuple_is_exact_and_matches_package_metadata() -> None:
+    values = dict(
+        line.split("=", 1)
+        for line in TUPLE.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    )
+    assert values["OPENCTI_VERSION"] == "7.260710.0"
+    assert values["PYCTI_VERSION"] == values["OPENCTI_VERSION"]
+    assert values["OPENSEARCH_VERSION"] == "3.5.0"
+    assert values["OPENCTI_PLATFORM_IMAGE"].startswith("opencti/platform@sha256:")
+    assert values["OPENCTI_WORKER_IMAGE"].startswith("opencti/worker@sha256:")
+    project = tomllib.loads(
+        (REPO_ROOT / "packages" / "opencti-mcp" / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert f'pycti=={values["PYCTI_VERSION"]}' in project["project"]["dependencies"]
 
 
 def test_external_helper_exposes_only_explicit_shared_check() -> None:
@@ -62,3 +89,15 @@ def test_external_helper_exposes_only_explicit_shared_check() -> None:
     assert "--shared-opensearch-check" in source
     assert "prepare-opencti-shared-opensearch.sh" in source
     assert 'source "$REPO_ROOT/install.sh"' not in source
+
+
+def test_identity_provisioner_proves_positive_and_negative_index_boundaries() -> None:
+    source = PROVISION.read_text(encoding="utf-8")
+    assert "secrets.token_urlsafe(48)" in source
+    assert 'proof_index = f"opencti-security-proof-' in source
+    assert '"/case-security-negative-proof"' in source
+    assert "negative not in {401, 403}" in source
+    assert "os.chmod(temp_path, 0o600)" in source
+    assert "os.replace(temp_path, output_path)" in source
+    assert "OPENCTI_OPENSEARCH_PASSWORD=" in source
+    assert "print(platform_password" not in source

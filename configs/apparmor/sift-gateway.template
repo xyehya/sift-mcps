@@ -120,12 +120,13 @@ profile sift-gateway {
   /home/*/.local/bin/uv                      rix,
   /usr/bin/python3*                          rix,
   /usr/local/sbin/sift-run-command-systemd-scope rix,
+  /usr/local/sbin/sift-addon-systemd-sandbox rix,
   /usr/bin/systemd-run                       rix,
   /usr/bin/systemctl                         rix,
-  # Every stdio backend crosses into the default-deny sift-addon domain before
-  # setpriv clears Linux capabilities and sets no-new-privileges. This is an
-  # exact fail-closed transition; never add an inherit/unconfined fallback.
-  /usr/bin/setpriv                          px -> sift-addon,
+  # The root-owned systemd broker attaches stdio children directly to the
+  # sift-addon profile and applies capability/egress/resource controls.
+  /run/sift-addon/                          rw,
+  /run/sift-addon/**                        rwk,
 
   # Forensic tooling (Zimmerman tools, mount helpers, FUSE tools).
   # NOTE: after the opensearch-worker decoupling (2026-06-14) the gateway no
@@ -171,7 +172,6 @@ profile sift-addon {
   #include <abstractions/ssl_certs>
   #include <abstractions/nameservice>
 
-  /usr/bin/setpriv                          rix,
   /usr/bin/python3*                         rix,
   /opt/sift-mcps/                           r,
   /opt/sift-mcps/**                         rix,

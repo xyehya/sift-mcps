@@ -41,28 +41,48 @@ _SECRET_VARS = [
 
 def test_production_stdio_child_drops_all_capability_sets(monkeypatch):
     monkeypatch.setenv("SIFT_DROP_BACKEND_CAPABILITIES", "1")
-    monkeypatch.setattr(sb.os.path, "isfile", lambda path: path == sb._SETPRIV)
-    monkeypatch.setattr(sb.os, "access", lambda path, mode: path == sb._SETPRIV)
+    monkeypatch.setattr(sb.os.path, "isfile", lambda _path: True)
+    monkeypatch.setattr(sb.os, "access", lambda _path, _mode: True)
 
-    command, args = sb._capability_dropped_command("/opt/addon", ["--serve"])
+    command, args = sb._capability_dropped_command(
+        "opencti-mcp",
+        "/opt/sift-mcps/.venv/bin/opencti-mcp",
+        [],
+        {"OPENCTI_URL": "http://127.0.0.1:8080", "OPENCTI_TOKEN": "secret"},
+    )
 
-    assert command == "/usr/bin/setpriv"
+    assert command == "/usr/bin/sudo"
     assert args == [
-        "--no-new-privs",
-        "--inh-caps=-all",
-        "--ambient-caps=-all",
+        "-n",
+        "--preserve-env=OPENCTI_TOKEN,OPENCTI_URL",
+        "/usr/local/sbin/sift-addon-systemd-sandbox",
+        "--backend-name",
+        "opencti-mcp",
+        "--network-policy",
+        "loopback",
         "--",
-        "/opt/addon",
-        "--serve",
+        "/opt/sift-mcps/.venv/bin/opencti-mcp",
     ]
 
 
-def test_production_stdio_child_fails_closed_without_setpriv(monkeypatch):
+def test_production_stdio_child_fails_closed_without_sandbox_helper(monkeypatch):
     monkeypatch.setenv("SIFT_DROP_BACKEND_CAPABILITIES", "1")
-    monkeypatch.setattr(sb.os.path, "isfile", lambda _path: False)
+    monkeypatch.setattr(sb.os.path, "isfile", lambda path: path == sb._SUDO)
+    monkeypatch.setattr(sb.os, "access", lambda path, _mode: path == sb._SUDO)
 
-    with pytest.raises(RuntimeError, match="setpriv is unavailable"):
-        sb._capability_dropped_command("/opt/addon", [])
+    with pytest.raises(RuntimeError, match="sandbox helper is unavailable"):
+        sb._capability_dropped_command(
+            "windows-triage-mcp", "/opt/addon", [], {}
+        )
+
+
+def test_production_stdio_child_rejects_backend_without_network_policy(monkeypatch):
+    monkeypatch.setenv("SIFT_DROP_BACKEND_CAPABILITIES", "1")
+    monkeypatch.setattr(sb.os.path, "isfile", lambda _path: True)
+    monkeypatch.setattr(sb.os, "access", lambda _path, _mode: True)
+
+    with pytest.raises(RuntimeError, match="no approved network sandbox policy"):
+        sb._capability_dropped_command("custom-mcp", "/opt/addon", [], {})
 
 
 # --- minimal env (DSS-CAN-020) ---------------------------------------------

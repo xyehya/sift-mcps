@@ -539,6 +539,7 @@ def test_stdio_proxy_env_does_not_inherit_unreferenced_process_secrets(monkeypat
     monkeypatch.setenv("LC_ALL", "C.UTF-8")
 
     transport = _stdio_transport(
+        "windows-triage-mcp",
         {
             "type": "stdio",
             "command": "true",
@@ -558,17 +559,20 @@ def test_live_stdio_proxy_uses_capability_dropping_transition(monkeypatch):
     monkeypatch.setattr("sift_gateway.backends.stdio_backend.os.access", lambda *_: True)
 
     transport = _stdio_transport(
-        {"type": "stdio", "command": "/opt/addon", "args": ["--serve"]}
+        "windows-triage-mcp",
+        {"type": "stdio", "command": "/opt/sift-mcps/.venv/bin/windows-triage-mcp"},
     )
 
-    assert transport.command == "/usr/bin/setpriv"
+    assert transport.command == "/usr/bin/sudo"
     assert transport.args == [
-        "--no-new-privs",
-        "--inh-caps=-all",
-        "--ambient-caps=-all",
+        "-n",
+        "/usr/local/sbin/sift-addon-systemd-sandbox",
+        "--backend-name",
+        "windows-triage-mcp",
+        "--network-policy",
+        "none",
         "--",
-        "/opt/addon",
-        "--serve",
+        "/opt/sift-mcps/.venv/bin/windows-triage-mcp",
     ]
 
 
@@ -581,7 +585,9 @@ def test_stdio_proxy_env_propagates_db_active_authority_flag(monkeypatch):
     monkeypatch.setenv("SIFT_DB_ACTIVE", "1")
     monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgres://secret")
 
-    transport = _stdio_transport({"type": "stdio", "command": "true"})
+    transport = _stdio_transport(
+        "opensearch-mcp", {"type": "stdio", "command": "true"}
+    )
 
     assert transport.env["SIFT_DB_ACTIVE"] == "1"
     # The authority flag travels; the control-plane DSN (a secret) does not.
@@ -592,12 +598,14 @@ def test_stdio_proxy_env_omits_db_active_when_unset(monkeypatch):
     monkeypatch.setenv("PATH", "/usr/bin")
     monkeypatch.delenv("SIFT_DB_ACTIVE", raising=False)
 
-    transport = _stdio_transport({"type": "stdio", "command": "true"})
+    transport = _stdio_transport(
+        "opensearch-mcp", {"type": "stdio", "command": "true"}
+    )
 
     assert "SIFT_DB_ACTIVE" not in transport.env
 
 
-def test_gateway_core_has_no_hardcoded_addon_names():
+def test_gateway_core_hardcodes_addon_names_only_for_os_sandbox_policy():
     # This invariant disciplines EXTERNAL/third-party MCP add-on backends so they
     # plug into the modular schema-registered surface without the gateway core
     # ever knowing them by name (naming convention, no-execute, conflict-free).
@@ -608,9 +616,11 @@ def test_gateway_core_has_no_hardcoded_addon_names():
         # contract is designed for. The first-party RAG pack is intentionally
         # gateway-owned, so its typed kb_* dispatch is an allowed core seam.
     src_root = Path(__file__).resolve().parents[1] / "src" / "sift_gateway"
+    policy_file = src_root / "backends" / "stdio_backend.py"
     combined = "\n".join(
         path.read_text(encoding="utf-8")
         for path in src_root.rglob("*.py")
+        if path != policy_file
     )
     forbidden = [
         "wintriage",
@@ -619,3 +629,6 @@ def test_gateway_core_has_no_hardcoded_addon_names():
         "windows-triage",
     ]
     assert [name for name in forbidden if name in combined] == []
+    policy = policy_file.read_text(encoding="utf-8")
+    assert '"windows-triage-mcp": "none"' in policy
+    assert '"opencti-mcp": "loopback"' in policy

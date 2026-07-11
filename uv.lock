@@ -1587,7 +1587,7 @@ dev = [
 requires-dist = [
     { name = "fastmcp", specifier = ">=3" },
     { name = "mcp", specifier = ">=1.26" },
-    { name = "pycti", specifier = ">=6.0" },
+    { name = "pycti", specifier = "==7.260710.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
@@ -1871,7 +1871,7 @@ wheels = [
 
 [[package]]
 name = "pycti"
-version = "7.260626.0"
+version = "7.260710.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -1895,9 +1895,9 @@ dependencies = [
     { name = "stix2" },
     { name = "uvicorn", extra = ["standard"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/00/f0/4ee80af0a2d4ccfa5cd3680e1355beb1eac121ec7a1efaf96a3077a624f2/pycti-7.260626.0.tar.gz", hash = "sha256:b3689b9b759dd6819db3f86e14df7f390abe53528059425960e28a5de4de9f7d", size = 258151, upload-time = "2026-06-26T15:40:11.546Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c8/be/4a1b759ecf2c2c9da651110989cb2e5733391a9068e0c978e56024b5a18a/pycti-7.260710.0.tar.gz", hash = "sha256:87ec57ab7290c2f413fe5a363f507d97c6e8093ff5f29b8fd4d1130b99357660", size = 258849, upload-time = "2026-07-10T12:47:46.24Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/82/b1d317403a138a08c960251ecfbc6ff12640f6d30221c8824dbe84937981/pycti-7.260626.0-py3-none-any.whl", hash = "sha256:4a3bf479206e24a98bea84922d6cd0f69490d860a70cb37f0847903cc5ead6c9", size = 350625, upload-time = "2026-06-26T15:40:10.213Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/67/c2aaf6dbe932c05277a5bed8e1b93a2ac4a01bda6e2a25811d29dffa6e9c/pycti-7.260710.0-py3-none-any.whl", hash = "sha256:3a23ae8ffe7e1550def2458065a88788249618724aee2a2e38f6ed7ec0e8fef2", size = 351060, upload-time = "2026-07-10T12:47:44.642Z" },
 ]
 
 [[package]]
