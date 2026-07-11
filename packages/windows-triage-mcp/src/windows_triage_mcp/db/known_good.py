@@ -95,6 +95,12 @@ class KnownGoodDB:
                 self._conn.execute("PRAGMA synchronous = NORMAL")
         return self._conn
 
+    def close(self) -> None:
+        """Close the current SQLite connection, if one is open."""
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
     def is_available(self) -> bool:
         """Check if the database exists and is accessible."""
         if not self.db_path.exists():

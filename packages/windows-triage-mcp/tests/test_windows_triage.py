@@ -121,6 +121,13 @@ def server(tmp_path):
         cache_size=0,
     )
 
+    # Production readers use SQLite immutable=1. Flush fixture writes out of
+    # WAL state before opening those readers; an immutable connection correctly
+    # ignores a live writer's mutable WAL/SHM sidecars.
+    kg_db.close()
+    ctx_db.close()
+    reg_db.close()
+
     # 13. Instantiate server
     srv = WindowsTriageServer(
         config=config,
