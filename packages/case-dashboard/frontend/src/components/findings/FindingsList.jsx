@@ -3,6 +3,7 @@ import { Check, X } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
+import { parseTimestamp } from '@/lib/timestamp-utils'
 import { FilterBar } from '@/components/findings/FindingsFilterBar'
 import { Row, ActivePill } from '@/components/findings/FindingRow'
 import { Button } from '@/components/ui/button'
@@ -74,8 +75,8 @@ export function FindingsList({
   const sortedList = useMemo(() => {
     const arr = list.slice()
     return arr.sort((a, b) => {
-      const ta = new Date(a.modified_at || a.event_timestamp || 0).getTime()
-      const tb = new Date(b.modified_at || b.event_timestamp || 0).getTime()
+      const ta = parseTimestamp(a.modified_at || a.event_timestamp || 0)
+      const tb = parseTimestamp(b.modified_at || b.event_timestamp || 0)
       return sortFilter === 'oldest' ? ta - tb : tb - ta
     })
   }, [list, sortFilter])

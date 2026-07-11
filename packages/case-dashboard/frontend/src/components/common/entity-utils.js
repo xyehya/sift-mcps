@@ -1,4 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────
+
+import { parseTimestamp } from '@/lib/timestamp-utils'
+
+export { parseTimestamp } from '@/lib/timestamp-utils'
 // Entity helpers — pure logic + static token-class maps shared by the four
 // entity tabs (Timeline · Hosts · Accounts · IOCs). No JSX, no store, so the
 // aggregation/sort/format logic is unit-testable and the .jsx files stay clean
@@ -107,7 +111,7 @@ export function getAccountsForFinding(f) {
 /** "YYYY-MM-DD HH:MM:SS" (UTC) for a timestamp, or '—' when unparseable. */
 export function fmtTs(raw) {
   if (!raw) return '—'
-  const ms = new Date(raw).getTime()
+  const ms = parseTimestamp(raw)
   if (Number.isNaN(ms)) return '—'
   return new Date(ms).toISOString().replace('T', ' ').substring(0, 19)
 }
@@ -123,7 +127,7 @@ export function timeRange(list) {
   for (const f of list ?? []) {
     const raw = f.event_timestamp || f.timestamp
     if (!raw) continue
-    const ms = new Date(raw).getTime()
+    const ms = parseTimestamp(raw)
     if (Number.isNaN(ms)) continue
     seen = true
     if (ms < minMs) minMs = ms
@@ -191,7 +195,7 @@ export function filterTimeline(timeline, { types = new Set(), host = 'all', sear
     const q = search.toLowerCase()
     list = list.filter((e) => (e.description ?? '').toLowerCase().includes(q))
   }
-  return [...list].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+  return [...list].sort((a, b) => parseTimestamp(a.timestamp) - parseTimestamp(b.timestamp))
 }
 
 // ── Generic table sort (Hosts / Accounts / IOCs) ─────────────────────────
