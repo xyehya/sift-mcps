@@ -422,6 +422,27 @@ def test_denied_command_fails_closed_with_receipt(db, sealed_case):
     assert receipt["command_plan_sha256"]
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "dotnet /opt/zimmermantools/PECmd.dll --help",
+        "dotnet exec /opt/zimmermantools/SrumECmd.exe --help",
+    ],
+)
+def test_durable_lane_denies_windows_only_zimmerman_launcher_targets(db, sealed_case, command):
+    """Fail on reversion: the durable lane shares the synchronous deny floor."""
+    job = _enqueue_run_command(
+        db, sealed_case, command=command, purpose="attempt Windows-only tool launch"
+    )
+    w = _worker(db, {"run_command": run_command_job_handler})
+    w.run_once(job_types=["run_command"])
+
+    stored = db.get(job.id)
+    assert stored.status == "succeeded"
+    assert stored.result_public["success"] is False
+    assert "Windows-only Zimmerman tool target" in stored.result_public["error"]
+
+
 def test_run_command_cannot_read_secret_env_via_proc(db, sealed_case, monkeypatch):
     """A command that tries to read the parent's secret env sees nothing."""
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "sr-secret-should-not-leak")

@@ -10,6 +10,27 @@ from typing import Any
 
 SECURITY_POLICY_ENV = "SIFT_EXECUTE_SECURITY_POLICY"
 
+# These curated knowledge cards describe Windows-only tools.  They must never
+# acquire a Linux ``run_command`` lane, whether invoked directly or as an
+# assembly passed to the unlisted (contained-tier) dotnet launcher.
+WINDOWS_ONLY_ZIMMERMAN_TOOLS = frozenset({"pecmd", "srumecmd"})
+
+
+def is_windows_only_zimmerman_target(value: str) -> bool:
+    """Return whether *value* names a blocked Zimmerman executable/assembly.
+
+    ``dotnet`` accepts both Unix and Windows-looking assembly paths, so split
+    both separators and compare a case-folded basename.  This deliberately
+    recognizes only the two Windows-only tools and their executable/assembly
+    aliases; it does not restrict dotnet generally or other Zimmerman wrappers.
+    """
+    basename = value.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    return basename in {
+        alias
+        for tool in WINDOWS_ONLY_ZIMMERMAN_TOOLS
+        for alias in (tool, f"{tool}.exe", f"{tool}.dll")
+    }
+
 DENY_FLOOR = frozenset(
     {
         "mkfs",
@@ -66,7 +87,11 @@ DENY_FLOOR = frozenset(
         # floor so a detected binary or an operator allowlist cannot contradict
         # the catalog's execution boundary.
         "pecmd",
+        "pecmd.exe",
+        "pecmd.dll",
         "srumecmd",
+        "srumecmd.exe",
+        "srumecmd.dll",
         # Added — nested interpreters (P0.3)
         "*sh",
         "busybox",

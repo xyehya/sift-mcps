@@ -58,7 +58,10 @@ def test_denied_command_rejected_before_executor_is_invoked(monkeypatch):
     assert called is False
 
 
-@pytest.mark.parametrize("binary", ["PECmd", "SrumECmd"])
+@pytest.mark.parametrize(
+    "binary",
+    ["PECmd", "PECmd.exe", "PECmd.dll", "SrumECmd", "SrumECmd.exe", "SrumECmd.dll"],
+)
 def test_windows_only_zimmerman_tools_are_rejected_before_linux_execution(
     monkeypatch, binary
 ):
@@ -75,6 +78,32 @@ def test_windows_only_zimmerman_tools_are_rejected_before_linux_execution(
 
     with pytest.raises(DeniedBinaryError, match="blocked by security policy"):
         generic.run_command([binary, "--help"], purpose="test platform policy")
+
+    assert called is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["dotnet", "/opt/zimmermantools/PECmd.dll", "--help"],
+        ["dotnet", "exec", r"C:\\Zimmerman\\SrumECmd.exe", "--help"],
+    ],
+)
+def test_dotnet_cannot_launch_windows_only_zimmerman_targets_before_executor(
+    monkeypatch, command
+):
+    """Fail on reversion: the contained dotnet launcher cannot bypass the floor."""
+    called = False
+
+    def _fail_if_called(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("executor should not run Windows-only launcher targets")
+
+    monkeypatch.setattr(generic, "execute", _fail_if_called)
+
+    with pytest.raises(DeniedBinaryError, match="Windows-only Zimmerman tool target"):
+        generic.run_command(command, purpose="test platform policy")
 
     assert called is False
 

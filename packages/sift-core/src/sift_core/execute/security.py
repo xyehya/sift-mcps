@@ -19,6 +19,7 @@ from sift_core.execute.environment import find_binary
 from sift_core.execute.exceptions import DeniedBinaryError
 from sift_core.execute.runtime_acl import AUTHORITY_FILE_BASENAMES
 from sift_core.execute.security_policy import (
+    is_windows_only_zimmerman_target,
     load_policy_from_env,
     matches_allowed_binary,
     matches_denied_binary,
@@ -937,6 +938,19 @@ def validate_shell_command(
         # Deny sudo
         if binary == "sudo":
             raise DeniedBinaryError("Agent-supplied sudo is blocked. Commands must be run directly.")
+
+        # ``dotnet`` remains an unlisted, contained-tier launcher by design;
+        # do not turn this into a blanket launcher deny.  These two
+        # Windows-only Zimmerman cards are the exception: accepting their DLL
+        # or EXE aliases here would bypass the non-overridable direct-binary
+        # deny floor and contradict their agent-facing availability contract.
+        if binary.casefold() == "dotnet" and any(
+            is_windows_only_zimmerman_target(arg) for arg in argv[1:]
+        ):
+            raise DeniedBinaryError(
+                "Windows-only Zimmerman tool target is blocked by security policy. "
+                "Use an operator-provisioned wintools-mcp backend instead."
+            )
             
         # Allowed/Denied Binary Check
         if is_denied(binary):

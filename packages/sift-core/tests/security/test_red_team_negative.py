@@ -369,6 +369,25 @@ def test_run3_dotnet_is_not_silently_executable_via_allowlist() -> None:
     assert security.classify_binary_risk("dotnet") == "contained"
 
 
+def test_windows_only_dotnet_targets_are_denied_without_blocking_other_zimmerman_wrappers(
+    gate_case: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The narrow launcher floor must preserve the approved-wrapper boundary."""
+    monkeypatch.setattr(
+        security,
+        "find_binary",
+        lambda name: f"/usr/bin/{Path(str(name)).name}",
+    )
+    with _with_case(gate_case):
+        with pytest.raises(DeniedBinaryError, match="Windows-only Zimmerman tool target"):
+            security.validate_shell_command(
+                "dotnet /opt/zimmermantools/PECmd.dll --help", cwd=gate_case
+            )
+        stages = security.validate_shell_command("EvtxECmd --help", cwd=gate_case)
+
+    assert stages[0]["binary"] == "EvtxECmd"
+
+
 @pytest.mark.parametrize(
     ("tool", "flags"),
     [
