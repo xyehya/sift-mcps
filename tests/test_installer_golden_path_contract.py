@@ -138,6 +138,7 @@ def test_secure_os_hardening_is_default_and_service_scoped() -> None:
     assert 'setcap -r "$cap_target"' in hardening
     assert "profile sift-gateway {" in gateway_profile
     assert "profile sift-addon {" in gateway_profile
+    assert gateway_profile.count("/opt/sift-mcps/.venv/lib/**") == 2
     assert "/usr/bin/setpriv                          px -> sift-addon," in gateway_profile
     assert "capability linux_immutable," in gateway_profile
     assert "/var/lib/sift/.sift/opensearch.yaml       r," in gateway_profile

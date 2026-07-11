@@ -32,6 +32,9 @@ profile sift-gateway {
   # runtime tree is /opt/sift-mcps, not an operator-home test checkout.
   /opt/sift-mcps/                            r,
   /opt/sift-mcps/**                          r,
+  # CPython imports native extension modules with executable mmap. Plain read
+  # permission is insufficient and fails startup with "failed to map segment".
+  /opt/sift-mcps/.venv/lib/**                mr,
 
   # uv Python installations and shared libs
   /home/*/.local/share/uv/python/*/          r,
@@ -169,6 +172,7 @@ profile sift-addon {
   /usr/bin/python3*                         rix,
   /opt/sift-mcps/                           r,
   /opt/sift-mcps/**                         rix,
+  /opt/sift-mcps/.venv/lib/**               mr,
 
   /var/lib/sift/.sift/opensearch.yaml       r,
   /var/lib/sift/.sift/opensearch-root-ca.pem r,
