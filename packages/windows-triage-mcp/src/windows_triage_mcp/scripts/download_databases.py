@@ -34,10 +34,27 @@ import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
-from windows_triage_mcp.config import get_config
+from windows_triage_mcp.config import BASELINE_TRANSACTION_MARKER, get_config
 
 REPO = "AppliedIR/sift-mcp"
+DEFAULT_RELEASE_TAG = "triage-db-v2026.02.25"
 ASSETS = ("known_good.db.zst", "context.db.zst", "checksums.sha256")
+BASELINE_PROVENANCE_NAME = "baseline-provenance.json"
+BASELINE_PROVENANCE_SCHEMA = "sift.windows-triage.baseline-provenance/v1"
+PINNED_BASELINE = {
+    "known_good.db": {
+        "compressed_asset": "known_good.db.zst",
+        "compressed_asset_sha256": "95c739d6b3932aaf85366b3c031ada9c21abd52a109fa81d5bd81c880120173e",
+        "decompressed_sha256": "d80df709eb2a0cbcf5217ca06e724bcd471cb00c1d47c1e943b529ab271f0472",
+        "size_bytes": 5_935_333_376,
+    },
+    "context.db": {
+        "compressed_asset": "context.db.zst",
+        "compressed_asset_sha256": "615b668a7a23741ec9995e5b976901d63ec639f30128601145277198f6c95bd0",
+        "decompressed_sha256": "133e7d020ddc86b078f9e9ce699350c2548f3d69b0d5e3d0fa17253f9bea0236",
+        "size_bytes": 2_486_272,
+    },
+}
 # Optional full registry baseline. ~500 MB compressed, ~12 GB decompressed.
 # Downloaded only on explicit opt-in (--with-registry) because of its size; the
 # default ASSETS install never fetches it.
@@ -73,40 +90,13 @@ def _github_headers() -> dict[str, str]:
     return headers
 
 
-def _fetch_release(tag: str = "latest") -> dict:
-    """Fetch release metadata from GitHub API.
-
-    When tag is "latest", finds the most recent triage-db-* release
-    that contains .db.zst assets. Otherwise fetches the exact tag.
-    """
+def _fetch_release(tag: str = DEFAULT_RELEASE_TAG) -> dict:
+    """Fetch metadata for an exact release tag from the GitHub API."""
     headers = _github_headers()
-
-    if tag == "latest":
-        # Find most recent triage DB release by tag prefix.
-        # per_page=100 prevents pagination issues as code releases
-        # accumulate (default is 30).
-        url = f"https://api.github.com/repos/{REPO}/releases?per_page=100"
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            releases = json.loads(resp.read())
-            matching = [
-                r
-                for r in releases
-                if r["tag_name"].startswith("triage-db-")
-                and any(a["name"].endswith(".db.zst") for a in r.get("assets", []))
-            ]
-            if matching:
-                return matching[0]  # GitHub returns most recent first
-            raise ValueError(
-                "No triage database releases found. "
-                "Expected releases with tag prefix 'triage-db-' "
-                "containing .db.zst assets."
-            )
-    else:
-        url = f"https://api.github.com/repos/{REPO}/releases/tags/{tag}"
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read())
+    url = f"https://api.github.com/repos/{REPO}/releases/tags/{tag}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
 
 
 def _get_asset_url(release: dict, asset_name: str) -> str | None:
@@ -206,7 +196,9 @@ def _verify_checksums(temp_dir: Path, required_assets: tuple[str, ...]) -> bool:
     return True
 
 
-def _write_registry_provenance(dest: Path, tag_name: str, compressed_sha256: str) -> None:
+def _write_registry_provenance(
+    dest: Path, tag_name: str, compressed_sha256: str
+) -> None:
     """Persist non-secret provenance after the optional registry DB verifies."""
     registry_db = dest / REGISTRY_DB_NAME
     provenance = registry_db.with_name(f"{REGISTRY_DB_NAME}.provenance.json")
@@ -220,7 +212,11 @@ def _write_registry_provenance(dest: Path, tag_name: str, compressed_sha256: str
         "verified_at": datetime.now(UTC).isoformat(),
     }
     with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=dest, prefix=f".{provenance.name}.", delete=False
+        mode="w",
+        encoding="utf-8",
+        dir=dest,
+        prefix=f".{provenance.name}.",
+        delete=False,
     ) as handle:
         json.dump(payload, handle, sort_keys=True)
         handle.write("\n")
@@ -229,6 +225,156 @@ def _write_registry_provenance(dest: Path, tag_name: str, compressed_sha256: str
         temporary = Path(handle.name)
     os.replace(temporary, provenance)
     os.chmod(provenance, 0o640)
+
+
+def _write_baseline_provenance(
+    dest: Path, tag_name: str, compressed_hashes: dict[str, str]
+) -> None:
+    """Atomically bind installed core DB bytes to their verified release assets."""
+    provenance = dest / BASELINE_PROVENANCE_NAME
+    databases = {}
+    for asset in ("known_good.db.zst", "context.db.zst"):
+        db = dest / asset.removesuffix(".zst")
+        databases[db.name] = {
+            "compressed_asset": asset,
+            "compressed_asset_sha256": compressed_hashes[asset],
+            "decompressed_sha256": _sha256_file(db),
+            "size_bytes": db.stat().st_size,
+        }
+    payload = {
+        "schema": BASELINE_PROVENANCE_SCHEMA,
+        "repository": REPO,
+        "release_tag": tag_name,
+        "databases": databases,
+        "verified_at": datetime.now(UTC).isoformat(),
+    }
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=dest,
+        prefix=f".{provenance.name}.",
+        delete=False,
+    ) as handle:
+        json.dump(payload, handle, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+        temporary = Path(handle.name)
+    os.replace(temporary, provenance)
+    os.chmod(provenance, 0o640)
+
+
+def _installed_baseline_is_verified(dest: Path, tag: str) -> bool:
+    """Validate the installed pinned baseline without consulting the network."""
+    if (dest / BASELINE_TRANSACTION_MARKER).exists():
+        return False
+    provenance = dest / BASELINE_PROVENANCE_NAME
+    try:
+        payload = json.loads(provenance.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if (
+        payload.get("schema") != BASELINE_PROVENANCE_SCHEMA
+        or payload.get("repository") != REPO
+        or payload.get("release_tag") != tag
+    ):
+        return False
+    databases = payload.get("databases")
+    if not isinstance(databases, dict):
+        return False
+    expected_tables = {
+        "known_good.db": (("baseline_files", 1_000_000),),
+        "context.db": (("lolbins", 100), ("vulnerable_drivers", 100)),
+    }
+    for name, table_checks in expected_tables.items():
+        record = databases.get(name)
+        pinned = PINNED_BASELINE[name]
+        db = dest / name
+        if not isinstance(record, dict) or not db.is_file() or db.is_symlink():
+            return False
+        digest = record.get("decompressed_sha256")
+        size = record.get("size_bytes")
+        if (
+            not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or not isinstance(size, int)
+            or size <= 0
+            or db.stat().st_size != size
+            or _sha256_file(db) != digest
+            or record != pinned
+        ):
+            return False
+        for table, minimum in table_checks:
+            if not _verify_database(db, table, minimum, f"installed {name} ({table})"):
+                return False
+    return True
+
+
+def _adopt_verified_pinned_baseline(dest: Path, tag: str) -> bool:
+    """Create a receipt for a legacy install only when its bytes match the repo pin."""
+    if tag != DEFAULT_RELEASE_TAG:
+        return False
+    compressed_hashes: dict[str, str] = {}
+    for name, pinned in PINNED_BASELINE.items():
+        db = dest / name
+        if (
+            not db.is_file()
+            or db.is_symlink()
+            or db.stat().st_size != pinned["size_bytes"]
+            or _sha256_file(db) != pinned["decompressed_sha256"]
+        ):
+            return False
+        compressed_hashes[str(pinned["compressed_asset"])] = str(
+            pinned["compressed_asset_sha256"]
+        )
+    _write_baseline_provenance(dest, tag, compressed_hashes)
+    return _installed_baseline_is_verified(dest, tag)
+
+
+def _checksums_match_repository_pin(tag: str, checksums: dict[str, str]) -> bool:
+    """Reject a validly formatted release checksum file that differs from our pin."""
+    return tag == DEFAULT_RELEASE_TAG and all(
+        checksums.get(str(pinned["compressed_asset"]))
+        == pinned["compressed_asset_sha256"]
+        for pinned in PINNED_BASELINE.values()
+    )
+
+
+def verify_installed_baseline(dest: Path, tag: str = DEFAULT_RELEASE_TAG) -> bool:
+    """Network-free validation for installer offline mode and rerun preflight."""
+    return _installed_baseline_is_verified(
+        dest, tag
+    ) or _adopt_verified_pinned_baseline(dest, tag)
+
+
+def _begin_baseline_transaction(dest: Path, tag: str) -> Path:
+    """Publish a fail-closed marker before committing a multi-file baseline set."""
+    marker = dest / BASELINE_TRANSACTION_MARKER
+    if not marker.exists():
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, f"{tag}\n".encode())
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        _fsync_directory(dest)
+    return marker
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist rename/unlink ordering for the baseline transaction."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _finish_baseline_transaction(marker: Path) -> None:
+    """Make a completely committed release set visible to the runtime."""
+    _fsync_directory(marker.parent)
+    marker.unlink()
+    _fsync_directory(marker.parent)
 
 
 def _free_bytes(path: Path) -> int:
@@ -290,7 +436,7 @@ def _verify_database(db_path: Path, table: str, min_rows: int, label: str) -> bo
 
 
 def download_databases(
-    dest_dir: str | Path, tag: str = "latest", with_registry: bool = False
+    dest_dir: str | Path, tag: str = DEFAULT_RELEASE_TAG, with_registry: bool = False
 ) -> bool:
     """Download and verify triage databases.
 
@@ -307,6 +453,20 @@ def download_databases(
     """
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
+    if tag != DEFAULT_RELEASE_TAG:
+        print(
+            f"Refusing unpinned Windows-triage release {tag!r}; "
+            f"this build permits only {DEFAULT_RELEASE_TAG!r}."
+        )
+        return False
+    installed_verified = _installed_baseline_is_verified(dest, tag)
+    if not installed_verified:
+        installed_verified = _adopt_verified_pinned_baseline(dest, tag)
+    if installed_verified and not with_registry:
+        print(
+            f"Verified installed Windows-triage baseline for pinned release {tag}; skipping download."
+        )
+        return True
     if with_registry and not _check_registry_disk_space(dest):
         # Keep the free-space gate inside the reusable API as well as main(),
         # so programmatic callers cannot accidentally bypass the 12 GiB guard.
@@ -324,7 +484,10 @@ def download_databases(
 
     # Compose the per-run download set: the default baseline assets plus the
     # optional registry asset when explicitly requested.
-    assets: list[str] = list(ASSETS)
+    core_update_needed = not installed_verified
+    assets: list[str] = ["checksums.sha256"]
+    if core_update_needed:
+        assets[:0] = ["known_good.db.zst", "context.db.zst"]
     if with_registry:
         if _get_asset_url(release, REGISTRY_ASSET) is None:
             print(
@@ -374,7 +537,9 @@ def download_databases(
 
             # Verify checksums
             print("\nVerifying checksums...")
-            required_assets = tuple(asset for asset in assets if asset != "checksums.sha256")
+            required_assets = tuple(
+                asset for asset in assets if asset != "checksums.sha256"
+            )
             if not _verify_checksums(temp_dir, required_assets):
                 if attempt < MAX_ATTEMPTS:
                     wait = attempt * 5
@@ -383,16 +548,27 @@ def download_databases(
                     continue
                 print("Checksum verification failed after all attempts.")
                 return False
+            checksums = _load_checksums(temp_dir / "checksums.sha256")
+            if checksums is None or not _checksums_match_repository_pin(
+                tag_name, checksums
+            ):
+                print(
+                    "Release checksums do not match the repository-pinned baseline; refusing update."
+                )
+                return False
 
-            # Decompress
+            # Decompress into the attempt directory. Never overwrite a known-good
+            # installed DB until every requested replacement has validated.
             print("\nDecompressing...")
-            decompress_set = ["known_good.db.zst", "context.db.zst"]
+            decompress_set = (
+                ["known_good.db.zst", "context.db.zst"] if core_update_needed else []
+            )
             if with_registry:
                 decompress_set.append(REGISTRY_ASSET)
             for zst_name in decompress_set:
                 zst_path = temp_dir / zst_name
                 db_name = zst_name.removesuffix(".zst")
-                db_path = dest / db_name
+                db_path = temp_dir / db_name
                 print(f"  {db_name}...", end="", flush=True)
                 _decompress_zst(zst_path, db_path)
                 size_mb = db_path.stat().st_size / (1024 * 1024)
@@ -401,31 +577,62 @@ def download_databases(
             # Verify databases
             print("\nVerifying databases...")
             ok = True
-            ok &= _verify_database(
-                dest / "known_good.db", "baseline_files", 1_000_000, "known_good.db"
-            )
-            ok &= _verify_database(
-                dest / "context.db", "lolbins", 100, "context.db (lolbins)"
-            )
-            ok &= _verify_database(
-                dest / "context.db", "vulnerable_drivers", 100, "context.db (drivers)"
-            )
+            if core_update_needed:
+                ok &= _verify_database(
+                    temp_dir / "known_good.db",
+                    "baseline_files",
+                    1_000_000,
+                    "known_good.db",
+                )
+                ok &= _verify_database(
+                    temp_dir / "context.db", "lolbins", 100, "context.db (lolbins)"
+                )
+                ok &= _verify_database(
+                    temp_dir / "context.db",
+                    "vulnerable_drivers",
+                    100,
+                    "context.db (drivers)",
+                )
             if with_registry:
                 ok &= _verify_database(
-                    dest / REGISTRY_DB_NAME,
+                    temp_dir / REGISTRY_DB_NAME,
                     "baseline_registry",
                     1_000_000,
                     "known_good_registry.db",
                 )
 
             if ok:
+                if (
+                    core_update_needed
+                    and tag_name == DEFAULT_RELEASE_TAG
+                    and any(
+                        (temp_dir / name).stat().st_size != pinned["size_bytes"]
+                        or _sha256_file(temp_dir / name)
+                        != pinned["decompressed_sha256"]
+                        for name, pinned in PINNED_BASELINE.items()
+                    )
+                ):
+                    print(
+                        "Decompressed databases do not match the repository pin; refusing update."
+                    )
+                    return False
+                marker = None
+                if core_update_needed:
+                    marker = _begin_baseline_transaction(dest, tag_name)
+                    for db_name in ("known_good.db", "context.db"):
+                        os.replace(temp_dir / db_name, dest / db_name)
+                    _write_baseline_provenance(dest, tag_name, checksums)
                 if with_registry:
-                    checksums = _load_checksums(temp_dir / "checksums.sha256")
-                    registry_sha256 = checksums.get(REGISTRY_ASSET) if checksums else None
+                    registry_sha256 = (
+                        checksums.get(REGISTRY_ASSET) if checksums else None
+                    )
                     if registry_sha256 is None:
                         print("Registry provenance failed: missing registry SHA-256.")
                         return False
+                    os.replace(temp_dir / REGISTRY_DB_NAME, dest / REGISTRY_DB_NAME)
                     _write_registry_provenance(dest, tag_name, registry_sha256)
+                if marker is not None:
+                    _finish_baseline_transaction(marker)
                 print("\nDatabases installed successfully.")
                 return True
             else:
@@ -452,9 +659,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--verify-installed",
+        action="store_true",
+        help="Verify the installed repository-pinned core baseline without network access.",
+    )
+    parser.add_argument(
         "--tag",
-        default="latest",
-        help="Release tag to download (default: latest)",
+        default=DEFAULT_RELEASE_TAG,
+        help=f"Exact release tag to download (default: pinned {DEFAULT_RELEASE_TAG})",
     )
     parser.add_argument(
         "--with-registry",
@@ -486,6 +698,13 @@ def main() -> None:
         dest = Path(args.dest)
     else:
         dest = get_config(reload=True).data_dir
+
+    if args.verify_installed:
+        if args.with_registry:
+            parser.error(
+                "--verify-installed does not provision the optional registry baseline"
+            )
+        sys.exit(0 if verify_installed_baseline(dest, args.tag) else 1)
 
     # Gate the optional ~12 GB registry baseline on (a) a disk-space check and
     # (b) explicit operator confirmation, so it is never pulled silently.

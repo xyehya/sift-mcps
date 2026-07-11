@@ -18,6 +18,7 @@ readonly WINTRIAGE_ENTRYPOINT="windows-triage-mcp"
 readonly WINTRIAGE_DEFAULT_DATA_DIR="/var/lib/sift/windows-triage"
 readonly WINTRIAGE_REGISTRY_DB="known_good_registry.db"
 readonly WINTRIAGE_REGISTRY_PROVENANCE="${WINTRIAGE_REGISTRY_DB}.provenance.json"
+readonly WINTRIAGE_BASELINE_PROVENANCE="baseline-provenance.json"
 
 wintriage_usage() {
   cat <<'EOF'
@@ -167,6 +168,12 @@ wintriage_stage_or_download_baselines() {
       || die "SIFT_OFFLINE=1: baseline is missing: $known_good. Stage the verified decompressed file before rerunning."
     svc_test_f "$context" \
       || die "SIFT_OFFLINE=1: baseline is missing: $context. Stage the verified decompressed file before rerunning."
+    sudo_if_needed -u "$SIFT_GATEWAY_SERVICE_USER" env \
+      -u SIFT_CONTROL_PLANE_DSN -u DATABASE_URL -u POSTGRES_DSN \
+      SIFT_WINDOWS_TRIAGE_DB_DIR="$WINTRIAGE_DEFAULT_DATA_DIR" \
+      "$VENV_PYTHON" -m windows_triage_mcp.scripts.download_databases \
+        --dest "$WINTRIAGE_DEFAULT_DATA_DIR" --verify-installed \
+      || die "SIFT_OFFLINE=1: installed core baseline does not match the repository-pinned release and hashes."
     if [[ "$with_registry" == "1" ]]; then
       wintriage_write_offline_registry_provenance
     fi
@@ -188,7 +195,7 @@ wintriage_stage_or_download_baselines() {
 
 wintriage_set_service_readable() {
   local filename path
-  for filename in known_good.db context.db "$WINTRIAGE_REGISTRY_DB" "$WINTRIAGE_REGISTRY_PROVENANCE"; do
+  for filename in known_good.db context.db "$WINTRIAGE_BASELINE_PROVENANCE" "$WINTRIAGE_REGISTRY_DB" "$WINTRIAGE_REGISTRY_PROVENANCE"; do
     path="$WINTRIAGE_DEFAULT_DATA_DIR/$filename"
     [[ -e "$path" ]] || continue
     [[ ! -L "$path" ]] || die "Refusing symlinked Windows-triage baseline artifact: $path"

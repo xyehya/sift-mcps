@@ -538,6 +538,19 @@ writes `~/.sift/addon-register/<name>.json`. It **never** registers a backend an
 | `--tag TAG` | Release tag to pull (defaults to the pinned baseline release). |
 | `--with-registry` | ALSO download the ~12 GB `known_good_registry.db` baseline (opt-in; gated on a disk-space check). |
 | `--yes` | Assume yes to the registry confirmation (non-interactive installs). |
+| `--verify-installed` | Network-free verification of the installed core DBs against the repository-pinned tag, compressed hashes, decompressed hashes, sizes, and SQLite schema thresholds. |
+
+The default core baseline is pinned to `triage-db-v2026.02.25`. A successful
+install atomically records `baseline-provenance.json` beside the databases.
+Installer reruns validate that receipt and the complete database hashes before
+skipping GitHub. An older install without a receipt is adopted without a
+download only when both database bytes exactly match the repository pin;
+otherwise replacement is downloaded into a private staging directory, fully
+hash/schema-validated, and only then committed over the installed files. A
+durable `.baseline-update-in-progress` marker brackets the multi-file commit;
+the backend refuses startup while that marker exists, so a host crash cannot
+expose a mixed release. A successful rerun repairs and clears the marker. The
+optional registry baseline remains a separate explicit opt-in.
 
 ### 8.5 Reading backend status on the Portal Backends page
 

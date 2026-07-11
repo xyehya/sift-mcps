@@ -27,6 +27,7 @@ from pathlib import Path
 from .exceptions import ConfigurationError
 
 logger = logging.getLogger(__name__)
+BASELINE_TRANSACTION_MARKER = ".baseline-update-in-progress"
 
 
 def _parse_int_env(name: str, default: int) -> int:
@@ -137,7 +138,9 @@ def _load_config_from_env() -> Config:
     project_root = Path(__file__).parent.parent.parent
 
     # Load paths from environment
-    data_dir_str = os.environ.get("SIFT_WINDOWS_TRIAGE_DB_DIR") or os.environ.get("WT_DATA_DIR")
+    data_dir_str = os.environ.get("SIFT_WINDOWS_TRIAGE_DB_DIR") or os.environ.get(
+        "WT_DATA_DIR"
+    )
     known_good_db_str = os.environ.get("WT_KNOWN_GOOD_DB")
     context_db_str = os.environ.get("WT_CONTEXT_DB")
     registry_db_str = os.environ.get("WT_REGISTRY_DB")

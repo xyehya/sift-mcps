@@ -68,7 +68,7 @@ from .analysis import (
     validate_hash,
 )
 from .audit import AuditWriter, resolve_examiner
-from .config import Config, ConfigurationError, get_config
+from .config import BASELINE_TRANSACTION_MARKER, Config, ConfigurationError, get_config
 from .db import ContextDB, KnownGoodDB, RegistryDB
 from .exceptions import DatabaseError, ValidationError, WindowsTriageError
 from .oplog import setup_logging
@@ -154,6 +154,20 @@ class WindowsTriageServer:
 
         # Load configuration
         self.config = config or get_config()
+
+        # A release contains multiple SQLite files. The installer publishes this
+        # marker before replacing any member and removes it only after the full
+        # set plus provenance receipt is durable. Refuse all baseline service if
+        # a host crash interrupted that transaction; a mixed release must never
+        # produce forensic verdicts.
+        if (
+            not self.config.skip_db_validation
+            and (self.config.data_dir / BASELINE_TRANSACTION_MARKER).exists()
+        ):
+            raise ConfigurationError(
+                "Windows-triage baseline update is incomplete; rerun the installer "
+                "to verify and commit the pinned release before serving tools"
+            )
 
         # Resolve database paths (explicit paths override config)
         kg_path = known_good_path or self.config.known_good_db
@@ -297,7 +311,8 @@ class WindowsTriageServer:
         @self.server.list_tools()
         async def list_tools():
             return [
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
+                Tool(
+                    annotations=ToolAnnotations(readOnlyHint=True),
                     name="wintriage_check_artifact",
                     description="Validate one Windows artifact against local offline baselines. Use type='file' for path baseline + optional hash, type='hash' for LOLDrivers vulnerable-driver lookup, type='filename' for deception heuristics, type='lolbin' for living-off-the-land binary context, or type='dll' for DLL hijackability. UNKNOWN is neutral: not in the local database, not evidence of malice. Examples: wintriage_check_artifact(type='file', value='C:\\Windows\\System32\\svchost.exe', os_version='Win10_21H2_Pro'); wintriage_check_artifact(type='hash', value='<sha256>'); wintriage_check_artifact(type='lolbin', value='certutil.exe').",
                     inputSchema={
@@ -323,7 +338,8 @@ class WindowsTriageServer:
                         "required": ["type", "value"],
                     },
                 ),
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
+                Tool(
+                    annotations=ToolAnnotations(readOnlyHint=True),
                     name="wintriage_check_process_tree",
                     description="Validate a process parent-child relationship against the Windows process tree baseline. Returns verdict: EXPECTED, SUSPICIOUS (unexpected parent for this child), or UNKNOWN. Example: svchost.exe should have services.exe as parent — any other parent is SUSPICIOUS. Pass path and user for more precise matching.",
                     inputSchema={
@@ -349,7 +365,8 @@ class WindowsTriageServer:
                         "required": ["process_name", "parent_name"],
                     },
                 ),
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
+                Tool(
+                    annotations=ToolAnnotations(readOnlyHint=True),
                     name="wintriage_check_system",
                     description="Validate Windows persistence/system configuration against OS-version baselines. Use type='service', type='scheduled_task', or type='autorun'. OS version is required because Windows services/tasks/autoruns vary by release. UNKNOWN is neutral unless the response includes concrete suspicious findings. Examples: wintriage_check_system(type='service', name='EventLog', os_version='Win10_21H2_Pro', binary_path='C:\\Windows\\System32\\svchost.exe'); wintriage_check_system(type='scheduled_task', name='\\Microsoft\\Windows\\Defrag\\ScheduledDefrag', os_version='Win10_21H2_Pro'); wintriage_check_system(type='autorun', name='HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', value_name='SecurityHealth', os_version='Win10_21H2_Pro').",
                     inputSchema={
@@ -379,7 +396,8 @@ class WindowsTriageServer:
                         "required": ["type", "name", "os_version"],
                     },
                 ),
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
+                Tool(
+                    annotations=ToolAnnotations(readOnlyHint=True),
                     name="wintriage_check_registry",
                     description="Check a registry key or value against the full registry baseline (requires known_good_registry.db, 12GB). Returns verdict: EXPECTED, SUSPICIOUS, or UNKNOWN. For autorun/persistence checks specifically, use wintriage_check_system(type='autorun', ...) instead — it is faster and does not require the large DB.",
                     inputSchema={
@@ -405,7 +423,8 @@ class WindowsTriageServer:
                         "required": ["key_path"],
                     },
                 ),
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
+                Tool(
+                    annotations=ToolAnnotations(readOnlyHint=True),
                     name="wintriage_check_pipe",
                     description="Check a named pipe against known Windows pipes and known C2 framework pipes. Returns verdict: EXPECTED (standard Windows pipe), SUSPICIOUS (matches known C2 pipe patterns from Cobalt Strike, Metasploit, etc.), or UNKNOWN. Named pipes are a common C2 communication channel.",
                     inputSchema={
@@ -419,7 +438,8 @@ class WindowsTriageServer:
                         "required": ["pipe_name"],
                     },
                 ),
-                Tool(annotations=ToolAnnotations(readOnlyHint=True),
+                Tool(
+                    annotations=ToolAnnotations(readOnlyHint=True),
                     name="wintriage_server_status",
                     description="Report Windows triage backend readiness. Use resource='health' for connectivity/cache health, resource='db_stats' for baseline coverage counts, or resource='all' before a triage-heavy investigation. Example: wintriage_server_status(resource='all').",
                     inputSchema={
@@ -444,7 +464,9 @@ class WindowsTriageServer:
                     artifact_type = str(arguments.get("type", "")).strip().lower()
                     value = arguments.get("value")
                     if artifact_type == "file":
-                        _validate_input_length(value, self.config.max_path_length, "value")
+                        _validate_input_length(
+                            value, self.config.max_path_length, "value"
+                        )
                         _validate_input_length(
                             arguments.get("hash"), self.config.max_hash_length, "hash"
                         )
@@ -456,26 +478,40 @@ class WindowsTriageServer:
                             arguments.get("os_version"),
                         )
                     elif artifact_type == "hash":
-                        _validate_input_length(value, self.config.max_hash_length, "value")
+                        _validate_input_length(
+                            value, self.config.max_hash_length, "value"
+                        )
                         _validate_no_null_bytes(value, "value")
                         result = await self._check_hash(value)
                     elif artifact_type == "filename":
-                        _validate_input_length(value, self.config.max_path_length, "value")
+                        _validate_input_length(
+                            value, self.config.max_path_length, "value"
+                        )
                         _validate_no_null_bytes(value, "value")
                         result = await self._analyze_filename(value)
                     elif artifact_type == "lolbin":
-                        _validate_input_length(value, self.config.max_path_length, "value")
+                        _validate_input_length(
+                            value, self.config.max_path_length, "value"
+                        )
                         _validate_no_null_bytes(value, "value")
                         result = await self._check_lolbin(value)
                     elif artifact_type == "dll":
-                        _validate_input_length(value, self.config.max_path_length, "value")
+                        _validate_input_length(
+                            value, self.config.max_path_length, "value"
+                        )
                         _validate_no_null_bytes(value, "value")
                         result = await self._check_hijackable_dll(value)
                     else:
                         result = {
                             "error": "unsupported_artifact_type",
                             "message": "type must be one of: file, hash, filename, lolbin, dll",
-                            "supported_types": ["file", "hash", "filename", "lolbin", "dll"],
+                            "supported_types": [
+                                "file",
+                                "hash",
+                                "filename",
+                                "lolbin",
+                                "dll",
+                            ],
                             "next_step": "Call wintriage_check_artifact with a supported type and put the artifact in value.",
                         }
                     result.setdefault("artifact_type", artifact_type)
@@ -530,7 +566,11 @@ class WindowsTriageServer:
                         }
                     result.setdefault("system_type", system_type)
                 elif name == "wintriage_server_status":
-                    resource = str(arguments.get("resource", "health") or "health").strip().lower()
+                    resource = (
+                        str(arguments.get("resource", "health") or "health")
+                        .strip()
+                        .lower()
+                    )
                     if resource == "health":
                         result = await self._get_health()
                     elif resource == "db_stats":
@@ -1558,8 +1598,8 @@ class WindowsTriageServer:
         lower_pipe = clean_pipe.lower()
         for prefix in ("\\\\.\\pipe\\", "\\pipe\\", "pipe\\"):
             if lower_pipe.startswith(prefix):
-                clean_pipe = clean_pipe[len(prefix):]
-                lower_pipe = lower_pipe[len(prefix):]
+                clean_pipe = clean_pipe[len(prefix) :]
+                lower_pipe = lower_pipe[len(prefix) :]
         clean_pipe = clean_pipe.lstrip("\\")
 
         # Check for suspicious C2 pipes
@@ -1626,7 +1666,9 @@ class WindowsTriageServer:
         db_status = {"known_good": "unknown", "context": "unknown"}
         try:
             if not self.known_good_db.db_path.exists():
-                raise FileNotFoundError(f"Database file not found: {self.known_good_db.db_path}")
+                raise FileNotFoundError(
+                    f"Database file not found: {self.known_good_db.db_path}"
+                )
             stats = self.known_good_db.get_stats()
             if stats.get("os_versions", 0) == 0:
                 raise ValueError("Database tables not initialized or empty")
@@ -1637,7 +1679,9 @@ class WindowsTriageServer:
 
         try:
             if not self.context_db.db_path.exists():
-                raise FileNotFoundError(f"Database file not found: {self.context_db.db_path}")
+                raise FileNotFoundError(
+                    f"Database file not found: {self.context_db.db_path}"
+                )
             stats = self.context_db.get_stats()
             if stats.get("lolbins", 0) == 0:
                 raise ValueError("Database tables not initialized or empty")

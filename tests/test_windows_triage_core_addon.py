@@ -85,7 +85,7 @@ def test_core_addon_uses_narrow_library_boundary() -> None:
     source = CORE_ADDON.read_text(encoding="utf-8")
 
     assert "sift_source_core_addon_libraries" in source
-    assert "source \"$REPO_DIR/install.sh\"" not in source
+    assert 'source "$REPO_DIR/install.sh"' not in source
     assert "_seed_one_addon_backend" in source
     assert "'{}'" in source
 
@@ -93,8 +93,9 @@ def test_core_addon_uses_narrow_library_boundary() -> None:
 def test_core_addon_reads_service_owned_baselines_through_sudo_boundary() -> None:
     source = CORE_ADDON.read_text(encoding="utf-8")
     assert 'svc_test_f "$known_good"' in source
+    assert "--verify-installed" in source
     assert 'sudo_if_needed -u "$SIFT_GATEWAY_SERVICE_USER" env' in source
-    assert '-u SIFT_CONTROL_PLANE_DSN -u DATABASE_URL -u POSTGRES_DSN' in source
+    assert "-u SIFT_CONTROL_PLANE_DSN -u DATABASE_URL -u POSTGRES_DSN" in source
 
 
 def test_online_downloader_runs_as_service_without_control_plane_credentials() -> None:
