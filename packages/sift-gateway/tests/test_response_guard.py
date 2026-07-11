@@ -47,6 +47,36 @@ class TestScanToolResult:
         assert findings[0]["severity"] == "critical"
         assert findings[0]["char_offset"] == 0
 
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "sk-12345678901234567890T3BlbkFJ12345678901234567890",
+            "sk-proj-12345678901234567890_-project-key-material",
+            "sk-svcacct-12345678901234567890_-service-account-key",
+            "sk-None-12345678901234567890_-user-scoped-key-material",
+        ],
+    )
+    def test_openai_api_key_formats_detected_and_redacted(self, key: str):
+        """Known legacy and modern OpenAI key forms are critical secrets."""
+        redacted, findings = redact_tool_result(f"found {key} in config")
+        assert "OpenAI API Key" in [finding["pattern_name"] for finding in findings]
+        assert key not in redacted
+        assert "[REDACTED:OpenAI API Key]" in redacted
+
+    @pytest.mark.parametrize(
+        "candidate",
+        [
+            "sk-project-12345678901234567890",  # lookalike prefix
+            "sk-none-12345678901234567890",  # wrong case for observed user scope
+            "sk-None-1234567890123456789",  # one character below the boundary
+            "sk-proj-short-identifier",  # not enough entropy to be a key
+        ],
+    )
+    def test_openai_key_lookalikes_and_short_values_are_not_detected(self, candidate: str):
+        """Prefix-only matching must not redact ordinary short identifiers."""
+        findings = scan_tool_result(f"identifier={candidate}")
+        assert "OpenAI API Key" not in [finding["pattern_name"] for finding in findings]
+
     def test_clean_text_returns_empty(self):
         assert scan_tool_result("clean forensic output with no secrets") == []
 
