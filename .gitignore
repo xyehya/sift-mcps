@@ -17,7 +17,6 @@ coverage/
 .env
 .env.*
 !.env.example
-.mcp.json
 
 # Evidence files — never commit real forensic evidence
 *.E01
@@ -28,20 +27,22 @@ coverage/
 
 # Playwright MCP render scratch (excalidraw export)
 .playwright-mcp/
+
+# Skill bodies live here locally; tracked symlinks under .claude/skills and
+# .cursor/skills point at these paths. Populate via /setup-matt-pocock-skills
+# (or your usual skills installer) — not committed as file trees.
 .agents/
 
 # Machine-local skills lockfile (linear-cli skills) — not shared
 skills-lock.json
-.claude/settings.json
 
-# codebase-memory-mcp local agent wiring — hardcodes a per-machine binary
-# path (~/.local/bin/codebase-memory-mcp); not shared. (.mcp.json above also
-# carries its MCP server registration.)
+# Project agent wiring is committed under .cursor/ and .claude/settings.json /
+# .mcp.json / opencode.json / .codex/config.toml (PATH-based MCP commands only;
+# no machine-absolute binary paths). Keep only machine-local Claude hooks and
+# personal skill overlays gitignored below.
 .claude/hooks/cbm-code-discovery-gate
 .claude/hooks/cbm-session-reminder
 .claude/skills/codebase-memory/
-.codex/config.toml
-opencode.json
 .claude/skills/linear-cli/
 .claude/skills/supabase-postgres-best-practices/
 

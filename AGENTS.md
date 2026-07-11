@@ -60,6 +60,17 @@ gateway, the 9 fail-closed tool-call gates, the Postgres-authoritative / OpenSea
 split, the seven STRIDE trust boundaries, and the `run_command` ceiling+floor sandbox. **Read
 it before touching auth, the policy chain, backends, evidence/audit, or execution.** It is the DESIGN model — where it conflicts with the code, the **code wins; flag the drift**.
 
+## Agent tooling (project-scoped)
+
+Prefer **repo** config over user-global installs. Canonical locations:
+
+- Cursor MCP / plugins: `.cursor/mcp.json`, `.cursor/settings.json`
+- Cursor rules / agents / skills: `.cursor/rules/`, `.cursor/agents/`, `.cursor/skills/`
+- Claude / Codex / OpenCode MCP: `.mcp.json`, `.claude/settings.json`, `.codex/config.toml`, `opencode.json`
+- Matt Pocock skill bodies: `.agents/skills/` (local); symlinked from `.claude/skills/` and `.cursor/skills/`
+
+`codebase-memory-mcp` must be on `PATH` (e.g. `~/.local/bin`). Do not register it in `~/.cursor/mcp.json` for this project.
+
 ## Code Discovery
 
 This project uses `codebase-memory-mcp` to maintain a knowledge graph. Prefer MCP
