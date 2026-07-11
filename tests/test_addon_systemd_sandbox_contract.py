@@ -22,7 +22,7 @@ def test_helper_is_default_deny_and_structured() -> None:
     for option in ("--pipe", "--wait", "--quiet", "--collect"):
         assert f'"{option}"' in source
     assert "shell=True" not in source
-    assert "subprocess.run(" in source
+    assert "subprocess.Popen(" in source
     assert 'apparmor_label != "sift-addon-broker (enforce)"' in source
 
 
@@ -43,6 +43,8 @@ def test_secret_environment_uses_root_only_file_not_argv() -> None:
     assert "os.chmod(env_path, 0o600)" in source
     assert 'f"--property=EnvironmentFile={env_path}"' in source
     assert "env_path.unlink(missing_ok=True)" in source
+    assert 'state == "active"' in source
+    assert 'f"--unit={unit_name}"' in source
     assert "--setenv" not in source
     assert "OPENCTI_TOKEN=" not in source
 

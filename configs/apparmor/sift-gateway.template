@@ -218,6 +218,7 @@ profile sift-addon-broker flags=(attach_disconnected) {
   /usr/local/sbin/sift-addon-systemd-sandbox r,
   /usr/bin/python3*                         rix,
   /usr/bin/systemd-run                      rix,
+  /usr/bin/systemctl                        rix,
   /run/sift-addon/                          rw,
   /run/sift-addon/**                        rwk,
   /run/systemd/private                      rw,

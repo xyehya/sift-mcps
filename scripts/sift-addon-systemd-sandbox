@@ -6,9 +6,11 @@ from __future__ import annotations
 import os
 import pwd
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import NoReturn
 
@@ -93,6 +95,7 @@ def main() -> int:
             env_file.write(environment_line("LOGNAME", service_user))
         os.chmod(env_path, 0o600)
 
+        unit_name = f"sift-addon-{backend_name}-{secrets.token_hex(8)}.service"
         systemd_args = [
             "/usr/bin/systemd-run",
             "--pipe",
@@ -100,6 +103,7 @@ def main() -> int:
             "--quiet",
             "--collect",
             "--service-type=exec",
+            f"--unit={unit_name}",
             f"--property=User={service_user}",
             f"--property=Group={service_group}",
             "--property=AppArmorProfile=sift-addon",
@@ -133,10 +137,32 @@ def main() -> int:
             )
         else:
             systemd_args.append("--property=RestrictAddressFamilies=AF_UNIX")
-        completed = subprocess.run(
-            [*systemd_args, "--", resolved_command], check=False
-        )
-        return completed.returncode
+        process = subprocess.Popen([*systemd_args, "--", resolved_command])
+        deadline = time.monotonic() + 15
+        while process.poll() is None:
+            state = subprocess.run(
+                [
+                    "/usr/bin/systemctl",
+                    "show",
+                    "--property=ActiveState",
+                    "--value",
+                    unit_name,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            if state == "active":
+                # Type=exec becomes active only after systemd has loaded the
+                # EnvironmentFile and successfully execve'd the add-on.
+                env_path.unlink(missing_ok=True)
+                env_path = None
+                break
+            if time.monotonic() >= deadline:
+                process.terminate()
+                fail("transient add-on unit did not become active")
+            time.sleep(0.05)
+        return process.wait()
     finally:
         if env_path is not None:
             env_path.unlink(missing_ok=True)
