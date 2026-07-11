@@ -83,6 +83,33 @@ def test_windows_only_zimmerman_tools_are_rejected_before_linux_execution(
 
 
 @pytest.mark.parametrize(
+    "binary",
+    [
+        f"C:\\Zimmerman\\{tool}{suffix}"
+        for tool in ("PECmd", "SrumECmd")
+        for suffix in ("", ".exe", ".dll")
+    ],
+)
+def test_windows_style_paths_to_windows_only_zimmerman_tools_are_rejected_before_execution(
+    monkeypatch, binary
+):
+    """Fail on reversion: normalize ``\\`` before applying DENY_FLOOR."""
+    called = False
+
+    def _fail_if_called(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("executor should not run Windows-only tools")
+
+    monkeypatch.setattr(generic, "execute", _fail_if_called)
+
+    with pytest.raises(DeniedBinaryError, match="blocked by security policy"):
+        generic.run_command([binary, "--help"], purpose="test Windows path policy")
+
+    assert called is False
+
+
+@pytest.mark.parametrize(
     "command",
     [
         ["dotnet", "/opt/zimmermantools/PECmd.dll", "--help"],
