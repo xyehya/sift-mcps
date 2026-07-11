@@ -63,8 +63,8 @@ _PATTERNS: list[_Pattern] = [
     _Pattern("AWS Secret Key",    re.compile(r'(?i)aws[_\-]?secret[_\-]?access[_\-]?key\s*[=:]\s*[A-Za-z0-9/+=]{40}'), "critical"),
     _Pattern("GitHub Token",      re.compile(r'gh[pousr]_[A-Za-z0-9_]{36,}'), "critical"),
     _Pattern("GitHub Classic PAT",re.compile(r'github_pat_[A-Za-z0-9_]{82,}'), "critical"),
-    # OpenAI's legacy keys embed ``T3BlbkFJ``.  Modern project, service-account,
-    # and user-scoped keys use explicit prefixes.  Keep this deliberately
+    # OpenAI's legacy keys embed ``T3BlbkFJ``.  Modern project and service-account
+    # keys use explicit prefixes.  Keep this deliberately
     # prefix- and length-bounded: ResponseGuard is defense in depth, not an
     # exhaustive vendor-key catalog, and short ``sk-*`` identifiers are not
     # sufficient evidence of a secret.
@@ -72,7 +72,7 @@ _PATTERNS: list[_Pattern] = [
         "OpenAI API Key",
         re.compile(
             r'sk-(?:[A-Za-z0-9]{20,}T3BlbkFJ[A-Za-z0-9]{20,}|'
-            r'(?:proj|svcacct|None)-[A-Za-z0-9_-]{20,})'
+            r'(?:proj|svcacct)-[A-Za-z0-9_-]{20,})'
         ),
         "critical",
     ),

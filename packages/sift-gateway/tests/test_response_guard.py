@@ -53,7 +53,6 @@ class TestScanToolResult:
             "sk-12345678901234567890T3BlbkFJ12345678901234567890",
             "sk-proj-12345678901234567890_-project-key-material",
             "sk-svcacct-12345678901234567890_-service-account-key",
-            "sk-None-12345678901234567890_-user-scoped-key-material",
         ],
     )
     def test_openai_api_key_formats_detected_and_redacted(self, key: str):
@@ -67,8 +66,8 @@ class TestScanToolResult:
         "candidate",
         [
             "sk-project-12345678901234567890",  # lookalike prefix
-            "sk-none-12345678901234567890",  # wrong case for observed user scope
-            "sk-None-1234567890123456789",  # one character below the boundary
+            "sk-none-12345678901234567890",  # unsupported lookalike prefix
+            "sk-None-12345678901234567890",  # unsupported lookalike prefix
             "sk-proj-short-identifier",  # not enough entropy to be a key
         ],
     )
