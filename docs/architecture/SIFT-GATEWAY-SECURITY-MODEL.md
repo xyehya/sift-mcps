@@ -40,8 +40,16 @@ deployment target, not a second authority boundary: the core Security plugin
 must be enabled with TLS, the OpenCTI platform receives a dedicated `opencti*`
 role, and Redis/RabbitMQ/MinIO/workers remain on an OpenCTI-only network. The
 Gateway must not expose `opencti_*` through case-search tooling. Until those
-compatibility, least-privilege, capacity, outage, and rollback proofs pass, the
-isolated OpenCTI datastore remains the safe deployment.
+compatibility, constrained-role, audit, capacity, and outage proofs pass,
+OpenCTI remains stopped. Fresh deployment is the only accepted path; legacy
+data migration and rollback are out of scope.
+
+The supported OpenCTI 7 role follows upstream's required cluster-template,
+ingest-pipeline, and ISM actions plus an `opencti*` index boundary. OpenSearch
+cannot name-scope those cluster metadata actions; this is an explicit trusted-
+component exception guarded by audit attribution and case-metadata drift proof,
+not a grant of `case-*` data access. See
+`docs/security/OPENCTI-SHARED-OPENSEARCH-TRUST-AND-RISK.md`.
 
 ## VP-2 — Eight planes, one gate
 Authority flows one way: **Postgres (control plane) is the source of truth**; OpenSearch

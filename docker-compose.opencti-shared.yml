@@ -7,7 +7,8 @@
 #
 # Required operator environment is deliberately not committed here:
 # OPENCTI_PLATFORM_IMAGE / OPENCTI_WORKER_IMAGE (immutable @sha256 images),
-# OPENCTI_ADMIN_TOKEN, OPENCTI_WORKER_TOKEN, OPENCTI_RABBITMQ_PASSWORD,
+# OPENCTI_ADMIN_PASSWORD, OPENCTI_ADMIN_TOKEN, OPENCTI_WORKER_TOKEN,
+# OPENCTI_RABBITMQ_PASSWORD,
 # OPENCTI_MINIO_SECRET_KEY, OPENCTI_ENCRYPTION_KEY, OPENCTI_HEALTH_ACCESS_KEY,
 # OPENCTI_OPENSEARCH_CA, OPENCTI_OPENSEARCH_USER, and
 # OPENCTI_OPENSEARCH_PASSWORD.
@@ -29,12 +30,12 @@ services:
       - APP__PORT=8080
       - APP__BASE_URL=http://localhost:8080
       - APP__ADMIN__EMAIL=admin@sift.local
-      - APP__ADMIN__PASSWORD=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
+      - APP__ADMIN__PASSWORD=${OPENCTI_ADMIN_PASSWORD:?set a distinct OpenCTI admin password}
       - APP__ADMIN__TOKEN=${OPENCTI_ADMIN_TOKEN:?set OpenCTI admin token}
       - APP__ENCRYPTION_KEY=${OPENCTI_ENCRYPTION_KEY:?set OpenCTI encryption key}
       - APP__HEALTH_ACCESS_KEY=${OPENCTI_HEALTH_ACCESS_KEY:?set OpenCTI health access key}
       - APP__APP_LOGS__LOGS_LEVEL=error
-      - ELASTICSEARCH__URL=https://${SIFT_OPENSEARCH_HOST:-sift-opensearch}:9200
+      - ELASTICSEARCH__URL=https://${SIFT_OPENSEARCH_HOST:-node-0.example.com}:9200
       - ELASTICSEARCH__ENGINE_SELECTOR=opensearch
       - ELASTICSEARCH__ENGINE_CHECK=true
       - ELASTICSEARCH__INDEX_PREFIX=opencti
@@ -84,7 +85,9 @@ services:
       - opencti-app-net
     environment:
       - OPENCTI_URL=http://opencti:8080
-      - OPENCTI_TOKEN=${OPENCTI_WORKER_TOKEN:?set a least-privilege OpenCTI worker token}
+      # OpenCTI 7 requires a BYPASS administrator token for workers. This is a
+      # dedicated service identity, never the bootstrap admin or MCP query user.
+      - OPENCTI_TOKEN=${OPENCTI_WORKER_TOKEN:?set dedicated OpenCTI worker token}
       - WORKER_LOG_LEVEL=error
     depends_on:
       opencti:
@@ -95,10 +98,14 @@ services:
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+    user: "999:999"
     networks:
       - opencti-app-net
-    volumes:
-      - opencti-redis:/data
+    # Redis holds locks/caches/streams, not authoritative OpenCTI data. A
+    # UID-owned tmpfs keeps the container non-root without a privileged chown
+    # entrypoint; restart recovery comes from OpenSearch/RabbitMQ.
+    tmpfs:
+      - /data:uid=999,gid=999,mode=0700
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -110,6 +117,8 @@ services:
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+    # Avoid the image's root entrypoint/chown path while retaining cap_drop ALL.
+    user: "999:999"
     networks:
       - opencti-app-net
     volumes:
@@ -143,7 +152,6 @@ services:
       retries: 5
 
 volumes:
-  opencti-redis:
   opencti-rabbitmq:
   opencti-minio:
 

@@ -13,6 +13,9 @@ CHECK = REPO_ROOT / "scripts" / "prepare-opencti-shared-opensearch.sh"
 SETUP = REPO_ROOT / "scripts" / "setup-addon.sh"
 TUPLE = REPO_ROOT / "configs" / "opencti" / "shared-target-versions.env"
 PROVISION = REPO_ROOT / "scripts" / "provision-opencti-shared-opensearch.py"
+API_IDENTITIES = REPO_ROOT / "scripts" / "provision-opencti-api-identities.py"
+ORCHESTRATOR = REPO_ROOT / "scripts" / "provision-opencti-shared-target.sh"
+GATEWAY_UNIT = REPO_ROOT / "configs" / "systemd" / "sift-gateway.service"
 
 
 def test_shared_compose_has_no_dedicated_search_and_keeps_tls_prefix_boundary() -> None:
@@ -22,12 +25,18 @@ def test_shared_compose_has_no_dedicated_search_and_keeps_tls_prefix_boundary() 
     assert "ELASTICSEARCH__ENGINE_CHECK=true" in source
     assert "ELASTICSEARCH__INDEX_PREFIX=opencti" in source
     assert "ELASTICSEARCH__SSL__REJECT_UNAUTHORIZED=true" in source
+    assert "node-0.example.com" in source
     assert "external: true" in source
     assert "internal: true" in source
     assert "127.0.0.1:8080:8080" in source
     assert "RABBITMQ__PASSWORD=${OPENCTI_RABBITMQ_PASSWORD" in source
     assert "MINIO__SECRET_KEY=${OPENCTI_MINIO_SECRET_KEY" in source
     assert "OPENCTI_TOKEN=${OPENCTI_WORKER_TOKEN" in source
+    assert "APP__ADMIN__PASSWORD=${OPENCTI_ADMIN_PASSWORD" in source
+    assert "APP__ADMIN__PASSWORD=${OPENCTI_ADMIN_TOKEN" not in source
+    assert source.count('user: "999:999"') == 2
+    assert "/data:uid=999,gid=999,mode=0700" in source
+    assert "opencti-redis:/data" not in source
     assert "RABBITMQ_DEFAULT_PASS=${OPENCTI_RABBITMQ_PASSWORD" in source
     assert "MINIO_ROOT_PASSWORD=${OPENCTI_MINIO_SECRET_KEY" in source
     assert "RABBITMQ__PASSWORD=${OPENCTI_ADMIN_TOKEN" not in source
@@ -89,15 +98,47 @@ def test_external_helper_exposes_only_explicit_shared_check() -> None:
     assert "--shared-opensearch-check" in source
     assert "prepare-opencti-shared-opensearch.sh" in source
     assert 'source "$REPO_ROOT/install.sh"' not in source
+    assert "provision-opencti-shared-target.sh" in source
+    assert "prepare_opencti_secrets && install_opencti" not in source
+    assert 'die "--provision requested but Docker is unavailable.' in source
 
 
 def test_identity_provisioner_proves_positive_and_negative_index_boundaries() -> None:
     source = PROVISION.read_text(encoding="utf-8")
     assert "secrets.token_urlsafe(48)" in source
     assert 'proof_index = f"opencti-security-proof-' in source
-    assert '"/case-security-negative-proof"' in source
+    assert 'case_proof = f"case-security-negative-proof-' in source
     assert "negative not in {401, 403}" in source
     assert "os.chmod(temp_path, 0o600)" in source
     assert "os.replace(temp_path, output_path)" in source
     assert "OPENCTI_OPENSEARCH_PASSWORD=" in source
     assert "print(platform_password" not in source
+    assert "os.chown(output_path, 0, 0)" in source
+    assert '"/_plugins/_security/api/audit"' in source
+    assert '"/config/audit/log_request_body", "value": False' in source
+    assert '"/config/audit/disabled_rest_categories", "value": ["AUTHENTICATED"]' in source
+
+
+def test_opencti_api_identities_are_distinct_and_gateway_is_query_only() -> None:
+    source = API_IDENTITIES.read_text(encoding="utf-8")
+    assert '{"BYPASS", "APIACCESS", "APIACCESS_USETOKEN"}' in source
+    assert '{"KNOWLEDGE", "APIACCESS", "APIACCESS_USETOKEN"}' in source
+    assert 'len({admin_token, worker, query}) != 3' in source
+    assert '"SIFT_OPENCTI_URL": "http://127.0.0.1:8080"' in source
+    assert '"SIFT_OPENCTI_TOKEN": query' in source
+    assert "atomic_env(stack_path, stack, 0, 0)" in source
+    unit = GATEWAY_UNIT.read_text(encoding="utf-8")
+    assert "EnvironmentFile=-${SIFT_HOME}/opencti-query.env" in unit
+    assert "opencti-stack.env" not in unit
+    assert "opencti-shared.env" not in unit
+
+
+def test_shared_orchestrator_is_fail_closed_and_uses_pinned_compose() -> None:
+    source = ORCHESTRATOR.read_text(encoding="utf-8")
+    assert "set -Eeuo pipefail" in source
+    assert "prepare-opencti-shared-opensearch.sh" in source
+    assert "provision-opencti-shared-opensearch.py" in source
+    assert "provision-opencti-api-identities.py" in source
+    assert "docker-compose.opencti-shared.yml" in source
+    assert "docker-compose.opencti.yml" not in source
+    assert "|| warn" not in source

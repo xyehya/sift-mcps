@@ -595,11 +595,11 @@ setup_opencti() {
     warn "Docker not found — OpenCTI's own stack cannot be started here. You can still point at an external OpenCTI."
   fi
   if [[ "${SETUP_OPENCTI_PROVISION:-0}" == "1" ]] && command -v docker >/dev/null 2>&1; then
-    SIFT_OPENCTI_ENABLED=true
-    { prepare_opencti_secrets && install_opencti && install_opencti_feeds; } \
-      || warn "OpenCTI provisioning incomplete — backend will be UNAVAILABLE until reachable."
+    log "Provisioning the pinned secure shared-target OpenCTI stack."
+    sudo --preserve-env=SIFT_OFFLINE,SIFT_MCPS_INSTALL_ROOT \
+      bash "$REPO_ROOT/scripts/provision-opencti-shared-target.sh"
   elif [[ "${SETUP_OPENCTI_PROVISION:-0}" == "1" ]]; then
-    warn "--provision requested but Docker is unavailable; emitting the external payload only."
+    die "--provision requested but Docker is unavailable."
   else
     log "OpenCTI stack provisioning not requested; preparing an external registration payload only."
   fi

@@ -21,7 +21,11 @@ services:
     ports:
       - "127.0.0.1:9200:9200"
     networks:
-      - sift-net
+      sift-net:
+        # The bundled OpenSearch node certificate is valid for this DNS name.
+        # Shared TLS clients use the alias with hostname verification enabled.
+        aliases:
+          - node-0.example.com
     # BATCH-HR3 (B-MVP-005) container hardening. The image already runs as the
     # non-root opensearch user (UID 1000). Drop ALL Linux capabilities (OpenSearch
     # needs none; memory locking comes from the memlock ulimit below, not
