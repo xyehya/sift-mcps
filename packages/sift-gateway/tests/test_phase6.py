@@ -563,10 +563,12 @@ def test_live_stdio_proxy_uses_capability_dropping_transition(monkeypatch):
         {"type": "stdio", "command": "/opt/sift-mcps/.venv/bin/windows-triage-mcp"},
     )
 
-    assert transport.command == "/usr/bin/sudo"
+    # The gateway launches only the unprivileged relay.  The relay owns the
+    # narrowly-scoped sudo transition to the validating broker; reverting to a
+    # direct gateway-to-sudo invocation would bypass that stdio-preserving
+    # boundary and must fail this contract.
+    assert transport.command == "/usr/local/sbin/sift-addon-stdio-relay"
     assert transport.args == [
-        "-n",
-        "/usr/local/sbin/sift-addon-systemd-sandbox",
         "--backend-name",
         "windows-triage-mcp",
         "--network-policy",
