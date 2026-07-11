@@ -122,9 +122,12 @@ profile sift-gateway {
   /usr/local/sbin/sift-run-command-systemd-scope rix,
   /usr/bin/systemd-run                       rix,
   /usr/bin/systemctl                         rix,
-  # Every stdio backend crosses into the default-deny sift-addon domain before
-  # setpriv clears Linux capabilities and sets no-new-privileges.
-  /usr/bin/setpriv                          px -> sift-addon,
+  # Every stdio backend stacks the default-deny sift-addon domain onto the
+  # gateway domain before setpriv clears Linux capabilities and sets
+  # no-new-privileges.  Stacking preserves the intersection of both policies;
+  # a future gateway NoNewPrivileges flip therefore cannot turn this boundary
+  # into an unsafe replacement transition or require a permissive fallback.
+  /usr/bin/setpriv                          px -> &sift-addon,
 
   # Forensic tooling (Zimmerman tools, mount helpers, FUSE tools).
   # NOTE: after the opensearch-worker decoupling (2026-06-14) the gateway no
