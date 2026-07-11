@@ -307,6 +307,10 @@ main() {
   # A1-BOOTSTRAP: validate evidence/cases root before starting services.
   validate_evidence_root
 
+  # Load the mandatory profile before systemd starts/restarts ExecStart. The
+  # gateway unit explicitly enters the named profile and fails to start if the
+  # profile is unavailable.
+  configure_apparmor
   install_systemd_service
 
   # NOTE: loginctl linger removed — the gateway/worker are now SYSTEM services
@@ -316,7 +320,7 @@ main() {
   configure_run_command_systemd_scope
   configure_immutable_capability
   configure_auditd
-  configure_apparmor
+  verify_gateway_apparmor_attachment
   poll_gateway "initial"
 
   # A1-BOOTSTRAP: Supabase operator bootstrap runs after the gateway is up

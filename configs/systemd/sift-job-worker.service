@@ -77,10 +77,11 @@ RestrictRealtime=true
 LockPersonality=true
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-# Keep exactly CAP_LINUX_IMMUTABLE, granted to this service process rather than
-# the shared system Python binary. All other capabilities are dropped.
-CapabilityBoundingSet=CAP_LINUX_IMMUTABLE
-AmbientCapabilities=CAP_LINUX_IMMUTABLE
+# This lane never seals or unseals evidence. The root-owned, argv-validating
+# scope helper is reached only through its narrow sudoers rule, so the
+# long-lived worker needs no ambient or bounded capability.
+CapabilityBoundingSet=
+AmbientCapabilities=
 # === end RUN-3 B-AA hardening ===============================================
 
 [Install]

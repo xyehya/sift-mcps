@@ -127,12 +127,38 @@ def test_secure_os_hardening_is_default_and_service_scoped() -> None:
         REPO_ROOT / "configs" / "systemd" / "sift-job-worker.service",
         REPO_ROOT / "configs" / "systemd" / "sift-opensearch-worker@.service",
     ]
+    gateway_unit = units[0].read_text(encoding="utf-8")
+    gateway_profile = (
+        REPO_ROOT / "configs" / "apparmor" / "sift-gateway.template"
+    ).read_text(encoding="utf-8")
 
     assert "SIFT_APPARMOR_ENFORCE=1" in installer
     assert "--apparmor-complain" in installer
     assert "setcap cap_linux_immutable+ep" not in hardening
     assert 'setcap -r "$cap_target"' in hardening
-    for unit in units:
-        assert "AmbientCapabilities=CAP_LINUX_IMMUTABLE" in unit.read_text(
+    assert "profile sift-gateway {" in gateway_profile
+    assert "profile sift-addon {" in gateway_profile
+    assert "/usr/bin/setpriv                          px -> sift-addon," in gateway_profile
+    assert "capability linux_immutable," in gateway_profile
+    assert "/var/lib/sift/.sift/opensearch.yaml       r," in gateway_profile
+    assert "/var/lib/sift/.sift/opensearch-root-ca.pem r," in gateway_profile
+    addon_profile = gateway_profile.split("profile sift-addon {", 1)[1]
+    assert "/var/lib/sift/.sift/tls/" not in addon_profile
+    for secret_file in (
+        "control-plane.env",
+        "supabase.env",
+        "audit-writer.env",
+        "ca-key.pem",
+    ):
+        assert secret_file not in addon_profile
+    assert "AppArmorProfile=sift-gateway" in gateway_unit
+    assert "verify_gateway_apparmor_attachment" in installer
+    assert installer.index("configure_apparmor") < installer.index(
+        "install_systemd_service"
+    )
+    assert "AmbientCapabilities=CAP_LINUX_IMMUTABLE" in gateway_unit
+    assert "SIFT_DROP_BACKEND_CAPABILITIES=1" in gateway_unit
+    for unit in units[1:]:
+        assert "AmbientCapabilities=CAP_LINUX_IMMUTABLE" not in unit.read_text(
             encoding="utf-8"
         )

@@ -4,6 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
+# Enter the named profile explicitly. ExecStart is a console script, so an
+# attachment keyed to the Python interpreter never confined the service.
+AppArmorProfile=sift-gateway
 # Runs as the dedicated non-admin service user (sift-service). Its primary group
 # is the per-user group of the same name. The aggregated stdio backend MCPs
 # (opensearch-mcp/rag/opencti) are spawned as subprocesses and inherit this user.
@@ -57,6 +60,7 @@ Environment=SIFT_EXECUTE_SYSTEMD_SCOPE_HELPER=/usr/local/sbin/sift-run-command-s
 # stays LOG-only (see _X86_64_ALWAYS_LOG_SYSCALLS) so curl/wget read-only
 # fetches and AF_UNIX IPC survive; cgroup IPAddressDeny=any enforces egress.
 Environment=SIFT_EXECUTE_SECCOMP_MODE=kill
+Environment=SIFT_DROP_BACKEND_CAPABILITIES=1
 
 # === BATCH-HR3 systemd hardening ============================================
 # Minimal, tested containment for a service that (a) spawns forensic tooling via

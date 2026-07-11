@@ -27,7 +27,7 @@ configure_immutable_capability() {
     sudo_if_needed setcap -r "$cap_target" || die \
       "Could not remove unsafe global CAP_LINUX_IMMUTABLE from $cap_target."
   fi
-  log "CAP_LINUX_IMMUTABLE is confined to SIFT systemd service processes."
+  log "CAP_LINUX_IMMUTABLE is confined to the gateway service; workers and add-ons drop it."
 }
 
 configure_auditd() {
@@ -91,7 +91,8 @@ configure_auditd() {
 _apparmor_load_profile() {
   local profile_dst="$1"
   if [[ "${SIFT_APPARMOR_ENFORCE:-0}" == "1" ]]; then
-    sudo_if_needed apparmor_parser -r "$profile_dst" 2>/dev/null || true
+    sudo_if_needed apparmor_parser -r "$profile_dst" || die \
+      "Could not load required AppArmor profile $profile_dst in enforce mode."
   else
     sudo_if_needed apparmor_parser -C -r "$profile_dst" 2>/dev/null || true
   fi
@@ -99,7 +100,10 @@ _apparmor_load_profile() {
 
 configure_apparmor() {
   if ! command -v aa-status &>/dev/null; then
-    warn "AppArmor not found — skipping profile."
+    if [[ "${SIFT_APPARMOR_ENFORCE:-0}" == "1" ]]; then
+      die "AppArmor is required for the secure install but aa-status is unavailable."
+    fi
+    warn "AppArmor not found — explicit development complain profile cannot be loaded."
     return 0
   fi
   [[ -x "$VENV_PYTHON" ]] || return 0
@@ -107,7 +111,7 @@ configure_apparmor() {
   local profile_dst="/etc/apparmor.d/sift-gateway"
   local tmp
   tmp="$(mktemp)"
-  sed "s|@@PYTHON_BIN@@|${VENV_PYTHON}|g" "$profile_src" > "$tmp"
+  cp "$profile_src" "$tmp"
   sudo_if_needed cp "$tmp" "$profile_dst"
   rm -f "$tmp"
   sudo_if_needed chmod 644 "$profile_dst"
@@ -129,11 +133,26 @@ configure_apparmor() {
     _apparmor_load_profile "$profile_dst"
   fi
   if [[ "${SIFT_APPARMOR_ENFORCE:-0}" == "1" ]]; then
+    sudo_if_needed aa-status 2>/dev/null | grep -Fq 'sift-gateway' || die \
+      "Required sift-gateway AppArmor profile is not loaded."
     log "AppArmor profiles installed (ENFORCE mode)."
   else
     log "AppArmor profiles installed (complain mode). Run ./harden.sh (or"
     log "  ./install.sh --apparmor-enforce) for the proven enforce posture."
   fi
+}
+
+verify_gateway_apparmor_attachment() {
+  [[ "${SIFT_APPARMOR_ENFORCE:-0}" == "1" ]] || return 0
+  command -v systemctl >/dev/null 2>&1 || return 0
+  local pid label
+  pid="$(sudo_if_needed systemctl show -p MainPID --value sift-gateway.service)"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || die \
+    "sift-gateway has no live MainPID for AppArmor attachment verification."
+  label="$(sudo_if_needed cat "/proc/${pid}/attr/current" 2>/dev/null || true)"
+  [[ "$label" == "sift-gateway (enforce)" ]] || die \
+    "sift-gateway AppArmor attachment failed (observed: ${label:-unreadable})."
+  log "sift-gateway is attached to AppArmor profile sift-gateway (ENFORCE)."
 }
 
 configure_run_command_systemd_scope() {

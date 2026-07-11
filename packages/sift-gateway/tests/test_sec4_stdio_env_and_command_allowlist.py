@@ -39,6 +39,32 @@ _SECRET_VARS = [
 ]
 
 
+def test_production_stdio_child_drops_all_capability_sets(monkeypatch):
+    monkeypatch.setenv("SIFT_DROP_BACKEND_CAPABILITIES", "1")
+    monkeypatch.setattr(sb.os.path, "isfile", lambda path: path == sb._SETPRIV)
+    monkeypatch.setattr(sb.os, "access", lambda path, mode: path == sb._SETPRIV)
+
+    command, args = sb._capability_dropped_command("/opt/addon", ["--serve"])
+
+    assert command == "/usr/bin/setpriv"
+    assert args == [
+        "--no-new-privs",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--",
+        "/opt/addon",
+        "--serve",
+    ]
+
+
+def test_production_stdio_child_fails_closed_without_setpriv(monkeypatch):
+    monkeypatch.setenv("SIFT_DROP_BACKEND_CAPABILITIES", "1")
+    monkeypatch.setattr(sb.os.path, "isfile", lambda _path: False)
+
+    with pytest.raises(RuntimeError, match="setpriv is unavailable"):
+        sb._capability_dropped_command("/opt/addon", [])
+
+
 # --- minimal env (DSS-CAN-020) ---------------------------------------------
 
 

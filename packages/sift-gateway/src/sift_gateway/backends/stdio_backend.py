@@ -26,6 +26,25 @@ _STOP_TIMEOUT = 15
 # the underlying backend's blocking I/O for 300s+ before the gateway
 # noticed. 30s is generous for healthy backends, fail-fast for hung.
 _INITIALIZE_TIMEOUT = 30
+_SETPRIV = "/usr/bin/setpriv"
+
+
+def _capability_dropped_command(command: str, args: list[str]) -> tuple[str, list[str]]:
+    """Wrap an add-on exec in a fail-closed, empty Linux capability boundary."""
+    if os.environ.get("SIFT_DROP_BACKEND_CAPABILITIES") != "1":
+        return command, args
+    if not os.path.isfile(_SETPRIV) or not os.access(_SETPRIV, os.X_OK):
+        raise RuntimeError(
+            "SIFT_DROP_BACKEND_CAPABILITIES=1 but /usr/bin/setpriv is unavailable"
+        )
+    return _SETPRIV, [
+        "--no-new-privs",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--",
+        command,
+        *args,
+    ]
 
 
 # SEC-4 (DSS-CAN-020): a registered stdio backend launches as the gateway
@@ -202,6 +221,7 @@ class StdioMCPBackend(MCPBackend):
                 self.name,
             )
 
+        command, args = _capability_dropped_command(command, args)
         server_params = StdioServerParameters(
             command=command,
             args=args,
