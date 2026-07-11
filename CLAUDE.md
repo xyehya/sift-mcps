@@ -63,7 +63,15 @@ it before touching auth, the policy chain, backends, evidence/audit, or executio
 ## Code Discovery
 
 This project uses `codebase-memory-mcp` to maintain a knowledge graph. Prefer MCP
-graph tools over grep/glob for code discovery:
+graph tools over grep/glob for code discovery.
+
+**Always index before any graph query.** Call
+`index_repository(repo_path=<repo root>, name="Users-yk-AI-sift-mcps")` (or the
+derived project name) at the start of discovery and again before querying after
+substantive code edits. Indexing is fast; a fresh index keeps results current.
+Do not skip this step because a prior session "already indexed."
+
+Then use:
 
 1. `search_graph` to find functions, classes, routes, variables.
 2. `trace_path` to inspect callers, callees, and data flow.
@@ -72,7 +80,7 @@ graph tools over grep/glob for code discovery:
 5. `get_architecture` for high-level structure.
 
 Fall back to `rg` for string literals, configs, shell scripts, docs, or when the
-graph is insufficient.
+graph tools / MCP are unavailable.
 
 ### Architecture Decision Record (ADR)
 
@@ -81,10 +89,10 @@ ARCHITECTURE / PATTERNS / TRADEOFFS / PHILOSOPHY) in the same graph store as the
 code-discovery tools above — shared across Claude Code, Codex CLI, and OpenCode
 since all three point at the identical local binary + DB.
 
-- **Read it at session start when the project is indexed** and before touching gateway / security /
-  execution code: `manage_adr(project="Users-yk-AI-sift-mcps", mode="get")`. If the tool or project is
-  unavailable, report that once and continue from the canonical repo docs and source; do not block the
-  task or create a fresh graph index merely to satisfy this read.
+- **Index first**, then read the ADR at session start before touching gateway /
+  security / execution code: `manage_adr(project="Users-yk-AI-sift-mcps", mode="get")`.
+  If `manage_adr` is missing from the MCP tool surface, report that once and continue
+  from the canonical repo docs and source.
 - **Update it, don't let it rot**: when a PATTERNS/TRADEOFFS entry changes (policy-chain
   stage count, seccomp/AppArmor default posture, an add-on drift gets resolved, etc.),
   re-run `manage_adr(mode="update", content=...)` with the revised section. A stale
@@ -105,10 +113,10 @@ use the stated fallback instead of blocking or fabricating a tool verdict.
 1. **Security guidance** — when installed, invoke `codeguard-security:codeguard` while modifying code
    (or `codeguard-security:security-review` for a full pass) and report its verdict. If unavailable, use
    the canonical security model plus a manual secure-by-default review and state that fallback clearly.
-2. **codebase-memory MCP** — when the project is indexed, use the graph tools (`search_graph`,
-   `trace_path`, `get_code_snippet`, `query_graph`, `get_architecture`) for code discovery over grep/glob,
-   plus the `codebase-memory` skill for query syntax. If unavailable/unindexed, fall back to `rg` and
-   exact source reads without turning indexing into task scope.
+2. **codebase-memory MCP** — always `index_repository` before graph queries, then use
+   `search_graph` / `trace_path` / `get_code_snippet` / `query_graph` / `get_architecture`
+   for code discovery over grep/glob, plus the `codebase-memory` skill for query syntax.
+   If the MCP is unavailable, fall back to `rg` and exact source reads.
 3. **LSP validators on changed files before closing** — Python:
    `uv run --extra dev ruff check <paths>` + `uv run --extra dev pyright` (and
    targeted `uv run --extra dev pyright <file>` on each file touched); frontend:
