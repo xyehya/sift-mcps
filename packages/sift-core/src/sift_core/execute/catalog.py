@@ -66,6 +66,11 @@ class ToolDefinition:
     common_flags: list[dict] = field(default_factory=list)
     # FK tool name for knowledge lookup (defaults to binary name)
     fk_tool_name: str = ""
+    # Some entries retain curated knowledge but are deliberately not exposed to
+    # either Linux run_command lane.  This is catalog metadata only; policy
+    # authorization remains in security_policy.py.
+    agent_executable: bool = True
+    availability_note: str = ""
 
     @property
     def knowledge_name(self) -> str:
@@ -127,6 +132,8 @@ def load_catalog() -> dict[str, ToolDefinition]:
                 description=tool_entry.get("description", ""),
                 common_flags=tool_entry.get("common_flags", []),
                 fk_tool_name=tool_entry.get("fk_tool_name", ""),
+                agent_executable=tool_entry.get("agent_executable", True),
+                availability_note=tool_entry.get("availability_note", ""),
             )
             _catalog_cache[name.lower()] = td
 
@@ -160,6 +167,8 @@ def list_tools_in_catalog(category: str | None = None) -> list[dict]:
                 "binary": td.binary,
                 "category": td.category,
                 "description": td.description,
+                "agent_executable": td.agent_executable,
+                "availability_note": td.availability_note,
             }
         )
     return results

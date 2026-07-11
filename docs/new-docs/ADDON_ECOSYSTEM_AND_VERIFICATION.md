@@ -128,15 +128,17 @@ disagree (live gateway, case-rocba-3, 2026-06-18: 70 cataloged / 62 available):
 | (b) **cataloged** | has a YAML catalog entry with flag policy + timeout | `packages/sift-core/data/catalog/` |
 | (c) **installed** | the binary actually exists on the VM | the VM filesystem |
 
-Live, `yara`, `tshark`, `binwalk`, `zeek`, `PECmd`, `RECmd`, `SQLECmd`,
-`SrumECmd` are (a)+(b) but show under `core_tools.missing` — **not (c)**. This is
-a real **operator-trust gap**: policy/catalog (and, by analogy, an add-on
-manifest) can *claim* a capability the VM does not satisfy. It is the Path-A
-mirror of manifest-vs-reality drift, and ties to the Axis F supply-chain
-inventory work (`XYE-48`/`XYE-49`). **Implication for the verifier:** a
-COMPATIBLE check should report the (c) gap (binary present? backend process
-startable?), not just (a)/(b) declarations — a tool/backend that is declared but
-not installed is the most common honest failure, far more than a malicious one.
+The June 18 live snapshot found `yara`, `tshark`, `binwalk`, `zeek`, `PECmd`,
+`RECmd`, `SQLECmd`, and `SrumECmd` declared but absent. It is historical evidence,
+not a current inventory claim: the current installer attempts `yara`, `tshark`,
+and `binwalk` best-effort, while PECmd/SrumECmd are Windows-only wintools-mcp
+capabilities and are not Linux execution-lane tools. The live `get_tool_help`
+inventory remains the authority for a particular VM. This is a real
+**operator-trust gap**: policy/catalog (and, by analogy, an add-on manifest) can
+*claim* a capability the VM does not satisfy. A COMPATIBLE check should report the
+(c) gap (binary present? backend process startable?), not just (a)/(b)
+declarations — a tool/backend that is declared but not installed is the most
+common honest failure, far more than a malicious one.
 
 **Already-DONE surface (do NOT propose as new backends).** `opensearch-mcp`
 already ingests, via its parser set, the super-timeline and memory planes plus a
