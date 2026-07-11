@@ -346,7 +346,10 @@ def check_tools(tool_names: list[str] | None = None) -> dict:
             td = get_tool_def(name)
             if td:
                 path = find_binary(td.binary)
-                results[name] = {"available": path is not None, "binary_path": path}
+                results[name] = {
+                    "available": td.agent_executable and path is not None,
+                    "binary_path": path,
+                }
             else:
                 results[name] = {
                     "available": False,
@@ -361,7 +364,10 @@ def check_tools(tool_names: list[str] | None = None) -> dict:
         td = get_tool_def(t["name"])
         if td:
             path = find_binary(td.binary)
-            results[t["name"]] = {"available": path is not None, "binary_path": path}
+            results[t["name"]] = {
+                "available": td.agent_executable and path is not None,
+                "binary_path": path,
+            }
     return results
 
 

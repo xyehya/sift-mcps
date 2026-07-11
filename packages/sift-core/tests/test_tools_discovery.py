@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 from sift_core.execute.security_policy import MVP_FORENSIC_ALLOWLIST
 from sift_core.execute.tools import discovery
-from sift_core.execute.tools.discovery import build_tool_inventory, get_tool_help
+from sift_core.execute.tools.discovery import (
+    build_tool_inventory,
+    check_tools,
+    get_tool_help,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -128,6 +132,39 @@ def test_windows_only_zimmerman_tools_are_not_advertised_as_linux_executable(too
     assert help_card["available"] is False
     assert "Linux run_command and run_command_job lanes" in help_card["availability_note"]
     assert "usage_hint" not in help_card
+
+
+@pytest.mark.parametrize("tool_name", ["PECmd", "SrumECmd"])
+def test_check_tools_does_not_advertise_non_executable_catalog_entries(monkeypatch, tool_name):
+    """Fail on reversion: knowledge-only Windows tools remain unavailable.
+
+    A detectable binary must not override the catalog's execution boundary in
+    either the named-tool or full-catalog check_tools response.
+    """
+    monkeypatch.setattr(discovery, "find_binary", lambda _binary: "/mock/bin/tool")
+
+    named_result = check_tools([tool_name])
+    all_results = check_tools()
+
+    assert named_result[tool_name] == {
+        "available": False,
+        "binary_path": "/mock/bin/tool",
+    }
+    assert all_results[tool_name] == {
+        "available": False,
+        "binary_path": "/mock/bin/tool",
+    }
+
+
+def test_check_tools_keeps_executable_catalog_entries_available(monkeypatch):
+    """agent_executable entries remain available when their binary is found."""
+    monkeypatch.setattr(discovery, "find_binary", lambda _binary: "/mock/bin/tool")
+
+    named_result = check_tools(["exiftool"])
+    all_results = check_tools()
+
+    assert named_result["exiftool"]["available"] is True
+    assert all_results["exiftool"]["available"] is True
 
 
 def test_yara_help_does_not_claim_a_bundled_rules_inventory():
