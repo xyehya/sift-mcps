@@ -2264,6 +2264,8 @@ name = "rag-mcp"
 source = { editable = "packages/forensic-rag-mcp" }
 dependencies = [
     { name = "mcp" },
+    { name = "numpy" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pyyaml" },
     { name = "sentence-transformers" },
     { name = "sift-common" },
@@ -2280,6 +2282,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "mcp", specifier = ">=1.26" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "pyyaml", specifier = ">=6.0" },

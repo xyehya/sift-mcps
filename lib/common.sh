@@ -172,14 +172,11 @@ SIFT_UV_TARBALL_SHA256_AARCH64="${SIFT_UV_TARBALL_SHA256_AARCH64:-88e800834007cc
 # ships no checksum file, so the hash is pinned here like the Supabase CLI).
 SIFT_HAYABUSA_TAG="${SIFT_HAYABUSA_TAG:-v3.9.0}"
 SIFT_HAYABUSA_SHA256="${SIFT_HAYABUSA_SHA256:-ffb31e02bd47d840d999d964d4663287cdb194a22ea856904348786acba414d7}"
-# BGE embedding model (D3): canonical revision (git commit) on Hugging Face Hub
-# for BAAI/bge-base-en-v1.5. The seed/query loaders pass this revision so the
+# Qwen3 embedding model (D3): canonical revision (git commit) on Hugging Face Hub.
+# The snapshot/query loaders pass this revision so the
 # weights are reproducible, and verify it after load (B-MVP-015).
-SIFT_RAG_MODEL_NAME="${SIFT_RAG_MODEL_NAME:-BAAI/bge-base-en-v1.5}"
-SIFT_RAG_MODEL_REVISION="${SIFT_RAG_MODEL_REVISION:-a5beb1e3e68b9ab74eb54cfd186867f64f240e1a}"
-# RAG Chroma bundle (D4, legacy chroma path only): pin the release tag so the
-# (already checksum-verified) bundle comes from a fixed release, not "latest".
-SIFT_RAG_INDEX_TAG="${SIFT_RAG_INDEX_TAG:-rag-index-v1}"
+SIFT_RAG_MODEL_NAME="${SIFT_RAG_MODEL_NAME:-Qwen/Qwen3-Embedding-0.6B}"
+SIFT_RAG_MODEL_REVISION="${SIFT_RAG_MODEL_REVISION:-97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3}"
 # GeoIP (D6): the OpenSearch ip2geo datasource hits a live unauthenticated
 # endpoint. Off by default; set SIFT_GEOIP_ENABLED=1 to opt in.
 SIFT_GEOIP_ENABLED="${SIFT_GEOIP_ENABLED:-0}"

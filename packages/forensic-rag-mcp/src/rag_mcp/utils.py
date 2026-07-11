@@ -27,23 +27,15 @@ MITRE_ID_PATTERN = re.compile(r"\b(T\d{4}(?:\.\d{3})?)\b", re.IGNORECASE)
 
 # Allowed embedding models (security: prevent arbitrary model loading).
 #
-# B-MVP-015: the live 26,586-chunk corpus is embedded with BAAI/bge-base-en-v1.5
-# (768-dim). That canonical model is the only one consistent with the existing
-# pgvector rows — re-embedding with another model would be required to change it.
-# The other entries are accepted ONLY for a deliberate, from-scratch re-seed; the
-# default and the canonical pin below stay bge-base-en-v1.5.
+# Only explicitly reviewed models may be loaded by the gateway process.
 ALLOWED_MODELS = frozenset(
     {
-        "BAAI/bge-base-en-v1.5",
-        "BAAI/bge-small-en-v1.5",
-        "BAAI/bge-large-en-v1.5",
-        "sentence-transformers/all-MiniLM-L6-v2",
-        "sentence-transformers/all-mpnet-base-v2",
+        "Qwen/Qwen3-Embedding-0.6B",
     }
 )
 
 # Default embedding model
-DEFAULT_MODEL_NAME = "BAAI/bge-base-en-v1.5"
+DEFAULT_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 
 # B-MVP-004 (D3) / B-MVP-015: canonical revision (git commit on Hugging Face Hub)
 # for the default model, so the downloaded weights are reproducible and pinned.
@@ -51,8 +43,12 @@ DEFAULT_MODEL_NAME = "BAAI/bge-base-en-v1.5"
 # the runtime override the gateway/worker units carry. Only applied when the
 # resolved model is the canonical default — a deliberate alternate model has its
 # own (unpinned) revision unless the operator pins one.
-CANONICAL_MODEL_NAME = "BAAI/bge-base-en-v1.5"
-CANONICAL_MODEL_REVISION = "a5beb1e3e68b9ab74eb54cfd186867f64f240e1a"
+CANONICAL_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
+CANONICAL_MODEL_REVISION = "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3"
+QUERY_INSTRUCTION = (
+    "Given a digital-forensics and incident-response query, retrieve the most "
+    "relevant authoritative reference passages."
+)
 
 
 def resolve_model_revision(model_name: str) -> str | None:

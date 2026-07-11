@@ -237,11 +237,12 @@ seed_addon_backends() {
 bootstrap_supabase_operator() {
   local sb_url="${SUPABASE_URL:-}"
   local sb_key="${SUPABASE_SERVICE_ROLE_KEY:-}"
+  local sb_anon="${SUPABASE_ANON_KEY:-}"
   local cp_dsn
   cp_dsn="$(_resolved_control_plane_dsn)"
 
-  if [[ -z "$sb_url" || -z "$sb_key" ]]; then
-    warn "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set — skipping Supabase operator bootstrap."
+  if [[ -z "$sb_url" || -z "$sb_key" || -z "$sb_anon" ]]; then
+    warn "Supabase URL, anon key, or service-role key is unavailable — skipping operator bootstrap."
     warn "  Set these env vars and re-run ./install.sh to provision the Supabase operator account."
     SUPABASE_OPERATOR_CREATED=0
     return
@@ -254,19 +255,6 @@ bootstrap_supabase_operator() {
     return
   fi
 
-  # Idempotency: skip if already bootstrapped
-  if svc_test_f "$MATERIALS_FILE" && svc_read "$MATERIALS_FILE" | grep -q '^supabase_operator_email=' 2>/dev/null; then
-    log "Supabase operator already bootstrapped — preserving."
-    SUPABASE_OPERATOR_EMAIL="$(svc_read "$MATERIALS_FILE" | awk -F= '$1=="supabase_operator_email"{sub(/^[^=]*=/,""); print; exit}' || true)"
-    if [[ -z "$SUPABASE_OPERATOR_EMAIL" ]]; then
-      SUPABASE_OPERATOR_EMAIL="${SIFT_EXAMINER}@operators.sift.local"
-    fi
-    SUPABASE_OPERATOR_CREATED=0
-    SUPABASE_OPERATOR_MAPPED=1
-    export SUPABASE_OPERATOR_EMAIL SUPABASE_OPERATOR_MAPPED
-    return
-  fi
-
   # A1-BOOTSTRAP: generate one-time installer password for Supabase operator.
   # The operator MUST reset this on first login (status=invited in DB).
   local sb_temp_password
@@ -274,7 +262,7 @@ bootstrap_supabase_operator() {
   local sb_email="${SIFT_EXAMINER}@operators.sift.local"
 
   log "Provisioning Supabase operator: $sb_email (status=invited, forced-reset on first login)."
-  export SUPABASE_URL="$sb_url" SUPABASE_SERVICE_ROLE_KEY="$sb_key"
+  export SUPABASE_URL="$sb_url" SUPABASE_ANON_KEY="$sb_anon" SUPABASE_SERVICE_ROLE_KEY="$sb_key"
   export SIFT_CONTROL_PLANE_DSN="$cp_dsn"
   export SB_OPERATOR_EMAIL="$sb_email" SB_OPERATOR_TEMP_PW="$sb_temp_password"
   export SB_OPERATOR_EXAMINER="$SIFT_EXAMINER"
@@ -285,6 +273,7 @@ import json, os, sys, time, urllib.request, urllib.error
 
 url = os.environ["SUPABASE_URL"].rstrip("/")
 key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
 dsn = os.environ["SIFT_CONTROL_PLANE_DSN"]
 email = os.environ["SB_OPERATOR_EMAIL"]
 password = os.environ["SB_OPERATOR_TEMP_PW"]
@@ -439,6 +428,22 @@ def _delete_auth_user(auth_user_id):
         pass
 
 
+def _verify_password_grant():
+    if not anon_key:
+        raise RuntimeError("supabase_anon_key_unavailable")
+    body = json.dumps({"email": email, "password": password}).encode()
+    req = urllib.request.Request(
+        f"{url}/auth/v1/token?grant_type=password",
+        data=body,
+        method="POST",
+        headers={"apikey": anon_key, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        result = json.loads(resp.read() or b"{}")
+    if not result.get("access_token") or not (result.get("user") or {}).get("id"):
+        raise RuntimeError("supabase_operator_password_grant_failed")
+
+
 created_auth_user = False
 reset_existing_password = False
 auth_user_id = ""
@@ -462,6 +467,8 @@ try:
             conn, auth_user_id, prior_profile_status
         )
         conn.commit()
+        if created_auth_user or reset_existing_password:
+            _verify_password_grant()
 except urllib.error.HTTPError as exc:
     body = exc.read()[:200].decode("utf-8", errors="replace")
     print(f"http_error:{exc.code}:{body}")

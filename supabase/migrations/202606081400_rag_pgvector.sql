@@ -40,8 +40,8 @@ create extension if not exists vector;
 -- ---------------------------------------------------------------------------
 -- 0. Embedding dimension contract
 -- ---------------------------------------------------------------------------
--- The bundled embedding model (BAAI/bge-base-en-v1.5) emits 768-dim vectors.
--- The column is fixed at 768 so the ANN index and distance ops are well typed.
+-- The canonical Qwen3-Embedding-0.6B model emits 1024-dim vectors.
+-- The column is fixed at 1024 so the ANN index and distance ops are well typed.
 -- A model change that alters the dimension is a schema change (new migration),
 -- never a silent drift.
 
@@ -163,8 +163,8 @@ create table if not exists app.rag_chunks (
   content text not null,
   -- Opaque provenance handle for THIS chunk (agent-safe; never a path).
   provenance_id uuid not null,
-  -- 768-dim embedding (bge-base-en-v1.5). Nullable until the embedder runs.
-  embedding vector(768) null,
+  -- 1024-dim embedding (Qwen3-Embedding-0.6B). Nullable during provisioning.
+  embedding vector(1024) null,
   metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   constraint rag_chunks_kind_check
@@ -214,8 +214,8 @@ begin
   ) then
     create index rag_chunks_embedding_cosine_idx
       on app.rag_chunks
-      using ivfflat (embedding vector_cosine_ops)
-      with (lists = 100);
+      using hnsw (embedding vector_cosine_ops)
+      with (m = 16, ef_construction = 128);
   end if;
 exception
   when others then
@@ -265,7 +265,7 @@ create or replace function app.rag_upsert_chunk(
   p_document_id uuid,
   p_chunk_index int,
   p_content text,
-  p_embedding vector(768) default null,
+  p_embedding vector(1024) default null,
   p_provenance_id uuid default null,
   p_metadata jsonb default '{}'::jsonb
 )
@@ -319,7 +319,7 @@ $$;
 -- document/collection labels, content, and a distance. It never returns the
 -- embedding or any absolute path.
 create or replace function app.rag_search(
-  p_query_embedding vector(768),
+  p_query_embedding vector(1024),
   p_case_id uuid default null,
   p_top_k int default 5,
   p_include_knowledge boolean default true,
@@ -479,7 +479,7 @@ comment on table app.rag_documents is
   'RAG source documents with provenance_id and optional opaque evidence link. '
   'source_ref is a relative display label only; absolute paths are rejected.';
 comment on table app.rag_chunks is
-  'RAG embeddable chunks (vector(768)) with per-chunk provenance_id. Derived '
+  'RAG embeddable chunks (vector(1024)) with per-chunk provenance_id. Derived '
   'chunk text is path-guarded so no absolute OS/mount path is persisted. '
   'case_id is denormalized for case-scoped ANN filtering.';
 comment on column app.rag_chunks.provenance_id is

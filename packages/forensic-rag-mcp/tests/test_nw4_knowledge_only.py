@@ -374,7 +374,7 @@ def test_migration_has_no_include_knowledge_param():
 def test_migration_creates_six_arg_rag_search():
     sql = _migration_sql()
     # The new function signature should have exactly 6 parameters
-    assert "p_query_embedding vector(768)" in sql
+    assert "p_query_embedding vector(1024)" in sql
     assert "p_top_k int" in sql
     assert "p_source text" in sql
     assert "p_source_ids text[]" in sql
@@ -438,7 +438,7 @@ def test_server_search_calls_store_without_derived_params():
 
     class _FakeEmbedder:
         def embed(self, q):
-            return [0.1] * 768
+            return [0.1] * 1024
 
     s = srv.RAGServer()
     tracing_store = _TracingStore()

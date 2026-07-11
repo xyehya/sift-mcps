@@ -54,7 +54,7 @@ def test_create_or_replace_keeps_existing_params():
     sql = _sql()
     # The first five params (unchanged contract) must still be present.
     for param in (
-        "p_query_embedding vector(768)",
+        "p_query_embedding vector(1024)",
         "p_case_id uuid default null",
         "p_top_k int default 5",
         "p_include_knowledge boolean default true",

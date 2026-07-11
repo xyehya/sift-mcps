@@ -257,7 +257,7 @@ def test_upsert_document_rejects_absolute_source_ref(monkeypatch):
         )
 
 
-def test_deterministic_embedding_is_stable_and_768_dimensional():
+def test_deterministic_embedding_is_stable_and_canonical_dimensional():
     first = deterministic_embedding("credential theft case study")
     second = deterministic_embedding("credential theft case study")
     assert first == second

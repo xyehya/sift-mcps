@@ -1,4 +1,4 @@
-"""BGE query embedder for the pgvector RAG plane (BATCH-OSX-RAG).
+"""Qwen3 query embedder for the pgvector RAG plane.
 
 Moved here from the gateway ``rag_bridge._embed_query``. This is the runtime
 query embedder for ``kb_search_knowledge``: it loads the allowlisted BGE model
@@ -17,11 +17,11 @@ from __future__ import annotations
 import logging
 import threading
 
-from .utils import ALLOWED_MODELS, DEFAULT_MODEL_NAME
+from .utils import ALLOWED_MODELS, DEFAULT_MODEL_NAME, QUERY_INSTRUCTION
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_DIM = 768
+EMBEDDING_DIM = 1024
 MAX_QUERY_LENGTH = 1000
 
 
@@ -66,7 +66,8 @@ class QueryEmbedder:
         if len(query) > MAX_QUERY_LENGTH:
             raise QueryEmbeddingError("rag_query_too_long")
         model = self._load_model()
-        vector = model.encode(query)
+        instructed_query = f"Instruct: {QUERY_INSTRUCTION}\nQuery: {query.strip()}"
+        vector = model.encode(instructed_query, normalize_embeddings=True)
         out = [float(v) for v in vector.tolist()]
         if len(out) != EMBEDDING_DIM:  # pragma: no cover - model contract
             raise QueryEmbeddingError("rag_embedding_dim_mismatch")

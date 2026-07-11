@@ -47,10 +47,12 @@ EnvironmentFile=-${SIFT_HOME}/opencti-query.env
 # data dir so build_response/run_command enrichment fires under the service user.
 # Non-secret path; written by install.sh (write_fk_env).
 EnvironmentFile=-${SIFT_HOME}/forensic-knowledge.env
-# B-MVP-015 / B-MVP-004 (D3): the BGE embedding model cache lives under the
+# The pinned Qwen3 embedding model cache lives under the
 # service home (not the operator home), and the model name/revision are pinned so
 # kb_search_knowledge loads reproducible weights. Non-secret identifiers/path.
 Environment=HF_HOME=${SIFT_HF_HOME}
+Environment=HF_HUB_OFFLINE=1
+Environment=TRANSFORMERS_OFFLINE=1
 Environment=RAG_MODEL_NAME=${SIFT_RAG_MODEL_NAME}
 Environment=RAG_MODEL_REVISION=${SIFT_RAG_MODEL_REVISION}
 Environment=SIFT_EXECUTE_REQUIRE_RUNTIME_USER=1

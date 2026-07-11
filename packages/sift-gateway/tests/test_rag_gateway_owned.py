@@ -49,8 +49,8 @@ class _FakeGatewayRagService:
             "document_count": 44,
             "collection_count": 2,
             "source_count": 23,
-            "embedding_dim": 768,
-            "embedding_model": "BAAI/bge-base-en-v1.5",
+            "embedding_dim": 1024,
+            "embedding_model": "Qwen/Qwen3-Embedding-0.6B",
         }
 
     def _search(self, **_: object) -> dict[str, object]:

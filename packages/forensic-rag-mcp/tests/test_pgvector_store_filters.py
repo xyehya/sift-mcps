@@ -173,4 +173,4 @@ def test_knowledge_stats(monkeypatch):
     assert stats["collection_count"] == 12
     assert stats["source_count"] == 23
     assert stats["embedding_dim"] == EMBEDDING_DIM
-    assert stats["embedding_model"] == "BAAI/bge-base-en-v1.5"
+    assert stats["embedding_model"] == "Qwen/Qwen3-Embedding-0.6B"
