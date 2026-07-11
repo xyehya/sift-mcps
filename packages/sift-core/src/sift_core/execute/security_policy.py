@@ -116,6 +116,18 @@ DENY_FLOOR = frozenset(
         "nohup",
         "timeout",
         "stdbuf",
+        # These launchers rewrite argv before executing another program.  The
+        # command validator intentionally does not implement each launcher's
+        # option grammar recursively, because a partial parser would create a
+        # bypass around the direct-binary and dotnet Zimmerman deny floors.
+        # They have no required agent-facing forensic role; invoke the
+        # approved forensic binary directly instead.
+        "nice",
+        "ionice",
+        "chrt",
+        "taskset",
+        "time",
+        "command",
         # Added — additional interpreters / shell-escape vectors. These have no
         # legitimate non-interactive forensic use and each can spawn a shell or
         # execute arbitrary code (interpreters), or shell out via '!' (pagers /
