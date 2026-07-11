@@ -19,7 +19,8 @@ It never transfers data, changes OpenSearch security, or starts containers.
 
 Required environment for a passing target check:
   OPENCTI_PLATFORM_IMAGE, OPENCTI_WORKER_IMAGE, OPENCTI_REDIS_IMAGE,
-  OPENCTI_RABBITMQ_IMAGE, OPENCTI_MINIO_IMAGE (all immutable @sha256 images)
+  OPENCTI_RABBITMQ_IMAGE, OPENCTI_MINIO_IMAGE, and the four
+  OPENCTI_CONNECTOR_*_IMAGE values (all immutable @sha256 images)
   OPENCTI_OPENSEARCH_CA, OPENCTI_OPENSEARCH_USER, OPENCTI_OPENSEARCH_PASSWORD
   OPENCTI_ADMIN_PASSWORD, OPENCTI_ADMIN_TOKEN, OPENCTI_WORKER_TOKEN,
   OPENCTI_RABBITMQ_PASSWORD,
@@ -52,6 +53,8 @@ source "$tuple_file"
   || { printf 'FATAL: unsupported shared-target OpenSearch version.\n' >&2; exit 1; }
 export OPENCTI_PLATFORM_IMAGE OPENCTI_WORKER_IMAGE OPENCTI_REDIS_IMAGE
 export OPENCTI_RABBITMQ_IMAGE OPENCTI_MINIO_IMAGE
+export OPENCTI_CONNECTOR_MITRE_IMAGE OPENCTI_CONNECTOR_CISA_KEV_IMAGE
+export OPENCTI_CONNECTOR_THREATFOX_IMAGE OPENCTI_CONNECTOR_URLHAUS_IMAGE
 
 command -v docker >/dev/null 2>&1 || {
   printf 'FATAL: Docker is required to validate the shared compose contract.\n' >&2
@@ -75,7 +78,7 @@ grep -q 'https://localhost:9200' "$core_compose" || {
   exit 1
 }
 
-for image_var in OPENCTI_PLATFORM_IMAGE OPENCTI_WORKER_IMAGE OPENCTI_REDIS_IMAGE OPENCTI_RABBITMQ_IMAGE OPENCTI_MINIO_IMAGE; do
+for image_var in OPENCTI_PLATFORM_IMAGE OPENCTI_WORKER_IMAGE OPENCTI_REDIS_IMAGE OPENCTI_RABBITMQ_IMAGE OPENCTI_MINIO_IMAGE OPENCTI_CONNECTOR_MITRE_IMAGE OPENCTI_CONNECTOR_CISA_KEV_IMAGE OPENCTI_CONNECTOR_THREATFOX_IMAGE OPENCTI_CONNECTOR_URLHAUS_IMAGE; do
   value="${!image_var:-}"
   [[ "$value" == *@sha256:* ]] || {
     printf 'FATAL: %s must be an immutable @sha256 image reference.\n' "$image_var" >&2
@@ -87,11 +90,6 @@ done
   || { printf 'FATAL: OpenCTI platform image does not match the accepted tuple.\n' >&2; exit 1; }
 [[ "$OPENCTI_WORKER_IMAGE" == "opencti/worker@sha256:3cb80d6f9f4816fdd2c4f8565807851388be3e247ef2348ef34a553be8d414ea" ]] \
   || { printf 'FATAL: OpenCTI worker image does not match the accepted tuple.\n' >&2; exit 1; }
-docker manifest inspect "$OPENCTI_PLATFORM_IMAGE" >/dev/null 2>&1 \
-  || { printf 'FATAL: pinned OpenCTI platform image digest is unavailable.\n' >&2; exit 1; }
-docker manifest inspect "$OPENCTI_WORKER_IMAGE" >/dev/null 2>&1 \
-  || { printf 'FATAL: pinned OpenCTI worker image digest is unavailable.\n' >&2; exit 1; }
-
 [[ -r "${OPENCTI_OPENSEARCH_CA:-}" ]] \
   || { printf 'FATAL: OPENCTI_OPENSEARCH_CA must name a readable verified CA file.\n' >&2; exit 1; }
 command -v openssl >/dev/null 2>&1 \
@@ -110,6 +108,20 @@ for secret_var in OPENCTI_OPENSEARCH_USER OPENCTI_OPENSEARCH_PASSWORD OPENCTI_AD
     printf 'FATAL: %s must be supplied through the operator environment/secret store.\n' "$secret_var" >&2
     exit 1
   }
+done
+
+for image_var in OPENCTI_PLATFORM_IMAGE OPENCTI_WORKER_IMAGE OPENCTI_CONNECTOR_MITRE_IMAGE OPENCTI_CONNECTOR_CISA_KEV_IMAGE OPENCTI_CONNECTOR_THREATFOX_IMAGE OPENCTI_CONNECTOR_URLHAUS_IMAGE; do
+  image="${!image_var}"
+  if [[ "${SIFT_OFFLINE:-0}" == "1" ]]; then
+    docker image inspect "$image" >/dev/null 2>&1 \
+      || { printf 'FATAL: offline mode requires cached pinned image %s.\n' "$image_var" >&2; exit 1; }
+  else
+    if ! docker manifest inspect "$image" >/dev/null 2>&1; then
+      docker image inspect "$image" >/dev/null 2>&1 \
+        || { printf 'FATAL: pinned image %s is unavailable from the registry and local cache.\n' "$image_var" >&2; exit 1; }
+      printf 'WARNING: registry probe failed for %s; using exact cached digest.\n' "$image_var" >&2
+    fi
+  fi
 done
 
 pycti_spec="$(SIFT_REPO_DIR="$REPO_DIR" python3 - <<'PY'

@@ -1,46 +1,100 @@
-# OpenCTI public import connectors — optional reference add-on feeds, prepared via
-# scripts/setup-addon.sh after the OpenCTI platform compose is running.
-#
-# These containers fetch public CTI sources into the local OpenCTI platform.
-# They share the optional OpenCTI network and authenticate with the
-# add-on-generated OpenCTI admin token.
+# Secure public-reference feeds for the fresh shared-target OpenCTI deployment.
+# Images are release-aligned and immutable. Connectors receive dedicated OpenCTI
+# tokens only: no OpenSearch, gateway, worker, or bootstrap-admin credentials.
+name: sift-opencti-connectors
+
+x-connector-defaults: &connector-defaults
+  restart: unless-stopped
+  init: true
+  user: "65532:65532"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 128
+  mem_limit: 768m
+  cpus: 0.75
+  stop_grace_period: 30s
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m
+  networks:
+    - opencti-app-net
+    - feed-egress
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
 
 services:
-  connector-mitre:
-    image: opencti/connector-mitre:latest
-    container_name: sift-opencti-connector-mitre
-    restart: unless-stopped
-    networks:
-      - opencti-net
+  mitre:
+    <<: *connector-defaults
+    image: "${OPENCTI_CONNECTOR_MITRE_IMAGE:?set pinned MITRE connector image}"
     environment:
-      - OPENCTI_URL=http://opencti:8080
-      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
-      - CONNECTOR_ID=${OPENCTI_CONNECTOR_MITRE_ID}
-      - CONNECTOR_NAME=MITRE ATT&CK
-      - CONNECTOR_SCOPE=marking-definition,identity,attack-pattern,course-of-action,intrusion-set,campaign,malware,tool,report,external-reference-as-report,x-mitre-data-source,x-mitre-data-component,x-mitre-matrix,x-mitre-tactic,x-mitre-collection
-      - CONNECTOR_LOG_LEVEL=info
-      - MITRE_INTERVAL=7
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: "${OPENCTI_CONNECTOR_MITRE_TOKEN:?set dedicated MITRE connector token}"
+      CONNECTOR_ID: "${OPENCTI_CONNECTOR_MITRE_ID:?set stable MITRE connector UUID}"
+      CONNECTOR_NAME: MITRE ATT&CK
+      CONNECTOR_LOG_LEVEL: error
+      MITRE_INTERVAL: "7"
+      MITRE_REMOVE_STATEMENT_MARKING: "false"
+      # v18+ contains types unsupported by this pinned connector/platform tuple.
+      MITRE_ENTERPRISE_FILE_URL: "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/d4a34a19eb60dcd0a9d15a456da842a42e1003fc/enterprise-attack/enterprise-attack.json"
+      MITRE_MOBILE_ATTACK_FILE_URL: "false"
+      MITRE_ICS_ATTACK_FILE_URL: "false"
+      MITRE_CAPEC_FILE_URL: "false"
 
-  connector-cisa-known-exploited-vulnerabilities:
-    image: opencti/connector-cisa-known-exploited-vulnerabilities:latest
-    container_name: sift-opencti-connector-cisa-kev
-    restart: unless-stopped
-    networks:
-      - opencti-net
+  cisa-kev:
+    <<: *connector-defaults
+    image: "${OPENCTI_CONNECTOR_CISA_KEV_IMAGE:?set pinned CISA KEV connector image}"
     environment:
-      - OPENCTI_URL=http://opencti:8080
-      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
-      - CONNECTOR_ID=${OPENCTI_CONNECTOR_CISA_KEV_ID}
-      - CONNECTOR_NAME=CISA KEV
-      - CONNECTOR_SCOPE=cisa
-      - CONNECTOR_LOG_LEVEL=info
-      - CONNECTOR_DURATION_PERIOD=P1D
-      - CISA_CATALOG_URL=https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
-      - CISA_CREATE_INFRASTRUCTURES=true
-      - CISA_KEV_FLAG_ONLY=false
-      - CISA_TLP=TLP:CLEAR
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: "${OPENCTI_CONNECTOR_CISA_KEV_TOKEN:?set dedicated CISA KEV connector token}"
+      CONNECTOR_ID: "${OPENCTI_CONNECTOR_CISA_KEV_ID:?set stable CISA KEV connector UUID}"
+      CONNECTOR_NAME: CISA KEV
+      CONNECTOR_SCOPE: cisa
+      CONNECTOR_LOG_LEVEL: error
+      CONNECTOR_DURATION_PERIOD: P1D
+      CISA_CATALOG_URL: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+      CISA_CREATE_INFRASTRUCTURES: "false"
+      CISA_KEV_FLAG_ONLY: "false"
+      CISA_TLP: TLP:CLEAR
+
+  threatfox:
+    <<: *connector-defaults
+    image: "${OPENCTI_CONNECTOR_THREATFOX_IMAGE:?set pinned ThreatFox connector image}"
+    environment:
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: "${OPENCTI_CONNECTOR_THREATFOX_TOKEN:?set dedicated ThreatFox connector token}"
+      CONNECTOR_ID: "${OPENCTI_CONNECTOR_THREATFOX_ID:?set stable ThreatFox connector UUID}"
+      CONNECTOR_NAME: ThreatFox
+      CONNECTOR_SCOPE: threatfox
+      CONNECTOR_LOG_LEVEL: error
+      THREATFOX_INTERVAL: "1"
+      THREATFOX_CSV_URL: https://threatfox.abuse.ch/export/csv/recent/
+      THREATFOX_IMPORT_OFFLINE: "false"
+      THREATFOX_CREATE_INDICATORS: "true"
+      THREATFOX_DEFAULT_X_OPENCTI_SCORE: "50"
+      THREATFOX_IOC_TO_IMPORT: all_types
+
+  urlhaus:
+    <<: *connector-defaults
+    image: "${OPENCTI_CONNECTOR_URLHAUS_IMAGE:?set pinned URLhaus connector image}"
+    environment:
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: "${OPENCTI_CONNECTOR_URLHAUS_TOKEN:?set dedicated URLhaus connector token}"
+      CONNECTOR_ID: "${OPENCTI_CONNECTOR_URLHAUS_ID:?set stable URLhaus connector UUID}"
+      CONNECTOR_NAME: Abuse.ch URLhaus
+      CONNECTOR_SCOPE: urlhaus
+      CONNECTOR_LOG_LEVEL: error
+      CONNECTOR_DURATION_PERIOD: P1D
+      URLHAUS_CSV_URL: https://urlhaus.abuse.ch/downloads/csv_recent/
+      URLHAUS_DEFAULT_X_OPENCTI_SCORE: "70"
+      URLHAUS_IMPORT_OFFLINE: "false"
+      URLHAUS_THREATS_FROM_LABELS: "true"
 
 networks:
-  opencti-net:
+  opencti-app-net:
     external: true
-    name: sift-opencti-net
+    name: sift-opencti-app-net
+  feed-egress:
+    name: sift-opencti-feed-egress

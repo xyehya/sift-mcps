@@ -591,6 +591,10 @@ setup_opencti() {
   PAYLOAD_MANIFEST="$SIFT_MCPS_ROOT/packages/opencti-mcp/sift-backend.json"
   log "== opencti-mcp (reference backend, provides: reference, threat-intel) =="
   print_manifest_summary "$PAYLOAD_MANIFEST" || true
+  # Provisioning uses the pinned pycti client to bootstrap MITRE provenance, so
+  # install the additive OpenCTI extra before entering the secure stack path.
+  # --inexact inside stage_runtime_command preserves every core package.
+  stage_runtime_command "opencti-mcp" "opencti"
   if ! command -v docker >/dev/null 2>&1; then
     warn "Docker not found — OpenCTI's own stack cannot be started here. You can still point at an external OpenCTI."
   fi
@@ -607,11 +611,9 @@ setup_opencti() {
   warn "OPENCTI_URL / OPENCTI_TOKEN are resolved by the gateway from its OWN env"
   warn "vars SIFT_OPENCTI_URL / SIFT_OPENCTI_TOKEN at backend startup. Set those"
   warn "in the gateway environment (systemd EnvironmentFile) before registering."
-  # B-MVP-034: the native installer does NOT sync the opencti extra, so this
-  # stages it into the runtime venv and registers the sift-service-executable
-  # console script (.venv/bin/opencti-mcp), matching the seeded opensearch/rag
-  # backends rather than the operator's uv.
-  stage_runtime_command "opencti-mcp" "opencti"
+  # B-MVP-034: stage_runtime_command above produced the sift-service-executable
+  # console script before provisioning so the same venv can run the pinned
+  # provenance bootstrap. The payload still points at that direct command.
   # env_refs only (spec §4.3): CHILD=GATEWAY name->name. The raw token never
   # touches this file or app.mcp_backends; the registry rejects a raw `env` map.
   PAYLOAD_ENV_REFS=(

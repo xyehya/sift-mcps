@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create distinct OpenCTI worker and query-only service identities."""
+"""Create distinct OpenCTI worker, query, and public-feed identities."""
 
 from __future__ import annotations
 
@@ -80,7 +80,13 @@ def main() -> None:
         fail("run this provisioner as root")
     stack_path = Path(os.environ.get("SIFT_OPENCTI_STACK_ENV", "/var/lib/sift/.sift/opencti-stack.env"))
     query_path = Path(os.environ.get("SIFT_OPENCTI_QUERY_ENV", "/var/lib/sift/.sift/opencti-query.env"))
+    connectors_path = Path(
+        os.environ.get(
+            "SIFT_OPENCTI_CONNECTORS_ENV", "/var/lib/sift/.sift/opencti-connectors.env"
+        )
+    )
     stack = parse_env(stack_path)
+    connectors = parse_env(connectors_path)
     admin_token = stack.get("OPENCTI_ADMIN_TOKEN", "")
     if not admin_token:
         fail("OpenCTI admin bootstrap token is missing")
@@ -106,29 +112,92 @@ def main() -> None:
             graphql(admin_token, role_cap, {"id": role["id"], "input": {"relationship_type": "has-capability", "toId": capabilities[capability]}}, "role capability add")
         return role
 
-    worker_role = ensure_role("SIFT Worker", {"BYPASS", "APIACCESS", "APIACCESS_USETOKEN"})
+    connector_capabilities = {
+        "APIACCESS",
+        "APIACCESS_USETOKEN",
+        "CONNECTORAPI",
+        "KNOWLEDGE",
+        "KNOWLEDGE_KNUPDATE",
+        "KNOWLEDGE_KNUPDATE_KNBYPASSFIELDS",
+        "KNOWLEDGE_KNUPDATE_KNBYPASSREFERENCE",
+        "MODULES",
+        "SETTINGS_SETKILLCHAINPHASES",
+        "SETTINGS_SETLABELS",
+        "SETTINGS_SETMARKINGS",
+        "SETTINGS_SETVOCABULARIES",
+    }
+    worker_role = ensure_role("SIFT Worker", connector_capabilities | {"BYPASS"})
     query_role = ensure_role("SIFT MCP Readonly", {"KNOWLEDGE", "APIACCESS", "APIACCESS_USETOKEN"})
-    groups_data = graphql(admin_token, "query { groups(first: 100) { edges { node { id name roles { edges { node { id name capabilities { name } } } } } } } }", operation="group read")
+    connector_role = ensure_role("SIFT Public Feed Connector", connector_capabilities)
+    groups_data = graphql(admin_token, "query { groups(first: 100) { edges { node { id name auto_new_marking allowed_marking { id } roles { edges { node { id name capabilities { name } } } } } } } }", operation="group read")
     groups = {edge["node"]["name"]: edge["node"] for edge in groups_data["groups"]["edges"]}
     group_add = "mutation GroupAdd($input: GroupAddInput!) { groupAdd(input: $input) { id name } }"
     group_role = "mutation GroupRole($groupId: ID!, $roleId: ID!) { groupEdit(id: $groupId) { relationAdd(input: {toId: $roleId, relationship_type: \"has-role\"}) { id } } }"
 
-    def ensure_group(name: str, role: dict) -> dict:
+    group_patch = "mutation GroupPatch($id: ID!, $input: [EditInput!]!) { groupEdit(id: $id) { fieldPatch(input: $input) { id name auto_new_marking } } }"
+
+    def ensure_group(name: str, role: dict, auto_new_marking: bool) -> dict:
         group = groups.get(name)
         if group is None:
-            group = graphql(admin_token, group_add, {"input": {"name": name, "description": "SIFT managed; do not edit", "default_assignation": False, "no_creators": True, "restrict_delete": True, "auto_new_marking": False, "group_confidence_level": {"max_confidence": 100, "overrides": []}}}, "group create")["groupAdd"]
+            group = graphql(admin_token, group_add, {"input": {"name": name, "description": "SIFT managed; do not edit", "default_assignation": False, "no_creators": True, "restrict_delete": True, "auto_new_marking": auto_new_marking, "group_confidence_level": {"max_confidence": 100, "overrides": []}}}, "group create")["groupAdd"]
             graphql(admin_token, group_role, {"groupId": group["id"], "roleId": role["id"]}, "group role add")
+        else:
+            current_roles = {
+                edge["node"]["name"] for edge in group.get("roles", {}).get("edges", [])
+            }
+            if current_roles != {role["name"]}:
+                fail(f"managed group {name} has unexpected role membership")
+            if group.get("auto_new_marking") is not auto_new_marking:
+                graphql(
+                    admin_token,
+                    group_patch,
+                    {
+                        "id": group["id"],
+                        "input": [
+                            {
+                                "key": "auto_new_marking",
+                                "value": [str(auto_new_marking).lower()],
+                            }
+                        ],
+                    },
+                    "group marking policy update",
+                )
         return group
 
-    worker_group = ensure_group("SIFT Workers", worker_role)
-    query_group = ensure_group("SIFT MCP Readonly", query_role)
+    worker_group = ensure_group("SIFT Workers", worker_role, True)
+    query_group = ensure_group("SIFT MCP Readonly", query_role, False)
+    connector_group = ensure_group("SIFT Public Feed Connectors", connector_role, True)
+    markings_data = graphql(
+        admin_token,
+        "query { markingDefinitions(first: 100) { edges { node { id } } } }",
+        operation="marking read",
+    )
+    marking_ids = {
+        edge["node"]["id"] for edge in markings_data["markingDefinitions"]["edges"]
+    }
+    group_marking = "mutation GroupMarking($groupId: ID!, $markingId: ID!) { groupEdit(id: $groupId) { relationAdd(input: {toId: $markingId, relationship_type: \"accesses-to\"}) { id } } }"
 
-    users_data = graphql(admin_token, "query { users(first: 500) { edges { node { id user_email } } } }", operation="user read")
+    def ensure_existing_markings(group: dict) -> None:
+        current = {item["id"] for item in group.get("allowed_marking", [])}
+        for marking_id in sorted(marking_ids - current):
+            graphql(
+                admin_token,
+                group_marking,
+                {"groupId": group["id"], "markingId": marking_id},
+                "group marking grant",
+            )
+
+    ensure_existing_markings(worker_group)
+    ensure_existing_markings(connector_group)
+
+    users_data = graphql(admin_token, "query { users(first: 500) { edges { node { id user_email groups { edges { node { id name default_assignation roles { edges { node { name capabilities { name } } } } } } } } } } }", operation="user read")
     users = {edge["node"]["user_email"]: edge["node"] for edge in users_data["users"]["edges"]}
     add = """mutation UserAdd($input: UserAddInput!) { userAdd(input: $input) { id user_email } }"""
     token_add = """mutation TokenAdd($userId: ID!, $input: UserTokenAddInput!) { userAdminTokenAdd(userId: $userId, input: $input) { plaintext_token } }"""
 
-    def ensure(email: str, name: str, group: dict, token_key: str) -> str:
+    def ensure(
+        email: str, name: str, group: dict, token_key: str, token_store: dict[str, str]
+    ) -> str:
         user = users.get(email)
         if user is None:
             user = graphql(admin_token, add, {"input": {"name": name, "user_email": email, "password": secrets.token_urlsafe(64), "groups": [group["id"]], "user_service_account": True}}, "user create")["userAdd"]
@@ -136,12 +205,34 @@ def main() -> None:
             # from a previous disposable deployment.
             token = ""
         else:
-            token = stack.get(token_key, "")
+            current_groups = [
+                edge["node"] for edge in user.get("groups", {}).get("edges", [])
+            ]
+            group_names = {item["name"] for item in current_groups}
+            unexpected = group_names - {group["name"], "Default"}
+            defaults = [item for item in current_groups if item["name"] == "Default"]
+            default_caps = {
+                capability["name"]
+                for item in defaults
+                for role_edge in item.get("roles", {}).get("edges", [])
+                for capability in role_edge["node"].get("capabilities", [])
+            }
+            if (
+                unexpected
+                or group["name"] not in group_names
+                or any(not item.get("default_assignation") for item in defaults)
+                or default_caps - {"KNOWLEDGE"}
+            ):
+                fail(f"managed service account {email} has unexpected group membership")
+            token = token_store.get(token_key, "")
         if not token:
             token = graphql(admin_token, token_add, {"userId": user["id"], "input": {"name": "sift-managed", "duration": "UNLIMITED"}}, "token create")["userAdminTokenAdd"]["plaintext_token"]
         me = graphql(token, "query { me { id user_email capabilities { name } } }", operation="token verify")["me"]
         if me["user_email"] != email:
             fail(f"stored token does not belong to {email}")
+        names = {capability["name"] for capability in me.get("capabilities", [])}
+        if "BYPASS" in names and group["name"] != "SIFT Workers":
+            fail(f"non-worker service account {email} unexpectedly has BYPASS")
         return token
 
     # OpenCTI 7 officially requires workers to use a BYPASS administrator
@@ -150,18 +241,41 @@ def main() -> None:
     if stack.get("OPENCTI_IDENTITIES_PROVISIONED") != "1":
         stack.pop("OPENCTI_WORKER_TOKEN", None)
         stack.pop("OPENCTI_QUERY_TOKEN", None)
-    worker = ensure("sift-worker@sift.local", "SIFT OpenCTI Worker", worker_group, "OPENCTI_WORKER_TOKEN")
-    query = ensure("sift-query@sift.local", "SIFT OpenCTI Query", query_group, "OPENCTI_QUERY_TOKEN")
-    if len({admin_token, worker, query}) != 3:
-        fail("OpenCTI admin, worker, and query tokens must be distinct")
+    worker = ensure("sift-worker@sift.local", "SIFT OpenCTI Worker", worker_group, "OPENCTI_WORKER_TOKEN", stack)
+    query = ensure("sift-query@sift.local", "SIFT OpenCTI Query", query_group, "OPENCTI_QUERY_TOKEN", stack)
+    feed_specs = (
+        ("mitre", "MITRE"),
+        ("cisa-kev", "CISA_KEV"),
+        ("threatfox", "THREATFOX"),
+        ("urlhaus", "URLHAUS"),
+    )
+    feed_tokens: list[str] = []
+    for slug, key_slug in feed_specs:
+        token_key = f"OPENCTI_CONNECTOR_{key_slug}_TOKEN"
+        token = ensure(
+            f"sift-connector-{slug}@sift.local",
+            f"SIFT {slug} Connector",
+            connector_group,
+            token_key,
+            connectors,
+        )
+        connectors[token_key] = token
+        connectors.setdefault(
+            f"OPENCTI_CONNECTOR_{key_slug}_ID", str(__import__("uuid").uuid4())
+        )
+        feed_tokens.append(token)
+    all_tokens = {admin_token, worker, query, *feed_tokens}
+    if len(all_tokens) != 3 + len(feed_tokens):
+        fail("OpenCTI admin, worker, query, and connector tokens must be distinct")
     stack["OPENCTI_WORKER_TOKEN"] = worker
     stack["OPENCTI_QUERY_TOKEN"] = query
     stack["OPENCTI_IDENTITIES_PROVISIONED"] = "1"
     atomic_env(stack_path, stack, 0, 0)
+    atomic_env(connectors_path, connectors, 0, 0)
     import pwd
     account = pwd.getpwnam(os.environ.get("SIFT_GATEWAY_SERVICE_USER", "sift-service"))
     atomic_env(query_path, {"SIFT_OPENCTI_URL": "http://127.0.0.1:8080", "SIFT_OPENCTI_TOKEN": query}, account.pw_uid, account.pw_gid)
-    print("Distinct OpenCTI worker and query-only identities provisioned.")
+    print("Distinct OpenCTI worker, query-only, and public-feed identities provisioned.")
 
 
 if __name__ == "__main__":
