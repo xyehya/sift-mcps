@@ -9,6 +9,7 @@ from sift_core.execute.tools.discovery import (
     build_tool_inventory,
     check_tools,
     get_tool_help,
+    suggest_tools,
 )
 
 
@@ -165,6 +166,26 @@ def test_check_tools_keeps_executable_catalog_entries_available(monkeypatch):
 
     assert named_result["exiftool"]["available"] is True
     assert all_results["exiftool"]["available"] is True
+
+
+@pytest.mark.parametrize(
+    ("artifact_type", "tool_name"),
+    [("prefetch", "PECmd"), ("srum", "SrumECmd")],
+)
+def test_suggest_tools_does_not_advertise_windows_only_tools_as_linux_runnable(
+    monkeypatch, artifact_type, tool_name
+):
+    """Fail on reversion: suggestions must honor agent_executable too.
+
+    A binary probe is deliberately mocked as successful. The catalog remains
+    the authority for whether the Linux agent may execute it.
+    """
+    monkeypatch.setattr(discovery, "find_binary", lambda _binary: "/mock/bin/tool")
+
+    result = suggest_tools(artifact_type)
+    entry = next(item for item in result["suggestions"] if item["tool"] == tool_name)
+
+    assert entry["available"] is False
 
 
 def test_yara_help_does_not_claim_a_bundled_rules_inventory():

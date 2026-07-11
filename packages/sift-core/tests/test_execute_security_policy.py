@@ -69,6 +69,8 @@ def test_default_policy_is_allowlist_with_contained_unlisted_tier():
         "lua5.4",
         "busybox",
         "fish",
+        "PECmd",
+        "SrumECmd",
     ):
         assert matches_denied_binary(binary, denied)
 
@@ -105,6 +107,18 @@ def test_allowlist_mode_still_enforces_deny_floor():
     assert matches_allowed_binary("mkfs.ext4", allowed)
     assert matches_denied_binary("env", denied)
     assert matches_denied_binary("mkfs.ext4", denied)
+
+
+@pytest.mark.parametrize("binary", ["PECmd", "SrumECmd"])
+def test_windows_only_zimmerman_tools_cannot_be_reenabled_by_operator_allowlist(binary):
+    """Fail on reversion: catalog-disabled Windows tools have no Linux lane."""
+    policy = build_security_policy(
+        {"mode": "allowlist", "allowed_binaries": [binary]},
+        require_operator_policy=True,
+    )
+
+    assert matches_allowed_binary(binary, policy["allowed_binaries"])
+    assert matches_denied_binary(binary, policy["denied_binaries"])
 
 
 def test_allowlist_mode_without_operator_allowlist_uses_mvp_seed():
