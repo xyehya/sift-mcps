@@ -300,6 +300,8 @@ MVP_FORENSIC_ALLOWLIST = frozenset(
         "tree",
         "date",
         "echo",
+        "pwd",
+        "whoami",
         # Archives (read-only listing; mutating flags blocked per-tool)
         "tar",
         "unzip",
