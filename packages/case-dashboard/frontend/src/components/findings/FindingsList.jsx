@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Check, X } from 'lucide-react'
 
-import { cn } from '@/lib/utils'
+import { cn, parseTime } from '@/lib/utils'
 import { useStoreSlice } from '@/store/useStore'
 import { FilterBar } from '@/components/findings/FindingsFilterBar'
 import { Row, ActivePill } from '@/components/findings/FindingRow'
@@ -74,8 +74,8 @@ export function FindingsList({
   const sortedList = useMemo(() => {
     const arr = list.slice()
     return arr.sort((a, b) => {
-      const ta = new Date(a.modified_at || a.event_timestamp || 0).getTime()
-      const tb = new Date(b.modified_at || b.event_timestamp || 0).getTime()
+      const ta = parseTime(a.modified_at || a.event_timestamp || 0)
+      const tb = parseTime(b.modified_at || b.event_timestamp || 0)
       return sortFilter === 'oldest' ? ta - tb : tb - ta
     })
   }, [list, sortFilter])

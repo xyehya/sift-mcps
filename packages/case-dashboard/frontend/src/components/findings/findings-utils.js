@@ -1,5 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 // Findings — pure helpers + token-class maps (no JSX, no store). Kept in a
+import { parseTime } from '@/lib/utils'
+
 // .js module so the component files stay clean under react-refresh's
 // only-export-components rule, and so the filter/delta logic is unit-testable
 // in isolation. Ported from the old FindingsTab monolith (behavior preserved,
@@ -210,9 +212,9 @@ export function effectiveFinding(finding, stagedItem) {
 export function contextWindow(finding, timeline) {
   const rawTs = finding?.event_timestamp || finding?.timestamp
   if (!rawTs || !timeline?.length) return []
-  const ts = new Date(rawTs).getTime()
+  const ts = parseTime(rawTs)
   const TWO_H = 2 * 3600 * 1000
   return timeline
-    .filter((e) => Math.abs(new Date(e.timestamp).getTime() - ts) <= TWO_H)
-    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+    .filter((e) => Math.abs(parseTime(e.timestamp) - ts) <= TWO_H)
+    .sort((a, b) => parseTime(a.timestamp) - parseTime(b.timestamp))
 }

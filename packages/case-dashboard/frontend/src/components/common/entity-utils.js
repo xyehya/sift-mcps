@@ -1,5 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 // Entity helpers — pure logic + static token-class maps shared by the four
+import { parseTime } from '@/lib/utils'
+
 // entity tabs (Timeline · Hosts · Accounts · IOCs). No JSX, no store, so the
 // aggregation/sort/format logic is unit-testable and the .jsx files stay clean
 // under react-refresh's only-export-components rule.
@@ -191,7 +193,7 @@ export function filterTimeline(timeline, { types = new Set(), host = 'all', sear
     const q = search.toLowerCase()
     list = list.filter((e) => (e.description ?? '').toLowerCase().includes(q))
   }
-  return [...list].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+  return [...list].sort((a, b) => parseTime(a.timestamp) - parseTime(b.timestamp))
 }
 
 // ── Generic table sort (Hosts / Accounts / IOCs) ─────────────────────────
