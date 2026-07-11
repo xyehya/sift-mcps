@@ -71,8 +71,11 @@ _PATTERNS: list[_Pattern] = [
     _Pattern(
         "OpenAI API Key",
         re.compile(
-            r'sk-(?:[A-Za-z0-9]{20,}T3BlbkFJ[A-Za-z0-9]{20,}|'
-            r'(?:proj|svcacct)-[A-Za-z0-9_-]{20,})'
+            # Keys are tokens, not identifier substrings.  Require delimiters
+            # outside the complete value so a forensic identifier such as
+            # ``artifact_sk-proj-...`` does not become a false positive.
+            r'(?<![A-Za-z0-9_-])sk-(?:[A-Za-z0-9]{20,}T3BlbkFJ[A-Za-z0-9]{20,}|'
+            r'(?:proj|svcacct)-[A-Za-z0-9_-]{20,})(?![A-Za-z0-9_-])'
         ),
         "critical",
     ),
