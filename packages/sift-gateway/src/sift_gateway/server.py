@@ -161,6 +161,7 @@ def _record_mounted_proxy_warmup_result(
     mounted = getattr(gateway, "_mounted_proxy_backends", None) or set()
     tool_map = getattr(gateway, "_tool_map", None) or {}
     failures: dict[str, str] = {}
+    verified: set[str] = set()
     for backend_name in sorted(mounted):
         expected = {
             tool_name
@@ -178,7 +179,10 @@ def _record_mounted_proxy_warmup_result(
                 "Mounted proxy warm-up returned an incomplete tool surface; "
                 f"missing {len(missing)} declared tool(s)"
             )
+        else:
+            verified.add(backend_name)
     gateway._mounted_proxy_failures = failures
+    gateway._mounted_proxy_verified = verified
 
 
 def _sanitize_output_schema(tool: Tool) -> None:
@@ -248,6 +252,7 @@ class Gateway:
         # Sticky boot-time failures for mounted, on-demand FastMCP proxies.
         # A mounted manifest is not proof that its subprocess can start.
         self._mounted_proxy_failures: dict[str, str] = {}
+        self._mounted_proxy_verified: set[str] = set()
         self._fastmcp_server = None
         # D7: single atomic snapshot — tool_map + tool_cache + manifest_meta are
         # always swapped together so no concurrent reader can observe a new map

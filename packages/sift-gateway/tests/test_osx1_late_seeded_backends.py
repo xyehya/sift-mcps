@@ -113,6 +113,7 @@ def test_mounted_proxy_warmup_records_partial_surface_by_backend():
     gateway = SimpleNamespace(
         _mounted_proxy_backends={"opensearch-mcp", "windows-triage-mcp"},
         _mounted_proxy_failures={},
+        _mounted_proxy_verified=set(),
         _tool_map={
             "opensearch_search": "opensearch-mcp",
             "opensearch_health": "opensearch-mcp",
@@ -130,12 +131,14 @@ def test_mounted_proxy_warmup_records_partial_surface_by_backend():
             "missing 1 declared tool(s)"
         )
     }
+    assert gateway._mounted_proxy_verified == {"windows-triage-mcp"}
 
 
 def test_mounted_proxy_warmup_exception_fails_every_mounted_backend():
     gateway = SimpleNamespace(
         _mounted_proxy_backends={"opensearch-mcp", "windows-triage-mcp"},
         _mounted_proxy_failures={},
+        _mounted_proxy_verified=set(),
         _tool_map={
             "opensearch_search": "opensearch-mcp",
             "wintriage_search": "windows-triage-mcp",
@@ -152,6 +155,7 @@ def test_mounted_proxy_warmup_exception_fails_every_mounted_backend():
         "TimeoutError" in detail
         for detail in gateway._mounted_proxy_failures.values()
     )
+    assert gateway._mounted_proxy_verified == set()
 
 
 def test_reload_picks_up_late_seeded_backend_without_restart():
@@ -355,6 +359,7 @@ def test_list_backends_reports_proxy_mounted_addon_as_on_demand_not_stopped():
     # Proxy-mounted but NOT started: the OSX1 on-demand resting state.
     gateway.backends["opensearch-mcp"] = _FakeBackend(_MANIFEST, started=False)
     gateway._mounted_proxy_backends = {"opensearch-mcp"}
+    gateway._mounted_proxy_verified = {"opensearch-mcp"}
 
     item = _list_backends_item(gateway, _FakeRecord("opensearch-mcp", _MANIFEST))
 

@@ -136,6 +136,7 @@ async def test_health_endpoint_treats_mounted_idle_stdio_proxy_as_ready(tmp_path
     gateway = SimpleNamespace(
         backends={"opensearch-mcp": _StoppedBackend()},
         _mounted_proxy_backends={"opensearch-mcp"},
+        _mounted_proxy_verified={"opensearch-mcp"},
         _tool_map={"opensearch_search": "opensearch-mcp"},
         config={
             "auth": {"supabase": {"enabled": False}},
@@ -165,6 +166,7 @@ async def test_health_endpoint_persists_mounted_proxy_warmup_failure(tmp_path):
         _mounted_proxy_failures={
             "opensearch-mcp": "Mounted proxy warm-up returned an incomplete tool surface"
         },
+        _mounted_proxy_verified=set(),
         _tool_map={"opensearch_search": "opensearch-mcp"},
         config={
             "auth": {"supabase": {"enabled": False}},
@@ -183,6 +185,27 @@ async def test_health_endpoint_persists_mounted_proxy_warmup_failure(tmp_path):
         "mounted_proxy": True,
         "detail": "Mounted proxy warm-up returned an incomplete tool surface",
     }
+
+
+async def test_health_endpoint_fails_closed_for_unverified_mounted_proxy(tmp_path):
+    gateway = SimpleNamespace(
+        backends={"opensearch-mcp": _StoppedBackend()},
+        _mounted_proxy_backends={"opensearch-mcp"},
+        _mounted_proxy_failures={},
+        _mounted_proxy_verified=set(),
+        _tool_map={"opensearch_search": "opensearch-mcp"},
+        config={
+            "auth": {"supabase": {"enabled": False}},
+            "case": {"root": str(tmp_path)},
+        },
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(gateway=gateway)))
+
+    response = await health_endpoint(request)
+    payload = json.loads(response.body)
+
+    assert payload["status"] == "degraded"
+    assert payload["backends"]["opensearch-mcp"]["state"] == "startup_unverified"
 
 
 async def test_health_endpoint_keeps_unmounted_stopped_backend_degraded(tmp_path):

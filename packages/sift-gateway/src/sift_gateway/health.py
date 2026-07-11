@@ -35,9 +35,19 @@ def _operator_backend_health(gateway, name: str, result: dict) -> dict:
             "mounted_proxy": True,
             "detail": startup_failure,
         }
+    mounted = name in (getattr(gateway, "_mounted_proxy_backends", None) or set())
+    if mounted and name not in (
+        getattr(gateway, "_mounted_proxy_verified", None) or set()
+    ):
+        return {
+            "status": "error",
+            "state": "startup_unverified",
+            "mounted_proxy": True,
+            "detail": "Mounted proxy has not produced its complete declared tool surface",
+        }
     if (
         result.get("status") == "stopped"
-        and name in (getattr(gateway, "_mounted_proxy_backends", None) or set())
+        and mounted
     ):
         normalized = dict(result)
         normalized.update(
