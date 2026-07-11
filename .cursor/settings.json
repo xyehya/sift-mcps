@@ -1,11 +1,5 @@
 {
   "plugins": {
-    "project-codeguard/codeguard-security": {
-      "enabled": true
-    },
-    "supabase-agent-skills/postgres-best-practices": {
-      "enabled": true
-    },
     "supabase-agent-skills/supabase": {
       "enabled": true
     },

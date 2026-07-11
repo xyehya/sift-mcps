@@ -65,11 +65,13 @@ it before touching auth, the policy chain, backends, evidence/audit, or executio
 Prefer **repo** config over user-global installs. Canonical locations:
 
 - Cursor MCP / plugins: `.cursor/mcp.json`, `.cursor/settings.json`
-- Cursor rules / agents / skills: `.cursor/rules/`, `.cursor/agents/`, `.cursor/skills/`
+- Cursor rules / agents: `.cursor/rules/`, `.cursor/agents/`
+- Skills (Claude + Cursor): `.claude/skills/` → `.agents/skills/` (do not also mirror under `.cursor/skills/` — Cursor loads both and duplicates)
 - Claude / Codex / OpenCode MCP: `.mcp.json`, `.claude/settings.json`, `.codex/config.toml`, `opencode.json`
-- Matt Pocock skill bodies: `.agents/skills/` (local); symlinked from `.claude/skills/` and `.cursor/skills/`
 
-`codebase-memory-mcp` must be on `PATH` (e.g. `~/.local/bin`). Do not register it in `~/.cursor/mcp.json` for this project.
+CodeGuard is vendored as `.cursor/rules/codeguard-*.mdc` + `.cursor/agents/codeguard-reviewer.md` — do not also enable the CodeGuard marketplace plugin in this project.
+
+`codebase-memory-mcp` must be on `PATH` (e.g. `~/.local/bin`). Keep `~/.cursor/mcp.json` empty for this machine so the project `.cursor/mcp.json` owns it.
 
 ## Code Discovery
 
