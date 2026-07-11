@@ -145,6 +145,42 @@ _RETIRED_CORE_BACKENDS = frozenset(
 )
 
 
+def _record_mounted_proxy_warmup_result(
+    gateway,
+    actual_tools: set[str],
+    *,
+    error: BaseException | None = None,
+) -> None:
+    """Persist fail-closed boot health for every mounted add-on proxy.
+
+    FastMCP may log a provider failure and return a partial tools list instead
+    of raising.  Therefore a successful await is not enough: each mounted
+    backend must contribute every tool already declared in the gateway's
+    validated manifest-backed tool map.
+    """
+    mounted = getattr(gateway, "_mounted_proxy_backends", None) or set()
+    tool_map = getattr(gateway, "_tool_map", None) or {}
+    failures: dict[str, str] = {}
+    for backend_name in sorted(mounted):
+        expected = {
+            tool_name
+            for tool_name, owner in tool_map.items()
+            if owner == backend_name
+        }
+        missing = expected - actual_tools
+        if error is not None:
+            failures[backend_name] = (
+                "Mounted proxy warm-up failed before its tool surface was verified "
+                f"({type(error).__name__})"
+            )
+        elif missing:
+            failures[backend_name] = (
+                "Mounted proxy warm-up returned an incomplete tool surface; "
+                f"missing {len(missing)} declared tool(s)"
+            )
+    gateway._mounted_proxy_failures = failures
+
+
 def _sanitize_output_schema(tool: Tool) -> None:
     """B-MVP-038 gateway defense: repair/strip any aggregated tool's invalid
     ``outputSchema`` before it is advertised.
@@ -209,6 +245,9 @@ class Gateway:
         # reload (reload_backend_registry) mounts a newly-appeared backend exactly
         # once without a full gateway restart.
         self._mounted_proxy_backends: set[str] = set()
+        # Sticky boot-time failures for mounted, on-demand FastMCP proxies.
+        # A mounted manifest is not proof that its subprocess can start.
+        self._mounted_proxy_failures: dict[str, str] = {}
         self._fastmcp_server = None
         # D7: single atomic snapshot — tool_map + tool_cache + manifest_meta are
         # always swapped together so no concurrent reader can observe a new map
@@ -1439,14 +1478,19 @@ class Gateway:
             # the add-on tools drop and tools/list times out (LV1). Warming the
             # aggregate here (with keep_alive=True keeping the subprocess hot)
             # makes the full core+add-on catalog complete and instant from the
-            # first reconnect. Best-effort: never fail startup on a slow/absent
-            # backend — the 30s late-start checker + per-call lazy start remain.
+            # first reconnect.  Persist any exception OR partial tool surface in
+            # health: a mounted manifest is not runtime readiness, and the
+            # installer must fail closed rather than bless a partial install.
             try:
-                await asyncio.wait_for(
+                warmed_tools = await asyncio.wait_for(
                     gateway_mcp.list_tools(run_middleware=False), timeout=90.0
                 )
-            except Exception as exc:  # pragma: no cover - best-effort warm
-                logger.warning("pre-serve add-on proxy warm-up incomplete: %s", exc)
+                _record_mounted_proxy_warmup_result(
+                    gateway, {tool.name for tool in warmed_tools}
+                )
+            except Exception as exc:  # pragma: no cover - defensive transport path
+                _record_mounted_proxy_warmup_result(gateway, set(), error=exc)
+                logger.error("pre-serve add-on proxy warm-up failed: %s", exc)
             reaper_task = None
             if gateway.idle_timeout > 0:
                 reaper_task = asyncio.create_task(gateway._idle_reaper())

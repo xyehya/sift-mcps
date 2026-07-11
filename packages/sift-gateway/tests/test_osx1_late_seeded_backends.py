@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 from fastmcp import FastMCP
 from mcp.types import Tool
@@ -27,7 +28,7 @@ from sift_gateway.mcp_server import (
     expected_mounted_tool_names,
     mount_single_addon_proxy,
 )
-from sift_gateway.server import Gateway
+from sift_gateway.server import Gateway, _record_mounted_proxy_warmup_result
 
 
 def _execute_security() -> dict:
@@ -106,6 +107,51 @@ class _FakeRegistry:
 
 def _make_gateway() -> Gateway:
     return Gateway({"backends": {}, **_execute_security()})
+
+
+def test_mounted_proxy_warmup_records_partial_surface_by_backend():
+    gateway = SimpleNamespace(
+        _mounted_proxy_backends={"opensearch-mcp", "windows-triage-mcp"},
+        _mounted_proxy_failures={},
+        _tool_map={
+            "opensearch_search": "opensearch-mcp",
+            "opensearch_health": "opensearch-mcp",
+            "wintriage_search": "windows-triage-mcp",
+        },
+    )
+
+    _record_mounted_proxy_warmup_result(
+        gateway, {"opensearch_search", "wintriage_search"}
+    )
+
+    assert gateway._mounted_proxy_failures == {
+        "opensearch-mcp": (
+            "Mounted proxy warm-up returned an incomplete tool surface; "
+            "missing 1 declared tool(s)"
+        )
+    }
+
+
+def test_mounted_proxy_warmup_exception_fails_every_mounted_backend():
+    gateway = SimpleNamespace(
+        _mounted_proxy_backends={"opensearch-mcp", "windows-triage-mcp"},
+        _mounted_proxy_failures={},
+        _tool_map={
+            "opensearch_search": "opensearch-mcp",
+            "wintriage_search": "windows-triage-mcp",
+        },
+    )
+
+    _record_mounted_proxy_warmup_result(gateway, set(), error=TimeoutError())
+
+    assert set(gateway._mounted_proxy_failures) == {
+        "opensearch-mcp",
+        "windows-triage-mcp",
+    }
+    assert all(
+        "TimeoutError" in detail
+        for detail in gateway._mounted_proxy_failures.values()
+    )
 
 
 def test_reload_picks_up_late_seeded_backend_without_restart():

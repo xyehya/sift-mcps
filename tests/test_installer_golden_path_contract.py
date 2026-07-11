@@ -150,6 +150,7 @@ def test_secure_os_hardening_is_default_and_service_scoped() -> None:
     assert "/var/lib/sift/.sift/opensearch.yaml       r," in gateway_profile
     assert "/var/lib/sift/.sift/opensearch-root-ca.pem r," in gateway_profile
     addon_profile = gateway_profile.split("profile sift-addon {", 1)[1]
+    assert "/etc/mime.types                            r," in addon_profile
     assert "/var/lib/sift/.sift/tls/" not in addon_profile
     for secret_file in (
         "control-plane.env",

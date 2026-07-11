@@ -25,6 +25,16 @@ _SUPABASE_PROBE_TIMEOUT = 5.0
 
 def _operator_backend_health(gateway, name: str, result: dict) -> dict:
     """Translate backend-internal lifecycle state into operator health state."""
+    startup_failure = (
+        getattr(gateway, "_mounted_proxy_failures", None) or {}
+    ).get(name)
+    if startup_failure:
+        return {
+            "status": "error",
+            "state": "startup_failed",
+            "mounted_proxy": True,
+            "detail": startup_failure,
+        }
     if (
         result.get("status") == "stopped"
         and name in (getattr(gateway, "_mounted_proxy_backends", None) or set())

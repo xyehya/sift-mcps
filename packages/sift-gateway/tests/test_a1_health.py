@@ -157,6 +157,34 @@ async def test_health_endpoint_treats_mounted_idle_stdio_proxy_as_ready(tmp_path
     }
 
 
+async def test_health_endpoint_persists_mounted_proxy_warmup_failure(tmp_path):
+    """A mounted manifest must not hide a subprocess that failed pre-warm."""
+    gateway = SimpleNamespace(
+        backends={"opensearch-mcp": _StoppedBackend()},
+        _mounted_proxy_backends={"opensearch-mcp"},
+        _mounted_proxy_failures={
+            "opensearch-mcp": "Mounted proxy warm-up returned an incomplete tool surface"
+        },
+        _tool_map={"opensearch_search": "opensearch-mcp"},
+        config={
+            "auth": {"supabase": {"enabled": False}},
+            "case": {"root": str(tmp_path)},
+        },
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(gateway=gateway)))
+
+    response = await health_endpoint(request)
+    payload = json.loads(response.body)
+
+    assert payload["status"] == "degraded"
+    assert payload["backends"]["opensearch-mcp"] == {
+        "status": "error",
+        "state": "startup_failed",
+        "mounted_proxy": True,
+        "detail": "Mounted proxy warm-up returned an incomplete tool surface",
+    }
+
+
 async def test_health_endpoint_keeps_unmounted_stopped_backend_degraded(tmp_path):
     gateway = SimpleNamespace(
         backends={"opensearch-mcp": _StoppedBackend()},

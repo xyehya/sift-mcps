@@ -179,6 +179,11 @@ profile sift-addon {
   /opt/sift-mcps/**                         rix,
   /opt/sift-mcps/.venv/lib/**               mr,
 
+  # Python's stdlib mimetypes initialization reads this during FastMCP import.
+  # Grant only the single public, immutable system database; never broaden this
+  # to /etc/** because add-ons are outside the gateway policy boundary.
+  /etc/mime.types                            r,
+
   /var/lib/sift/.sift/opensearch.yaml       r,
   /var/lib/sift/.sift/opensearch-root-ca.pem r,
   /var/lib/sift/windows-triage/              r,
