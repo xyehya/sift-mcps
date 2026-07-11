@@ -105,18 +105,24 @@ since all three point at the identical local binary + DB.
 
 - **Index first**, then read the ADR at session start before touching gateway /
   security / execution code: `manage_adr(project="Users-yk-AI-sift-mcps", mode="get")`.
-  If `manage_adr` is missing from the MCP tool surface, report that once and continue
-  from the canonical repo docs and source.
+  Committed mirror (also the bootstrap source): `.codebase-memory/adr.md`.
+  If `manage_adr` is missing from the MCP tool surface, read that file (or CLI
+  `codebase-memory-mcp cli manage_adr --project Users-yk-AI-sift-mcps --mode get`)
+  and continue — do not crawl the monorepo first.
 - **Update it, don't let it rot**: when a PATTERNS/TRADEOFFS entry changes (policy-chain
   stage count, seccomp/AppArmor default posture, an add-on drift gets resolved, etc.),
-  re-run `manage_adr(mode="update", content=...)` with the revised section. A stale
-  ADR is worse than none — agents will trust it.
+  edit `.codebase-memory/adr.md` and re-run
+  `manage_adr(mode="update", content=<full six-section markdown>)` (or CLI
+  `--args-file`). Keep both in sync. A stale ADR is worse than none — agents will trust it.
 - **Targeted access**: `mode="sections"` reads/writes one named section instead of the
-  whole document.
-- Source material for the ADR content: `docs/drafts/architecture/sift-architecture-SPEC.md`
-  + `docs/drafts/architecture/sift-architecture.html` (C4 + STRIDE viewpoints), reconciled
-  against live `get_architecture()` graph output — code wins on conflict, flag the drift
-  (same rule as the Security model section above).
+  whole document. Official format requires exactly six `##` headers: PURPOSE, STACK,
+  ARCHITECTURE, PATTERNS, TRADEOFFS, PHILOSOPHY (≤ ~8000 chars). This is the project
+  brain for codebase-memory-mcp — distinct from per-decision notes in `docs/adr/`.
+- Source material for the ADR content (prefer in this order, code wins on conflict):
+  `docs/drafts/architecture/sift-architecture.html` (VP-1..VP-5 visual SoT) →
+  `docs/architecture/SIFT-GATEWAY-SECURITY-MODEL.md` (text twin) → `docs/latest/` →
+  `docs/new-docs/DEVELOPER_ENTRYPOINT.md` → other `docs/drafts/architecture/` → live
+  `get_architecture()` graph output. Flag drift.
 
 ## Spawned agents & agent teams — required loadout
 
