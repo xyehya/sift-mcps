@@ -13,6 +13,9 @@
 # OPENCTI_OPENSEARCH_CA, OPENCTI_OPENSEARCH_USER, and
 # OPENCTI_OPENSEARCH_PASSWORD.
 
+# Stable project identity makes provisioning idempotent regardless of cwd.
+name: sift-opencti-shared
+
 services:
   opencti:
     image: "${OPENCTI_PLATFORM_IMAGE:-opencti/platform@sha256:9cbf5b159faeea7eadd33f1643abf96d4d27f8659bc68a15c148085dc4cc77f1}"

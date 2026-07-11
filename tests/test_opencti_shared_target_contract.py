@@ -20,6 +20,7 @@ GATEWAY_UNIT = REPO_ROOT / "configs" / "systemd" / "sift-gateway.service"
 
 def test_shared_compose_has_no_dedicated_search_and_keeps_tls_prefix_boundary() -> None:
     source = SHARED_COMPOSE.read_text(encoding="utf-8")
+    assert "name: sift-opencti-shared" in source
     assert "opencti-opensearch" not in source
     assert "ELASTICSEARCH__ENGINE_SELECTOR=opensearch" in source
     assert "ELASTICSEARCH__ENGINE_CHECK=true" in source
