@@ -141,7 +141,7 @@ profile sift-gateway flags=(attach_disconnected) {
   /home/*/.local/share/uv/python/**/bin/**   rix,
   /home/*/.local/bin/uv                      rix,
   /usr/bin/python3*                          rix,
-  /usr/local/sbin/sift-run-command-systemd-scope rix,
+  /usr/local/sbin/sift-run-command-systemd-scope px -> sift-run-command-scope,
   /usr/local/sbin/sift-addon-systemd-sandbox px -> sift-addon-broker,
   /usr/local/sbin/sift-addon-stdio-relay        rix,
   /run/sift-addon-client/                       rw,
@@ -217,6 +217,61 @@ profile sift-gateway flags=(attach_disconnected) {
   deny /usr/bin/bash                         x,
   deny /usr/bin/sh                           x,
   deny /bin/dash                             x,
+}
+
+
+# Privileged run_command scope broker: entered only after command-specific
+# sudoers authenticates the exact root-owned helper path. Needs a shell to
+# validate scope flags, then execs systemd-run. Cannot read gateway secrets.
+profile sift-run-command-scope flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  # systemd-run --uid/--gid requires these after sudo has already elevated.
+  capability setuid,
+  capability setgid,
+  capability sys_admin,
+  capability audit_write,
+
+  /usr/local/sbin/sift-run-command-systemd-scope r,
+  /usr/bin/env                               rix,
+  /bin/bash                                  rix,
+  /usr/bin/bash                              rix,
+  /bin/sh                                    rix,
+  /usr/bin/sh                                rix,
+  /usr/bin/id                                rix,
+  /usr/bin/basename                          rix,
+  /usr/bin/dirname                           rix,
+  /usr/bin/systemd-run                       rix,
+  /usr/bin/systemctl                         rix,
+  /bin/basename                              rix,
+  /usr/bin/coreutils                         rix,
+
+  # Worker python absolute path under the install tree.
+  /opt/sift-mcps/.venv/bin/python            rix,
+  /opt/sift-mcps/.venv/bin/python3*          rix,
+  /opt/sift-mcps/.venv/bin/**                rix,
+  /opt/sift-mcps/.venv/lib/**                mr,
+  /opt/sift-mcps/                            r,
+  /opt/sift-mcps/**                          r,
+
+  /run/systemd/private                       rw,
+  /run/dbus/system_bus_socket                rw,
+  /proc/@{pid}/attr/current                  r,
+  /proc/@{pid}/fd/                           r,
+  /proc/@{pid}/fd/**                         rw,
+
+  signal (receive) peer=sift-gateway,
+  network unix,
+  dbus (send, receive) bus=system,
+
+  deny network inet,
+  deny network inet6,
+  deny network raw,
+  deny mount,
+  deny remount,
+  deny umount,
+  deny ptrace,
 }
 
 # Privileged broker domain: entered only after command-specific sudoers has
