@@ -90,7 +90,7 @@ class Config:
         """Set defaults and validate configuration after creation."""
         # Set default paths if not provided
         if self.data_dir is None:
-            self.data_dir = Path("/var/lib/sift/windows-triage")
+            self.data_dir = Path("/var/cache/sift/windows-triage")
         if self.known_good_db is None:
             self.known_good_db = self.data_dir / "known_good.db"
         if self.context_db is None:

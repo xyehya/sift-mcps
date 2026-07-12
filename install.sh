@@ -126,14 +126,13 @@ main() {
         printf '                       fetches from a live endpoint). Equivalent to SIFT_GEOIP_ENABLED=1.\n'
         printf '  --apparmor-enforce   Explicitly select the default ENFORCE posture.\n'
         printf '  --apparmor-complain  DEVELOPMENT ONLY: load profiles without enforcement.\n'
-        printf '  --uninstall          Reverse the SOFTWARE install: delegates to scripts/uninstall.sh\n'
-        printf '                       to stop/remove the systemd service + service users, venv,\n'
-        printf '                       ~/.sift (config/TLS/secrets), and auditd + AppArmor configs.\n'
-        printf '                       PRESERVES all data: /var/lib/sift state, docker volumes, and\n'
-        printf '                       /cases EVIDENCE are never touched. Dry-run unless -y is given.\n'
-        printf '                       To remove forensic STATE/docker data, run scripts/uninstall.sh\n'
-        printf '                       directly with non-evidence components. EVIDENCE can only be\n'
-        printf '                       removed via the gated scripts/uninstall.sh evidence path.\n'
+        printf '  --uninstall          Reverse the SOFTWARE + stack install: delegates to\n'
+        printf '                       scripts/uninstall.sh for a greenfield wipe (services,\n'
+        printf '                       Docker volumes, /var/lib/sift state, /opt runtime).\n'
+        printf '                       PRESERVES /cases evidence (pass --data only on\n'
+        printf '                       scripts/uninstall.sh directly). Dry-run unless -y.\n'
+        printf '                       Optional: SIFT_KEEP_CACHES=1 to keep /var/cache/sift\n'
+        printf '                       (uv/HF/wintriage) + Docker images for fast reinstall.\n'
         printf '  -y, --yes            Proceed non-interactively (otherwise --uninstall is a dry-run).\n'
         exit 0
         ;;
@@ -189,6 +188,10 @@ main() {
   export SIFT_OFFLINE SIFT_GEOIP_ENABLED SIFT_HF_HOME
   export SIFT_UV_VERSION SIFT_UV_TARBALL_SHA256 SIFT_HAYABUSA_TAG SIFT_HAYABUSA_SHA256
   export SIFT_RAG_MODEL_NAME SIFT_RAG_MODEL_REVISION
+  export UV_CACHE_DIR="${UV_CACHE_DIR:-$SIFT_UV_CACHE_DIR}"
+  export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$SIFT_PIP_CACHE_DIR}"
+  export SIFT_CACHE_ROOT SIFT_UV_CACHE_DIR SIFT_PIP_CACHE_DIR
+  export SIFT_WINDOWS_TRIAGE_DATA_DIR SIFT_HAYABUSA_CACHE_DIR
   if is_offline; then
     log "OFFLINE MODE (SIFT_OFFLINE=1): no network downloads will be attempted; staged artifacts required."
   fi

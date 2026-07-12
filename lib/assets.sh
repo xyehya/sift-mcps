@@ -49,9 +49,33 @@ install_hayabusa() {
   # invokes the system-wide /usr/local/bin/hayabusa symlink) can execute them.
   local binary_dir="$SIFT_HOME/bin"
   local rules_dir="$SIFT_HOME/hayabusa-rules"
+  local cache_bin="${SIFT_HAYABUSA_CACHE_DIR}/bin/hayabusa"
+  local cache_rules="${SIFT_HAYABUSA_CACHE_DIR}/rules"
 
   if sudo_if_needed test -x "$binary_dir/hayabusa"; then
     log "hayabusa already installed (preserving $binary_dir/hayabusa)."
+    return
+  fi
+
+  # Prefer the durable regenerable cache (survives --keep-caches greenfield wipe)
+  # before any network download.
+  if sudo_if_needed test -x "$cache_bin"; then
+    log "Restoring hayabusa from durable cache: $cache_bin"
+    sudo_if_needed install -d -m 755 -o "$SIFT_GATEWAY_SERVICE_USER" -g "$SIFT_GATEWAY_SERVICE_USER" "$binary_dir"
+    local tmp_hay
+    tmp_hay="$(mktemp)"
+    sudo_if_needed cp "$cache_bin" "$tmp_hay"
+    svc_install_file "$tmp_hay" "$binary_dir/hayabusa" 755
+    rm -f "$tmp_hay"
+    if sudo_if_needed test -d "$cache_rules" && \
+       [[ -n "$(sudo_if_needed find "$cache_rules" -name '*.yml' -print -quit 2>/dev/null)" ]]; then
+      sudo_if_needed rm -rf "$rules_dir"
+      sudo_if_needed cp -a "$cache_rules" "$rules_dir"
+      sudo_if_needed chown -R "$SIFT_GATEWAY_SERVICE_USER:$SIFT_GATEWAY_SERVICE_USER" "$rules_dir"
+      HAYABUSA_RULES_COUNT="$(sudo_if_needed find "$rules_dir" -name '*.yml' | wc -l | tr -d ' ')"
+      log "hayabusa rules restored from cache: ${HAYABUSA_RULES_COUNT} YAML files"
+    fi
+    log "hayabusa installed from cache: $(sudo_if_needed "$binary_dir/hayabusa" help 2>&1 | head -1)"
     return
   fi
 
@@ -67,7 +91,7 @@ install_hayabusa() {
   if is_offline; then
     warn "SIFT_OFFLINE=1: skipping hayabusa download. Detection will be unavailable until staged."
     warn "  Stage offline: place the hayabusa binary at $binary_dir/hayabusa (and rules at $rules_dir),"
-    warn "  or pre-download $asset and extract it there, then re-run ./install.sh."
+    warn "  or pre-stage $cache_bin (+ $cache_rules), then re-run ./install.sh."
     return
   fi
 
@@ -121,6 +145,17 @@ install_hayabusa() {
     log "hayabusa rules installed: ${HAYABUSA_RULES_COUNT} YAML files"
   else
     warn "Bundled rules not found in release archive."
+  fi
+
+  # Best-effort mirror into the durable cache for --keep-caches reinstall loops.
+  if sudo_if_needed test -x "$binary_dir/hayabusa"; then
+    sudo_if_needed install -d -m 755 -o "$SIFT_GATEWAY_SERVICE_USER" -g "$SIFT_GATEWAY_SERVICE_USER" \
+      "$SIFT_HAYABUSA_CACHE_DIR/bin" "$SIFT_HAYABUSA_CACHE_DIR/rules"
+    sudo_if_needed cp -a "$binary_dir/hayabusa" "$cache_bin" 2>/dev/null || true
+    if sudo_if_needed test -d "$rules_dir"; then
+      sudo_if_needed rm -rf "$cache_rules"
+      sudo_if_needed cp -a "$rules_dir" "$cache_rules" 2>/dev/null || true
+    fi
   fi
   rm -rf "$tmpd"
 }

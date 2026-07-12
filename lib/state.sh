@@ -98,13 +98,28 @@ install_state_dirs() {
   sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_ENRICHMENT_DIR"
   sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_CASE_ROOT"
 
-  # B-MVP-015 / B-MVP-004 (D3): explicit Hugging Face cache under the service
-  # home so the BGE embedding weights live with the service that uses them
-  # (gateway/worker run as sift-service and read HF_HOME from their unit env),
-  # not in the operator's home. 0755 so the seed (run by the operator via uv)
-  # and the running service can both reach it; weights are public, not secret.
-  sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$(dirname "$SIFT_HF_HOME")"
+  # Durable regenerable caches under /var/cache/sift (survive greenfield wipe
+  # only when the operator passes --keep-caches). Public weights/baselines —
+  # not secrets. 0755 so the operator seed (uv) and sift-service can both reach them.
+  sudo_if_needed install -d -m 0755 "$SIFT_CACHE_ROOT"
+  # uv/pip caches: operator-writable (sync runs as the installing user).
+  local cache_owner cache_group
+  cache_owner="$(user_name)"
+  cache_group="$(group_name)"
+  sudo_if_needed install -d -m 755 -o "$cache_owner" -g "$cache_group" "$SIFT_UV_CACHE_DIR"
+  sudo_if_needed install -d -m 755 -o "$cache_owner" -g "$cache_group" "$SIFT_PIP_CACHE_DIR"
   sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_HF_HOME"
+  sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_WINDOWS_TRIAGE_DATA_DIR"
+  sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_HAYABUSA_CACHE_DIR"
+  sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_HAYABUSA_CACHE_DIR/bin"
+  sudo_if_needed install -d -m 755 -o "$svc" -g "$svc" "$SIFT_HAYABUSA_CACHE_DIR/rules"
+
+  # One-shot migration from pre-durable-cache layouts so reinstall does not
+  # leave multi-GB artifacts stranded under /var/lib/sift (which greenfield
+  # uninstall always purges).
+  _migrate_legacy_cache_tree "$SIFT_HF_HOME_LEGACY" "$SIFT_HF_HOME" "Hugging Face model cache"
+  _migrate_legacy_cache_tree "$SIFT_WINDOWS_TRIAGE_DATA_DIR_LEGACY" "$SIFT_WINDOWS_TRIAGE_DATA_DIR" \
+    "Windows-triage baseline DBs"
 
   # SIFT_HOME (secrets + gateway.yaml + TLS + backups): 0700 owned sift-service.
   # NOT group `sift` — secrets must NOT be readable by agent_runtime.
@@ -118,10 +133,44 @@ install_state_dirs() {
   # agent_runtime inherit the group and can share PDB symbols. The group-write
   # default ACL (so cached files are group-writable, not just group-readable) is
   # asserted in join_shared_symbol_group, after configure_agent_runtime ensures acl.
-  sudo_if_needed install -d -m 0755 "$(dirname "$SIFT_VOL_SYMBOLS")"
   sudo_if_needed install -d -m 2775 -o "$svc" -g "$SIFT_GATEWAY_SERVICE_GROUP" "$SIFT_VOL_SYMBOLS"
   # Re-assert setgid bit (install -m may be masked by umask on some coreutils).
   sudo_if_needed chmod 2775 "$SIFT_VOL_SYMBOLS"
+}
+
+# Move a legacy regenerable cache tree into the durable /var/cache/sift path.
+# Idempotent: no-op when the source is absent, empty, or already the destination.
+_migrate_legacy_cache_tree() {
+  local src="$1" dst="$2" label="$3"
+  [[ -n "$src" && -n "$dst" ]] || return 0
+  if ! sudo_if_needed test -d "$src" 2>/dev/null; then
+    return 0
+  fi
+  if [[ "$(cd "$src" 2>/dev/null && pwd -P)" == "$(cd "$dst" 2>/dev/null && pwd -P)" ]]; then
+    return 0
+  fi
+  if [[ -z "$(sudo_if_needed find "$src" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    sudo_if_needed rmdir --ignore-fail-on-non-empty "$src" 2>/dev/null || true
+    return 0
+  fi
+  log "Migrating $label: $src -> $dst"
+  sudo_if_needed install -d -m 755 -o "$SIFT_GATEWAY_SERVICE_USER" -g "$SIFT_GATEWAY_SERVICE_USER" "$dst"
+  # Prefer rename (same FS); fall back to copy then remove empty source dirs only
+  # (never delete non-empty leftovers blindly).
+  if sudo_if_needed mv "$src"/* "$dst"/ 2>/dev/null; then
+    sudo_if_needed rmdir --ignore-fail-on-non-empty "$src" 2>/dev/null || true
+    # Also drop empty parent .cache under state if it is now empty.
+    local parent
+    parent="$(dirname "$src")"
+    if [[ "$(basename "$parent")" == ".cache" ]]; then
+      sudo_if_needed rmdir --ignore-fail-on-non-empty "$parent" 2>/dev/null || true
+    fi
+  elif sudo_if_needed cp -a "$src/." "$dst/"; then
+    warn "Copied $label to $dst; remove the legacy tree $src after verifying."
+  else
+    warn "Could not migrate $label from $src — install continues with $dst."
+  fi
+  sudo_if_needed chown -R "$SIFT_GATEWAY_SERVICE_USER:$SIFT_GATEWAY_SERVICE_USER" "$dst" 2>/dev/null || true
 }
 
 ensure_gateway_service_user() {

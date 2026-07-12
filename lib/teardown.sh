@@ -24,6 +24,8 @@ print_summary() {
   printf 'Config:       %s\n' "$SIFT_CONFIG"
   printf 'Secrets:      %s   (read with: sudo cat)\n' "$MATERIALS_FILE"
   printf 'Evidence root: %s\n' "$SIFT_CASES_ROOT"
+  printf 'Durable cache: %s (uv/HF/wintriage; survives uninstall --keep-caches)\n' \
+    "${SIFT_CACHE_ROOT:-/var/cache/sift}"
   printf '\n'
 
   # Supabase provisioning mode.
@@ -97,30 +99,19 @@ print_summary() {
 }
 
 # =============================================================================
-# Uninstall — DELEGATED to scripts/uninstall.sh (the single, gated teardown)
+# Uninstall — DELEGATED to scripts/uninstall.sh (the single greenfield teardown)
 # =============================================================================
 #
-#   ./install.sh --uninstall   # tear down the SIFT software install
+#   ./install.sh --uninstall   # tear down the SIFT stack (greenfield, no --data)
 #
 # D5 / immutability boundary #2 (#16): the INSTALLER MUST HAVE NO CODE PATH THAT
 # CAN DELETE CASE EVIDENCE. There is therefore no inline purge here and no
 # data-purge flag on install.sh. `./install.sh --uninstall` is a thin shim that
-# runs the canonical, multi-gated uninstaller `scripts/uninstall.sh`, which:
-#   * NEVER touches /cases (evidence) unless an operator runs IT directly with the
-#     two explicit evidence-removal gate flags AND --yes AND types
-#     "DELETE EVIDENCE" at its prompt; and
-#   * preserves the evidence root even when its own state-purge runs (it actively
-#     guards the cases root / any ancestor).
-# This shim deliberately NEVER passes those evidence-removal gate flags through:
-# evidence teardown is only ever reachable by invoking scripts/uninstall.sh directly.
-#
-# Scope of the delegated software teardown (no data loss): systemd units + service
-# users, the staged runtime + venv + SIFT_HOME (config/TLS/secrets/hayabusa), and
-# the system-hardening drop-ins (auditd rules, AppArmor profile). Forensic STATE
-# under /var/lib/sift, docker data volumes, and EVIDENCE under /cases are preserved.
-# To remove those, run scripts/uninstall.sh directly with the appropriate
-# (non-evidence) components — e.g. `scripts/uninstall.sh --components state,cache,
-# opensearch,supabase --yes --i-understand`.
+# runs the canonical uninstaller `scripts/uninstall.sh`, which:
+#   * NEVER touches /cases unless an operator runs IT directly with --data AND
+#     --i-understand-evidence-loss AND --yes (plus typed confirm on a TTY); and
+#   * optionally preserves durable regenerable caches via --keep-caches.
+# This shim deliberately NEVER passes --data / evidence-loss flags through.
 
 do_uninstall() {
   local uninstaller="$REPO_DIR/scripts/uninstall.sh"
@@ -132,42 +123,41 @@ do_uninstall() {
     fi
   else
     # shellcheck disable=SC2128  # false positive: in THIS (mutually-exclusive)
-    # branch $uninstaller is still the string path from line 126, not an array.
+    # branch $uninstaller is still the string path from line above, not an array.
     uninstaller=("$uninstaller")
   fi
 
-  log "Uninstalling sift-mcps (software only — evidence under /cases is never touched here)."
-  log "Delegating to the canonical, evidence-gated uninstaller: scripts/uninstall.sh"
+  log "Uninstalling sift-mcps (greenfield stack wipe — evidence under /cases is never touched here)."
+  log "Delegating to the canonical uninstaller: scripts/uninstall.sh"
 
-  # Software-only teardown that preserves DATA (state, docker volumes) and EVIDENCE:
-  #   systemd  — sift-gateway/sift-job-worker units + service users
-  #   runtime  — staged tree, .venv, SIFT_HOME (config/TLS/secrets/hayabusa)
-  #   auditd   — /etc/audit/rules.d/99-sift-evidence.rules
-  #   apparmor — /etc/apparmor.d/sift-gateway
-  #   tls      — TLS/CA material under SIFT_HOME/tls
-  # NEVER: state, cache, opensearch, supabase, opencti (data) — and NEVER evidence.
-  # --i-understand is required because these tear down the running platform; we add
-  # it here (this shim is itself the explicit `--uninstall` intent). We never add
-  # the evidence-removal gate flags, so evidence stays off-limits by construction.
-  # shellcheck disable=SC2054  # the commas form a single --components VALUE (a
-  # comma-separated component list), not array-element separators.
-  local args=(--components systemd,runtime,auditd,apparmor,tls --i-understand)
+  # Greenfield stack teardown. Evidence stays off-limits by construction
+  # (we never forward --data). --i-understand is required because this tears
+  # down the running platform; we add it here (this shim is itself the
+  # explicit `--uninstall` intent).
+  local args=(--i-understand)
   if [[ "${ASSUME_YES:-0}" == "1" ]]; then
     args+=(--yes)
   else
     log "Running in DRY-RUN mode (scripts/uninstall.sh default). Re-run with -y/--yes to actually remove."
+  fi
+  if [[ "${SIFT_KEEP_CACHES:-0}" == "1" ]]; then
+    args+=(--keep-caches)
+    log "SIFT_KEEP_CACHES=1: durable /var/cache/sift + Docker images will be preserved."
   fi
 
   "${uninstaller[@]}" "${args[@]}"
 
   log "Uninstall delegation complete."
   printf '\n'
-  printf 'Preserved (never removed by ./install.sh --uninstall):\n'
-  printf '  State:    %s   (integrity records, tokens, passwords, snapshots)\n' "$SIFT_STATE_DIR"
-  printf '  Evidence: %s   (immutable; only the gated scripts/uninstall.sh evidence path can ever touch it)\n' "$SIFT_CASE_ROOT"
-  printf '  Docker volumes (if any) left intact.\n'
-  printf 'To remove forensic STATE or docker data too, run scripts/uninstall.sh directly\n'
-  printf 'with non-evidence components, e.g.:\n'
-  printf '  scripts/uninstall.sh --components state,cache,opensearch,supabase --yes --i-understand\n'
+  printf 'Preserved by ./install.sh --uninstall:\n'
+  printf '  Evidence: %s   (only scripts/uninstall.sh --data can purge personalized cases)\n' "$SIFT_CASE_ROOT"
+  if [[ "${SIFT_KEEP_CACHES:-0}" == "1" ]]; then
+    printf '  Caches:   %s (uv/HF/wintriage/hayabusa) + Docker images\n' \
+      "${SIFT_CACHE_ROOT:-/var/cache/sift}"
+  fi
   printf 'The repo checkout itself was left in place. Reinstall with: ./install.sh\n'
+  printf 'Personalized evidence wipe (gated):\n'
+  printf '  scripts/uninstall.sh --yes --i-understand --data --i-understand-evidence-loss\n'
+  printf 'Fast reinstall loop (keep bandwidth caches):\n'
+  printf '  scripts/uninstall.sh --yes --i-understand --keep-caches\n'
 }

@@ -125,6 +125,17 @@ sync_workspace() {
   export UV_PYTHON="$SYSTEM_PYTHON"
   export UV_NO_MANAGED_PYTHON=1
   export UV_PYTHON_DOWNLOADS=never
+  # Pin wheel caches under /var/cache/sift so --keep-caches greenfield loops
+  # reuse bandwidth without guessing operator-home paths. Owned by the installing
+  # operator (uv sync runs as the operator, not sift-service).
+  export UV_CACHE_DIR="${UV_CACHE_DIR:-$SIFT_UV_CACHE_DIR}"
+  export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$SIFT_PIP_CACHE_DIR}"
+  local cache_owner cache_group
+  cache_owner="$(user_name)"
+  cache_group="$(group_name)"
+  sudo_if_needed install -d -m 755 -o "$cache_owner" -g "$cache_group" \
+    "$UV_CACHE_DIR" "$PIP_CACHE_DIR" 2>/dev/null || \
+    install -d -m 755 "$UV_CACHE_DIR" "$PIP_CACHE_DIR" 2>/dev/null || true
 
   # The core extra is mandatory and includes opensearch-mcp. First-party packs
   # are additive and selected only by the explicit --with-* installer contract.
@@ -139,7 +150,7 @@ sync_workspace() {
     sync_extras+=(--extra windows-triage)
     sync_labels+=(windows-triage)
   fi
-  log "Workspace extras: ${sync_labels[*]}"
+  log "Workspace extras: ${sync_labels[*]} (UV_CACHE_DIR=$UV_CACHE_DIR)"
   "$UV_BIN" sync \
     "${sync_extras[@]}" \
     --project "$REPO_DIR" \

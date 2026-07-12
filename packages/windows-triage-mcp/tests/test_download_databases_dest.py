@@ -2,7 +2,7 @@
 
 The add-on's runtime reads the triage databases from the dir resolved by
 ``config.get_config`` (``SIFT_WINDOWS_TRIAGE_DB_DIR`` -> ``WT_DATA_DIR`` ->
-``/var/lib/sift/windows-triage``). The downloader must defer to that same single
+``/var/cache/sift/windows-triage``). The downloader must defer to that same single
 source so it lands the download exactly where the runtime later reads it.
 Regression guard for the fresh-install bug where the ~5.9GB baseline wrote into
 the package's ``data/`` source dir instead of the configured dir.
@@ -72,7 +72,7 @@ def test_runtime_default_when_unset(monkeypatch):
     dest = _run_main(monkeypatch, [], {})
     # Defers to the add-on's runtime default — the same dir config.get_config
     # uses when nothing is set, so the download and runtime agree by default.
-    assert dest == Path("/var/lib/sift/windows-triage")
+    assert dest == Path("/var/cache/sift/windows-triage")
 
 
 def _run_main_capture(monkeypatch, argv):

@@ -8,8 +8,8 @@ fact, so the only safe invariant is that ``install.sh`` contains no such path at
 
 The canonical, correctly-gated evidence teardown lives ONLY in
 ``scripts/uninstall.sh`` (``confirm_evidence_removal``: requires
-``--remove-evidence`` + ``--i-understand-evidence-loss`` + ``--yes`` + a typed
-``DELETE EVIDENCE``). ``install.sh`` must DELEGATE uninstall there and never carry
+``--data`` + ``--i-understand-evidence-loss`` + ``--yes`` + a typed
+``DELETE EVIDENCE`` on a TTY). ``install.sh`` must DELEGATE uninstall there and never carry
 its own evidence-delete branch.
 
 These are STATIC GUARD tests (fail-on-revert): they assert the dangerous tokens
@@ -28,6 +28,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "install.sh"
+TEARDOWN_SH = REPO_ROOT / "lib" / "teardown.sh"
 UNINSTALL_SH = REPO_ROOT / "scripts" / "uninstall.sh"
 
 
@@ -108,17 +109,23 @@ def test_do_uninstall_delegates_to_canonical_script(install_src: str) -> None:
         "install.sh no longer delegates to scripts/uninstall.sh; do_uninstall must "
         "invoke the canonical, evidence-gated uninstaller."
     )
+    teardown = TEARDOWN_SH.read_text(encoding="utf-8")
+    assert "scripts/uninstall.sh" in teardown
+    assert "do_uninstall" in teardown
 
 
 def test_do_uninstall_never_forwards_evidence_flags(install_src: str) -> None:
-    """Even when delegating, install.sh must NEVER pass the evidence-loss gates
-    down to scripts/uninstall.sh — those may only be supplied by an operator
-    running scripts/uninstall.sh directly."""
-    for flag in ("--remove-evidence", "--i-understand-evidence-loss"):
-        assert flag not in install_src, (
-            f"install.sh references {flag}; it must never forward evidence-removal "
-            "gates to scripts/uninstall.sh."
-        )
+    """Even when delegating, do_uninstall must NEVER put evidence-loss flags on the
+    argv it builds. Help text may name the gated path; the live args must not."""
+    del install_src  # install.sh help may document the gated path; argv is in teardown.
+    teardown = TEARDOWN_SH.read_text(encoding="utf-8")
+    body = teardown.split("do_uninstall()", 1)[1].split("\n}", 1)[0]
+    # The only args= construction must be the software/greenfield set.
+    assert "local args=(--i-understand)" in body
+    assert "args+=(--data)" not in body
+    assert "args+=(--i-understand-evidence-loss)" not in body
+    assert "args+=(--remove-evidence)" not in body
+    assert "--remove-evidence" not in body
 
 
 # ---------------------------------------------------------------------------
@@ -147,10 +154,11 @@ def test_install_sh_syntax_ok() -> None:
 
 
 def test_canonical_uninstaller_still_gates_evidence() -> None:
-    """Sanity: the delegation target keeps its triple gate (we must not have
-    weakened it). scripts/uninstall.sh requires the evidence-loss flags + typed
+    """Sanity: the delegation target keeps its multi-gate (we must not have
+    weakened it). scripts/uninstall.sh requires --data + evidence-loss flags + typed
     confirmation."""
     src = UNINSTALL_SH.read_text(encoding="utf-8")
     assert "confirm_evidence_removal" in src
+    assert "--data" in src
     assert "--i-understand-evidence-loss" in src
     assert "DELETE EVIDENCE" in src

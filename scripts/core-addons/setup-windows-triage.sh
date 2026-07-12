@@ -15,7 +15,7 @@ sift_source_core_addon_libraries
 
 readonly WINTRIAGE_BACKEND_NAME="windows-triage-mcp"
 readonly WINTRIAGE_ENTRYPOINT="windows-triage-mcp"
-readonly WINTRIAGE_DEFAULT_DATA_DIR="/var/lib/sift/windows-triage"
+readonly WINTRIAGE_DEFAULT_DATA_DIR="${SIFT_WINDOWS_TRIAGE_DATA_DIR:-/var/cache/sift/windows-triage}"
 readonly WINTRIAGE_REGISTRY_DB="known_good_registry.db"
 readonly WINTRIAGE_REGISTRY_PROVENANCE="${WINTRIAGE_REGISTRY_DB}.provenance.json"
 readonly WINTRIAGE_BASELINE_PROVENANCE="baseline-provenance.json"
@@ -31,7 +31,7 @@ Options:
   --with-registry    Also provision the optional ~12 GiB full registry baseline.
                      It is never selected by --install alone.
   --offline          Refuse all network access. Pre-stage known_good.db and
-                     context.db in /var/lib/sift/windows-triage. With
+                     context.db in /var/cache/sift/windows-triage. With
                      --with-registry, also pre-stage known_good_registry.db
                      and set SIFT_WINDOWS_TRIAGE_REGISTRY_SHA256 plus
                      SIFT_WINDOWS_TRIAGE_REGISTRY_PROVENANCE.
@@ -51,8 +51,9 @@ Environment:
                        non-secret release/source descriptor recorded locally.
 
 The first-party pack fixes the runtime data directory at
-/var/lib/sift/windows-triage. This lets sift-service use the backend's native
-default and keeps the registry env_refs empty.
+/var/cache/sift/windows-triage (durable regenerable cache). This lets
+sift-service use the backend's native default, keeps the registry env_refs
+empty, and survives greenfield uninstall --keep-caches.
 EOF
 }
 
@@ -95,6 +96,8 @@ wintriage_sync_runtime() {
     offline_flag=(--offline)
   fi
   log "Installing Windows-triage into the existing core runtime without pruning core packages."
+  export UV_CACHE_DIR="${UV_CACHE_DIR:-${SIFT_UV_CACHE_DIR:-/var/cache/sift/uv}}"
+  export PIP_CACHE_DIR="${PIP_CACHE_DIR:-${SIFT_PIP_CACHE_DIR:-/var/cache/sift/pip}}"
   UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never \
     "$UV_BIN" sync --inexact --extra windows-triage \
       --project "$REPO_DIR" \

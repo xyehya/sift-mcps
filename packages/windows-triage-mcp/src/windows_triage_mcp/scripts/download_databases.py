@@ -655,7 +655,7 @@ def main() -> None:
         help=(
             "Destination directory. When omitted, defers to the add-on's "
             "runtime config: $SIFT_WINDOWS_TRIAGE_DB_DIR, then $WT_DATA_DIR, "
-            "then /var/lib/sift/windows-triage."
+            "then /var/cache/sift/windows-triage."
         ),
     )
     parser.add_argument(
@@ -690,7 +690,7 @@ def main() -> None:
     # Single source of truth for the baseline dir: an explicit --dest wins,
     # otherwise defer to the add-on's own runtime resolution
     # (config.get_config: SIFT_WINDOWS_TRIAGE_DB_DIR -> WT_DATA_DIR ->
-    # /var/lib/sift/windows-triage). This guarantees the download lands exactly
+    # /var/cache/sift/windows-triage). This guarantees the download lands exactly
     # where the runtime later reads the databases from, rather than diverging
     # into the package source tree. reload=True so this one-shot CLI honors the
     # current process environment.

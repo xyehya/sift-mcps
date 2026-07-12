@@ -47,9 +47,10 @@ EnvironmentFile=-${SIFT_HOME}/opencti-query.env
 # data dir so build_response/run_command enrichment fires under the service user.
 # Non-secret path; written by install.sh (write_fk_env).
 EnvironmentFile=-${SIFT_HOME}/forensic-knowledge.env
-# The pinned Qwen3 embedding model cache lives under the
-# service home (not the operator home), and the model name/revision are pinned so
-# kb_search_knowledge loads reproducible weights. Non-secret identifiers/path.
+# The pinned Qwen3 embedding model cache lives under the durable
+# /var/cache/sift/huggingface tree (not the operator home), and the model
+# name/revision are pinned so kb_search_knowledge loads reproducible weights.
+# Non-secret identifiers/path. Survives greenfield uninstall --keep-caches.
 Environment=HF_HOME=${SIFT_HF_HOME}
 Environment=HF_HUB_OFFLINE=1
 Environment=TRANSFORMERS_OFFLINE=1

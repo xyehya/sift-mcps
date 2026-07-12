@@ -84,11 +84,14 @@ if is_offline; then
   sync_flags+=(--offline)
 fi
 log "Installing first-party RAG runtime extra into the existing SIFT venv."
+sync_env=(UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never)
 if is_offline; then
   sync_env=(UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never UV_OFFLINE=1)
-else
-  sync_env=(UV_NO_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never)
 fi
+sync_env+=(
+  "UV_CACHE_DIR=${UV_CACHE_DIR:-${SIFT_UV_CACHE_DIR:-/var/cache/sift/uv}}"
+  "PIP_CACHE_DIR=${PIP_CACHE_DIR:-${SIFT_PIP_CACHE_DIR:-/var/cache/sift/pip}}"
+)
 if ! env "${sync_env[@]}" "$UV_BIN" "${sync_flags[@]}"; then
   if is_offline; then
     die "Offline RAG runtime install failed. Stage the hash-pinned rag wheel/dependency artifacts in the uv cache, then rerun $0 --install --offline."

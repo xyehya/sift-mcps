@@ -114,15 +114,25 @@ SIFT_VERIFICATION_DIR="${SIFT_VERIFICATION_DIR:-$SIFT_STATE_DIR/verification}"
 SIFT_TOKENS_DIR="${SIFT_TOKENS_DIR:-$SIFT_STATE_DIR/tokens}"
 SIFT_SNAPSHOTS_DIR="${SIFT_SNAPSHOTS_DIR:-$SIFT_STATE_DIR/snapshots}"
 SIFT_ENRICHMENT_DIR="${SIFT_ENRICHMENT_DIR:-$SIFT_STATE_DIR/enrichment}"
-# Shared Volatility3 symbol cache: setgid (2775) group `sift` so BOTH the
-# service user (sift-service) and the run_command runtime user (agent_runtime)
-# can populate/share it. Exported into both systemd units as SIFT_VOL_SYMBOLS.
-# Lives under /var/cache (FHS: regenerable cached data), deliberately NOT under
-# $SIFT_STATE_DIR — setup-agent-runtime.sh stamps a recursive `u:agent_runtime:---`
-# deny ACL over all of /var/lib/sift, which would override the `sift` group grant
-# and make the cache unwritable by the runtime user. /var/cache/sift is outside
-# that deny sweep so both users can share it.
-SIFT_VOL_SYMBOLS="${SIFT_VOL_SYMBOLS:-/var/cache/sift/volatility-symbols}"
+# Durable regenerable caches live under /var/cache/sift (FHS). Greenfield
+# uninstall wipes /var/lib/sift always; --keep-caches preserves this tree so
+# reinstall can reuse uv wheels, HF/torch weights, and windows-triage baselines
+# without re-downloading multi-GB bandwidth. Volatility3 symbols stay here too
+# (outside /var/lib/sift) because setup-agent-runtime.sh stamps a recursive
+# `u:agent_runtime:---` deny ACL over all of /var/lib/sift.
+SIFT_CACHE_ROOT="${SIFT_CACHE_ROOT:-/var/cache/sift}"
+SIFT_UV_CACHE_DIR="${SIFT_UV_CACHE_DIR:-$SIFT_CACHE_ROOT/uv}"
+SIFT_PIP_CACHE_DIR="${SIFT_PIP_CACHE_DIR:-$SIFT_CACHE_ROOT/pip}"
+SIFT_VOL_SYMBOLS="${SIFT_VOL_SYMBOLS:-$SIFT_CACHE_ROOT/volatility-symbols}"
+SIFT_WINDOWS_TRIAGE_DATA_DIR="${SIFT_WINDOWS_TRIAGE_DATA_DIR:-$SIFT_CACHE_ROOT/windows-triage}"
+SIFT_HAYABUSA_CACHE_DIR="${SIFT_HAYABUSA_CACHE_DIR:-$SIFT_CACHE_ROOT/hayabusa}"
+# Hugging Face / torch embedding weights (public, regenerable). Default moved
+# off $SIFT_STATE_DIR so greenfield wipe does not force a multi-GB redownload
+# when the operator opts into --keep-caches.
+SIFT_HF_HOME="${SIFT_HF_HOME:-$SIFT_CACHE_ROOT/huggingface}"
+# Legacy path from pre-durable-cache installs; migrated once by install_state_dirs.
+SIFT_HF_HOME_LEGACY="${SIFT_HF_HOME_LEGACY:-$SIFT_STATE_DIR/.cache/huggingface}"
+SIFT_WINDOWS_TRIAGE_DATA_DIR_LEGACY="${SIFT_WINDOWS_TRIAGE_DATA_DIR_LEGACY:-$SIFT_STATE_DIR/windows-triage}"
 SIFT_EXAMINER="${SIFT_EXAMINER:-examiner}"
 SIFT_EXECUTE_AS_USER="${SIFT_EXECUTE_AS_USER:-agent_runtime}"
 # Dedicated non-admin system user that the gateway + durable job worker run as.
@@ -184,7 +194,6 @@ SIFT_GEOIP_ENABLED="${SIFT_GEOIP_ENABLED:-0}"
 # download step short-circuits with an actionable message pointing at the
 # operator-staged artifact path it expects instead.
 SIFT_OFFLINE="${SIFT_OFFLINE:-0}"
-SIFT_HF_HOME="${SIFT_HF_HOME:-$SIFT_STATE_DIR/.cache/huggingface}"
 
 VENV_DIR="$REPO_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
