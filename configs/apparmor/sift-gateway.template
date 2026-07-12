@@ -63,7 +63,9 @@ profile sift-gateway flags=(attach_disconnected) {
   # on the cases root and case directory, not on evidence file contents.
   /cases/                                    rw,
   /cases/*/                                  rw,
-  /cases/*/evidence/                         r,
+  # Directory inode may be created during portal case scaffolding; evidence
+  # *file bytes* remain write-denied via the explicit deny below.
+  /cases/*/evidence/                         rw,
   /cases/*/evidence/**                       r,
   deny /cases/*/evidence/**                  w,
 
