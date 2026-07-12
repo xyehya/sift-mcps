@@ -129,11 +129,15 @@ positive allowlist `@mvp_forensic` (`unlisted_policy = reject`, fail-closed) · 
 argv-rewriting launchers denied without partial recursive parsing · program-text scanners
 (sed/sqlite3/tshark/vol/exiftool) · block shells & interpreters (sh/bash/python/perl/ruby/node ·
 awk system/getline) · direct `dotnet` denied (approved Zimmerman wrappers select fixed targets) · `/var/lib/sift` hard block +
-cross-case access denied · output sanitation (ANSI/OSC strip · untrusted label · secret redaction).
+active-case-only agent input operands (including redirects and input flags; raw `input_files` is not
+public) · case-confined mutation targets · output sanitation (ANSI/OSC strip · untrusted label · secret
+redaction). Explicitly documented non-file flag semantics and vetted forensic `/dev` device operands are
+the only path-shape exceptions.
 
 **FLOOR — kernel/OS** (`dfir_exec_launcher.py` + `worker.py`):
 runtime-user fail-closed (`SIFT_EXECUTE_REQUIRE_RUNTIME_USER`, `agent_runtime` uid) ·
-`systemd-run --scope` (`MemoryMax=4G TasksMax=64 OOMPolicy=kill IPAddressDeny=any`) ·
+`systemd-run --scope` (memory ceiling dynamically derives from 60% of current `MemAvailable` unless an
+operator explicitly configures one; `TasksMax=64 OOMPolicy=kill IPAddressDeny=any`) ·
 no-new-privs · Landlock ABI v4 (FS+net deny-default) · **seccomp = KILL** (SIGSYS on disallowed
 syscall) · AppArmor `dfir-exec` = ENFORCE. Landlock grants read-only: case/evidence paths,
 `/etc/mime.types`, `/proc/N/fd` — nothing else is reachable.
