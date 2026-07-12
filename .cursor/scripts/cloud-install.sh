@@ -42,4 +42,36 @@ else
   log "WARN: scripts/cloud/bootstrap-agent-tools.sh missing — skip MCP binary install"
 fi
 
+# --- Project dependency toolchain (Python workspace + portal frontend) ---
+# The base image is NOT guaranteed to ship uv or Node 24, and the committed
+# .cursor/environment.json is the single source of truth for setup (no external
+# snapshot deps). Install idempotently so a fresh VM comes up able to lint/test/
+# build/run. No secrets are read or written here.
+if [[ ! -x "$HOME/.local/bin/uv" ]] && ! command -v uv >/dev/null 2>&1; then
+  log "Installing uv"
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+
+# Node 24.13.1 via nvm — frontend engines require >=24.13.1 <25.
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if [[ ! -x "$NVM_DIR/versions/node/v24.13.1/bin/node" ]]; then
+  log "Installing Node 24.13.1 via nvm"
+  # nvm.sh is not nounset-clean; relax -u only while sourcing/using it.
+  set +u
+  # shellcheck source=/dev/null
+  [[ -s "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh"
+  nvm install 24.13.1
+  nvm alias default 24.13.1
+  set -u
+fi
+
+log "Syncing Python workspace deps (uv sync --locked)"
+uv sync --locked \
+  --extra core --extra rag --extra opencti --extra windows-triage --extra dev
+
+if [[ -f "$REPO_ROOT/packages/case-dashboard/frontend/package.json" ]]; then
+  log "Installing portal frontend deps (npm ci)"
+  npm --prefix "$REPO_ROOT/packages/case-dashboard/frontend" ci
+fi
+
 log "Install complete"
