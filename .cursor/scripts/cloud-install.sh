@@ -14,7 +14,7 @@ fi
 
 # Persist proxy + CA env for shells and MCP HTTP clients that honor standard vars.
 PROFILE_SNIPPET="$HOME/.cursor-cloud-tailscale.env"
-cat > "$PROFILE_SNIPPET" <<'EOF'
+cat > "$PROFILE_SNIPPET" <<'ENV'
 # Sourced by cloud agent shells when userspace Tailscale is ready.
 if [[ -f /tmp/tailscaled.ready ]]; then
   export ALL_PROXY="socks5h://127.0.0.1:1055"
@@ -24,12 +24,22 @@ if [[ -f /tmp/tailscaled.ready ]]; then
   export SSL_CERT_FILE="/tmp/sift-ca.pem"
   export REQUESTS_CA_BUNDLE="/tmp/sift-ca.pem"
 fi
-EOF
+ENV
 
 for rc in "$HOME/.bashrc" "$HOME/.profile"; do
   if [[ -f "$rc" ]] && ! grep -q 'cursor-cloud-tailscale.env' "$rc" 2>/dev/null; then
     printf '\n# Cursor Cloud Tailscale proxy env\n[ -f "$HOME/.cursor-cloud-tailscale.env" ] && . "$HOME/.cursor-cloud-tailscale.env"\n' >> "$rc"
   fi
 done
+
+# Host-native codebase-memory-mcp (Linux binary). Never commit the binary;
+# portable MCP configs resolve via ${userHome} / PATH.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ -x "$REPO_ROOT/scripts/cloud/bootstrap-agent-tools.sh" ]]; then
+  log "Bootstrapping codebase-memory-mcp"
+  bash "$REPO_ROOT/scripts/cloud/bootstrap-agent-tools.sh"
+else
+  log "WARN: scripts/cloud/bootstrap-agent-tools.sh missing — skip MCP binary install"
+fi
 
 log "Install complete"

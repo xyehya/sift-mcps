@@ -72,7 +72,11 @@ Prefer **repo** config over user-global installs. Canonical locations:
 CodeGuard is vendored as `.cursor/rules/codeguard-*.mdc` + `.cursor/agents/codeguard-reviewer.md` — do not also enable the CodeGuard marketplace plugin in this project.
 
 Keep `~/.cursor/mcp.json` empty so project `.cursor/mcp.json` owns memory MCP.
-Cursor uses `${userHome}/.local/bin/codebase-memory-mcp` (GUI apps often lack `~/.local/bin` on `PATH`).
+Do **not** commit absolute machine paths (`/Users/...`, `/home/...`) in MCP configs.
+Cursor: `${userHome}/.local/bin/codebase-memory-mcp` (GUI apps often lack `~/.local/bin` on `PATH`).
+Claude / Codex / OpenCode: bare `codebase-memory-mcp` on `PATH`.
+Install the host-native binary with DeusData `install.sh` (never commit the binary).
+Cloud / Linux agents: run `scripts/cloud/bootstrap-agent-tools.sh` in the environment install hook.
 
 ## Code Discovery
 
