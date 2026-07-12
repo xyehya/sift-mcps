@@ -247,10 +247,13 @@ profile sift-run-command-scope flags=(attach_disconnected) {
   /bin/basename                              rix,
   /usr/bin/coreutils                         rix,
 
-  # Worker python absolute path under the install tree.
-  /opt/sift-mcps/.venv/bin/python            rix,
-  /opt/sift-mcps/.venv/bin/python3*          rix,
-  /opt/sift-mcps/.venv/bin/**                rix,
+  # Worker python must leave this broker (px -> dfir-exec). Sticky rix left the
+  # transient scope labeled as the broker, which cannot open /cases and also
+  # missed the venv→/usr/bin/python3.12 symlink target. Do not grant /cases here.
+  # No catch-all /venv/bin/** rix — that conflicts with these px rules.
+  /opt/sift-mcps/.venv/bin/python            px -> dfir-exec,
+  /opt/sift-mcps/.venv/bin/python3*          px -> dfir-exec,
+  /usr/bin/python3*                          px -> dfir-exec,
   /opt/sift-mcps/.venv/lib/**                mr,
   /opt/sift-mcps/                            r,
   /opt/sift-mcps/**                          r,

@@ -160,6 +160,11 @@ def test_worker_public_contract_remains_shell_false() -> None:
 def test_live_gate_runbook_covers_positive_and_checklist_rows() -> None:
     text = RUNBOOK.read_text(encoding="utf-8")
     required_tokens = [
+        "MVP L3 gate",
+        "L3-P allowlisted",
+        "Broker blindness",
+        "px -> dfir-exec",
+        "SIFT_RUN3_GATE_STRICT",
         "vol -f <CASE_DIR>/evidence/mem.raw windows.pslist",
         "mmls <CASE_DIR>/evidence/disk.E01",
         "EvtxECmd -f <CASE_DIR>/evidence/x.evtx --csv <CASE_DIR>/extractions/",
