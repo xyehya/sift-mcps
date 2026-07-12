@@ -13,6 +13,7 @@ import logging
 import os
 import stat
 from dataclasses import dataclass, field
+from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -109,9 +110,9 @@ class Config:
             raise ConfigurationError("max_results must be between 1 and 1000")
 
     def __repr__(self) -> str:
-        """Safe repr that never includes token."""
+        """Safe repr that never includes a credential or endpoint location."""
         return (
-            f"Config(opencti_url={self.opencti_url!r}, "
+            f"Config(transport={urlparse(self.opencti_url).scheme!r}, "
             f"token=***, timeout={self.timeout_seconds}s)"
         )
 
@@ -326,7 +327,10 @@ def _load_token_from_env_file(path: Path) -> str | None:
 def _validate_url(url: str) -> str:
     """Validate and normalize OpenCTI URL.
 
-    Security: Prevents SSRF by restricting URL schemes.
+    Security: prevents accidental plaintext transmission of the OpenCTI token.
+    HTTP is allowed only for a true loopback endpoint. The production add-on
+    sandbox also keeps egress loopback-only; remote connectivity needs a
+    separately designed, exact-destination policy.
     """
     url = url.strip().rstrip("/")
 
@@ -345,36 +349,29 @@ def _validate_url(url: str) -> str:
     if not parsed.netloc:
         raise ConfigurationError("Invalid URL: missing host")
 
-    # Warn if using HTTP for non-local hosts
-    if parsed.scheme == "http":
-        host = parsed.hostname or ""
-        is_local = host in ("localhost", "127.0.0.1", "::1") or host.startswith(
-            (
-                "10.",
-                "172.16.",
-                "172.17.",
-                "172.18.",
-                "172.19.",
-                "172.20.",
-                "172.21.",
-                "172.22.",
-                "172.23.",
-                "172.24.",
-                "172.25.",
-                "172.26.",
-                "172.27.",
-                "172.28.",
-                "172.29.",
-                "172.30.",
-                "172.31.",
-                "192.168.",
-            )
+    if parsed.username is not None or parsed.password is not None:
+        raise ConfigurationError("OpenCTI URL must not include credentials")
+
+    if parsed.scheme == "http" and not _is_loopback_host(parsed.hostname or ""):
+        raise ConfigurationError(
+            "Remote OpenCTI HTTP is disabled. Use a loopback endpoint or HTTPS "
+            "in a separately approved remote-egress deployment."
         )
 
-        if not is_local:
-            logger.warning(
-                "Using HTTP for non-local OpenCTI - credentials sent in plaintext",
-                extra={"url": url},
-            )
-
     return url
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return whether *host* is a literal loopback address or ``localhost``.
+
+    Do not DNS-resolve hostnames here: configuration validation must be
+    deterministic and a DNS result must not turn a remote name into an implicit
+    plaintext-transport exception.
+    """
+    normalized = host.strip().rstrip(".").lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ip_address(normalized).is_loopback
+    except ValueError:
+        return False

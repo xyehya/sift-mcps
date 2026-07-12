@@ -99,6 +99,7 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     cwd = payload.get("cwd") or None
     case_dir = str(payload.get("case_dir") or cwd or os.environ.get("SIFT_CASE_DIR") or "").strip()
     memory_limit_bytes = int(payload.get("memory_limit_bytes") or 0)
+    file_size_limit_bytes = int(payload.get("file_size_limit_bytes") or 0)
     runtime_user = str(payload.get("runtime_user") or "").strip()
     sudo_path = str(payload.get("sudo_path") or "/usr/bin/sudo").strip()
     runtime_user_already_applied = bool(payload.get("runtime_user_already_applied"))
@@ -144,7 +145,17 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
         except OSError:
             cache_dir = ""
     if cache_dir:
-        env_overrides["XDG_CACHE_HOME"] = cache_dir
+        # Keep every conventional temporary/cache location inside the case
+        # write-jail.  Managed runtimes consult TMPDIR before HOME/XDG and must
+        # never fall back to the host-wide /tmp when Landlock is active.
+        env_overrides.update(
+            {
+                "XDG_CACHE_HOME": cache_dir,
+                "TMPDIR": cache_dir,
+                "TMP": cache_dir,
+                "TEMP": cache_dir,
+            }
+        )
         jail = os.path.dirname(cache_dir)  # the case tmp/ write-jail
         home_dir = os.path.join(jail, "home")
         for key, path in (
@@ -211,6 +222,7 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 cwd=cwd,
                 case_dir=case_dir,
                 memory_limit_bytes=memory_limit_bytes,
+                file_size_limit_bytes=file_size_limit_bytes,
                 max_output_bytes=max_bytes,
                 service_uid=service_uid,
                 service_gid=service_gid,
@@ -518,6 +530,7 @@ def _argv_for_launcher(
     service_uid: int | None,
     service_gid: int | None,
     vol_symbols_dir: str,
+    file_size_limit_bytes: int = 0,
 ) -> list[str]:
     if not launcher_enabled:
         return argv
@@ -530,6 +543,7 @@ def _argv_for_launcher(
         "cwd": cwd or case_dir,
         "timeout": timeout,
         "memory_limit_bytes": memory_limit_bytes,
+        "file_size_limit_bytes": file_size_limit_bytes,
         "max_output_bytes": max_output_bytes,
         "runtime_user": runtime_user,
         "runtime_uid": runtime_uid,

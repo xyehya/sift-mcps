@@ -30,6 +30,10 @@ profile dfir-exec @@DFIR_EXEC_LAUNCHER@@ {
   /bin/**                                  rix,
   /sbin/**                                 rix,
   /usr/local/bin/**                        rix,
+  # Zimmerman wrappers are the only reviewed route to .NET assemblies. The
+  # /usr/bin/dotnet symlink resolves here, so this exact runtime needs execute
+  # permission while the rest of /usr/lib stays non-executable.
+  /usr/lib/dotnet/dotnet                   rix,
   /usr/lib/**                              mr,
   /usr/lib64/**                            mr,
   /lib/**                                  mr,
@@ -41,6 +45,8 @@ profile dfir-exec @@DFIR_EXEC_LAUNCHER@@ {
   /etc/alternatives/**                     r,
   /etc/localtime                           r,
   /etc/nsswitch.conf                       r,
+  # file(1) reads this public classification database; grant no write access.
+  /etc/magic                               r,
   # volatility3 automagic initializes stdlib mimetypes, which reads
   # /etc/mime.types. Landlock grants the same file; both layers must allow.
   /etc/mime.types                          r,
@@ -86,10 +92,14 @@ profile dfir-exec @@DFIR_EXEC_LAUNCHER@@ {
   /opt/pdf-tools/                          r,
   /opt/pdf-tools/**                        rix,
 
-  # Device/proc reads needed by normal runtimes. Do not grant broad /proc or /dev.
+  # Device/proc/sysfs reads needed by normal runtimes. Keep proc paths exact:
+  # Landlock must allow procfs at mount granularity for child processes, while
+  # this profile remains the narrow pathname backstop (never /proc/**).
   /dev/null                                rw,
   /dev/zero                                r,
   /dev/urandom                             r,
+  /proc/meminfo                            r,
+  /proc/stat                               r,
   /proc/mounts                             r,
   /proc/self/                              r,
   /proc/self/**                            r,
@@ -97,6 +107,7 @@ profile dfir-exec @@DFIR_EXEC_LAUNCHER@@ {
   /proc/[0-9]*/cmdline                     r,
   /proc/[0-9]*/limits                      r,
   /proc/[0-9]*/maps                        r,
+  /proc/[0-9]*/mountinfo                   r,
   /proc/[0-9]*/mounts                      r,
   /proc/[0-9]*/stat                        r,
   /proc/[0-9]*/status                      r,
@@ -105,6 +116,8 @@ profile dfir-exec @@DFIR_EXEC_LAUNCHER@@ {
   # /proc/self/** rule above does not match the resolved path. Grant the dir
   # listing on the pid-form path for the FD-close pass.
   /proc/[0-9]*/fd/                         r,
+  /sys/devices/system/                     r,
+  /sys/devices/system/**                   r,
   deny @{PROC}/sys/kernel/**               w,
 
   # Case role model. Landlock supplies the per-case deny-by-absence floor; this

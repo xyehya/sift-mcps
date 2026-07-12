@@ -40,6 +40,35 @@ def validate_fifo(raw: str, service_uid: int, prefix: str, expected_mode: int) -
     return path
 
 
+def read_relay_environment(approved: frozenset[str]) -> dict[str, str]:
+    """Read the relay's bounded credential payload from stdin.
+
+    The relay passes a dedicated one-shot pipe as the broker's stdin. The
+    actual add-on stdio channel continues to use the separately validated,
+    pinned FIFOs below. This avoids both a credential file that needs a DAC
+    exception and a sudo environment hop that could enter journal metadata.
+    """
+    data = sys.stdin.buffer.read(32769)
+    if len(data) > 32768:
+        fail("relay environment payload is too large")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        fail("relay environment payload is not UTF-8")
+
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line:
+            continue
+        if "=" not in line:
+            fail("relay environment payload is malformed")
+        name, value = line.split("=", 1)
+        if name not in approved or name in values or "\x00" in value:
+            fail("relay environment payload is not approved")
+        values[name] = value
+    return values
+
+
 def main() -> int:
     if os.geteuid() != 0:
         fail("must run as root")
@@ -92,6 +121,7 @@ def main() -> int:
     expected_backend, expected_network, approved_env = policy
     if (backend_name, network_policy) != (expected_backend, expected_network):
         fail("backend command/network policy mismatch")
+    relay_env = read_relay_environment(approved_env)
 
     run_dir = Path("/run/sift-addon")
     run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -110,7 +140,7 @@ def main() -> int:
         ) as env_file:
             env_path = Path(env_file.name)
             for name in sorted(approved_env):
-                value = os.environ.get(name)
+                value = relay_env.get(name)
                 if value:
                     env_file.write(environment_line(name, value))
             env_file.write(environment_line("HOME", "/tmp"))

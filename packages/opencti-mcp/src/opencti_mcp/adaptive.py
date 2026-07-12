@@ -460,7 +460,7 @@ class AdaptiveMetrics:
                     )
 
             except Exception as e:
-                logger.warning(f"Probe failed: {e}")
+                logger.warning("Probe failed", extra={"error_type": type(e).__name__})
 
             # Wait for next probe interval
             self._stop_event.wait(self.probe_interval)

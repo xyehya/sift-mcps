@@ -28,6 +28,34 @@ def relay(source_fd: int, destination_fd: int) -> None:
         return
 
 
+def build_relay_environment(approved: tuple[str, ...]) -> bytes:
+    """Encode only approved child variables for the broker's one-shot stdin.
+
+    Do not forward add-on credentials through sudo's environment: sudo may
+    record those values in its journal metadata. The root broker validates and
+    copies this bounded pipe payload into a root-owned EnvironmentFile before
+    systemd starts the add-on.
+    """
+    lines: list[str] = []
+    for name in sorted(approved):
+        value = os.environ.get(name)
+        if not value:
+            continue
+        if "\n" in value or "\r" in value or "\x00" in value:
+            fail("approved environment value contains a forbidden character")
+        lines.append(f"{name}={value}\n")
+    payload = "".join(lines).encode("utf-8")
+    if len(payload) > 32768:
+        fail("approved environment payload is too large")
+    return payload
+
+
+def write_all(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        view = view[os.write(fd, view) :]
+
+
 def main() -> int:
     if os.geteuid() == 0:
         fail("must run as the gateway service user")
@@ -43,6 +71,7 @@ def main() -> int:
     input_path = runtime / f"stdin.{nonce}"
     output_path = runtime / f"stdout.{nonce}"
     input_fd = output_fd = None
+    env_read = env_write = None
     try:
         os.mkfifo(input_path, 0o644)
         os.mkfifo(output_path, 0o622)
@@ -55,30 +84,42 @@ def main() -> int:
         approved = {
             "opensearch-mcp": ("OPENSEARCH_CONFIG", "OPENSEARCH_HOST"),
             "windows-triage-mcp": ("WT_DATA_DIR",),
-            "opencti-mcp": ("OPENCTI_URL", "OPENCTI_TOKEN"),
+            "opencti-mcp": (
+                "OPENCTI_URL",
+                "OPENCTI_TOKEN",
+            ),
         }.get(backend_name)
         if approved is None:
             fail("backend has no relay policy")
-        preserve = [name for name in approved if os.environ.get(name)]
-        sudo_args = ["/usr/bin/sudo", "-n"]
-        if preserve:
-            sudo_args.append(f"--preserve-env={','.join(preserve)}")
-        sudo_args.extend(
-            (
-                "/usr/local/sbin/sift-addon-systemd-sandbox",
-                "--backend-name", backend_name,
-                "--network-policy", network_policy,
-                "--stdin-path", str(input_path),
-                "--stdout-path", str(output_path),
-                "--", command,
-            )
-        )
-        process = subprocess.Popen(sudo_args)
+        payload = build_relay_environment(approved)
+        env_read, env_write = os.pipe2(os.O_CLOEXEC)
+        write_all(env_write, payload)
+        os.close(env_write)
+        env_write = None
+        sudo_args = [
+            "/usr/bin/sudo",
+            "-n",
+            "/usr/local/sbin/sift-addon-systemd-sandbox",
+            "--backend-name", backend_name,
+            "--network-policy", network_policy,
+            "--stdin-path", str(input_path),
+            "--stdout-path", str(output_path),
+            "--", command,
+        ]
+        process = subprocess.Popen(sudo_args, stdin=env_read)
+        os.close(env_read)
+        env_read = None
         threading.Thread(target=relay, args=(0, input_fd), daemon=True).start()
         threading.Thread(target=relay, args=(output_fd, 1), daemon=True).start()
         return process.wait()
     finally:
         for fd in (input_fd, output_fd):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        for fd in (env_read, env_write):
             if fd is not None:
                 try:
                     os.close(fd)

@@ -28,6 +28,7 @@ def test_helper_is_default_deny_and_structured() -> None:
     assert "StandardOutput=file:" in source
     assert "StandardError=journal" in source
     assert "def validate_fifo(" in source
+    assert "def read_relay_environment(" in source
     assert 'path.parent != Path("/run/sift-addon-client")' in source
     assert "stat.S_ISFIFO" in source
     assert "os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC" in source
@@ -49,16 +50,33 @@ def test_only_approved_backend_command_policy_pairs_exist() -> None:
     assert "len(sys.argv) != 11" in source
 
 
+def test_opencti_relay_never_weakens_its_loopback_only_egress_policy() -> None:
+    helper = HELPER.read_text(encoding="utf-8")
+    relay = RELAY.read_text(encoding="utf-8")
+
+    for source in (helper, relay):
+        assert "OPENCTI_URL" in source
+        assert "OPENCTI_TOKEN" in source
+        assert "OPENCTI_INSECURE_HTTP_REMOTE" not in source
+
+
 def test_secret_environment_uses_root_only_file_not_argv() -> None:
-    source = HELPER.read_text(encoding="utf-8")
-    assert 'prefix="environment."' in source
-    assert "os.chmod(env_path, 0o600)" in source
-    assert 'f"--property=EnvironmentFile={env_path}"' in source
-    assert "env_path.unlink(missing_ok=True)" in source
-    assert 'state == "active"' in source
-    assert 'f"--unit={unit_name}"' in source
-    assert "--setenv" not in source
-    assert "OPENCTI_TOKEN=" not in source
+    helper = HELPER.read_text(encoding="utf-8")
+    relay = RELAY.read_text(encoding="utf-8")
+    assert 'prefix="environment."' in helper
+    assert "os.chmod(env_path, 0o600)" in helper
+    assert 'f"--property=EnvironmentFile={env_path}"' in helper
+    assert "env_path.unlink(missing_ok=True)" in helper
+    assert 'state == "active"' in helper
+    assert 'f"--unit={unit_name}"' in helper
+    assert "--setenv" not in helper
+    assert "OPENCTI_TOKEN=" not in helper
+    assert "--preserve-env" not in relay
+    assert "build_relay_environment" in relay
+    assert "os.pipe2(os.O_CLOEXEC)" in relay
+    assert "stdin=env_read" in relay
+    assert "read_relay_environment(approved_env)" in helper
+    assert "capability dac_override," not in APPARMOR.read_text(encoding="utf-8")
 
 
 def test_sudoers_grants_only_validating_helper_with_setenv() -> None:
@@ -83,6 +101,5 @@ def test_unprivileged_relay_precedes_broker_transition() -> None:
     assert "/usr/local/sbin/sift-addon-stdio-relay        rix" in source
     assert "/run/sift-addon-client/**                     rwk" in source
     assert "/run/sift-addon-client/**                 rw," in source
-    assert "capability dac_override," not in source
     assert "CapabilityBoundingSet=" in HELPER.read_text(encoding="utf-8")
     assert "deny ptrace," in source

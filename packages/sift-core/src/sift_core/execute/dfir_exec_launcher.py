@@ -80,6 +80,11 @@ FS_WRITE = (
     | LANDLOCK_ACCESS_FS_MAKE_FIFO
     | LANDLOCK_ACCESS_FS_MAKE_BLOCK
     | LANDLOCK_ACCESS_FS_MAKE_SYM
+    # .NET and many native forensic tools open derived artifacts with O_TRUNC.
+    # Without this access right a file can be created in the case write-jail
+    # but cannot be opened for output. _fs_handled_access masks it on Landlock
+    # ABI versions predating the truncate bit.
+    | LANDLOCK_ACCESS_FS_TRUNCATE
 )
 
 _LIBC = ctypes.CDLL(None, use_errno=True)
@@ -198,7 +203,7 @@ def _close_inherited_fds() -> None:
 def _set_limits(policy: dict[str, Any]) -> None:
     timeout = int(policy.get("timeout") or 0)
     memory_limit = int(policy.get("memory_limit_bytes") or 0)
-    file_size_limit = int(policy.get("file_size_limit_bytes") or 1_073_741_824)
+    file_size_limit = int(policy.get("file_size_limit_bytes") or 0)
 
     def lower_limit(kind: int, soft_value: int, hard_value: int | None = None) -> None:
         _soft, current_hard = resource.getrlimit(kind)
@@ -213,7 +218,7 @@ def _set_limits(policy: dict[str, Any]) -> None:
         lower_limit(resource.RLIMIT_CPU, cpu_limit, cpu_limit + 1)
     if memory_limit > 0 and hasattr(resource, "RLIMIT_AS"):
         lower_limit(resource.RLIMIT_AS, memory_limit)
-    if hasattr(resource, "RLIMIT_FSIZE"):
+    if file_size_limit > 0 and hasattr(resource, "RLIMIT_FSIZE"):
         lower_limit(resource.RLIMIT_FSIZE, file_size_limit)
     if hasattr(resource, "RLIMIT_NOFILE"):
         lower_limit(resource.RLIMIT_NOFILE, 256)
@@ -385,7 +390,16 @@ def _install_landlock(policy: dict[str, Any]) -> int:
                 # Read+execute only; see FORENSIC_TOOL_RX_ROOTS for the
                 # per-root justification and the preserved-floor analysis.
                 *FORENSIC_TOOL_RX_ROOTS,
-                "/proc/self",
+                # Managed runtimes (notably .NET) query their own child-process
+                # state plus public CPU and NUMA topology.  A rule for
+                # ``/proc/self`` resolves to the launcher's PID and therefore
+                # does not cover a child started by a shell-backed wrapper.
+                # Landlock cannot express the AppArmor-style numeric-PID glob,
+                # so grant the procfs mount read+execute here and retain the
+                # narrower AppArmor pathname backstop below.  The runtime user
+                # still cannot read other users' ``environ`` files by DAC.
+                "/proc",
+                "/sys/devices/system",
                 "/etc/ld.so.cache",
                 "/etc/ld.so.conf",
                 "/etc/ld.so.conf.d",
@@ -393,6 +407,10 @@ def _install_landlock(policy: dict[str, Any]) -> int:
                 "/etc/localtime",
                 "/etc/ssl/certs",
                 "/etc/nsswitch.conf",
+                # file(1) consults this public, immutable magic database before
+                # falling back to its compiled database. Without it, the command
+                # succeeds but emits an avoidable EACCES warning to the agent.
+                "/etc/magic",
                 # volatility3's automagic initializes the stdlib mimetypes
                 # module, which reads /etc/mime.types. Without a grant the
                 # Landlock floor denies it (EACCES), the exception derails vol's
@@ -436,18 +454,17 @@ def _install_landlock(policy: dict[str, Any]) -> int:
         os.close(ruleset_fd)
 
 
-# SEC-16: socket() is ALWAYS logged, never killed — even when the global action
-# is KILL. curl/wget read-only fetches and AF_UNIX local IPC legitimately call
-# socket(), and egress is already enforced at the network layer by the systemd
-# cgroup scope (IPAddressDeny=any). The ideal would be AF-family splitting (kill
-# AF_PACKET/AF_NETLINK/raw, allow AF_INET/AF_INET6/AF_UNIX), but that requires
-# inspecting socket()'s domain argument (seccomp_data.args[0]); this flat,
-# nr-only BPF builder cannot express an arg-dependent action cleanly. So we keep
-# socket as LOG-only telemetry (preserving the Wave-1 signal) rather than make
-# the kill action crash legitimate fetches. The remaining denylisted syscalls
-# below are zero-false-positive for forensic parsers, so they are safe to KILL.
+# SEC-16: these syscalls are ALWAYS logged, never killed — even when the global
+# action is KILL. curl/wget read-only fetches and AF_UNIX local IPC legitimately
+# call socket(), and egress is already enforced at the network layer by the
+# systemd cgroup scope (IPAddressDeny=any). clone3 is the modern process-creation
+# syscall used by glibc/.NET before any fallback to clone; clone is already
+# permitted and TasksMax/no-new-privs still constrain the process. The flat,
+# nr-only BPF builder cannot inspect syscall arguments, so preserve telemetry
+# rather than make the kill action crash approved forensic wrappers.
 _X86_64_ALWAYS_LOG_SYSCALLS = {
     41,  # socket — see SEC-16 note above; never killed.
+    435,  # clone3 — required by reviewed .NET Zimmerman wrappers.
 }
 
 # Denylisted syscalls that receive the configured action (KILL under enforce,
@@ -482,7 +499,6 @@ _X86_64_DENY_SYSCALLS = {
     429,  # move_mount
     430,  # fsopen
     432,  # fsmount
-    435,  # clone3
     442,  # mount_setattr
 }
 
@@ -545,6 +561,13 @@ def _prepare_and_exec(policy: dict[str, Any], real_argv: list[str]) -> None:
     _install_seccomp(policy)
 
     env = build_sandbox_env(base_env=dict(os.environ))
+    # .NET diagnostics create global named semaphores under /dev/shm.  The
+    # forensic jail intentionally has no shared-memory write grant, so disable
+    # diagnostics in this launcher-owned environment rather than reopening that
+    # host-wide write surface.  User-provided DOTNET_* remains denylisted by
+    # build_sandbox_env; this fixed safe value cannot be overridden by a tool
+    # invocation.
+    env["DOTNET_EnableDiagnostics"] = "0"
     os.execvpe(real_argv[0], real_argv, env)
 
 

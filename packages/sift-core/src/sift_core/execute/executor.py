@@ -62,6 +62,21 @@ def _systemd_scope_mode() -> str:
     return "required"
 
 
+def _mem_available_bytes() -> int:
+    """Return Linux ``MemAvailable`` in bytes, or zero when unavailable."""
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as meminfo:
+            for line in meminfo:
+                if not line.startswith("MemAvailable:"):
+                    continue
+                fields = line.split()
+                if len(fields) >= 2:
+                    return max(0, int(fields[1]) * 1024)
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
 def _systemd_memory_props(memory_limit_bytes: int) -> tuple[str, str]:
     memory_max = os.environ.get("SIFT_EXECUTE_SYSTEMD_MEMORY_MAX", "").strip()
     memory_high = os.environ.get("SIFT_EXECUTE_SYSTEMD_MEMORY_HIGH", "").strip()
@@ -69,8 +84,15 @@ def _systemd_memory_props(memory_limit_bytes: int) -> tuple[str, str]:
         memory_max = memory_max or str(int(memory_limit_bytes))
         memory_high = memory_high or str(max(1, int(memory_limit_bytes * 0.75)))
     else:
-        memory_high = memory_high or "3G"
-        memory_max = memory_max or "4G"
+        available = _mem_available_bytes()
+        # Keep every execution scope below contemporaneously available RAM so a
+        # memory-forensics job has useful headroom without starving the gateway,
+        # workers, or other active scopes. Non-Linux hosts retain the proven
+        # 3G/4G fallback, and explicit operator limits still win.
+        dynamic_max = available * 60 // 100 if available else 4 * 1024**3
+        dynamic_high = max(1, dynamic_max * 75 // 100)
+        memory_high = memory_high or str(dynamic_high)
+        memory_max = memory_max or str(dynamic_max)
     return memory_high, memory_max
 
 
@@ -208,6 +230,7 @@ def _run_isolated_worker(
     runtime_user: str = "",
     sudo_path: str = "",
     cache_dir: str = "",
+    file_size_limit_bytes: int = 0,
 ) -> dict[str, Any]:
     case_dir = _active_or_env_case_dir()
     payload = {
@@ -216,6 +239,7 @@ def _run_isolated_worker(
         "case_dir": case_dir,
         "max_output_bytes": max_output_bytes,
         "memory_limit_bytes": memory_limit_bytes,
+        "file_size_limit_bytes": file_size_limit_bytes,
         "runtime_user": runtime_user,
         "sudo_path": sudo_path,
         "cache_dir": cache_dir,
@@ -384,6 +408,7 @@ def execute(
             runtime_user=runtime_user,
             sudo_path=sudo_path,
             cache_dir=cache_dir,
+            file_size_limit_bytes=config.execute_file_size_limit_bytes,
         )
         elapsed = time.monotonic() - start
 

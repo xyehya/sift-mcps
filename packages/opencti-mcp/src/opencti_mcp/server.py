@@ -451,7 +451,9 @@ class OpenCTIMCPServer:
 
             except ConfigurationError as e:
                 elapsed_ms = (time.monotonic() - start) * 1000
-                logger.error("Configuration error", extra={"error": str(e)})
+                logger.error(
+                    "Configuration error", extra={"error_type": type(e).__name__}
+                )
                 error_result = {
                     "error": "configuration_error",
                     "message": "OpenCTI is not properly configured. Check server settings.",
@@ -472,7 +474,6 @@ class OpenCTIMCPServer:
                     extra={
                         "tool": name,
                         "error_type": type(e).__name__,
-                        "error": str(e),
                     },
                 )
                 error_result = {

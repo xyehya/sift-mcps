@@ -7,6 +7,7 @@ import re
 from _installer_support import REPO_ROOT
 
 APPARMOR = REPO_ROOT / "configs" / "apparmor" / "sift-gateway.template"
+DFIR_EXEC_APPARMOR = REPO_ROOT / "configs" / "apparmor" / "dfir-exec.template"
 
 
 def _broker_body() -> str:
@@ -51,3 +52,28 @@ def test_gateway_still_px_into_scope_broker() -> None:
         "/usr/local/sbin/sift-run-command-systemd-scope px -> sift-run-command-scope,"
         in source
     )
+
+
+def test_dfir_exec_allows_only_the_fixed_dotnet_runtime_for_zimmerman_wrappers() -> None:
+    source = DFIR_EXEC_APPARMOR.read_text(encoding="utf-8")
+    assert "/usr/lib/dotnet/dotnet                   rix," in source
+    assert "/usr/lib/dotnet/**                        rix," not in source
+
+
+def test_dfir_exec_keeps_proc_narrow_while_allowing_dotnet_runtime_metadata() -> None:
+    source = DFIR_EXEC_APPARMOR.read_text(encoding="utf-8")
+
+    for rule in (
+        "/proc/meminfo                            r,",
+        "/proc/stat                               r,",
+        "/proc/[0-9]*/mountinfo                   r,",
+        "/sys/devices/system/**                   r,",
+    ):
+        assert rule in source
+    assert "\n  /proc/**" not in source
+
+
+def test_dfir_exec_allows_the_public_file_magic_database_read_only() -> None:
+    source = DFIR_EXEC_APPARMOR.read_text(encoding="utf-8")
+    assert "/etc/magic                               r," in source
+    assert "/etc/magic                               rw" not in source

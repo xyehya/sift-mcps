@@ -414,6 +414,7 @@ def test_run_command_wraps_worker_in_systemd_scope_when_requested(monkeypatch):
         "which",
         lambda cmd: "/usr/bin/systemd-run" if cmd == "systemd-run" else None,
     )
+    monkeypatch.setattr(executor_module, "_mem_available_bytes", lambda: 20 * 1024**3)
     monkeypatch.setattr(pwd, "getpwnam", lambda name: SimpleNamespace(pw_gid=995))
 
     captured = {}
@@ -452,8 +453,8 @@ def test_run_command_wraps_worker_in_systemd_scope_when_requested(monkeypatch):
     assert "--gid" in cmd
     assert cmd[cmd.index("--gid") + 1] == "995"
     assert "-p" in cmd
-    assert "MemoryHigh=3G" in cmd
-    assert "MemoryMax=4G" in cmd
+    assert f"MemoryHigh={9 * 1024**3}" in cmd
+    assert f"MemoryMax={12 * 1024**3}" in cmd
     assert "CPUQuota=200%" in cmd
     assert "TasksMax=64" in cmd
     assert "RuntimeMaxSec=10" in cmd
@@ -481,6 +482,7 @@ def test_run_command_uses_systemd_scope_helper_when_configured(monkeypatch):
         "which",
         lambda cmd: f"/usr/bin/{cmd}" if cmd in {"sudo", "systemd-run"} else None,
     )
+    monkeypatch.setattr(executor_module, "_mem_available_bytes", lambda: 20 * 1024**3)
     monkeypatch.setattr(executor_module.Path, "exists", lambda self: True)
 
     captured = {}
@@ -514,8 +516,8 @@ def test_run_command_uses_systemd_scope_helper_when_configured(monkeypatch):
     assert cmd[cmd.index("--unit") + 1].startswith("sift-run-command-")
     assert cmd[cmd.index("--unit") + 1].endswith(".scope")
     assert cmd[cmd.index("--runtime-user") + 1] == "agent_runtime"
-    assert cmd[cmd.index("--memory-high") + 1] == "3G"
-    assert cmd[cmd.index("--memory-max") + 1] == "4G"
+    assert cmd[cmd.index("--memory-high") + 1] == str(9 * 1024**3)
+    assert cmd[cmd.index("--memory-max") + 1] == str(12 * 1024**3)
     assert cmd[cmd.index("--cpu-quota") + 1] == "200%"
     assert cmd[cmd.index("--tasks-max") + 1] == "64"
     assert cmd[cmd.index("--runtime-max-sec") + 1] == "10"
@@ -1431,6 +1433,9 @@ def test_worker_cache_dir_provisions_writable_home_and_xdg(tmp_path):
     assert f"XDG_DATA_HOME={home / '.local' / 'share'}" in out
     assert f"XDG_STATE_HOME={home / '.local' / 'state'}" in out
     assert f"XDG_CACHE_HOME={cache}" in out
+    assert f"TMPDIR={cache}" in out
+    assert f"TMP={cache}" in out
+    assert f"TEMP={cache}" in out
     # The vol symbol store is provisioned inside the same write-jail.
     assert (jail / "vol-symbols").is_dir()
 

@@ -115,6 +115,17 @@ TRANSIENT_HTTP_CODES = frozenset({408, 429, 500, 502, 503, 504})
 logger = logging.getLogger(__name__)
 
 
+def _log_safe_failure(
+    message: str, error: BaseException, *, level: int = logging.ERROR
+) -> None:
+    """Record only a stable failure class, never transport exception text.
+
+    ``requests`` and pycti exceptions commonly include the configured endpoint.
+    The add-on must not put that configuration-sensitive value into its journal.
+    """
+    logger.log(level, message, extra={"error_type": type(error).__name__})
+
+
 # =============================================================================
 # Circuit Breaker
 # =============================================================================
@@ -763,7 +774,7 @@ class OpenCTIClient:
                 ) from e
             except Exception as e:
                 # Don't leak connection details
-                logger.error(f"Failed to connect to OpenCTI: {e}")
+                _log_safe_failure("Failed to connect to OpenCTI", e)
                 raise ConnectionError(f"Connection failed: {type(e).__name__}") from e
 
     def reconnect(self) -> Any:
@@ -944,12 +955,12 @@ class OpenCTIClient:
                 f"{_STARTUP_PROBE_TIMEOUT}s: {type(e).__name__}. "
                 f"Backend running in DEGRADED mode — threat-intel "
                 f"queries will fail-fast until the server is reachable. "
-                f"Check connectivity to {self.config.opencti_url}."
+                "Check connectivity to the configured OpenCTI endpoint."
             )
             self._circuit_breaker.record_failure()
             logger.warning(
                 "OpenCTI unreachable; degraded mode active",
-                extra={"url": self.config.opencti_url, "error_type": type(e).__name__},
+                extra={"error_type": type(e).__name__},
             )
             # NOTE: not raising — backend stays up, tools fail-fast per-call
 
@@ -962,7 +973,7 @@ class OpenCTIClient:
             self._circuit_breaker.record_failure()
             logger.error(
                 "Startup validation failed",
-                extra={"error": str(e), "error_type": type(e).__name__},
+                extra={"error_type": type(e).__name__},
             )
 
         return result
@@ -1012,7 +1023,7 @@ class OpenCTIClient:
 
                     return version_info
         except Exception as e:
-            logger.debug(f"Could not get OpenCTI version: {e}")
+            _log_safe_failure("Could not get OpenCTI version", e, level=logging.DEBUG)
 
         return None
 
@@ -1089,7 +1100,7 @@ class OpenCTIClient:
             version_info = self._get_opencti_version(self.connect()) or {}
 
             return {
-                "url": self.config.opencti_url,
+                "endpoint_scheme": self.config.opencti_url.split(":", 1)[0].lower(),
                 "version": version_info.get("version"),
                 "platform_version": version_info.get("platform_version"),
                 "available": self.is_available(),
@@ -1097,7 +1108,7 @@ class OpenCTIClient:
             }
         except Exception as e:
             return {
-                "url": self.config.opencti_url,
+                "endpoint_scheme": self.config.opencti_url.split(":", 1)[0].lower(),
                 "version": None,
                 "available": False,
                 "error": type(e).__name__,
@@ -1328,14 +1339,14 @@ class OpenCTIClient:
                     self._search_cache, cache_key
                 )
                 if found:
-                    logger.warning(
-                        f"Indicator search failed, returning cached result: {e}"
+                    _log_safe_failure(
+                        "Indicator search failed; returning cached result", e, level=logging.WARNING
                     )
                     self._last_response_from_cache = True
                     self._last_response_degraded = True
                     return cached
 
-            logger.error(f"Indicator search failed: {e}")
+            _log_safe_failure("Indicator search failed", e)
             raise QueryError(f"Indicator search failed: {type(e).__name__}") from e
 
     def search_threat_actors(
@@ -1398,7 +1409,7 @@ class OpenCTIClient:
             return self._format_threat_actors(unique[offset : offset + limit])
 
         except Exception as e:
-            logger.error(f"Threat actor search failed: {e}")
+            _log_safe_failure("Threat actor search failed", e)
             raise QueryError(f"Threat actor search failed: {type(e).__name__}") from e
 
     def search_malware(
@@ -1435,7 +1446,7 @@ class OpenCTIClient:
             return self._format_malware(results)
 
         except Exception as e:
-            logger.error(f"Malware search failed: {e}")
+            _log_safe_failure("Malware search failed", e)
             raise QueryError(f"Malware search failed: {type(e).__name__}") from e
 
     def search_attack_patterns(
@@ -1470,7 +1481,7 @@ class OpenCTIClient:
             return self._format_attack_patterns(results)
 
         except Exception as e:
-            logger.error(f"Attack pattern search failed: {e}")
+            _log_safe_failure("Attack pattern search failed", e)
             raise QueryError(f"Attack pattern search failed: {type(e).__name__}") from e
 
     def search_vulnerabilities(
@@ -1504,7 +1515,7 @@ class OpenCTIClient:
             return self._format_vulnerabilities(results)
 
         except Exception as e:
-            logger.error(f"Vulnerability search failed: {e}")
+            _log_safe_failure("Vulnerability search failed", e)
             raise QueryError(f"Vulnerability search failed: {type(e).__name__}") from e
 
     def search_reports(
@@ -1546,7 +1557,7 @@ class OpenCTIClient:
             return self._format_reports(results)
 
         except Exception as e:
-            logger.error(f"Report search failed: {e}")
+            _log_safe_failure("Report search failed", e)
             raise QueryError(f"Report search failed: {type(e).__name__}") from e
 
     def search_campaigns(
@@ -1588,7 +1599,7 @@ class OpenCTIClient:
             return self._format_campaigns(results)
 
         except Exception as e:
-            logger.error(f"Campaign search failed: {e}")
+            _log_safe_failure("Campaign search failed", e)
             raise QueryError(f"Campaign search failed: {type(e).__name__}") from e
 
     def search_tools(
@@ -1622,7 +1633,7 @@ class OpenCTIClient:
             return self._format_tools(results)
 
         except Exception as e:
-            logger.error(f"Tool search failed: {e}")
+            _log_safe_failure("Tool search failed", e)
             raise QueryError(f"Tool search failed: {type(e).__name__}") from e
 
     def search_infrastructure(
@@ -1656,7 +1667,7 @@ class OpenCTIClient:
             return self._format_infrastructure(results)
 
         except Exception as e:
-            logger.error(f"Infrastructure search failed: {e}")
+            _log_safe_failure("Infrastructure search failed", e)
             raise QueryError(f"Infrastructure search failed: {type(e).__name__}") from e
 
     def search_incidents(
@@ -1698,7 +1709,7 @@ class OpenCTIClient:
             return self._format_incidents(results)
 
         except Exception as e:
-            logger.error(f"Incident search failed: {e}")
+            _log_safe_failure("Incident search failed", e)
             raise QueryError(f"Incident search failed: {type(e).__name__}") from e
 
     def search_observables(
@@ -1748,7 +1759,7 @@ class OpenCTIClient:
             return self._format_observables(results)
 
         except Exception as e:
-            logger.error(f"Observable search failed: {e}")
+            _log_safe_failure("Observable search failed", e)
             raise QueryError(f"Observable search failed: {type(e).__name__}") from e
 
     def search_sightings(
@@ -1775,7 +1786,7 @@ class OpenCTIClient:
             return self._format_sightings(results)
 
         except Exception as e:
-            logger.error(f"Sighting search failed: {e}")
+            _log_safe_failure("Sighting search failed", e)
             raise QueryError(f"Sighting search failed: {type(e).__name__}") from e
 
     def search_organizations(
@@ -1802,7 +1813,7 @@ class OpenCTIClient:
             return self._format_organizations(results)
 
         except Exception as e:
-            logger.error(f"Organization search failed: {e}")
+            _log_safe_failure("Organization search failed", e)
             raise QueryError(f"Organization search failed: {type(e).__name__}") from e
 
     def search_sectors(
@@ -1826,7 +1837,7 @@ class OpenCTIClient:
             return self._format_sectors(results)
 
         except Exception as e:
-            logger.error(f"Sector search failed: {e}")
+            _log_safe_failure("Sector search failed", e)
             raise QueryError(f"Sector search failed: {type(e).__name__}") from e
 
     def search_locations(
@@ -1847,7 +1858,7 @@ class OpenCTIClient:
             return self._format_locations(results)
 
         except Exception as e:
-            logger.error(f"Location search failed: {e}")
+            _log_safe_failure("Location search failed", e)
             raise QueryError(f"Location search failed: {type(e).__name__}") from e
 
     def search_courses_of_action(
@@ -1870,7 +1881,7 @@ class OpenCTIClient:
             return self._format_courses_of_action(results)
 
         except Exception as e:
-            logger.error(f"Course of action search failed: {e}")
+            _log_safe_failure("Course of action search failed", e)
             raise QueryError(
                 f"Course of action search failed: {type(e).__name__}"
             ) from e
@@ -1899,7 +1910,7 @@ class OpenCTIClient:
             return self._format_groupings(results)
 
         except Exception as e:
-            logger.error(f"Grouping search failed: {e}")
+            _log_safe_failure("Grouping search failed", e)
             raise QueryError(f"Grouping search failed: {type(e).__name__}") from e
 
     def search_notes(
@@ -1926,7 +1937,7 @@ class OpenCTIClient:
             return self._format_notes(results)
 
         except Exception as e:
-            logger.error(f"Note search failed: {e}")
+            _log_safe_failure("Note search failed", e)
             raise QueryError(f"Note search failed: {type(e).__name__}") from e
 
     def unified_search(
@@ -2135,7 +2146,7 @@ class OpenCTIClient:
                             context["mitre_techniques"].append(target_name)
 
             except Exception as e:
-                logger.warning(f"Failed to get relationships: {e}")
+                _log_safe_failure("Failed to get relationships", e, level=logging.WARNING)
 
             return context
 
@@ -2145,11 +2156,11 @@ class OpenCTIClient:
         except Exception as e:
             # GraphQL schema errors, pycti version mismatches, etc.
             # Degrade gracefully instead of killing the lookup
-            logger.warning(f"IOC context lookup degraded for {ioc}: {e}")
+            _log_safe_failure("IOC context lookup degraded", e, level=logging.WARNING)
             return {
                 "found": False,
                 "ioc": ioc,
-                "error": f"Context unavailable: {e}",
+                "error": "Context unavailable",
             }
 
     def get_entity(self, entity_id: str) -> dict[str, Any] | None:
@@ -2191,7 +2202,7 @@ class OpenCTIClient:
             return None
 
         except Exception as e:
-            logger.error(f"Get entity failed: {e}")
+            _log_safe_failure("Get entity failed", e)
             raise QueryError(f"Get entity failed: {type(e).__name__}") from e
 
     def get_relationships(
@@ -2257,7 +2268,7 @@ class OpenCTIClient:
             return [self._format_relationship(r) for r in unique[:limit]]
 
         except Exception as e:
-            logger.error(f"Get relationships failed: {e}")
+            _log_safe_failure("Get relationships failed", e)
             raise QueryError(f"Get relationships failed: {type(e).__name__}") from e
 
     def get_recent_indicators(
@@ -2294,7 +2305,7 @@ class OpenCTIClient:
             return self._format_indicators(results)
 
         except Exception as e:
-            logger.error(f"Recent indicators query failed: {e}")
+            _log_safe_failure("Recent indicators query failed", e)
             raise QueryError(
                 f"Recent indicators query failed: {type(e).__name__}"
             ) from e
@@ -2377,7 +2388,7 @@ class OpenCTIClient:
             return None
 
         except Exception as e:
-            logger.error(f"Hash lookup failed: {e}")
+            _log_safe_failure("Hash lookup failed", e)
             return None
 
     # =========================================================================
@@ -2420,7 +2431,7 @@ class OpenCTIClient:
             return enrichment
 
         except Exception as e:
-            logger.error(f"Failed to list connectors: {e}")
+            _log_safe_failure("Failed to list connectors", e)
             raise QueryError(f"Failed to list connectors: {type(e).__name__}") from e
 
     def trigger_enrichment(self, entity_id: str, connector_id: str) -> dict[str, Any]:
@@ -2474,7 +2485,7 @@ class OpenCTIClient:
             }
 
         except Exception as e:
-            logger.error(f"Trigger enrichment failed: {e}")
+            _log_safe_failure("Trigger enrichment failed", e)
             raise QueryError(f"Trigger enrichment failed: {type(e).__name__}") from e
 
     # =========================================================================
@@ -2542,7 +2553,7 @@ class OpenCTIClient:
                                 label_name=label,
                             )
                         except Exception as e:
-                            logger.warning(f"Failed to add label {label}: {e}")
+                            _log_safe_failure("Failed to add label", e, level=logging.WARNING)
 
                 return {
                     "success": True,
@@ -2555,7 +2566,7 @@ class OpenCTIClient:
             return {"success": False, "error": "No result returned"}
 
         except Exception as e:
-            logger.error(f"Create indicator failed: {e}")
+            _log_safe_failure("Create indicator failed", e)
             raise QueryError(f"Create indicator failed: {type(e).__name__}") from e
 
     def create_note(
@@ -2620,7 +2631,7 @@ class OpenCTIClient:
             return {"success": False, "error": "No result returned"}
 
         except Exception as e:
-            logger.error(f"Create note failed: {e}")
+            _log_safe_failure("Create note failed", e)
             raise QueryError(f"Create note failed: {type(e).__name__}") from e
 
     def create_sighting(
@@ -2699,7 +2710,7 @@ class OpenCTIClient:
             return {"success": False, "error": "No result returned"}
 
         except Exception as e:
-            logger.error(f"Create sighting failed: {e}")
+            _log_safe_failure("Create sighting failed", e)
             raise QueryError(f"Create sighting failed: {type(e).__name__}") from e
 
     # =========================================================================

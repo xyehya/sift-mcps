@@ -34,6 +34,10 @@ class SiftConfig:
     # Optional address-space limit applied inside the isolated worker process.
     execute_memory_limit_bytes: int = 0
 
+    # Optional per-file write limit for execution outputs. Disabled by default:
+    # managed forensic runtimes may reserve large backing files during startup.
+    execute_file_size_limit_bytes: int = 0
+
     # Low-privilege local account used for native Linux user isolation.
     # Set SIFT_EXECUTE_AS_USER=__current__ only for local tests/dev.
     execute_as_user: str = "agent_runtime"
@@ -81,6 +85,14 @@ class SiftConfig:
             try:
                 cfg.execute_memory_limit_bytes = int(
                     os.environ["SIFT_EXECUTE_MEMORY_LIMIT"]
+                )
+            except ValueError:
+                pass
+
+        if os.environ.get("SIFT_EXECUTE_FILE_SIZE_LIMIT"):
+            try:
+                cfg.execute_file_size_limit_bytes = int(
+                    os.environ["SIFT_EXECUTE_FILE_SIZE_LIMIT"]
                 )
             except ValueError:
                 pass
