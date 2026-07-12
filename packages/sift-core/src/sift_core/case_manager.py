@@ -1184,7 +1184,20 @@ class CaseManager:
         # Response warnings (accumulated through remaining steps)
         warnings: list[str] = []
 
-        # Auto-create timeline event for type=finding with event_timestamp
+        # Auto-create timeline event for type=finding with event_timestamp.
+        #
+        # P2.4 (intentional): ONLY type=="finding" auto-mints a linked timeline
+        # event. The other three finding types are deliberately excluded even if
+        # they carry an event_timestamp:
+        #   - exclusion  — records what did NOT happen / was ruled out; it has no
+        #     positive event to place on the incident timeline.
+        #   - conclusion — a synthesized judgement over prior findings, not a
+        #     discrete observed event.
+        #   - attribution — an actor/campaign judgement, not a timeline event.
+        # Minting timeline rows for these would pollute the chronological
+        # reconstruction with non-events. Callers who need a timeline entry for
+        # such a judgement use record_timeline_event() explicitly.
+        # Fail-on-revert coverage: tests/test_p24_timeline_auto_mint_scope.py.
         timeline_event_id = ""
         finding_type = sanitized.get("type", "")
         event_ts = sanitized.get("event_timestamp", "")
