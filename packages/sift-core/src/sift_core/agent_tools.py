@@ -383,7 +383,6 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
                 "save_output": {"type": "boolean", "default": False, "description": "Persist full stdout/stderr to agent/run_commands/."},
                 "evidence_refs": {"type": "array", "items": {"type": "string"}, "description": "Sealed evidence references (evidence_id or relative display path) this command reads. Resolved to local paths internally; the agent never supplies absolute paths."},
                 "output_ref": {"type": "string", "description": "Logical name for saved output. Resolved internally to a writable location under agent/run_commands/; returned as a relative output ref."},
-                "input_files": {"type": "array", "items": {"type": "string"}, "description": "Deprecated: prefer evidence_refs. Evidence/input file paths this command reads, for provenance hashing."},
                 "working_dir": {"type": "string", "description": "Working directory, relative to the case directory."},
                 "preview_lines": {"type": "integer", "default": 0, "description": "Cap inline stdout to this many lines (0 = no inline cap)."},
                 "skip_enrichment": {"type": "boolean", "default": False, "description": "Skip forensic-knowledge enrichment after the first call."},
@@ -723,6 +722,22 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             error="purpose is required",
             examiner=examiner,
         )
+    # ``input_files`` used to be an agent-supplied provenance hint.  It let a
+    # caller make the gateway open and hash an arbitrary readable host path
+    # before the command validator ran.  Evidence references are the only
+    # supported provenance input: the Gateway resolves them from the active
+    # case's sealed manifest/DB record and injects the local path internally.
+    # Reject even an empty legacy field so stale clients discover the migration
+    # instead of assuming it still has meaning.
+    if "input_files" in args:
+        return build_response(
+            tool_name="run_command",
+            success=False,
+            data=None,
+            audit_id=audit_id,
+            error="input_files is no longer accepted; use sealed evidence_refs instead",
+            examiner=examiner,
+        )
     try:
         working_dir = str(args.get("working_dir", ""))
         if working_dir:
@@ -860,23 +875,9 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
     first_binary = ""
     detected_inputs: list[str] = []
 
-    input_files = args.get("input_files") or None
     if resolved_evidence_paths:
         detected_inputs.extend(resolved_evidence_paths)
-        if input_files:
-            for fpath in input_files:
-                try:
-                    detected_inputs.append(str(resolve_case_path(str(fpath))))
-                except ValueError:
-                    detected_inputs.append(str(fpath))
         detection_method = "evidence_ref"
-    elif input_files:
-        for fpath in input_files:
-            try:
-                detected_inputs.append(str(resolve_case_path(str(fpath))))
-            except ValueError:
-                detected_inputs.append(str(fpath))
-        detection_method = "llm"
     else:
         for subcmd_str, _ in subcmds:
             if not subcmd_str.strip():
@@ -917,9 +918,15 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             detection_method = "none"
 
     input_hashes: dict[str, str] = {}
+    case_root_path = Path(case_root).resolve() if case_root else None
     for fpath in detected_inputs:
         try:
             p = Path(fpath).resolve()
+            # Provenance collection is itself a file read.  Keep it on the
+            # same active-case floor as command arguments so parsed/stale raw
+            # paths can never turn the gateway into a host-file hash oracle.
+            if case_root_path is None or not p.is_relative_to(case_root_path):
+                continue
             if p.is_file():
                 if p.stat().st_size > 1_000_000_000:
                     input_hashes[str(p)] = "skipped:too_large"
@@ -1153,11 +1160,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             response["warning"] = "Audit write failed — action not recorded"
         if detection_method == "none" and first_binary not in _NO_INPUT_CMDS:
             response["input_files_warning"] = (
-                "Could not detect input files — pass input_files parameter for provenance chain linking."
-            )
-        elif detection_method == "llm" and not input_hashes:
-            response["input_files_warning"] = (
-                "input_files provided but none resolved to existing files. Provenance chain will be incomplete."
+                "Could not detect input files — pass sealed evidence_refs for provenance chain linking."
             )
         # Final defense-in-depth: scrub every path-like value in the agent-facing
         # response. In-case absolutes (including those embedded in tool stdout)

@@ -1080,7 +1080,7 @@ def test_evidence_write_delete_mutation_blocked(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="Output denied: path .*protected case"):
         generic.run_command(
-            "cp /usr/bin/python3 evidence/qa-decoy-REMOVEME",
+            "cp evidence/sealed.bin evidence/qa-decoy-REMOVEME",
             purpose="block evidence write",
         )
 
@@ -1629,7 +1629,7 @@ def test_run_command_single_find_partial_path_keeps_output_and_flags_failure(
     case_dir = _exec_case_dir(tmp_path, monkeypatch)
     _set_policy(monkeypatch, {"denied_binaries": ["env"]})
     good = str(case_dir / "evidence")
-    blocked = str(tmp_path / "does-not-exist-blocked")  # stand-in for a blocked path
+    blocked = str(case_dir / "does-not-exist-blocked")
 
     res = generic.run_command(
         f"find {good} {blocked} -name *.log",
@@ -1663,7 +1663,7 @@ def test_run_command_pipeline_masked_upstream_failure_is_surfaced(
     case_dir = _exec_case_dir(tmp_path, monkeypatch)
     _set_policy(monkeypatch, {"denied_binaries": ["env"]})
     good = str(case_dir / "evidence")
-    blocked = str(tmp_path / "does-not-exist-blocked")
+    blocked = str(case_dir / "does-not-exist-blocked")
 
     res = generic.run_command(
         f"find {good} {blocked} -name *.log | grep alpha",
@@ -1695,7 +1695,7 @@ def test_run_command_and_chain_skips_after_nonzero_find_keeps_partial_output(
     case_dir = _exec_case_dir(tmp_path, monkeypatch)
     _set_policy(monkeypatch, {"denied_binaries": ["env"]})
     good = str(case_dir / "evidence")
-    blocked = str(tmp_path / "does-not-exist-blocked")
+    blocked = str(case_dir / "does-not-exist-blocked")
 
     res = generic.run_command(
         f"find {good} {blocked} -name *.log && echo SECOND_RAN",

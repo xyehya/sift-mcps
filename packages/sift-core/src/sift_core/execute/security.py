@@ -152,21 +152,6 @@ def sanitize_extra_args(extra_args: list[str], tool_name: str = "") -> list[str]
     return sanitized
 
 
-# Directories where rm is blocked (evidence storage, case data)
-def _get_protected_dirs() -> tuple[str, ...]:
-    """Resolve protected directories at runtime.
-
-    The operator-configured cases root comes from the canonical
-    :func:`sift_core.case_io.cases_root` resolver; ``/cases`` and ``/evidence``
-    are kept as static defense-in-depth belts (well-known default mounts).
-    """
-    return (
-        str(cases_root().resolve()),
-        "/cases",
-        "/evidence",
-    )
-
-
 def is_denied(binary_name: str) -> bool:
     """Check if a binary is on the hard denylist."""
     return matches_denied_binary(binary_name, _get_policy()["denied_binaries"])
@@ -284,11 +269,26 @@ def _validate_case_output_target(path: str, *, base_dir: str | Path | None = Non
     return validate_output_path(path, base_dir=base_dir)
 
 
-def validate_rm_targets(args: list[str], *, base_dir: str | Path | None = None) -> None:
-    """Block rm from targeting evidence storage directories.
+def _validate_case_mutation_target(
+    path: str, *, action: str, base_dir: str | Path | None = None
+) -> str:
+    """Constrain a non-output-file mutation target to the active case."""
+    resolved = _resolve_user_path(path, base_dir=base_dir)
+    case_dir = _case_dir_path()
+    if case_dir is None:
+        raise ValueError(f"An active case is required for {action.lower()}")
+    if not _path_is_under(resolved, case_dir):
+        raise ValueError(f"{action} denied: target must resolve under the active case")
+    _reject_if_protected_case_path(resolved, action=action)
+    return str(resolved)
 
-    rm is allowed for general cleanup but blocked inside evidence
-    storage locations. Also blocks rm -rf / patterns.
+
+def validate_rm_targets(args: list[str], *, base_dir: str | Path | None = None) -> None:
+    """Confine ``rm`` to the active case's writable analysis directories.
+
+    Evidence and integrity records stay protected, while host paths and other
+    cases are rejected before execution even when an operator explicitly adds
+    ``rm`` to the binary allowlist.
     """
     _RM_GUIDANCE = (
         " File deletion in case/evidence directories requires human action "
@@ -297,30 +297,33 @@ def validate_rm_targets(args: list[str], *, base_dir: str | Path | None = None) 
         "approved local evidence workflow; do not attempt a side-channel delete."
     )
     path_args = [a for a in args if not a.startswith("-")]
+    case_dir = _active_case_dir_str()
+    if not case_dir:
+        raise ValueError("An active case is required for file deletion")
+    case_resolved_path = Path(case_dir).resolve()
     for arg in path_args:
         resolved_path = _resolve_user_path(arg, base_dir=base_dir)
-        resolved = str(resolved_path)  # noqa: F841 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
         if resolved_path == Path("/"):
             raise ValueError("Blocked: rm targeting filesystem root")
-        case_dir = _active_case_dir_str()
-        if case_dir:
-            case_resolved_path = Path(case_dir).resolve()
-            if any(_path_is_under(resolved_path, d) for d in _case_writable_dirs(case_resolved_path)):
-                continue
-            protected_roots = [case_resolved_path / "evidence", case_records_dir(case_resolved_path)]
-            protected_roots.append(case_resolved_path / "audit")
-            for protected in protected_roots:
-                protected = protected.resolve()
-                if _path_is_under(resolved_path, protected):
-                    raise ValueError(
-                        f"Blocked: rm in protected directory '{protected}'." + _RM_GUIDANCE
-                    )
-        for protected in _get_protected_dirs():
-            protected_path = Path(protected).resolve()
-            if _path_is_under(resolved_path, protected_path):
-                raise ValueError(
-                    f"Blocked: rm in protected directory '{protected}'." + _RM_GUIDANCE
-                )
+        if any(
+            _path_is_under(resolved_path, directory)
+            for directory in _case_writable_dirs(case_resolved_path)
+        ):
+            continue
+        protected_roots = [case_resolved_path / "evidence", case_records_dir(case_resolved_path)]
+        protected_roots.append(case_resolved_path / "audit")
+        if any(
+            _path_is_under(resolved_path, protected.resolve())
+            for protected in protected_roots
+        ):
+            raise ValueError(
+                "Blocked: rm in protected directory (case evidence or integrity storage)."
+                + _RM_GUIDANCE
+            )
+        raise ValueError(
+            "File deletion targets must be inside the active case writable "
+            "agent/, extractions/, or tmp/ directories"
+        )
 
 
 _BLOCKED_DIRECTORIES = (
@@ -453,12 +456,14 @@ def validate_output_path(path: str, *, base_dir: str | Path | None = None) -> st
 
 
 def validate_input_path(path: str, *, base_dir: str | Path | None = None) -> str:
-    """Validate that an input file path is not in a blocked system directory.
+    """Validate that an agent-supplied input path is inside the active case.
 
-    Resolves symlinks, then checks against a blocklist of sensitive system
-    directories. Also parses flag=value arguments and validates the value
-    portion as a path. Raises ValueError if the resolved path falls within
-    a blocked directory. Returns the resolved path string if valid.
+    The execution runtime may read its own installed binaries, libraries, and
+    configuration.  Those are not agent-controlled argv paths.  In contrast,
+    every path parsed from an agent command must resolve beneath the active
+    case.  This preserves the command-binary allowlist boundary while closing
+    host-file reads through ordinary positional arguments, redirects, and
+    input flags.  Symlinks are resolved before containment is checked.
     """
     # Handle flag=value arguments: validate the value portion as a path
     if "=" in path and path.startswith("-"):
@@ -468,21 +473,15 @@ def validate_input_path(path: str, *, base_dir: str | Path | None = None) -> str
         return path
 
     resolved_path = _resolve_user_path(path, base_dir=base_dir)
-    _reject_if_protected_case_path(resolved_path, action="Read")
-    resolved = str(resolved_path)
-    blocked_match = _path_is_blocked(
-        resolved_path,
-        _BLOCKED_DIRECTORIES,
-        exceptions=_BLOCKED_EXCEPTIONS,
-    )
-    if blocked_match:
-        blocked, blocked_path = blocked_match
+    case_dir = _case_dir_path()
+    if case_dir is None:
+        raise ValueError("An active case is required for agent-supplied input paths")
+    if not _path_is_under(resolved_path, case_dir):
         raise ValueError(
-            f"Access denied: path '{path}' resolves to '{resolved}' "
-            f"which is inside blocked system directory '{blocked}' "
-            f"(canonical '{blocked_path}')"
+            "Agent-supplied input paths must resolve under the active case"
         )
-    return resolved
+    _reject_if_protected_case_path(resolved_path, action="Read")
+    return str(resolved_path)
 
 
 # Tools that legitimately use /dev/ paths as device specifiers
@@ -504,6 +503,13 @@ _DEV_PATH_TOOLS = {
     "tsk_recover",
     "sorter",
     "dd",
+}
+
+# These flags carry a tool-internal logical label rather than a filesystem
+# operand.  They must stay explicit and tool-scoped: allowing a path-shaped
+# value here is safe only when the tool documents that it will not open it.
+_NON_FILE_PATH_VALUE_FLAGS: dict[str, frozenset[str]] = {
+    "fls": frozenset({"-m"}),  # TSK bodyfile mount-point label, e.g. ``-m /``.
 }
 
 _PRIVILEGED_TARGETS = {
@@ -812,16 +818,6 @@ def _path_args(argv: list[str]) -> list[str]:
     return [arg for arg in argv[1:] if arg and not arg.startswith("-")]
 
 
-def _validate_no_protected_targets(
-    paths: list[str], *, base_dir: str | Path | None, action: str
-) -> None:
-    for path in paths:
-        if "=" in path and path.startswith("-"):
-            continue
-        resolved = _resolve_user_path(path, base_dir=base_dir)
-        _reject_if_protected_case_path(resolved, action=action)
-
-
 def validate_mutating_command_targets(
     binary: str, argv: list[str], *, base_dir: str | Path | None = None
 ) -> None:
@@ -848,14 +844,19 @@ def validate_mutating_command_targets(
 
     if binary == "mv":
         if len(path_args) >= 2:
-            _validate_no_protected_targets(
-                path_args[:-1], base_dir=base_dir, action="Move"
-            )
-            _validate_case_output_target(path_args[-1], base_dir=base_dir)
+            for source in path_args[:-1]:
+                # A move mutates its source, so reading sealed evidence is not
+                # enough: both source and destination must be writable case
+                # workspace paths.
+                _validate_case_mutation_target(source, action="Move", base_dir=base_dir)
+            _validate_case_mutation_target(path_args[-1], action="Move", base_dir=base_dir)
         return
 
     if binary in {"chmod", "chown", "chgrp", "setfacl"}:
-        _validate_no_protected_targets(path_args, base_dir=base_dir, action="Metadata change")
+        for target in path_args:
+            _validate_case_mutation_target(
+                target, action="Metadata change", base_dir=base_dir
+            )
         return
 
     if binary in {"install", "rsync"} and len(path_args) >= 2:
@@ -1002,6 +1003,7 @@ def validate_shell_command(
         else:
             output_flags = get_output_flags()
             prev_was_output_flag = False
+            prev_was_non_file_path_flag = False
             for arg in argv[1:]:
                 if "=" in arg and arg.startswith("-"):
                     flag_part = arg.split("=", 1)[0]
@@ -1014,18 +1016,26 @@ def validate_shell_command(
                         else:
                             validate_input_path(value, base_dir=cwd)
                     prev_was_output_flag = False
+                    prev_was_non_file_path_flag = False
                     continue
                 if arg.startswith("-") and "=" not in arg:
                     prev_was_output_flag = arg in output_flags
+                    prev_was_non_file_path_flag = arg in _NON_FILE_PATH_VALUE_FLAGS.get(
+                        binary, frozenset()
+                    )
                     continue
                 if arg.startswith("/") or arg.startswith("..") or "/" in arg:
-                    if arg.startswith("/dev/") and binary in _DEV_PATH_TOOLS:
+                    if (
+                        (arg.startswith("/dev/") and binary in _DEV_PATH_TOOLS)
+                        or prev_was_non_file_path_flag
+                    ):
                         pass
                     elif prev_was_output_flag:
                         validate_output_path(arg, base_dir=cwd)
                     else:
                         validate_input_path(arg, base_dir=cwd)
                 prev_was_output_flag = False
+                prev_was_non_file_path_flag = False
             
         # Sanitize extra args
         sanitize_extra_args(argv[1:], tool_name=binary)

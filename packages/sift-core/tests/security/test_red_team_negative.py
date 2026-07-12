@@ -106,6 +106,53 @@ def _assert_command_denied_or_pending(
     return ""
 
 
+def test_agent_supplied_host_input_path_is_denied_at_the_command_gate(
+    gate_case: Path, tmp_path: Path
+) -> None:
+    """An allowed forensic binary may not be pointed at an arbitrary host file."""
+    host_file = tmp_path / "outside-active-case.bin"
+    host_file.write_bytes(b"not case evidence")
+
+    with _with_case(gate_case):
+        with pytest.raises(
+            ValueError,
+            match="Agent-supplied input paths must resolve under the active case",
+        ):
+            security.validate_shell_command(f"strings {host_file}", cwd=gate_case)
+
+
+@pytest.mark.parametrize(
+    "command_template",
+    [
+        "rm {host_file}",
+        "mv {host_file} agent/moved.bin",
+        "chmod 600 {host_file}",
+    ],
+)
+def test_mutating_tools_cannot_target_host_paths_when_explicitly_allowed(
+    gate_case: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command_template: str,
+) -> None:
+    """An operator allowlist entry never widens mutation outside the case."""
+    monkeypatch.setattr(
+        security,
+        "_get_policy",
+        lambda: _policy_for_validation(
+            {"mode": "allowlist", "allowed_binaries": ["rm", "mv", "chmod"]}
+        ),
+    )
+    host_file = tmp_path / "outside-active-case.bin"
+    host_file.write_bytes(b"not case evidence")
+
+    with _with_case(gate_case):
+        with pytest.raises(ValueError, match="active case"):
+            security.validate_shell_command(
+                command_template.format(host_file=host_file), cwd=gate_case
+            )
+
+
 CEILING_NEGATIVE_CASES = [
     pytest.param(
         "sqlite3 evidence/test.db '.shell id'",

@@ -110,6 +110,44 @@ def test_output_ref_rejects_traversal(sealed_case):
     assert "/etc/passwd" not in out
 
 
+# --- agent-facing input contract --------------------------------------------
+
+
+def test_run_command_schema_exposes_sealed_evidence_refs_not_raw_input_files():
+    """The registry is the agent-facing MCP schema source of truth."""
+    spec = next(item for item in agent_tools.CORE_TOOL_SPECS if item.name == "run_command")
+    properties = spec.input_schema["properties"]
+
+    assert "evidence_refs" in properties
+    assert "input_files" not in properties
+
+
+def test_run_command_rejects_legacy_input_files_before_execution(sealed_case, monkeypatch):
+    def _must_not_execute(*_args, **_kwargs):
+        pytest.fail("legacy input_files must be rejected before any command or hash read")
+
+    monkeypatch.setattr(agent_tools, "_execute_command", _must_not_execute)
+    monkeypatch.setattr(
+        agent_tools.hashlib,
+        "sha256",
+        lambda: pytest.fail("legacy input_files must be rejected before hashing"),
+    )
+
+    out = _run_command(
+        {
+            "command": "cat evidence/disk.txt",
+            "purpose": "prove legacy raw provenance paths are closed",
+            "input_files": ["/usr/share/zoneinfo/UTC"],
+        },
+        examiner="analyst",
+        audit=AuditWriter(mcp_name="sift-core"),
+    )
+
+    assert out["success"] is False
+    assert "input_files is no longer accepted" in out["error"]
+    assert "evidence_refs" in out["error"]
+
+
 # --- path sanitization -------------------------------------------------------
 
 

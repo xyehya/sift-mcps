@@ -46,6 +46,29 @@ canonical active-case paths. Hash only after that validation. Add a fail-on-reve
 agent-surface test that proves a harmless non-case fixture produces neither a digest
 nor an open attempt.
 
+### Resolution — fixed and live-proven 2026-07-13
+
+The recommended narrow fix is now applied:
+
+- `input_files` was removed from the public `run_command` schema and residual calls
+  fail closed before execution or provenance hashing, with a migration message to use
+  sealed `evidence_refs`.
+- Ordinary agent-supplied input operands, redirects, and input-flag values must
+  resolve under the active case. Provenance hashing has the same containment check.
+  The only exceptions are explicitly scoped non-file semantics (currently TSK
+  `fls -m`, whose value is a mount-point label) and the existing vetted `/dev` device
+  operands for forensic device tools.
+- File mutations remain case-confined even if an operator explicitly allowlists a
+  mutating binary; sealed evidence and integrity records remain non-writable.
+
+Live gateway proof after deploy and restart: `tools/list` reported no `input_files`
+property; a stale `input_files` call was rejected; `file /usr/share/zoneinfo/UTC`
+was rejected at the command gate; and `file evidence/p0p1-evidence.txt` using its
+sealed evidence ID succeeded with provenance, the full execution isolation posture,
+and a case-relative output ref. Focused local contracts: **192 passed** plus Ruff;
+targeted Pyright was clean for the changed tests and security module (two unrelated
+legacy `agent_tools.py` diagnostics remain in the package baseline).
+
 ## Live proof matrix
 
 | Control | Current proof |
@@ -54,7 +77,7 @@ nor an open attempt.
 | Service and profile state | Gateway, job worker, and both OpenSearch workers were active; `sift-gateway` and `dfir-exec` AppArmor profiles were loaded in enforce mode. |
 | Approved execution | An agent-facing fixed forensic wrapper succeeded and reported launcher, runtime user, required Landlock, seccomp kill, and required systemd scope as applied. |
 | Command ceiling | An argv-rewriting launcher and a mount command were denied before execution. |
-| Command path floor | A harmless host absolute path in command position was denied. |
+| Command path floor (corrected) | The original scan incorrectly recorded this as denied. Follow-up live proof showed a blocklist-only validator permitted a harmless host path in command position; the resolution above now rejects it at the active-case gate. |
 | Evidence write floor | Redirecting output into sealed evidence was denied. |
 | Provenance bypass | The same class of non-case fixture supplied through `input_files` produced an agent-visible input digest before execution. |
 | Internal sudo fallback | The runtime account has no sudo policy; a privileged-marked approved forensic tool completed direct-unprivileged. No agent-to-root path was demonstrated. |
