@@ -189,6 +189,9 @@ write_opensearch_config() {
   fi
   local tmp
   tmp="$(mktemp)"
+  # Clean up the secret-bearing temp on any set -e abort (e.g. svc_install_file
+  # failure) so the rendered credentials never linger in TMPDIR; self-clearing.
+  trap 'rm -f "${tmp:-}"; trap - EXIT' EXIT
   svc_test_f "$SIFT_HOME/opensearch-root-ca.pem" || die \
     "OpenSearch CA is missing; the TLS/authenticated core cannot be configured. Re-run install.sh."
   local admin_password
@@ -203,6 +206,7 @@ ca_certs: ${SIFT_HOME}/opensearch-root-ca.pem
 YAML
   svc_install_file "$tmp" "$os_config" 600
   rm -f "$tmp"
+  trap - EXIT
 }
 
 # FM-2: write gateway env file for OpenSearch env_refs so the backend process
@@ -221,6 +225,9 @@ write_opensearch_env() {
   # Operator-owned temp -> sift-service-owned 0600 (see write_supabase_env).
   local tmp
   tmp="$(mktemp)"
+  # Same EXIT-trap cleanup as write_opensearch_config / write_supabase_env: a
+  # failed svc_install_file under set -e must not leave the rendered env in TMPDIR.
+  trap 'rm -f "${tmp:-}"; trap - EXIT' EXIT
   {
     printf '# OpenSearch env — gateway env_refs for opensearch-mcp backend\n'
     printf '# Written by sift-mcps install.sh. Idempotent — delete to regenerate.\n'
@@ -229,6 +236,7 @@ write_opensearch_env() {
   } > "$tmp"
   svc_install_file "$tmp" "$os_env_file" 600
   rm -f "$tmp"
+  trap - EXIT
 }
 
 # BATCH-PMI3: write the gateway/worker env file that points the forensic-knowledge
