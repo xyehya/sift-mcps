@@ -372,8 +372,17 @@ def _validate_url(url: str) -> str:
         )
 
         if not is_local:
+            if os.environ.get("OPENCTI_INSECURE_HTTP_REMOTE", "").lower() not in (
+                "1",
+                "true",
+                "yes",
+            ):
+                raise ConfigurationError(
+                    "Using HTTP for non-local OpenCTI - credentials would be sent in plaintext. "
+                    "Use HTTPS or set OPENCTI_INSECURE_HTTP_REMOTE=1 if this is a safe private network."
+                )
             logger.warning(
-                "Using HTTP for non-local OpenCTI - credentials sent in plaintext",
+                "Using HTTP for non-local OpenCTI - credentials sent in plaintext (allowed by OPENCTI_INSECURE_HTTP_REMOTE)",
                 extra={"url": url},
             )
 
