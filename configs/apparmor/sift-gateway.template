@@ -268,8 +268,12 @@ profile sift-addon {
 
   /var/lib/sift/.sift/opensearch.yaml       r,
   /var/lib/sift/.sift/opensearch-root-ca.pem r,
+  # Legacy baseline path (pre-durable-cache installs) and durable regenerable
+  # cache under /var/cache/sift. Write is required for SQLite open + lock files.
   /var/lib/sift/windows-triage/              r,
   /var/lib/sift/windows-triage/**            r,
+  /var/cache/sift/windows-triage/            rw,
+  /var/cache/sift/windows-triage/**          rwk,
 
   # Case inputs may be inspected, but no case/evidence path is writable from
   # an add-on. Authoritative mutations remain gateway-mediated.
