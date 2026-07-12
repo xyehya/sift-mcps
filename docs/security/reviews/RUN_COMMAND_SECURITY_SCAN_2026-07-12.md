@@ -81,9 +81,11 @@ established repository environment was used while importing this exact review tr
 ## Limitations and next action
 
 The detailed vulnerability-writeup worker failed to initialize once and then stalled
-without producing an artifact after a retry; it was stopped. The scan's detailed
-temporary discovery/validation/attack-path records and a local-remediation hardening
-assessment were retained, but no sealed canonical Codex Security projection is claimed.
+after a retry; it was stopped. A detailed temporary write-up was subsequently retained
+with the discovery/validation/attack-path records and local-remediation hardening
+assessment, but canonical JSON and the generated Codex Security report projection were
+not finalized. This committed document is the decision record; no sealed canonical
+projection is claimed.
 
 Implement the P2 provenance-boundary fix, add the regression test, deploy it, and
 repeat the exact safe MCP reproduction. No broader execution-sandbox redesign is
