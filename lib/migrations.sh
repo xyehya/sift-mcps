@@ -275,9 +275,10 @@ PY
 
   local tmp
   tmp="$(mktemp)"
-  # The temp file transiently holds the scoped DSN. EXIT cleanup covers `set -e`
-  # aborts; normal and fail-soft paths clear the trap immediately after cleanup.
-  trap 'rm -f "${tmp:-}"; trap - EXIT' EXIT
+  # The temp file transiently holds the scoped DSN. Expand "$tmp" at registration
+  # — EXIT runs after `local` scope is gone. Normal/fail-soft paths clear the
+  # trap immediately after cleanup.
+  trap 'rm -f "'"$tmp"'"; trap - EXIT' EXIT
   # Copy existing keys EXCEPT any prior SIFT_AUDIT_WRITER_DSN line, then append
   # the fresh one. svc_read uses sudo to read the sift-service-owned 0600 file.
   svc_read "$control_env_file" | grep -v '^SIFT_AUDIT_WRITER_DSN=' > "$tmp" || true

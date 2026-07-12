@@ -51,22 +51,30 @@ def test_installer_generates_and_uses_a_verified_ca_bound_config() -> None:
 def test_opensearch_config_writers_trap_secret_temps_on_exit() -> None:
     """Static fail-on-revert: both writers must arm the established EXIT trap."""
     config = (REPO_ROOT / "lib" / "config.sh").read_text(encoding="utf-8")
+    # Path expanded at trap registration (not deferred "${tmp:-}"): EXIT runs
+    # after `local tmp` is out of scope, so a deferred expansion rm's nothing.
+    expected_trap = """trap 'rm -f "'"$tmp"'"; trap - EXIT' EXIT"""
     for fn in ("write_opensearch_config", "write_opensearch_env"):
         start = config.index(f"{fn}() {{")
         end = config.index("\n}", start)
         body = config[start:end]
-        assert "trap 'rm -f \"${tmp:-}\"; trap - EXIT' EXIT" in body, (
-            f"{fn} must trap-clean its mktemp on EXIT so a failed "
+        assert expected_trap in body, (
+            f"{fn} must expand mktemp path into EXIT trap so a failed "
             "svc_install_file cannot leave secrets in TMPDIR"
         )
         assert "trap - EXIT" in body
+        # Reject the broken deferred-local form if it appears on a trap line.
+        for line in body.splitlines():
+            if "trap" in line and "EXIT" in line and "rm -f" in line:
+                assert "${tmp:-}" not in line, (
+                    f"{fn} EXIT trap must not defer local tmp expansion: {line}"
+                )
         # TLS hardening must survive the cleanup re-introduction.
         if fn == "write_opensearch_config":
             assert "host: https://localhost:9200" in body
             assert "verify_certs: true" in body
             assert "http://127.0.0.1:9200" not in body
             assert "verify_certs: false" not in body
-
 
 def test_write_opensearch_config_cleans_secret_temp_when_install_fails(
     tmp_path: Path,
