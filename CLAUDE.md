@@ -79,6 +79,14 @@ Cursor uses `${userHome}/.local/bin/codebase-memory-mcp` (GUI apps often lack `~
 This project uses `codebase-memory-mcp` to maintain a knowledge graph. Prefer MCP
 graph tools over grep/glob for code discovery.
 
+**Direct MCP tools only — never the CLI.** Invoke registered `codebase-memory-mcp`
+tools through the agent tool interface (`index_repository`, `search_graph`,
+`trace_path`, `get_code_snippet`, `query_graph`, `get_architecture`, and
+`manage_adr`). Do not run `codebase-memory-mcp cli ...` or communicate with its
+executable through a shell command. If a required direct MCP method is not exposed
+(for example, project deletion), report that capability gap and do not substitute a
+CLI fallback.
+
 **Always index before any graph query.** Call
 `index_repository(repo_path=<repo root>, name="Users-yk-AI-sift-mcps")` (or the
 derived project name) at the start of discovery and again before querying after
@@ -106,14 +114,13 @@ since all three point at the identical local binary + DB.
 - **Index first**, then read the ADR at session start before touching gateway /
   security / execution code: `manage_adr(project="Users-yk-AI-sift-mcps", mode="get")`.
   Committed mirror (also the bootstrap source): `.codebase-memory/adr.md`.
-  If `manage_adr` is missing from the MCP tool surface, read that file (or CLI
-  `codebase-memory-mcp cli manage_adr --project Users-yk-AI-sift-mcps --mode get`)
-  and continue — do not crawl the monorepo first.
+  If `manage_adr` is missing from the MCP tool surface, read that file and continue
+  — do not invoke the CLI or crawl the monorepo first.
 - **Update it, don't let it rot**: when a PATTERNS/TRADEOFFS entry changes (policy-chain
   stage count, seccomp/AppArmor default posture, an add-on drift gets resolved, etc.),
   edit `.codebase-memory/adr.md` and re-run
-  `manage_adr(mode="update", content=<full six-section markdown>)` (or CLI
-  `--args-file`). Keep both in sync. A stale ADR is worse than none — agents will trust it.
+  `manage_adr(mode="update", content=<full six-section markdown>)` through the MCP
+  tool. Keep both in sync. A stale ADR is worse than none — agents will trust it.
 - **Targeted access**: `mode="sections"` reads/writes one named section instead of the
   whole document. Official format requires exactly six `##` headers: PURPOSE, STACK,
   ARCHITECTURE, PATTERNS, TRADEOFFS, PHILOSOPHY (≤ ~8000 chars). This is the project
@@ -133,10 +140,12 @@ use the stated fallback instead of blocking or fabricating a tool verdict.
 1. **Security guidance** — when installed, invoke `codeguard-security:codeguard` while modifying code
    (or `codeguard-security:security-review` for a full pass) and report its verdict. If unavailable, use
    the canonical security model plus a manual secure-by-default review and state that fallback clearly.
-2. **codebase-memory MCP** — always `index_repository` before graph queries, then use
+2. **codebase-memory MCP** — use direct MCP tool calls only: always `index_repository`
+   before graph queries, then use
    `search_graph` / `trace_path` / `get_code_snippet` / `query_graph` / `get_architecture`
    for code discovery over grep/glob, plus the `codebase-memory` skill for query syntax.
-   If the MCP is unavailable, fall back to `rg` and exact source reads.
+   Never invoke its CLI. If a required MCP method is unavailable, report it; for
+   read-only discovery, fall back to `rg` and exact source reads.
 3. **LSP validators on changed files before closing** — Python:
    `uv run --extra dev ruff check <paths>` + `uv run --extra dev pyright` (and
    targeted `uv run --extra dev pyright <file>` on each file touched); frontend:
