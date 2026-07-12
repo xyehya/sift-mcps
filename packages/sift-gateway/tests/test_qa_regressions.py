@@ -131,13 +131,22 @@ async def test_internal_keyerror_not_reported_as_unknown_tool(tmp_path, monkeypa
 # ── Finding 4: preview_lines must cap inline output ───────────────────────
 
 
+def _write_numbered_lines(case: dict, relative_path: str, count: int) -> str:
+    """Create an allowlisted-readable fixture file with ``count`` numbered lines."""
+    target = Path(case["case_dir"]) / relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("".join(f"{i}\n" for i in range(1, count + 1)))
+    return relative_path
+
+
 async def test_preview_lines_caps_inline_stdout(tmp_path, monkeypatch):
-    gateway, _ = _make_gateway(tmp_path, monkeypatch, "PREVIEW")
+    gateway, case = _make_gateway(tmp_path, monkeypatch, "PREVIEW")
+    fixture = _write_numbered_lines(case, "agent/scratch/preview_lines.txt", 2000)
     payload = await _call(
         gateway,
         "run_command",
         {
-            "command": ["seq", "1", "2000"],
+            "command": ["cat", fixture],
             "purpose": "preview cap",
             "preview_lines": 5,
         },
@@ -247,10 +256,11 @@ async def test_large_output_no_preview_returns_path_not_keyerror(tmp_path, monke
     BATCH-I1: the agent now receives a case-RELATIVE output ref (never an
     absolute path); the file still exists under the case directory."""
     gateway, case = _make_gateway(tmp_path, monkeypatch, "LARGE-OUT")
+    fixture = _write_numbered_lines(case, "agent/scratch/large_lines.txt", 5000)
     payload = await _call(
         gateway,
         "run_command",
-        {"command": ["seq", "1", "5000"], "purpose": "large output, no preview"},
+        {"command": ["cat", fixture], "purpose": "large output, no preview"},
         examiner="alice",
     )
     assert "keyerror" not in json.dumps(payload).lower(), payload
@@ -268,11 +278,12 @@ async def test_preview_plus_save_surfaces_recoverable_full_output(tmp_path, monk
 
     BATCH-I1: the ref is case-relative; resolve it against the case dir."""
     gateway, case = _make_gateway(tmp_path, monkeypatch, "SAVE-PREVIEW")
+    fixture = _write_numbered_lines(case, "agent/scratch/save_preview_lines.txt", 5000)
     payload = await _call(
         gateway,
         "run_command",
         {
-            "command": ["seq", "1", "5000"],
+            "command": ["cat", fixture],
             "purpose": "preview plus save",
             "preview_lines": 5,
             "save_output": True,
