@@ -82,6 +82,8 @@ profile sift-gateway flags=(attach_disconnected) {
   /cases/*/pending-reviews.json              rw,
   /cases/*/CASE.yaml                         rw,
   /cases/*/CASE.yaml.*                       rw,
+  # Atomic CASE.yaml rewrite uses mkstemp(..., suffix=".tmp") in the case root.
+  /cases/*/*.tmp                             rw,
   /cases/*/audit/                            rw,
   /cases/*/audit/**                          rw,
 
