@@ -582,13 +582,14 @@ teardown_runtime() {
   local venv_dir="$SIFT_MCPS_INSTALL_ROOT/.venv"
   if [[ -d "$venv_dir" ]]; then
     action "rm -rf" "$venv_dir (.venv — always removed; uv cache may remain)"
-    run_if_live rm -rf "$venv_dir"
+    # Service/root-owned bytecode under site-packages is common after a live run.
+    run_if_live sudo_if_needed rm -rf "$venv_dir"
   fi
   # Also drop a venv in the source clone if operator ran sync there.
   if [[ -d "$REPO_DIR/.venv" ]] && \
      [[ "$(cd "$REPO_DIR" 2>/dev/null && pwd -P)" != "$(cd "$SIFT_MCPS_INSTALL_ROOT" 2>/dev/null && pwd -P)" ]]; then
     action "rm -rf" "$REPO_DIR/.venv (clone venv)"
-    run_if_live rm -rf "$REPO_DIR/.venv"
+    run_if_live sudo_if_needed rm -rf "$REPO_DIR/.venv"
   fi
 
   if [[ -d "$SIFT_MCPS_INSTALL_ROOT" ]] && \
