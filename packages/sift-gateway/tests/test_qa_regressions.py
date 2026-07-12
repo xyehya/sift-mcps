@@ -327,7 +327,11 @@ async def test_pipeline_upstream_failure_not_masked(tmp_path, monkeypatch):
         gateway,
         "run_command",
         {
-            "command": "ls /nonexistent-pipe-check-xyz | head -1",
+            # Must resolve under the active case dir: agent-supplied input
+            # paths outside the case are now rejected by the path-confinement
+            # gate before the pipeline ever runs. Use a relative path that
+            # stays in-case but still doesn't exist, so `ls` genuinely fails.
+            "command": "ls agent/nonexistent-pipe-check-xyz | head -1",
             "purpose": "pipe masking regression",
         },
         examiner="alice",
