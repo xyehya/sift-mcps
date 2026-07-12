@@ -330,6 +330,10 @@ Required Cursor Cloud secrets (never commit or paste into chat/logs):
 - `TS_AUTHKEY` — reusable, ephemeral auth key tagged **`tag:cursor-cloud`**.
   Tailnet ACL must grant only `tag:cursor-cloud → 192.168.122.81:tcp:4508`.
 - `SIFT_CA_CERT` — PEM of the **public** SIFT CA (use `--cacert`, never `-k`).
+- `SIFT_AGENT_TOKEN` — gateway bearer for `/mcp` (same env var as Codex CLI
+  `codex mcp add --bearer-token-env-var SIFT_AGENT_TOKEN siftmcp ...`). Runtime
+  Secret on the environment; referenced from `.cursor/mcp.json` / `.codex/config.toml`,
+  never committed.
 
 Cloud VMs cannot use kernel Tailscale. Use **userspace** networking (rootless):
 
@@ -353,6 +357,25 @@ only `tcp:4508` on that address is intended to be reachable; OpenSearch `:9200`
 and Supabase `:54321/:54322` stay loopback-only on the VM. `/mcp` returns 401
 without gateway auth — reachability ≠ authorization. Hypervisor SSH from the
 maintainer Mac: `ssh fedora44` (not `fedora.local`).
+
+On cloud VM boot, `.cursor/scripts/cloud-start.sh` brings up userspace Tailscale
+and exports `ALL_PROXY` / `HTTPS_PROXY` / `NODE_EXTRA_CA_CERTS` when ready. For
+live MCP tools, harness config mirrors Codex CLI:
+
+```sh
+# Codex CLI equivalent:
+codex mcp add --bearer-token-env-var SIFT_AGENT_TOKEN siftmcp \
+  --url https://192.168.122.81:4508/mcp
+```
+
+- **Cursor:** `.cursor/mcp.json` → `siftmcp` with
+  `"Authorization": "Bearer ${env:SIFT_AGENT_TOKEN}"`
+- **Codex:** `.codex/config.toml` → `[mcp_servers.siftmcp]` with
+  `bearer_token_env_var = "SIFT_AGENT_TOKEN"`
+
+Set `SIFT_AGENT_TOKEN` as a Runtime Secret on the cloud environment (or export it
+in your local shell for desktop). Requires Tailscale up first — HTTP MCP clients
+use the proxy env from `~/.cursor-cloud-tailscale.env`.
 
 ### Known pre-existing test failures on a clean checkout (NOT environment issues)
 - `tests/test_opencti_shared_target_contract.py::test_shared_check_is_read_only_and_requires_secure_core_contract`

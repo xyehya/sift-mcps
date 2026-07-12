@@ -3,6 +3,12 @@
     "codebase-memory-mcp": {
       "command": "/Users/yk/.local/bin/codebase-memory-mcp",
       "args": []
+    },
+    "siftmcp": {
+      "url": "https://192.168.122.81:4508/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:SIFT_AGENT_TOKEN}"
+      }
     }
   }
 }
