@@ -91,6 +91,9 @@ def test_docker_volumes_always_purged_even_with_keep_caches() -> None:
     assert "_docker_force_rm_matching_containers" in src
     assert "_docker_list_sift_volumes" in src
     assert "Named SIFT Docker volumes still present" in src
+    # -q + --format drops names; force-rm must list ID and Names.
+    assert "docker ps -a --format '{{.ID}} {{.Names}}'" in src
+    assert "docker ps -aq --format" not in src
     # keep-caches only skips image rm — volumes still verified gone.
     images = src.split("teardown_docker_images()", 1)[1].split("\n}", 1)[0]
     assert 'KEEP_CACHES" -eq 1' in images

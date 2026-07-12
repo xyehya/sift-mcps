@@ -316,7 +316,9 @@ _docker_force_rm_matching_containers() {
     esac
     action "docker rm -f" "$name"
     run_if_live docker rm -f "$id" 2>/dev/null || true
-  done < <(docker ps -aq --format '{{.ID}} {{.Names}}' 2>/dev/null || true)
+  # Do not combine -q with --format: -q suppresses the format and yields
+  # ID-only lines, so name matching never fires and volumes stay in use.
+  done < <(docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null || true)
 }
 
 _docker_list_sift_volumes() {
@@ -341,8 +343,13 @@ _docker_force_rm_volume() {
   if docker volume rm "$vol" 2>/dev/null; then
     return 0
   fi
-  # Volume still held: drop any remaining containers, then retry once.
+  # Volume still held: drop matching SIFT containers and any container
+  # currently using this volume, then retry.
   _docker_force_rm_matching_containers "$(_docker_project_name)"
+  local cid
+  for cid in $(docker ps -aq --filter "volume=$vol" 2>/dev/null || true); do
+    docker rm -f "$cid" 2>/dev/null || true
+  done
   docker volume rm -f "$vol" 2>/dev/null || docker volume rm "$vol" 2>/dev/null || true
 }
 
