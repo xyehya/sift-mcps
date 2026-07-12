@@ -110,6 +110,15 @@ scrubbed before re-entering the agent's context — the prompt-injection-from-ev
 | 6 | Tool output → Agent untrusted-output | I T | `ResponseGuard`: secret patterns → `[REDACTED:*]`, untrusted-output labelling, no path/traceback leaks |
 | 7 | Operator → privileged action human step-up | S R E | Supabase fail-closed re-verify (CL3a/b) on case activation, evidence seal/retire, finding approval, report export, credential issuance; `approval_ledger` |
 
+**Residual risk (boundary 2 — accepted):** custody hash, seal, and append-only chain prove
+*integrity and provenance* of registered evidence — **not** that image bytes are safe to
+mount or parse. Non-dry-run ingest still redirects to a mount-capable worker that may process
+hostile filesystem content (kernel FS / FUSE / userspace parsers). Minimized sudoers,
+EvidenceGate-before-dispatch, and least-priv workers bound *who* mounts; they do not isolate
+hostile bytes from the host kernel. MicroVM / userspace-parse isolation is a separate future
+mitigation; optional `isolation_tier` surfacing is separate agent-facing surface work. Detail:
+`docs/codex-assessment/validation/cluster-EXEC.md` (DSS-CAN-007 residual).
+
 ## VP-5 — The `run_command` jail (ceiling + floor, both deny-default)
 `run_command(command: str)` runs `shell=False`, multi-stage argv (supports `| && || ; > >> < 2>&1`)
 as the `agent_runtime` uid on the SIFT VM. Two stacked layers gate it before any forensic

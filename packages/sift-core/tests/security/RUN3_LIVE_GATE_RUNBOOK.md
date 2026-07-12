@@ -5,8 +5,9 @@ placeholders only. Do not replace them with real VM case paths, credentials, JWT
 DSNs, or token material in committed files.
 
 Local tests in this directory use parser/policy helpers and do not invoke unsafe
-commands. The integrated gate can run with `SIFT_RUN3_GATE_STRICT=1` so pending
-B-CEIL/B-FLOOR xfails become hard failures.
+commands. Set `SIFT_RUN3_GATE_STRICT=1` so pending B-CEIL/B-FLOOR xfails become
+hard failures for what CI *can* enforce (parser, policy, template contracts).
+Strict mode does **not** replace the agent-facing MVP L3 gate on sift-vm.
 
 ## Inputs
 
@@ -56,9 +57,33 @@ operator, or requesting a flag flip.
 | runtime-user | run as service user with no distinct runtime user | Ceiling plus Floor |
 | autonomy | any policy path returning `approval_required` | Autonomy invariant |
 
-## Positive forensic matrix
+## MVP L3 gate (required for every floor change)
 
-Every row must succeed under the jail on real VM evidence.
+Floor changes mean AppArmor profiles, the systemd-scope helper, `dfir-exec` /
+Landlock / seccomp launcher policy, or runtime-user / scope mode defaults.
+
+Before calling any such change **live-proven**, run this **agent-facing** MVP on
+the SIFT VM (`ssh sift-vm`, gateway via `/mcp`) after exact-source deploy,
+`__pycache__` clear, and restart of `sift-gateway` + workers:
+
+| ID | Probe | Expect |
+|---|---|---|
+| L3-N setsid | `run_command` `setsid /bin/true` + `purpose` | Ceiling deny; no successful exit |
+| L3-N interpreter | `python3 -c 'print(1)'` | Ceiling deny |
+| L3-N secrets path | read under `/var/lib/sift` | Deny (ceiling and/or floor) |
+| L3-P allowlisted | e.g. `strings <CASE>/evidence/<sealed-file>` | `success` + `exit_code: 0` + `isolation.systemd_scope_applied: true` |
+| Broker blindness | under `sift-run-command-scope`, open `<CASE>/CASE.yaml` | `Permission denied` (no `/cases` on broker) |
+| Label hop | broker launches worker via `px -> dfir-exec` (not sticky `rix`) | Worker not labeled `sift-run-command-scope` |
+
+CI / `SIFT_RUN3_GATE_STRICT` covers parser and template contracts only. It does
+**not** replace this L3 MVP. A green unit suite on macOS or GitHub runners cannot
+see enforce-mode AppArmor transitions.
+
+## Positive forensic matrix (full — after major floor changes)
+
+Run the full matrix after enforce-mode flips, allowlist expansions, or
+Landlock/confinement-matrix redesigns — not on every micro-PR. Every row must
+succeed under the jail on real VM evidence.
 
 ```bash
 vol -f <CASE_DIR>/evidence/mem.raw windows.pslist
@@ -94,10 +119,11 @@ explicitly allows that read-only egress. Upload/post flags remain blocked.
   0 or service-user execution.
 - Floor G5: systemd per-exec scope enforces MemoryMax, TasksMax, CPUQuota,
   RuntimeMaxSec, OOMPolicy, and IPAddressDeny.
-- Gate: Negative red-team harness all blocked.
-- Gate: Positive forensic matrix all succeeds.
-- Gate: Evidence pre/post hash and immutable bit remain intact after the full
-  matrix.
+- Gate (every floor PR): MVP L3 table above (L3-N + L3-P + broker blindness).
+- Gate (major floor changes): Negative red-team harness all blocked.
+- Gate (major floor changes): Positive forensic matrix all succeeds.
+- Gate (major floor changes): Evidence pre/post hash and immutable bit remain
+  intact after the full matrix.
 
 ## Evidence integrity proof
 
