@@ -7,6 +7,7 @@ import {
   TIMELINE_TYPES,
   TIMELINE_TYPE_CLASS,
 } from '@/components/common/entity-utils'
+import { formatISODate } from '@/lib/timestamp-utils'
 import { EntityShell, EntityEmptyState } from '@/components/common/EntityShell'
 import { SearchInput, SelectFilter, ToggleChip, ResultCount } from '@/components/common/FilterBar'
 import { Clock } from 'lucide-react'
@@ -123,7 +124,7 @@ export function TimelineTab() {
             const prev = filtered[i - 1]
             const showDateSep =
               i === 0 ||
-              new Date(ev.timestamp).toDateString() !== new Date(filtered[i - 1].timestamp).toDateString()
+              formatISODate(ev.timestamp) !== formatISODate(filtered[i - 1].timestamp)
             return (
               <TimelineEvent
                 key={ev.id}

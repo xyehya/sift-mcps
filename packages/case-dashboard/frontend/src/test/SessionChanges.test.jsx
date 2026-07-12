@@ -1,3 +1,4 @@
+import { parseTimestamp } from '@/lib/timestamp-utils'
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useStore } from '../store/useStore'
 
@@ -276,7 +277,7 @@ describe('B-04: ActivityFeed time filter', () => {
   it('truncates to max 8 findings', () => {
     const now = Date.now()
     const findings = Array.from({ length: 15 }, (_, i) => makeFinding(String(i + 1), new Date(now)))
-    const sliced = [...findings].sort((a, b) => new Date(b.modified_at) - new Date(a.modified_at)).slice(0, 8)
+    const sliced = [...findings].sort((a, b) => parseTimestamp(b.modified_at) - parseTimestamp(a.modified_at)).slice(0, 8)
     expect(sliced).toHaveLength(8)
   })
 

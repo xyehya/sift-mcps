@@ -1,0 +1,3 @@
+## 2026-01-02 - Fast ISO String Parsing
+**Learning:** `new Date(string).toISOString().substring(0, 10)` creates unnecessary object allocations and causes significant overhead inside hot loops for timestamp formatting, grouping and parsing. Re-parsing timestamps for rendering UI or for calculating gaps repeatedly is a massive waste of cycles in large dashboards.
+**Action:** Use fast path logic for already valid ISO string values (which is a common format here), such as simple string substring, to prevent memory allocations. Implemented `formatISODate` and `formatISOTime` helper functions to avoid `new Date()` allocation overhead inside the timeline tab.
