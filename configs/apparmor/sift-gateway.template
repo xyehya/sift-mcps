@@ -58,9 +58,11 @@ profile sift-gateway flags=(attach_disconnected) {
   /var/cache/sift/                        rw,
   /var/cache/sift/**                      rwk,
 
-  # Cases root — HARD DENY writes to evidence files; allow reads for hashing
-  /cases/                                    r,
-  /cases/*/                                  r,
+  # Cases root — portal may create case directory trees; evidence *bytes* stay
+  # write-denied. mkdir of /cases/<case_key>/{evidence,audit,...} requires write
+  # on the cases root and case directory, not on evidence file contents.
+  /cases/                                    rw,
+  /cases/*/                                  rw,
   /cases/*/evidence/                         r,
   /cases/*/evidence/**                       r,
   deny /cases/*/evidence/**                  w,
@@ -76,7 +78,8 @@ profile sift-gateway flags=(attach_disconnected) {
   /cases/*/iocs.json                         rw,
   /cases/*/todos.json                        rw,
   /cases/*/pending-reviews.json              rw,
-  /cases/*/CASE.yaml                         r,
+  /cases/*/CASE.yaml                         rw,
+  /cases/*/CASE.yaml.*                       rw,
   /cases/*/audit/                            rw,
   /cases/*/audit/**                          rw,
 
