@@ -452,7 +452,7 @@ def run_command(
     # Cap the inline stdout to that many lines and report truncation, regardless
     # of size. The full output is preserved on disk (auto-saved when it exceeds
     # the response budget, or whenever save_output is set), reachable via
-    # full_output_path — so context stays small without losing evidence.
+    # full_output_ref — so context stays small without losing evidence.
     if preview_lines and stdout:
         lines = stdout.splitlines(keepends=True)
         if len(lines) > preview_lines:

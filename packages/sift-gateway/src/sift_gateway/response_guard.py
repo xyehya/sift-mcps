@@ -763,7 +763,19 @@ def _cap_guarded_result(
         # Audit (operator-visible) keeps the absolute path for forensic recall.
         meta["output_file"] = output_file
 
+    # Typed core tools may declare a minimal receipt contract. Keep its stable,
+    # scalar identifiers when replacing the bulky body so the MCP SDK can still
+    # validate the guarded result. Do not copy arbitrary fields: the cap exists
+    # specifically to remove unbounded agent-visible data.
+    typed_receipt: dict[str, Any] = {}
+    if isinstance(result.structured_content, dict):
+        for key in ("success", "tool"):
+            value = result.structured_content.get(key)
+            if isinstance(value, bool | str):
+                typed_receipt[key] = value
+
     capped_payload: dict[str, Any] = {
+        **typed_receipt,
         "_sift_output_capped": {
             "original_bytes": meta["original_bytes"],
             "returned_bytes": meta["returned_bytes"],

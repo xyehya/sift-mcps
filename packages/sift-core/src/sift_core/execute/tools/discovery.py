@@ -249,7 +249,13 @@ def get_tool_help(tool_name: str) -> dict:
     if tool_name == "run_command":
         return {
             "name": "run_command",
-            "description": "Execute a validated command plan as the low-privilege native runtime user. No shell wrapper is used; parsed argv stages are launched with shell=False.",
+            "description": "Run one validated, synchronous command as the low-privilege runtime user. Parsed argv stages launch with shell=False.",
+            "workflow": [
+                "Use evidence_refs for sealed originals; use case-relative paths for derived files.",
+                "Keep the default saved output and bounded preview.",
+                "Use full_output_ref and next_action for a focused follow-up instead of rerunning extraction.",
+                "Cite audit_id when recording a grounded observation.",
+            ],
             "policy": {
                 "blocked_constructs": [
                     "agent-supplied sudo",
@@ -265,7 +271,7 @@ def get_tool_help(tool_name: str) -> dict:
                     "Use '< input-file' instead of heredocs",
                     "Use '2>&1', '2> agent/file.err', or discard stderr with the tool's supported stderr controls",
                 ],
-                "path_restrictions": "Outputs must be under the active case agent/, extractions/, or tmp/ directories. Evidence and integrity records are read-only to the runtime user and write-blocked by policy."
+                "path_restrictions": "File operands and redirects are case-relative. Evidence and integrity records are read-only; command writes are limited to agent/, extractions/, or tmp/. Documented non-file flags and vetted forensic device operands are narrow policy exceptions."
             },
             "discovery": (
                 "Not sure which binaries are installed? get_tool_help('inventory') "

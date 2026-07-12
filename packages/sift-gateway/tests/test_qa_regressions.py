@@ -302,14 +302,13 @@ async def test_preview_plus_save_surfaces_recoverable_full_output(tmp_path, monk
         assert sum(1 for _ in fh) == 5000, "saved file must hold the full output"
 
 
-async def test_unsaved_command_mints_no_empty_output_dir(tmp_path, monkeypatch):
-    """A small command with no save_output must not create an empty
-    agent/run_commands/outputN/ directory (executor dir-creation was eager)."""
+async def test_explicit_no_save_mints_no_empty_output_dir(tmp_path, monkeypatch):
+    """The explicit opt-out must not create an empty output directory."""
     gateway, case = _make_gateway(tmp_path, monkeypatch, "NO-EMPTY-DIR")
     payload = await _call(
         gateway,
         "run_command",
-        {"command": ["date"], "purpose": "tiny output"},
+        {"command": ["date"], "purpose": "tiny output", "save_output": False},
         examiner="alice",
     )
     assert payload["success"] is True, payload
@@ -327,7 +326,7 @@ async def test_pipeline_upstream_failure_not_masked(tmp_path, monkeypatch):
         gateway,
         "run_command",
         {
-            "command": "ls /nonexistent-pipe-check-xyz | head -1",
+            "command": "ls agent/nonexistent-pipe-check-xyz | head -1",
             "purpose": "pipe masking regression",
         },
         examiner="alice",

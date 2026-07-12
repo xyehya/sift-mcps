@@ -156,6 +156,47 @@ _EVIDENCE_INFO_OUTPUT_SCHEMA: dict[str, Any] = {
     "required": ["chain_status", "evidence_files"],
 }
 
+_RUN_COMMAND_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "success": {"type": "boolean"},
+        "tool": {"const": "run_command"},
+        "audit_id": {"type": "string"},
+        "examiner": {"type": "string"},
+        "data": {},
+        "error": {"type": "string"},
+        "exit_code": {"type": "integer"},
+        "elapsed_seconds": {"type": "number"},
+        "output_format": {"type": "string"},
+        "output_files": {"type": "array", "items": {"type": "string"}},
+        "full_output_ref": {"type": "string"},
+        "full_output_sha256": {"type": "string"},
+        "full_output_bytes": {"type": "integer"},
+        "stderr_output_ref": {"type": "string"},
+        "stderr_output_sha256": {"type": "string"},
+        "provenance": {"type": "object"},
+        "isolation": {"type": "object"},
+        "failed_stages": {"type": "array", "items": {"type": "object"}},
+        "partial_failure": {"type": "boolean"},
+        "partial_failure_note": {"type": "string"},
+        "warnings": {"type": "array", "items": {}},
+        "warning": {"type": "string"},
+        "agent_action": {"type": "string"},
+        "next_action": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string"},
+                "output_ref": {"type": "string"},
+                "command": {"type": "string"},
+            },
+            "required": ["type"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["success", "tool", "audit_id"],
+    "additionalProperties": True,
+}
+
 _LIST_FINDINGS_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -368,27 +409,26 @@ CORE_TOOL_SPECS: tuple[CoreToolSpec, ...] = (
     ),
     CoreToolSpec(
         "run_command",
-        "Execute a quick, synchronous validated command on this SIFT VM and return "
-        "inline preview/receipt output. The returned rc-* receipt id is not a "
-        "durable job id; use run_command_job for long-running or parallel work "
-        "that should be polled with running_commands_status. Pass a single command string; "
-        "pipes (|), sequencing (&&/||/;), and redirects (>,>>,<,2>&1) are supported. "
-        "Set preview_lines to cap inline stdout and save_output for large output. "
-        "Case path jails, audit logging, and provenance hashing are enforced.",
+        "Run one quick, synchronous validated forensic command in the active case. "
+        "Full output is saved by default and a bounded preview is returned. Use "
+        "full_output_ref and next_action to inspect derived output with a focused "
+        "follow-up. The rc-* receipt id is not a durable job id; use run_command_job "
+        "for long-running or parallel work and poll running_commands_status.",
         _schema(
             {
-                "command": {"type": "string", "description": "Command to execute. May include pipes, &&/||/;, and redirects."},
-                "purpose": {"type": "string", "description": "Short reason for this command, recorded in the audit trail."},
+                "command": {"type": "string", "description": "One command string. Pipes, &&/||/;, and redirects are parsed without a shell wrapper."},
+                "purpose": {"type": "string", "description": "Concise forensic reason; recorded in the audit trail."},
                 "timeout": {"type": "integer", "default": 0, "description": "Per-command timeout in seconds. 0 uses the platform default."},
-                "save_output": {"type": "boolean", "default": False, "description": "Persist full stdout/stderr to agent/run_commands/."},
-                "evidence_refs": {"type": "array", "items": {"type": "string"}, "description": "Sealed evidence references (evidence_id or relative display path) this command reads. Resolved to local paths internally; the agent never supplies absolute paths."},
-                "output_ref": {"type": "string", "description": "Logical name for saved output. Resolved internally to a writable location under agent/run_commands/; returned as a relative output ref."},
-                "working_dir": {"type": "string", "description": "Working directory, relative to the case directory."},
-                "preview_lines": {"type": "integer", "default": 0, "description": "Cap inline stdout to this many lines (0 = no inline cap)."},
-                "skip_enrichment": {"type": "boolean", "default": False, "description": "Skip forensic-knowledge enrichment after the first call."},
+                "save_output": {"type": "boolean", "default": True, "description": "Save complete stdout/stderr as case-relative output references. false only suppresses proactive saving for small text; large or binary output is still retained."},
+                "evidence_refs": {"type": "array", "items": {"type": "string"}, "description": "Sealed originals read by this command (evidence id or display path). The gateway resolves them internally."},
+                "output_ref": {"type": "string", "description": "Optional logical label for saved output; always resolved under agent/run_commands/."},
+                "working_dir": {"type": "string", "description": "Optional case-relative working directory. Derived files may be read from there."},
+                "preview_lines": {"type": "integer", "default": 40, "minimum": 0, "maximum": 200, "description": "Maximum inline stdout lines. Keep this small; 0 removes the line cap but the byte cap remains."},
+                "skip_enrichment": {"type": "boolean", "default": False, "description": "Set true after the first related command to avoid repeating tool guidance."},
             },
             ["command", "purpose"],
         ),
+        output_schema=_RUN_COMMAND_OUTPUT_SCHEMA,
     ),
 )
 
@@ -940,23 +980,33 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             continue
 
     try:
+        save_output_arg = args.get("save_output")
+        save_output = True if save_output_arg is None else bool(save_output_arg)
+        preview_lines_arg = args.get("preview_lines")
+        preview_lines = (
+            40
+            if preview_lines_arg is None
+            else min(max(int(preview_lines_arg), 0), 200)
+        )
         exec_result = _execute_command(
             command,
             purpose=purpose,
             timeout=int(args.get("timeout") or 0) or None,
-            save_output=bool(args.get("save_output", False)) or bool(save_dir),
+            save_output=save_output or bool(save_dir),
             save_dir=save_dir,
             cwd=cwd,
-            preview_lines=min(int(args.get("preview_lines") or 0), 200),
+            preview_lines=preview_lines,
         )
         elapsed = time.monotonic() - start
         # Capture internal bookkeeping fields BEFORE stripping them from the
-        # inline data block. They drive full_output_path, the output format, the
+        # inline data block. They drive full_output_ref, the output format, the
         # stage summary, and the audit record below. Popping them first (the
         # original bug) raised KeyError on the large-output `_parsed` path and
-        # silently dropped full_output_path for every saved output.
+        # silently dropped full_output_ref for every saved output.
         output_file = exec_result.get("output_file")
         output_sha256 = exec_result.get("output_sha256")
+        stderr_file = exec_result.get("stderr_file")
+        stderr_sha256 = exec_result.get("stderr_sha256")
         output_format = exec_result.get("_output_format", "text")
         raw_stages = exec_result.get("stages") or []
         stdout_total_bytes = exec_result.get("stdout_total_bytes")
@@ -1020,6 +1070,14 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         output_file_ref = (
             sanitize_path_value(output_file, case_dir=case_root) if output_file else None
         )
+        stderr_file_ref = (
+            sanitize_path_value(stderr_file, case_dir=case_root) if stderr_file else None
+        )
+        output_file_refs = [
+            output_ref for output_ref in (output_file_ref, stderr_file_ref) if output_ref
+        ]
+        primary_output_ref = output_file_ref or stderr_file_ref
+        primary_output_sha256 = output_sha256 or stderr_sha256
         response = build_response(
             tool_name="run_command",
             success=pipeline_ok,
@@ -1030,7 +1088,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             exit_code=exec_result["exit_code"],
             command=[command],
             fk_tool_name=fk_name,
-            output_files=[output_file_ref] if output_file_ref else None,
+            output_files=output_file_refs or None,
             extractions=exec_result.get("extractions"),
             skip_enrichment=bool(args.get("skip_enrichment", False)),
             artifact_context=artifact_hint,
@@ -1079,15 +1137,19 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         # were really in force for this command.
         if isinstance(isolation, dict):
             response["isolation"] = isolation
-        if output_file_ref:
+        if primary_output_ref:
             # full_output_ref is the canonical output path key (case-relative,
             # never absolute). full_output_path was an alias — dropped to avoid
             # duplication; all consumers (tests, audit_helpers, run_command_job)
             # use full_output_ref. full_output_sha256/bytes remain at root because
             # audit_helpers._RUN_COMMAND_DETAIL_KEYS reads them directly.
-            response["full_output_ref"] = output_file_ref
-            response["full_output_sha256"] = output_sha256
-            response["full_output_bytes"] = stdout_total_bytes
+            response["full_output_ref"] = primary_output_ref
+            response["full_output_sha256"] = primary_output_sha256
+            if output_file_ref:
+                response["full_output_bytes"] = stdout_total_bytes
+        if stderr_file_ref:
+            response["stderr_output_ref"] = stderr_file_ref
+            response["stderr_output_sha256"] = stderr_sha256
 
         # Provenance receipt: hash-linked, path-free record the agent can cite in
         # findings/reports. Input hashes prove which sealed evidence was read;
@@ -1103,11 +1165,19 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             "input_count": len(input_hashes),
             "evidence_refs": public_evidence_refs if evidence_refs else [],
         }
-        if output_sha256:
-            provenance["output_sha256"] = output_sha256
-        if output_file_ref:
-            provenance["output_ref"] = output_file_ref
+        if primary_output_sha256:
+            provenance["output_sha256"] = primary_output_sha256
+        if primary_output_ref:
+            provenance["output_ref"] = primary_output_ref
+        if stderr_sha256:
+            provenance["stderr_sha256"] = stderr_sha256
         response["provenance"] = provenance
+        if primary_output_ref:
+            response["next_action"] = {
+                "type": "inspect_saved_output",
+                "output_ref": primary_output_ref,
+                "command": f"head -n 40 {primary_output_ref}",
+            }
 
         # Log privilege events using the same audit writer
         priv_events = exec_result.get("privilege_events", [])
@@ -1159,8 +1229,9 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             # missing local file ledger is expected and not an error.
             response["warning"] = "Audit write failed — action not recorded"
         if detection_method == "none" and first_binary not in _NO_INPUT_CMDS:
-            response["input_files_warning"] = (
-                "Could not detect input files — pass sealed evidence_refs for provenance chain linking."
+            response["provenance_hint"] = (
+                "Input provenance was not inferred. Pass evidence_refs for sealed originals; "
+                "case-relative derived files remain valid inputs."
             )
         # Final defense-in-depth: scrub every path-like value in the agent-facing
         # response. In-case absolutes (including those embedded in tool stdout)

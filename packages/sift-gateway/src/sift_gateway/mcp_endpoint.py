@@ -36,65 +36,14 @@ def _hash_token(token: str) -> str:
 
 
 def _build_gateway_instructions(gateway: Any) -> str:
-    """Compose aggregate /mcp instructions from core policy + add-on manifests."""
-    addon_lines: list[str] = []
-    for backend_name, backend in sorted(getattr(gateway, "backends", {}).items()):
-        manifest = getattr(backend, "manifest", None)
-        if not manifest:
-            continue
+    """Return compact initialization guidance; capability detail is on demand.
 
-        reqs = manifest.get("capabilities", {}).get("requires", [])
-        unmet = [req for req in reqs if not gateway.evaluate_requirement(req)]
-        if unmet:
-            addon_lines.append(
-                f"- {backend_name}: configured but currently unavailable "
-                f"(unmet requires: {', '.join(unmet)})."
-            )
-            continue
-
-        provides = manifest.get("capabilities", {}).get("provides", [])
-        tools = manifest.get("tools", [])
-        categories = sorted({
-            str(tool.get("category", ""))
-            for tool in tools
-            if tool.get("category")
-        })
-        phases = sorted({
-            str(tool.get("recommended_phase", ""))
-            for tool in tools
-            if tool.get("recommended_phase")
-        })
-        health = manifest.get("health", "")
-        line = (
-            f"- {backend_name}: provides {', '.join(provides) or 'unspecified'}; "
-            f"{len(tools)} declared tools"
-        )
-        if categories:
-            line += f"; categories: {', '.join(categories)}"
-        if phases:
-            line += f"; phases: {', '.join(phases)}"
-        if health:
-            line += f"; health: {health}"
-        line += "."
-        addon_lines.append(line)
-
-    if not addon_lines:
-        addon_text = (
-            "No add-on backend is currently configured and requirement-satisfied. "
-            "Use core tools only unless tools/list shows add-on tools."
-        )
-    else:
-        addon_text = "\n".join(addon_lines)
-
-    return (
-        f"{_GATEWAY_INSTRUCTIONS}\n\n"
-        "ADD-ON MANIFEST SUMMARY:\n"
-        "This section is generated from loaded sift-backend.json manifests and "
-        "current requires[] checks at gateway startup. For live backend health "
-        "and the exact tool surface, call case_info, capability_guide, "
-        "and tools/list.\n"
-        f"{addon_text}"
-    )
+    Initializing an MCP session must orient an agent, not preload deployment
+    state and every backend manifest into its context.  ``capability_guide`` is
+    the live, explicitly requested source for that detail.
+    """
+    del gateway
+    return _GATEWAY_INSTRUCTIONS
 
 
 def _backend_manifest_instructions(backend: Any) -> str | None:

@@ -250,7 +250,7 @@ status: draft
 
 ### run_command
 
-**Description:** Execute a quick, synchronous validated command on the SIFT VM and return inline preview/receipt output. Supports pipes (`|`), sequencing (`&&`/`||`/`;`), and redirects (`>`/`>>`/`<`/`2>&1`). Case path jails, audit logging, and provenance hashing are enforced.
+**Description:** Run one quick, synchronous validated forensic command in the active case. Complete output is saved by default, a bounded preview is returned, and `full_output_ref` plus `next_action` provide the focused follow-up. Use `run_command_job` for long-running or parallel work.
 
 **read_only:** No (mutating — executes commands on the VM)
 
@@ -258,22 +258,21 @@ status: draft
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| command | string | **Yes** | — | Command to execute. May include pipes, `&&`/`||`/`;`, and redirects. |
-| purpose | string | **Yes** | — | Short reason for this command, recorded in the audit trail |
+| command | string | **Yes** | — | One command string. Pipes, sequencing, and redirects are parsed without a shell wrapper. |
+| purpose | string | **Yes** | — | Concise forensic reason, recorded in the audit trail |
 | timeout | integer | No | 0 | Per-command timeout in seconds (0 = platform default) |
-| save_output | boolean | No | false | Persist full stdout/stderr to `agent/run_commands/` |
-| evidence_refs | string[] | No | — | Sealed evidence references (evidence_id or relative display path) the command reads |
-| output_ref | string | No | — | Logical name for saved output. Resolved to `agent/run_commands/` |
-| input_files | string[] | No | — | Deprecated: prefer evidence_refs |
-| working_dir | string | No | — | Working directory, relative to the case directory |
-| preview_lines | integer | No | 0 | Cap inline stdout to this many lines (0 = no inline cap) |
-| skip_enrichment | boolean | No | false | Skip forensic-knowledge enrichment after the first call |
+| save_output | boolean | No | true | Persist complete stdout/stderr as case-relative references. `false` suppresses proactive saving for small text only; large/binary output remains retained. |
+| evidence_refs | string[] | No | — | Sealed originals read by the command (evidence id or display path); resolved internally |
+| output_ref | string | No | — | Optional logical label for saved output, resolved under `agent/run_commands/` |
+| working_dir | string | No | — | Optional case-relative working directory; derived files may be read there |
+| preview_lines | integer | No | 40 | Maximum inline stdout lines (0–200; keep small) |
+| skip_enrichment | boolean | No | false | Set true after the first related command to avoid repeating tool guidance |
 
-**Output Shape:** Tool response with `{success, data, audit_id, exit_code, command[], provenance{job_id, input_sha256s[], input_count, evidence_refs[], output_sha256?, output_ref?}, full_output_ref?, full_output_sha256?, full_output_bytes?, isolation?, warnings?, agent_action?, privilege_escalation?, stages[], failed_stages?, partial_failure?, input_files_warning?}`
+**Output Shape:** Structured MCP result with `{success, tool, audit_id, data, exit_code?, full_output_ref?, full_output_sha256?, full_output_bytes?, stderr_output_ref?, stderr_output_sha256?, next_action?, provenance{job_id, input_sha256s[], input_count, evidence_refs[], output_sha256?, output_ref?, stderr_sha256?}, isolation?, warnings?, failed_stages?, partial_failure?, provenance_hint?}`. When output is saved, follow `next_action.command` (normally a focused `head`) or another case-relative reader; use `stderr_output_ref` when present rather than rerunning the extraction just to inspect stderr.
 
 **Interacts With:** SIFT VM shell, forensic tool binaries, case directory (jailed), Postgres audit
 
-**Security Annotations:** Case path jailing enforced — commands cannot escape the case directory. Audit logging is mandatory. Provenance hashing tracks all inputs and outputs. Evidence refs are resolved internally; the agent never supplies absolute paths. Command arrays with shell operators are rejected. Isolation posture (cgroup, seccomp, Landlock) is reported on the response. The returned `rc-{audit_id}` receipt ID is _not_ a durable job ID — use `run_command_job` for long-running work.
+**Security Annotations:** Case path jailing applies to file operands and redirects; vetted forensic `/dev` device operands and documented non-file flags are narrow exceptions. Audit logging is mandatory. Provenance hashing tracks all inputs and outputs. Evidence refs are resolved internally; the agent never supplies absolute paths. Command arrays with shell operators are rejected. Isolation posture (cgroup, seccomp, Landlock) is reported on the response. The returned `rc-{audit_id}` receipt ID is _not_ a durable job ID — use `run_command_job` for long-running work.
 
 ---
 

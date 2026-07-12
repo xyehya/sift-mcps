@@ -250,6 +250,51 @@ def test_run_command_with_evidence_ref_returns_provenance_and_job_id(sealed_case
     assert str(sealed_case) not in blob
 
 
+def test_run_command_defaults_to_saved_output_with_a_focused_follow_up(sealed_case):
+    """The agent's normal path keeps full output out of its immediate context."""
+    out = _run_command(
+        {
+            "command": "cat evidence/disk.txt",
+            "purpose": "read a sealed artifact without expanding context",
+            "evidence_refs": ["evidence/disk.txt"],
+        },
+        examiner="analyst",
+        audit=AuditWriter(mcp_name="sift-core"),
+    )
+
+    assert out["success"] is True
+    output_ref = out["full_output_ref"]
+    assert output_ref.startswith("agent/run_commands/")
+    assert (sealed_case / output_ref).is_file()
+    assert out["next_action"] == {
+        "type": "inspect_saved_output",
+        "output_ref": output_ref,
+        "command": f"head -n 40 {output_ref}",
+    }
+
+
+def test_run_command_surfaces_saved_stderr_when_stdout_is_empty(sealed_case):
+    """A failed forensic command must not strand its only useful output stream."""
+    out = _run_command(
+        {
+            "command": "ls agent/does-not-exist",
+            "purpose": "exercise the stderr-only saved-output contract",
+        },
+        examiner="analyst",
+        audit=AuditWriter(mcp_name="sift-core"),
+    )
+
+    assert out["success"] is False
+    stderr_ref = out["stderr_output_ref"]
+    assert stderr_ref.startswith("agent/run_commands/")
+    assert stderr_ref.endswith("_stderr.txt")
+    assert out["full_output_ref"] == stderr_ref
+    assert stderr_ref in out["output_files"]
+    assert (sealed_case / stderr_ref).is_file()
+    assert out["next_action"]["output_ref"] == stderr_ref
+    assert str(sealed_case) not in json.dumps(out)
+
+
 def test_run_command_accepts_gateway_resolved_db_evidence_ref_without_manifest(
     tmp_path, monkeypatch
 ):

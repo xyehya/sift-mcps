@@ -285,7 +285,18 @@ class GatewayLocalTool(Tool):
             return value
         if isinstance(value, list):
             return ToolResult(content=value)
-        return ToolResult(content=[TextContent(type="text", text=str(value))])
+        text = str(value)
+        if self.name == "run_command" and self.output_schema is not None:
+            try:
+                structured_content = json.loads(text)
+            except (TypeError, ValueError):
+                structured_content = None
+            if isinstance(structured_content, dict):
+                return ToolResult(
+                    content=[TextContent(type="text", text=text)],
+                    structured_content=structured_content,
+                )
+        return ToolResult(content=[TextContent(type="text", text=text)])
 
 
 def _normalize_output_schema(tool: Any) -> None:
@@ -411,6 +422,12 @@ def _register_core_tools(mcp: FastMCP, gateway: Any) -> None:
                 name=spec.name,
                 description=spec.description,
                 parameters=spec.input_schema,
+                # This revamp deliberately introduces a typed public result for
+                # run_command only. Other core specs keep their established
+                # text envelope until each has its own end-to-end surface test.
+                output_schema=(
+                    spec.output_schema if spec.name == "run_command" else None
+                ),
                 annotations=ToolAnnotations(readOnlyHint=spec.read_only),
                 meta={
                     "category": _CORE_TOOL_CATEGORIES.get(spec.name),

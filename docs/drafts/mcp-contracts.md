@@ -249,22 +249,23 @@ agent is told to pass `audit_id` from each tool response into `record_finding`.
   a durable job id; use `run_command_job` for long-running or parallel work that
   should be polled with `job_status`. Pass a single command string; pipes (`|`),
   sequencing (`&&`/`||`/`;`), and redirects (`>`,`>>`,`<`,`2>&1`) are supported.
-  Set `preview_lines` to cap inline stdout and `save_output` for large output.
+  Complete stdout/stderr are saved by default; `preview_lines` caps inline stdout.
   Case path jails, audit logging, and provenance hashing are enforced.
-- Input (agent_tools.py:256): required `command, purpose`; optional `timeout,
-  save_output, evidence_refs[], output_ref, input_files[] (deprecated), working_dir,
-  preview_lines, skip_enrichment`.
-- Output: `build_response` envelope — `{success, tool, data, audit_id, output_format,
+- Input: required `command, purpose`; optional `timeout, save_output, evidence_refs[],
+  output_ref, working_dir, preview_lines, skip_enrichment`.
+- Output: structured `build_response` envelope — `{success, tool, data, audit_id, output_format,
   elapsed_seconds, exit_code, command, job_id, provenance{...}}`, plus optional
   `warnings/agent_action/privilege_escalation/stages`, `full_output_ref/_sha256/_bytes`
-  (relative ref), and `input_files_warning` when inputs weren't detected.
+  plus optional `stderr_output_ref/_sha256` (relative refs), `next_action` for
+  saved-output inspection, and `provenance_hint`
+  when inputs were not inferred.
 - Parallel-safety: **serialized-mutation** (writes to `agent/run_commands/`, runs in
   the case jail). Treat as case-serialized; prefer `run_command_job` for long work.
-- Context budget: `preview_lines` capped at 200 (`min(..., 200)`); large stdout is
+- Context budget: `preview_lines` defaults to 40 and is capped at 200; large stdout is
   saved and only a preview returned; response guard then applies the 256 KiB cap.
-- Saved-artifact: `save_output`/`output_ref` persist full stdout/stderr under
-  `agent/run_commands/`, returned as a **relative** `full_output_ref` — never an
-  absolute path. `evidence_refs` resolve opaque ids/relative paths to local paths
+- Saved-artifact: complete stdout/stderr persist under `agent/run_commands/` by
+  default, returned as case-relative `full_output_ref` and, when present,
+  `stderr_output_ref` — never an absolute path. `evidence_refs` resolve opaque ids/relative paths to local paths
   internally; the agent never supplies or sees absolute paths.
 - Provenance: `provenance{job_id="rc-<audit_id>", audit_id, input_sha256s, evidence_
   refs, output_sha256?}`. Recovery: on `purpose is required`/`command must be a
