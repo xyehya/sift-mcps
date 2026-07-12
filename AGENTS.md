@@ -299,36 +299,41 @@ standalone portal demo use report generation, backend register/validate, or agen
 token issuance, not finding approval.
 
 ### Reaching the LIVE gateway over Tailscale (verified 2026-07-12)
-The live SIFT gateway (VM `sift` on hypervisor `fedora44`) is reachable from a
-cloud agent over the tailnet `taildaf4f1.ts.net`. `fedora44` (100.127.173.79) is a
-Tailscale **subnet router** advertising an approved **`192.168.122.81/32`** route
-(only the VM; the whole `/24` was intentionally narrowed). Gateway serves TLS on
-`https://192.168.122.81:4508` (`/health`, `/portal/`, `/mcp`).
+The live SIFT gateway (libvirt VM `sift` on hypervisor `fedora44`) is reachable
+from a cloud agent over the maintainer Tailscale tailnet. `fedora44` is a
+Tailscale **subnet router** advertising an approved **`192.168.122.81/32`**
+(only the VM). Gateway TLS: `https://192.168.122.81:4508` (`/health`, `/portal/`,
+`/mcp`).
 
-To connect from a cloud agent VM (requires secrets `TS_AUTHKEY` + `SIFT_CA_CERT`):
-- `TS_AUTHKEY` = reusable, ephemeral, **`tag:cursor-cloud`** auth key. The tailnet
-  ACL grants `tag:cursor-cloud → 192.168.122.81:tcp:4508` ONLY (tagged nodes are
-  not in `autogroup:member`, so this explicit grant is what authorizes access).
-- `SIFT_CA_CERT` = PEM of the public SIFT CA (validate TLS with `--cacert`, not `-k`).
-- Cloud Agent VMs cannot use kernel Tailscale — run **userspace networking**:
-  `tailscaled --tun=userspace-networking --socks5-server=localhost:1055 ...` then
-  `tailscale up --authkey=$TS_AUTHKEY --accept-routes --hostname=cursor-cloud-agent`
-  (`--accept-routes` is required to use the advertised `/32`). Reach the gateway
-  through the SOCKS5 proxy: `curl --proxy socks5h://localhost:1055 --cacert <ca>
-  https://192.168.122.81:4508/health`. `install.sh`/Tailscale need root for the
-  packaged daemon, but userspace `tailscaled` runs rootless with an explicit
-  `--socket`/`--statedir`.
-- Least-privilege confirmed: only `tcp:4508` to the `/32` is reachable; OpenSearch
-  `:9200` and Supabase `:54321/:54322` (loopback on the VM) are NOT reachable.
-- `/mcp` returns 401 without gateway auth (JWT/API key) — reachability ≠ authorization;
-  the gateway remains the policy boundary. Hypervisor work: `ssh fedora44` (NOT
-  `fedora.local`, which does not resolve).
+Required Cursor Cloud secrets (never commit or paste into chat/logs):
+- `TS_AUTHKEY` — reusable, ephemeral auth key tagged **`tag:cursor-cloud`**.
+  Tailnet ACL must grant only `tag:cursor-cloud → 192.168.122.81:tcp:4508`.
+- `SIFT_CA_CERT` — PEM of the **public** SIFT CA (use `--cacert`, never `-k`).
+
+Cloud VMs cannot use kernel Tailscale. Use **userspace** networking (rootless):
+
+```sh
+mkdir -p /tmp/tailscaled.state
+tailscaled --tun=userspace-networking \
+  --socks5-server=localhost:1055 \
+  --socket=/tmp/tailscaled.sock \
+  --statedir=/tmp/tailscaled.state &
+tailscale --socket=/tmp/tailscaled.sock up \
+  --authkey="$TS_AUTHKEY" \
+  --accept-routes \
+  --hostname=cursor-cloud-agent
+printf '%s\n' "$SIFT_CA_CERT" > /tmp/sift-ca.pem
+curl --proxy socks5h://localhost:1055 --cacert /tmp/sift-ca.pem \
+  --max-time 8 https://192.168.122.81:4508/health
+```
+
+`--accept-routes` is required to use the advertised `/32`. Least-privilege:
+only `tcp:4508` on that address is intended to be reachable; OpenSearch `:9200`
+and Supabase `:54321/:54322` stay loopback-only on the VM. `/mcp` returns 401
+without gateway auth — reachability ≠ authorization. Hypervisor SSH from the
+maintainer Mac: `ssh fedora44` (not `fedora.local`).
 
 ### Known pre-existing test failures on a clean checkout (NOT environment issues)
-- `tests/test_installer_golden_path_contract.py::test_secure_os_hardening_is_default_and_service_scoped`
-  — asserts the committed `configs/apparmor/sift-gateway.template` contains
-  `/opt/sift-mcps/.venv/lib/**` exactly twice; the committed file has 3. Fails
-  regardless of setup.
 - `tests/test_opencti_shared_target_contract.py::test_shared_check_is_read_only_and_requires_secure_core_contract`
   — requires the `docker` CLI to validate a compose contract; skips/fails when
   Docker is absent.
