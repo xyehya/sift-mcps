@@ -251,3 +251,55 @@ Next action:
 
 Never paste secrets, raw tokens, DSNs, passwords, private keys, service-role
 keys, or sensitive full evidence paths into GitHub, docs, or any external service.
+
+## Cursor Cloud specific instructions
+
+This section describes the **Cursor Cloud agent VM** dev environment, which is
+NOT the maintainer's macOS + SIFT-VM setup described in "Deploy-and-prove" above
+(`ssh sift-vm`, Fedora host, `localhost:4508` tunnel are all the maintainer's
+machines and are unreachable from this VM — ignore them here).
+
+### Toolchain (already installed in the base snapshot; refreshed by the update script)
+- **uv** lives at `~/.local/bin` — the update script prepends it to `PATH`.
+- **Node 24.13.1** is installed via nvm at `~/.nvm/versions/node/v24.13.1/bin`.
+  A stale `/exec-daemon/node` (v22) is earlier on the default `PATH` and shadows
+  it, so `node -v` in a fresh shell shows v22. The frontend requires Node 24
+  (`packages/case-dashboard/frontend/package.json` engines), so **prepend the
+  nvm bin** for any frontend command:
+  `export PATH="$HOME/.nvm/versions/node/v24.13.1/bin:$PATH"`.
+
+### Commands (standard invocations; authoritative source is `.github/workflows/ci.yml`)
+- Python lint/typecheck/test/coverage all use `uv run --locked ... <tool>` exactly
+  as in `ci.yml`. The supported pytest entrypoints are in
+  `docs/new-docs/DEVELOPER_ENTRYPOINT.md` §11; CI runs the full suite via
+  `pytest tests packages -m "not integration"` (importlib mode handles the
+  cross-package collisions the doc warns about).
+- Frontend (from `packages/case-dashboard/frontend`, Node 24 on PATH): `npm run dev`,
+  `npm run lint`, `npm test` (vitest), `npm run build`.
+
+### Docker is NOT installed here — and the standard dev/test loop does not need it
+CI and the normal loop are Docker-free (`-m "not integration"`). The full backend
+gateway (`sift-gateway` + OpenSearch from `docker-compose.yml` + Postgres/Supabase)
+requires Docker and is out of scope for the standalone cloud dev env.
+
+### Running the portal standalone (no backend) — the demoable app
+`npm run dev` serves the examiner portal at `http://localhost:5173/portal/`.
+Append `?mock=1` (`http://localhost:5173/portal/?mock=1`) to boot it fully seeded
+with demo fixtures behind a mock auth context — no gateway needed. The mock/real
+split lives ONLY at the API adapter (`src/api/client.js` + `src/_mock/routes.js`).
+**Caveat:** only the endpoints enumerated in `src/_mock/routes.js` are mocked
+(reports generate/save, backends register/validate/reload/enable, service
+start/stop/restart, auth principals issue/revoke, and the GET reads). Any other
+write — e.g. **findings Approve/Stage/Reject** — falls through to the real fetch,
+hits the Vite `/portal` proxy, and returns **HTTP 502** with no backend. For a
+standalone portal demo use report generation, backend register/validate, or agent
+token issuance, not finding approval.
+
+### Known pre-existing test failures on a clean checkout (NOT environment issues)
+- `tests/test_installer_golden_path_contract.py::test_secure_os_hardening_is_default_and_service_scoped`
+  — asserts the committed `configs/apparmor/sift-gateway.template` contains
+  `/opt/sift-mcps/.venv/lib/**` exactly twice; the committed file has 3. Fails
+  regardless of setup.
+- `tests/test_opencti_shared_target_contract.py::test_shared_check_is_read_only_and_requires_secure_core_contract`
+  — requires the `docker` CLI to validate a compose contract; skips/fails when
+  Docker is absent.
