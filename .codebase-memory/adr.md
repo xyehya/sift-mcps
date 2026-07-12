@@ -1,60 +1,98 @@
 ## PURPOSE
 
-Protocol SIFT Gateway is a governed DFIR platform for autonomous agents on SANS SIFT: one single-policy-boundary gateway; humans keep authority over evidence/approvals/credentials/reports. Agents reach tools only via `/mcp` (Supabase JWT); humans via `/portal`. This ADR is the **session entry point** — dense invariants + pointers. Prefer it over crawling the monorepo.
+**Project memory, not a conventional one-decision ADR.** It is the compact architectural contract returned before repository exploration: durable decisions, authority boundaries, invariants, and change routes—not current tickets or an exhaustive inventory.
 
-**Visual SoT for multi-layer security / defense-in-depth:** `docs/drafts/architecture/sift-architecture.html` (VP-1..VP-5). Text twin: `docs/architecture/SIFT-GATEWAY-SECURITY-MODEL.md`. Code wins on conflict — flag drift. Ops queue: `~/AI/sift-portal-ops/STATUS.md` + `trackers/MASTER_TRACKER.md`.
+Protocol SIFT Gateway enables governed autonomous DFIR: agents use `/mcp`; operators control evidence, privileged approvals, credentials, and reports through `/portal`. Gateway is the only privileged entry point—no direct agent-to-backend, database, evidence, or OS-execution route.
 
-**`run_command` is simultaneously the critical capability layer and the highest-risk layer** for autonomous DFIR: it is how the agent runs forensic binaries on the SIFT VM against sealed case artifacts/evidence. Without it, agentic investigation is hollow; without its jail, the agent is an uncontained remote executor on evidence. Preserve and prove that hardening on **every** change that touches execution.
+**Use:** index → read → graph-search a symbol → trace callers/callees. Code and migrations are truth; this is the map. Visual/security detail: `docs/drafts/architecture/sift-architecture.html` and `docs/architecture/SIFT-GATEWAY-SECURITY-MODEL.md`. Current work: `~/AI/sift-portal-ops/STATUS.md` and `trackers/MASTER_TRACKER.md`.
+
+**Source precedence:** code + migrations → architecture/security docs → this memory → operational trackers. Flag drift; do not perpetuate it.
 
 ## STACK
 
-- **Language**: Python 3.12 monorepo (`uv`); portal React 19 + Vite 8 + Tailwind v4 + shadcn.
-- **Gateway**: Starlette/FastMCP (`sift-gateway`) — auth, 10-stage MCP policy chain, REST, backend proxy.
-- **Control plane (AUTHORITATIVE)**: Supabase/Postgres 15, `FORCE RLS` on `app.*`, append-only audit/custody/approval, durable jobs. Writes land here under RLS — never in the derived index.
-- **Data plane (DERIVED, never SoR)**: OpenSearch — case-scoped `case-*` (+ gated `opencti_*` only under dedicated role, never via case-search). Rebuildable projection with provenance.
-- **Execution / `run_command`**: MCP tool in `sift-core` → durable job → `sift-job-worker` → `agent_runtime` uid on SIFT VM (`shell=False`, argv stages). Code: `sift_core/execute/` (`security.py` ceiling, `dfir_exec_launcher.py` floor).
-- **Workers**: `sift-job-worker` (`run_command`); `sift-opensearch-worker@` (ingest/enrich, FUSE-capable).
-- **Add-ons (stdio)**: `opensearch-mcp`, `forensic-rag-mcp` (pgvector/Qwen), `opencti-mcp` (query-only), `windows-triage-mcp`, `forensic-knowledge`.
-- **Shared**: `sift-common`. **Runtime jail**: AppArmor `dfir-exec` + Landlock v4 + seccomp=KILL + cgroup + no-new-privs. Proof VM: `ssh sift-vm`; tunnel `https://localhost:4508`.
+| Plane | Implementation | Authority / contract |
+| --- | --- | --- |
+| Policy boundary | `packages/sift-gateway` (Starlette/FastMCP) | JWT `/mcp`, tool scope, audit, active-case injection, response guard, and registered-tool proxying. |
+| Core DFIR | `packages/sift-core` | Case, evidence, findings, timeline, reports, durable jobs, and `run_command`. |
+| Control plane | Supabase/Postgres + `supabase/migrations` | **Authoritative** `FORCE RLS`: identity, active case, custody/audit/approval ledgers, jobs, backend registry, and public receipts. |
+| Projection / reference | `opensearch-mcp`, RAG/knowledge, OpenCTI, Windows-triage | OpenSearch is **derived** and case-scoped; reference add-ons are Gateway-registered by explicit namespace and authority contract. Add-ons get no DB credentials. |
+| Workers / confinement | `sift-job-worker`, `sift-opensearch-worker@`, `sift_core/execute` | Least-privilege durable workers; OS-confined execution. |
+| Operator surface | `packages/case-dashboard` | Human workflows for cases, evidence, approvals, and reports. |
+
+Python 3.12/`uv`; React 19/Vite/Tailwind/shadcn. Prove behavior on the SIFT VM, not by local tests alone.
 
 ## ARCHITECTURE
 
-**Eight planes, one gold gate** (HTML VP-2): Client → **Gateway** → Core tools / add-ons → **Postgres (truth)** / **OpenSearch (derived)** / **sandboxed execution** / evidence vault. Color encodes plane authority.
+```mermaid
+flowchart LR
+  A[AI agent] -->|JWT /mcp| G[Gateway: one policy boundary]
+  O[Operator] -->|/portal| G
+  G --> C[Core tools]
+  G --> X[Registered add-ons]
+  G <--> P[(Postgres: authoritative)]
+  C --> E[Immutable evidence]
+  G -->|enqueue job| P -->|lease / claim| W[Worker]
+  W --> J[Confined run_command]
+  W --> D[(OpenSearch: derived)]
+  X --> D
+```
 
-**Packages:** `sift-gateway` · `sift-core` (tools, evidence chain, **`run_command` jail**) · `case-dashboard` · `opensearch-mcp` · RAG/knowledge · opencti/wintriage · `supabase/migrations`.
+**Authority.** Postgres owns scopes, active case, evidence seal/custody, audit, approvals, backend registration, jobs, and receipts. Evidence is operator-mounted and immutable. OpenSearch is rebuildable/provenanced—not authorization or case truth. Only approved material enters reports. `app.active_case_state`, not env files or add-on state, supplies the active case.
 
-**Auth:** MCP = Supabase JWT only (SEC-6; outage → 503). Portal = HMAC session + step-up re-verify on privileged actions.
+**Agent tool-call flow.** Identity is established at `/mcp`. This is installed call order; denial prevents the body and `ResponseGuard` sanitizes the return path.
 
-**VP-3 policy chain** (fail-closed; identity first): ControlPlaneRequired → ToolAuthorization → AddonAuthority → CaseContext → AuditEnvelope → ProxyActiveCase → **EvidenceGate** (registered+sealed+chain OK — prerequisite before any `run_command` on case evidence) → ResponseGuard → IngestStatusAugment → OpenSearchJobDispatch → tool body. Live code may add stages beyond design “9” — verify `policy_middleware.py` / `mcp_server.py`.
+```text
+identity → catalog → ControlPlaneRequired → ToolAuthorization → AddonAuthority
+         → CaseContext → AuditEnvelope → ProxyActiveCase → EvidenceGate
+         → ResponseGuard → IngestStatusAugment → OpenSearchJobDispatch → tool body
+```
 
-**VP-4 STRIDE:** Critical **#2** evidence immutability and **#6** untrusted-output (`ResponseGuard`). **#3** (worker→OS jail) is the `run_command` risk boundary — elevation/DoS/tamper if the floor fails. Also #1 JWT/scopes; #4 Postgres/`FORCE RLS`; #5 derived OpenSearch; #7 operator step-up.
+`mcp_server.py` and `policy_middleware.py` are authoritative; do not rely on a stale “nine gates” count. `EvidenceGate` requires registered, sealed, intact evidence for a bound case. Only long-running OpenSearch ingest/enrich is dispatched; reads/queries stay direct unless deliberately reclassified.
 
-**`run_command` — critical + risk (VP-5):** Agent-facing MCP tool that executes forensic commands over artifacts/evidence on the SIFT VM. **Critical:** enables autonomous DFIR (timeline, carve, parse, hash, registry, memory tools in `@mvp_forensic`). **Risk:** host-side code execution with evidence-path visibility — largest agent blast radius in the system. **Ceiling** (intent): allowlist `@mvp_forensic`, `unlisted_policy=reject`, deny shells/interpreters/launcher smuggling, block cross-case/`/var/lib/sift`. **Floor** (capability): `agent_runtime` fail-closed · Landlock RO case/evidence only · seccomp=KILL · AppArmor enforce · cgroup MemoryMax/TasksMax · `IPAddressDeny=any` · no-new-privs. Deny-default on both. Output is untrusted → ResponseGuard. Jobs: enqueue → claim `FOR UPDATE SKIP LOCKED` → path-free `result_public`.
+**Durable-job flow.** The agent receives opaque, sanitized state—never paths or secrets:
 
-**Authority:** `app.active_case_state` sole active case; reports APPROVED-only; agent backends **no DB creds**.
+```text
+tool → Gateway audit + job → Postgres → worker claims (FOR UPDATE SKIP LOCKED)
+     → worker resolves opaque IDs internally → execute/ingest
+     → sanitized result_public + receipt → Postgres → Gateway → agent
+```
 
-**Read next:** `sift-architecture.html` (esp. VP-5) → SECURITY-MODEL.md VP-5 → `docs/latest/02 - Core Tools.md` → `DEVELOPER_ENTRYPOINT.md` → `docs/latest/` 00–18.
+**`run_command`: critical capability and largest blast radius.** The ceiling is a positive `@mvp_forensic` allowlist (`unlisted_policy=reject`) that blocks shells, interpreters, argv-rewriting launchers, and cross-case paths. The floor requires distinct `agent_runtime`, `shell=False`, Landlock deny-default grants, seccomp `KILL`, enforced AppArmor, `no-new-privs`, cgroup limits, and network denial. Both deny by default; output stays untrusted until `ResponseGuard`.
 
 ## PATTERNS
 
-1. **Never weaken `run_command` hardening for convenience.** Changes to allowlist, `security.py`, launcher, AppArmor, seccomp, Landlock grants, cgroup, runtime-user, or worker env-scrub require explicit threat rationale + negative/red-team proof. Expanding tools ≠ loosening the jail. Prefer adding a narrowly allowlisted wrapper over opening interpreters/network/FS.
-2. **Surfacing (#1 agent bug):** land on `*Out` + `result_public` + DB-authority path. Guard: `sift_common.testing.surface`.
-3. **Code wins over design/HTML** — flag drift.
-4. **Green test ≠ live proof** — VM deploy-and-prove after execution-path changes. Runbooks: `RUN-PORTAL-V3-VM-DEPLOY.md` / `RUN-PORTAL-V3-VM-TEST.md`.
-5. **Durable jobs** for `run_command`/ingest/enrich; `result_public` path-free.
-6. **No second door** — all privileged flows (including exec) cross the gateway gold band + EvidenceGate.
-7. **Discovery:** index → this ADR → graph tools; `rg` if MCP missing.
-8. **Security claims need reachability proof** — for `run_command`: tool → gates → argv → worker → OS jail footprint.
+1. **One door, fail closed.** Every privileged capability crosses Gateway policy, DB authority, audit, case binding, and evidence gate; never add a backdoor, file fallback, or agent-visible secret.
+2. **Surface changes end-to-end.** Agent-visible fields need `*Out`, `structured_content`/`result_public`, and the DB path. Add a fail-on-revert `sift_common.testing.surface` test; register optional keys in `SURFACE_OPTIONAL_KEYS`.
+3. **Separate authority from projection.** Write case/evidence/findings/approvals/jobs to Postgres under RLS; derive/search OpenSearch with Gateway-injected scope and provenance.
+4. **Make backend contracts explicit.** `app.mcp_backends` declares namespace, scopes, authority contract, and case arguments. Gateway injects authority; add-ons do not recreate it.
+5. **Use durable jobs for privileged/long work.** Persist opaque IDs and path-free `result_public`. New FUSE/long-running/privileged OpenSearch work needs dispatch classification and a worker handler.
+6. **Treat execution edits as security edits.** Allowlist, parser, runtime user, workers, jail, or systemd changes need threat rationale and negative tests. Prefer narrow wrappers over broader access.
+7. **Validate at the correct layer.** Graph discovery → focused tests/Ruff/Pyright → exact VM deploy and agent-facing repro. Tests prove plumbing, not live behavior.
+8. **Trace claims completely.** Prove reachability → registration → gates → supplied/injected args → operation → worker/OS footprint → current repro. Else call it hardening.
+
+**Change routing:** policy/auth/scoping → `sift-gateway`; evidence/findings/reports/execution → `sift-core` + migrations; derived search/ingest → `opensearch-mcp`; human UX → `case-dashboard`; confinement → configs/systemd/AppArmor with the code change.
 
 ## TRADEOFFS
 
-- **Autonomous DFIR needs `run_command`; safety needs the stacked jail.** Capability without jail = uncontained agent on evidence; jail without capability = useless agent. Default bias: keep capability, never trade away floor/ceiling.
-- **Single gateway** vs per-backend `/mcp` — one STRIDE story.
-- **Postgres authoritative / OpenSearch derived** — never trust OS as SoR.
-- **Stacked ceiling+floor** — policy can be wrong and kernel still contains; cost = allowlist + AppArmor maintenance.
-- **Fail-closed** (auth, audit, evidence gate, runtime-user) — outages block agents.
-- **Docs:** HTML visual SoT → SECURITY-MODEL text twin → `docs/latest/` → `docs/new-docs/`. Domain `docs/adr/` ≠ this MCP ADR. Cursor may omit `manage_adr` — CLI or `.codebase-memory/adr.md`.
+| Decision | Alternative rejected | Cost accepted |
+| --- | --- | --- |
+| One Gateway boundary | Direct backend MCP routes | More central complexity; one enforceable trust story. |
+| Postgres authority; OpenSearch derived | Search index decides truth | Rebuild/provenance work; RLS-backed custody remains reliable. |
+| DB-active and fail closed | File/env fallback during DB outage | Outage blocks agents; cannot silently bypass scope/custody. |
+| Durable jobs for execution/ingest | Long synchronous gateway calls | State/polling overhead; worker isolation and auditability. |
+| Policy ceiling + OS floor | Policy-only allowlist or broad sandbox | Jail maintenance; a policy/parser failure is not host control. |
+| Sanitized public results | Raw logs, paths, exceptions | Less agent debug detail; less secret/path/prompt-injection exposure. |
+
+This memory complements decision-specific records in `docs/adr/`. Create one when a choice is costly to reverse, surprising without context, and selected after a real trade-off.
 
 ## PHILOSOPHY
 
-Governed autonomy: agents investigate via tools (especially `run_command`); humans authorize evidence and release. Deny-by-default at policy **and** kernel. Evidence cannot be silently mutated (#2); command/tool output is hostile until ResponseGuard (#6). The execution jail is load-bearing infrastructure — treat every edit as a security change. Never hardcode secrets. Never weaken auth, evidence, or sandbox to “unblock” an agent. When unsure: HTML VP-5 + SECURITY-MODEL, then ask — do not invent a second door or a softer jail.
+**Governed autonomy:** agents investigate; operators retain authority over evidence, approvals, credentials, and reports. Keep `run_command` useful by making its limits explicit, layered, testable, and live-proven.
+
+```text
+trace authority path → change code/migration/config together → add revert-catching test
+→ focused tests + LSP → deploy exact revision → restart services
+→ agent-facing reproduction → record proof, residual risk, and next action
+```
+
+Never expose secrets, return raw evidence/tool output, weaken auth/evidence/sandbox to unblock work, or label unproven live/security claims as fact. Trace the whole path before widening authority.
