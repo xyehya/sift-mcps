@@ -5,6 +5,15 @@
     },
     "cursor-public/opensearch-agent-skills": {
       "enabled": true
+    },
+    "docs-canvas": {
+      "enabled": true
+    },
+    "pr-review-canvas": {
+      "enabled": true
+    },
+    "linear": {
+      "enabled": true
     }
   }
 }

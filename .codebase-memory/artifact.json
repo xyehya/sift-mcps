@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "89df4867ec8affa4253e42c2fc58fcb284ae859d",
-    "indexed_at": "2026-07-12T00:18:04Z",
+    "commit": "bff50067c335a20b9a2ed76b3c0e60956f1ae65f",
+    "indexed_at": "2026-07-12T11:12:42Z",
     "project": "Users-yk-AI-sift-mcps",
-    "nodes": 24051,
-    "edges": 104561,
-    "original_size": 50003968,
-    "compressed_size": 9989840,
-    "compression_level": 9
+    "nodes": 24119,
+    "edges": 104293,
+    "original_size": 74711040,
+    "compressed_size": 14221654,
+    "compression_level": 3
 }
