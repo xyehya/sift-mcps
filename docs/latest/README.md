@@ -43,6 +43,7 @@ All 17 declared invariants from `docs/drafts/architecture/sift-architecture.html
 | 16 | [Configuration Reference](16%20-%20Configuration%20Reference.md) | Reference | gateway.yaml keys, env vars, manifest schema, Supabase auth |
 | 17 | [Development Guide](17%20-%20Development%20Guide.md) | Guide | Dev setup, add tool, add backend, surface testing, conventions |
 | 18 | [Troubleshooting](18%20-%20Troubleshooting.md) | Guide | 18 symptom-driven fixes with exact error messages |
+| 19 | [Greenfield Uninstaller](19%20-%20Greenfield%20Uninstaller.md) | Guide | Streamlined VM wipe/reinstall contract, `--data` / `--keep-caches`, fail-closed volumes, live proof |
 
 ## Status
-Complete: 19 documents (1 HTML + 18 MD + 1 README). 00-08 system docs, 09-13 cross-cutting references, 14-18 procedural/operational guides.
+Complete: 20 documents (1 HTML + 19 MD + 1 README). 00-08 system docs, 09-13 cross-cutting references, 14-19 procedural/operational guides.
