@@ -41,7 +41,8 @@ _migrate_gateway_config() {
   local cfg_src cfg_out
   cfg_src="$(mktemp)"
   cfg_out="$(mktemp)"
-  trap 'rm -f "${cfg_src:-}" "${cfg_out:-}"; trap - EXIT' EXIT
+  # Expand paths at registration: EXIT runs after `local` scope is gone.
+  trap 'rm -f "'"$cfg_src"'" "'"$cfg_out"'"; trap - EXIT' EXIT
   if ! sudo_if_needed cat "$SIFT_CONFIG" > "$cfg_src" 2>/dev/null; then
     warn "_migrate_gateway_config: could not read $SIFT_CONFIG — skipping migration."
     rm -f "$cfg_src" "$cfg_out"
@@ -190,8 +191,9 @@ write_opensearch_config() {
   local tmp
   tmp="$(mktemp)"
   # Clean up the secret-bearing temp on any set -e abort (e.g. svc_install_file
-  # failure) so the rendered credentials never linger in TMPDIR; self-clearing.
-  trap 'rm -f "${tmp:-}"; trap - EXIT' EXIT
+  # failure). Expand "$tmp" now — EXIT runs after local scope is gone, so a
+  # deferred expansion would rm nothing and leave the password file in TMPDIR.
+  trap 'rm -f "'"$tmp"'"; trap - EXIT' EXIT
   svc_test_f "$SIFT_HOME/opensearch-root-ca.pem" || die \
     "OpenSearch CA is missing; the TLS/authenticated core cannot be configured. Re-run install.sh."
   local admin_password
@@ -225,9 +227,9 @@ write_opensearch_env() {
   # Operator-owned temp -> sift-service-owned 0600 (see write_supabase_env).
   local tmp
   tmp="$(mktemp)"
-  # Same EXIT-trap cleanup as write_opensearch_config / write_supabase_env: a
-  # failed svc_install_file under set -e must not leave the rendered env in TMPDIR.
-  trap 'rm -f "${tmp:-}"; trap - EXIT' EXIT
+  # Same EXIT-trap cleanup as write_opensearch_config / write_supabase_env.
+  # Expand "$tmp" at registration (see write_opensearch_config).
+  trap 'rm -f "'"$tmp"'"; trap - EXIT' EXIT
   {
     printf '# OpenSearch env — gateway env_refs for opensearch-mcp backend\n'
     printf '# Written by sift-mcps install.sh. Idempotent — delete to regenerate.\n'

@@ -140,7 +140,9 @@ def test_secure_os_hardening_is_default_and_service_scoped() -> None:
     assert "abi <abi/4.0>," in gateway_profile
     assert "profile sift-addon {" in gateway_profile
     assert "profile sift-addon-broker flags=(attach_disconnected) {" in gateway_profile
-    assert gateway_profile.count("/opt/sift-mcps/.venv/lib/**") == 2
+    # One mr grant per confined profile that imports from the install venv:
+    # sift-gateway, sift-addon-broker (worker), and sift-addon.
+    assert gateway_profile.count("/opt/sift-mcps/.venv/lib/**") == 3
     assert "/etc/mime.types" in gateway_profile
     services = (REPO_ROOT / "lib" / "services.sh").read_text(encoding="utf-8")
     assert 'die "Mandatory gateway is not reachable.' in services
