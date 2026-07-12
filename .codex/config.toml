@@ -2,8 +2,8 @@
 command = "codebase-memory-mcp"
 args = []
 
-# Live SIFT gateway aggregate MCP (Tailscale path). Token from env — same as:
-#   codex mcp add --bearer-token-env-var SIFT_AGENT_TOKEN siftmcp --url https://192.168.122.81:4508/mcp
 [mcp_servers.siftmcp]
 url = "https://192.168.122.81:4508/mcp"
 bearer_token_env_var = "SIFT_AGENT_TOKEN"
+required = true
+startup_timeout_sec = 15
