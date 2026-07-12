@@ -24,8 +24,6 @@ print_summary() {
   printf 'Config:       %s\n' "$SIFT_CONFIG"
   printf 'Secrets:      %s   (read with: sudo cat)\n' "$MATERIALS_FILE"
   printf 'Evidence root: %s\n' "$SIFT_CASES_ROOT"
-  printf 'Durable cache: %s (uv/HF/wintriage; survives uninstall --keep-caches)\n' \
-    "${SIFT_CACHE_ROOT:-/var/cache/sift}"
   printf '\n'
 
   # Supabase provisioning mode.
@@ -110,7 +108,8 @@ print_summary() {
 # runs the canonical uninstaller `scripts/uninstall.sh`, which:
 #   * NEVER touches /cases unless an operator runs IT directly with --data AND
 #     --i-understand-evidence-loss AND --yes (plus typed confirm on a TTY); and
-#   * optionally preserves durable regenerable caches via --keep-caches.
+#   * optionally spares download caches + Docker images via --keep-caches
+#     (volumes, .venv, and secrets are still always removed).
 # This shim deliberately NEVER passes --data / evidence-loss flags through.
 
 do_uninstall() {

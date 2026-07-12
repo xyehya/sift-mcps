@@ -20,7 +20,8 @@
 #   --i-understand-evidence-loss
 #                           Second gate required with --data
 #                           (or set SIFT_PURGE_EVIDENCE_ACK=1)
-#   --keep-caches           Preserve durable regenerable caches + Docker images
+#   --keep-caches           Optional: spare /var/cache/sift download caches +
+#                           Docker images only (volumes/.venv/secrets still wiped)
 #                           (or set SIFT_KEEP_CACHES=1). OFF by default.
 #   --execute-as USER       Override SIFT_EXECUTE_AS_USER (default: agent_runtime)
 #   --service-user USER     Override SIFT_GATEWAY_SERVICE_USER (default: sift-service)
@@ -30,12 +31,12 @@
 #   --cache-root PATH       Override SIFT_CACHE_ROOT (default: /var/cache/sift)
 #   -h, --help              Print this help and exit
 #
-# --data targets PERSONALIZED case/evidence only. Global knowledge (RAG seed
-# archive in artifacts/, embedding weights, windows-triage baselines) is either
-# disposable volume data (always wiped) or durable cache (--keep-caches).
+# --data targets PERSONALIZED case/evidence only.
 #
-# OpenCTI / OpenSearch / Supabase Docker VOLUMES are always removed (re-provision).
-# Docker IMAGES are removed unless --keep-caches.
+# Default live wipe removes the whole SIFT stack: containers, named volumes,
+# config/secrets, .venv, state. Optional --keep-caches only spares regenerable
+# download caches under /var/cache/sift and unused Docker images (faster test
+# re-spins). It does NOT keep volumes, .venv, or secrets.
 # =============================================================================
 set -Eeuo pipefail
 
@@ -266,25 +267,143 @@ _preserve_hayabusa_into_cache() {
 # 5) Teardown partitions (install reverse order)
 # ---------------------------------------------------------------------------
 
-# --- 5a OpenCTI (external add-on; volumes always; images only if !keep-caches)
-teardown_opencti() {
-  if ! command -v docker >/dev/null 2>&1; then
-    warn "docker not found — skipping OpenCTI teardown."
+# Stop gateway/workers before touching Docker so nothing restarts containers
+# or holds named volumes open. Unit-file removal happens later.
+stop_sift_services() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  local _os_workers=() _u _wlink
+  for _u in $(systemctl list-units --all --plain --no-legend 'sift-opensearch-worker@*.service' 2>/dev/null | awk '{print $1}'); do
+    _os_workers+=("$_u")
+  done
+  for _wlink in "$SYSTEMD_SYSTEM_DIR"/multi-user.target.wants/sift-opensearch-worker@*.service; do
+    [[ -e "$_wlink" ]] || continue
+    _os_workers+=("$(basename "$_wlink")")
+  done
+  action "systemctl stop + disable" "sift-gateway.service sift-job-worker.service"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    sudo_if_needed systemctl stop sift-gateway.service sift-job-worker.service 2>/dev/null || true
+    sudo_if_needed systemctl disable sift-gateway.service sift-job-worker.service 2>/dev/null || true
+  fi
+  if [[ ${#_os_workers[@]} -gt 0 ]]; then
+    action "systemctl stop + disable" "OpenSearch workers: ${_os_workers[*]}"
+    if [[ "$DRY_RUN" -eq 0 ]]; then
+      sudo_if_needed systemctl stop "${_os_workers[@]}" 2>/dev/null || true
+      sudo_if_needed systemctl disable "${_os_workers[@]}" 2>/dev/null || true
+    fi
+  fi
+  action "systemctl stop (best-effort)" "system-sift\\x2dopensearch\\x2dworker.slice"
+  run_if_live sudo_if_needed systemctl stop "system-sift\\x2dopensearch\\x2dworker.slice" 2>/dev/null || true
+}
+
+# Authoritative Docker purge: never depend solely on `compose down -v` (it
+# silently no-ops when env/secrets are missing and leaves volumes in place).
+_docker_project_name() { basename "$REPO_DIR"; }
+
+_docker_force_rm_matching_containers() {
+  command -v docker >/dev/null 2>&1 || return 0
+  local project="$1"
+  local id name
+  while read -r id name; do
+    [[ -n "$id" && -n "$name" ]] || continue
+    case "$name" in
+      sift-opensearch|sift-opensearch-*|sift-opencti|sift-opencti-*)
+        ;;
+      supabase_*_"${project}"|supabase_db_"${project}")
+        ;;
+      *)
+        continue
+        ;;
+    esac
+    action "docker rm -f" "$name"
+    run_if_live docker rm -f "$id" 2>/dev/null || true
+  done < <(docker ps -aq --format '{{.ID}} {{.Names}}' 2>/dev/null || true)
+}
+
+_docker_list_sift_volumes() {
+  command -v docker >/dev/null 2>&1 || return 0
+  local project="$1"
+  local vol
+  for vol in $(docker volume ls --quiet 2>/dev/null || true); do
+    case "$vol" in
+      "${project}_opensearch-data"|sift-mcps_opensearch-data) printf '%s\n' "$vol" ;;
+      sift-opencti-shared_*|sift-opencti-*) printf '%s\n' "$vol" ;;
+      supabase_*_"${project}"|supabase_db_"${project}") printf '%s\n' "$vol" ;;
+    esac
+  done
+}
+
+_docker_force_rm_volume() {
+  local vol="$1"
+  action "docker volume rm" "$vol"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
+  if docker volume rm "$vol" 2>/dev/null; then
+    return 0
+  fi
+  # Volume still held: drop any remaining containers, then retry once.
+  _docker_force_rm_matching_containers "$(_docker_project_name)"
+  docker volume rm -f "$vol" 2>/dev/null || docker volume rm "$vol" 2>/dev/null || true
+}
 
+force_purge_sift_docker_state() {
+  if ! command -v docker >/dev/null 2>&1; then
+    warn "docker not found — skipping container/volume force purge."
+    return 0
+  fi
+  local project
+  project="$(_docker_project_name)"
+
+  # Compose is best-effort only (may fail without env files).
   local connectors_compose="$REPO_DIR/docker-compose.opencti-connectors.yml"
   if [[ -f "$connectors_compose" ]]; then
-    action "docker compose down" "OpenCTI feed connectors ($connectors_compose)"
+    action "docker compose down" "OpenCTI connectors (best-effort: $connectors_compose)"
     run_if_live docker compose -f "$connectors_compose" down --remove-orphans 2>/dev/null || true
   fi
-
   local opencti_compose="$REPO_DIR/docker-compose.opencti-shared.yml"
   if [[ -f "$opencti_compose" ]]; then
-    action "docker compose down -v" "OpenCTI stack + named volumes ($opencti_compose)"
+    action "docker compose down -v" "OpenCTI shared (best-effort: $opencti_compose)"
     run_if_live docker compose -f "$opencti_compose" down -v --remove-orphans 2>/dev/null || true
   fi
+  local os_compose="$REPO_DIR/docker-compose.yml"
+  if [[ -f "$os_compose" ]]; then
+    action "docker compose down -v" "OpenSearch (best-effort: $os_compose)"
+    run_if_live docker compose -f "$os_compose" down -v --remove-orphans 2>/dev/null || true
+  fi
 
+  _docker_force_rm_matching_containers "$project"
+
+  local vol leftover=()
+  while read -r vol; do
+    [[ -n "$vol" ]] || continue
+    _docker_force_rm_volume "$vol"
+  done < <(_docker_list_sift_volumes "$project")
+
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    while read -r vol; do
+      [[ -n "$vol" ]] || continue
+      leftover+=("$vol")
+    done < <(_docker_list_sift_volumes "$project")
+    if [[ ${#leftover[@]} -gt 0 ]]; then
+      die "Named SIFT Docker volumes still present after purge: ${leftover[*]}
+  Reinstall will mint new credentials against stale volume data and fail.
+  Free the volumes (docker rm -f <containers>; docker volume rm -f …) and re-run."
+    fi
+    log "Verified: no leftover SIFT OpenSearch/OpenCTI/Supabase named volumes."
+  fi
+
+  # Networks (best-effort; may still be in use by unrelated containers).
+  local net
+  for net in sift-net sift-opencti-app-net "${SIFT_SUPABASE_NETWORK:-sift-supabase-local}"; do
+    if docker network inspect "$net" >/dev/null 2>&1; then
+      action "docker network rm" "$net"
+      run_if_live docker network rm "$net" 2>/dev/null || true
+    fi
+  done
+}
+
+# --- 5a OpenCTI env/secrets (containers/volumes: force_purge_sift_docker_state)
+teardown_opencti() {
   local f
   for f in \
     "$SIFT_HOME/opencti-stack.env" \
@@ -298,39 +417,11 @@ teardown_opencti() {
   done
 }
 
-# --- 5b OpenSearch core (volumes always; images only if !keep-caches)
+# --- 5b OpenSearch config (containers/volumes: force_purge_sift_docker_state)
 teardown_opensearch() {
-  if ! command -v docker >/dev/null 2>&1; then
-    warn "docker not found — skipping OpenSearch teardown."
-    return 0
-  fi
-
-  local compose_file="$REPO_DIR/docker-compose.yml"
-  if [[ -f "$compose_file" ]]; then
-    action "docker compose down -v" "OpenSearch stack + named volume opensearch-data ($compose_file)"
-    run_if_live docker compose -f "$compose_file" down -v --remove-orphans 2>/dev/null || true
-  fi
-
-  local _os_project
-  _os_project="$(basename "$REPO_DIR")"
-  local _v
-  for _v in $(docker volume ls --quiet 2>/dev/null | grep -E "_opensearch-data$" || true); do
-    case "$_v" in
-      "${_os_project}_opensearch-data"|sift-mcps_opensearch-data)
-        action "docker volume rm" "$_v (OpenSearch data)"
-        run_if_live docker volume rm "$_v" 2>/dev/null || \
-          warn "docker volume rm $_v failed (in use?) — remove manually if needed."
-        ;;
-    esac
-  done
-
-  if docker network inspect sift-net >/dev/null 2>&1; then
-    action "docker network rm" "sift-net"
-    run_if_live docker network rm sift-net 2>/dev/null || true
-  fi
-
   local f
-  for f in "$SIFT_HOME/opensearch.yaml" "$SIFT_HOME/opensearch.env"; do
+  for f in "$SIFT_HOME/opensearch.yaml" "$SIFT_HOME/opensearch.env" \
+           "$SIFT_HOME/opensearch-admin.env" "$SIFT_HOME/opensearch-root-ca.pem"; do
     if sudo_if_needed test -f "$f" 2>/dev/null; then
       action "remove" "$f (OpenSearch config)"
       run_if_live sudo_if_needed rm -f "$f"
@@ -338,7 +429,7 @@ teardown_opensearch() {
   done
 }
 
-# --- 5c Supabase (volumes always — control-plane DB is disposable)
+# --- 5c Supabase CLI + project env (containers/volumes: force_purge_…)
 teardown_supabase() {
   local sb_bin=""
   if command -v supabase >/dev/null 2>&1; then
@@ -351,7 +442,9 @@ teardown_supabase() {
   if [[ -n "$sb_bin" ]]; then
     action "supabase stop" "Supabase CLI local stack"
     if [[ "$DRY_RUN" -eq 0 ]]; then
-      (cd "$REPO_DIR" && supabase stop 2>/dev/null) || warn "supabase stop encountered an error (stack may already be down)."
+      (cd "$REPO_DIR" && supabase stop --no-backup 2>/dev/null) \
+        || (cd "$REPO_DIR" && supabase stop 2>/dev/null) \
+        || warn "supabase stop encountered an error (stack may already be down)."
     fi
 
     local sb_dir
@@ -368,27 +461,6 @@ teardown_supabase() {
     warn "Supabase CLI not found — skipping supabase stop."
   fi
 
-  local supa_net="${SIFT_SUPABASE_NETWORK:-sift-supabase-local}"
-  if command -v docker >/dev/null 2>&1 && docker network inspect "$supa_net" >/dev/null 2>&1; then
-    action "docker network rm" "$supa_net"
-    run_if_live docker network rm "$supa_net" 2>/dev/null || true
-  fi
-
-  if command -v docker >/dev/null 2>&1; then
-    local _supa_project
-    _supa_project="$(basename "$REPO_DIR")"
-    local _v
-    for _v in $(docker volume ls --quiet 2>/dev/null | grep -E "^supabase_.*_${_supa_project}$" || true); do
-      action "docker volume rm" "$_v (Supabase control-plane data)"
-      run_if_live docker volume rm "$_v" 2>/dev/null || \
-        warn "docker volume rm $_v failed (in use?) — remove manually if needed."
-    done
-    if docker volume inspect "supabase_db_${_supa_project}" >/dev/null 2>&1; then
-      action "docker volume rm" "supabase_db_${_supa_project}"
-      run_if_live docker volume rm "supabase_db_${_supa_project}" 2>/dev/null || true
-    fi
-  fi
-
   if [[ -f "$SUPABASE_PROJECT_DIR/sift-supabase.env" ]]; then
     action "remove" "$SUPABASE_PROJECT_DIR/sift-supabase.env"
     run_if_live rm -f "$SUPABASE_PROJECT_DIR/sift-supabase.env"
@@ -398,10 +470,10 @@ teardown_supabase() {
   fi
 }
 
-# --- 5d Known SIFT Docker images (skipped when --keep-caches)
+# --- 5d Docker images only when NOT --keep-caches (volumes always already gone)
 teardown_docker_images() {
   if [[ "$KEEP_CACHES" -eq 1 ]]; then
-    log "Keeping Docker images (--keep-caches); volumes already removed."
+    log "Keeping Docker images (--keep-caches). Named volumes were still purged."
     return 0
   fi
   if ! command -v docker >/dev/null 2>&1; then
@@ -414,7 +486,6 @@ teardown_docker_images() {
       "opensearchproject/opensearch@sha256:dbb01641baadae5104e18acd888bf05e8fdd9af3567fd30624a76ba3e5a31dec" \
       2>/dev/null || true
     docker image rm "opensearchproject/opensearch:3.5.0" 2>/dev/null || true
-    # Best-effort: any locally tagged opencti/platform|worker and common deps.
     local img
     for img in $(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | \
       grep -E '^(opencti/platform|opencti/worker|minio/minio|redis|rabbitmq)(:|$)' || true); do
@@ -461,53 +532,21 @@ teardown_auditd() {
   fi
 }
 
-# --- 5g systemd units, sudoers, helpers, users
+# --- 5g systemd units, sudoers, helpers, users (services already stopped earlier)
 teardown_systemd_and_users() {
-  local _os_workers=()
-  if command -v systemctl >/dev/null 2>&1; then
-    local _u
-    for _u in $(systemctl list-units --all --plain --no-legend 'sift-opensearch-worker@*.service' 2>/dev/null | awk '{print $1}'); do
-      _os_workers+=("$_u")
-    done
-  fi
-  local _wlink
-  for _wlink in "$SYSTEMD_SYSTEM_DIR"/multi-user.target.wants/sift-opensearch-worker@*.service; do
-    [[ -e "$_wlink" ]] || continue
-    _os_workers+=("$(basename "$_wlink")")
-  done
-  if [[ ${#_os_workers[@]} -gt 0 ]]; then
-    local _dedup=() _w _s _dup
-    for _w in "${_os_workers[@]}"; do
-      _dup=0
-      for _s in "${_dedup[@]}"; do [[ "$_s" == "$_w" ]] && _dup=1 && break; done
-      [[ "$_dup" -eq 0 ]] && _dedup+=("$_w")
-    done
-    _os_workers=("${_dedup[@]}")
-  fi
+  local f _wlink
 
-  if command -v systemctl >/dev/null 2>&1; then
-    action "systemctl stop + disable" "sift-gateway.service sift-job-worker.service"
-    if [[ "$DRY_RUN" -eq 0 ]]; then
-      sudo_if_needed systemctl stop sift-gateway.service sift-job-worker.service 2>/dev/null || true
-      sudo_if_needed systemctl disable sift-gateway.service sift-job-worker.service 2>/dev/null || true
-    fi
-    if [[ ${#_os_workers[@]} -gt 0 ]]; then
-      action "systemctl stop + disable" "OpenSearch workers: ${_os_workers[*]}"
-      if [[ "$DRY_RUN" -eq 0 ]]; then
-        sudo_if_needed systemctl stop "${_os_workers[@]}" 2>/dev/null || true
-        sudo_if_needed systemctl disable "${_os_workers[@]}" 2>/dev/null || true
-      fi
-    fi
-    action "systemctl stop (best-effort)" "system-sift\\x2dopensearch\\x2dworker.slice"
-    run_if_live sudo_if_needed systemctl stop "system-sift\\x2dopensearch\\x2dworker.slice" 2>/dev/null || true
-  fi
-
-  local f
   for f in "$GATEWAY_SERVICE_FILE" "$JOB_WORKER_SERVICE_FILE" "$OPENSEARCH_WORKER_SERVICE_FILE"; do
     if sudo_if_needed test -f "$f" 2>/dev/null; then
       action "remove" "$f"
       run_if_live sudo_if_needed rm -f "$f"
     fi
+  done
+  # Drop multi-user wants links for workers if unit file already gone.
+  for _wlink in "$SYSTEMD_SYSTEM_DIR"/multi-user.target.wants/sift-opensearch-worker@*.service; do
+    [[ -e "$_wlink" ]] || continue
+    action "remove" "$_wlink"
+    run_if_live sudo_if_needed rm -f "$_wlink"
   done
 
   if command -v systemctl >/dev/null 2>&1; then
@@ -688,10 +727,16 @@ main() {
   printf '  purge /cases (--data): %s\n' "$([[ "$PURGE_DATA" -eq 1 ]] && echo YES || echo no)"
   printf '\n'
 
-  log "--- OpenCTI teardown ---"
+  log "--- stop SIFT systemd services ---"
+  stop_sift_services
+
+  log "--- Docker containers + named volumes (always purged) ---"
+  force_purge_sift_docker_state
+
+  log "--- OpenCTI secrets ---"
   teardown_opencti
 
-  log "--- OpenSearch teardown ---"
+  log "--- OpenSearch config ---"
   teardown_opensearch
 
   log "--- Supabase teardown ---"
@@ -709,7 +754,7 @@ main() {
   log "--- FUSE conf revert ---"
   teardown_fuse_conf
 
-  log "--- systemd + users teardown ---"
+  log "--- systemd units + users teardown ---"
   teardown_systemd_and_users
 
   log "--- runtime + SIFT_HOME teardown ---"
@@ -733,14 +778,14 @@ main() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '=== Dry-run complete. No changes were made. ===\n'
     printf 'Live:  ./scripts/uninstall.sh --yes --i-understand\n'
-    printf 'Fast reinstall loop: add --keep-caches\n'
+    printf 'Spare download caches/images: add --keep-caches\n'
     printf 'Also wipe /cases:     add --data --i-understand-evidence-loss\n'
   else
     printf '=== Greenfield uninstall complete. ===\n'
     printf 'Source repo checkout was NOT removed.\n'
     if [[ "$KEEP_CACHES" -eq 1 ]]; then
-      printf 'Durable caches preserved under %s (uv/HF/wintriage/hayabusa).\n' "$SIFT_CACHE_ROOT"
-      printf 'Docker images preserved; volumes purged.\n'
+      printf 'Spared regenerable caches under %s and Docker images (--keep-caches).\n' "$SIFT_CACHE_ROOT"
+      printf 'Named volumes, .venv, and secrets were still removed.\n'
     fi
     if [[ "$PURGE_DATA" -ne 1 ]]; then
       printf 'Evidence under %s was NOT removed (pass --data to purge).\n' "$SIFT_CASES_ROOT"

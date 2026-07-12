@@ -74,12 +74,39 @@ def test_without_keep_caches_cache_tree_is_targeted() -> None:
 
 def test_opencti_teardown_still_shared_only() -> None:
     source = UNINSTALL_SH.read_text(encoding="utf-8")
-    section = source.split("teardown_opencti()", 1)[1].split("teardown_opensearch()", 1)[0]
-    assert "docker-compose.opencti-shared.yml" in section
-    assert "docker-compose.opencti-connectors.yml" in section
-    assert "docker-compose.opencti.yml" not in section
-    assert "opencti-opensearch" not in section
-    assert "sift-opencti-net" not in section
+    # Compose targets live in the authoritative Docker force-purge path.
+    assert "docker-compose.opencti-shared.yml" in source
+    assert "docker-compose.opencti-connectors.yml" in source
+    assert "docker-compose.opencti.yml" not in source
+    assert "opencti-opensearch" not in source
+    assert "sift-opencti-net" not in source
+    secrets = source.split("teardown_opencti()", 1)[1].split("\n}", 1)[0]
+    assert "opencti-query.env" in secrets
+    assert "opencti-stack.env" in secrets
+
+
+def test_docker_volumes_always_purged_even_with_keep_caches() -> None:
+    src = UNINSTALL_SH.read_text(encoding="utf-8")
+    assert "force_purge_sift_docker_state" in src
+    assert "_docker_force_rm_matching_containers" in src
+    assert "_docker_list_sift_volumes" in src
+    assert "Named SIFT Docker volumes still present" in src
+    # keep-caches only skips image rm — volumes still verified gone.
+    images = src.split("teardown_docker_images()", 1)[1].split("\n}", 1)[0]
+    assert 'KEEP_CACHES" -eq 1' in images
+    assert "Named volumes were still purged" in images
+    # Services stop before Docker so volumes are not held open.
+    main = src.split("main()", 1)[1]
+    assert main.index("stop_sift_services") < main.index("force_purge_sift_docker_state")
+
+
+def test_keep_caches_does_not_spare_venv_or_volumes() -> None:
+    src = UNINSTALL_SH.read_text(encoding="utf-8")
+    header = "\n".join(src.splitlines()[:45])
+    assert "does NOT keep volumes" in header
+    runtime = src.split("teardown_runtime()", 1)[1].split("\nteardown_state", 1)[0]
+    assert ".venv" in runtime
+    assert "sudo_if_needed rm -rf" in runtime
 
 
 def test_apparmor_teardown_includes_dfir_exec() -> None:
