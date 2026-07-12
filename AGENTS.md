@@ -254,6 +254,27 @@ keys, or sensitive full evidence paths into GitHub, docs, or any external servic
 
 ## Cursor Cloud specific instructions
 
+### Environment dashboard (where to configure your image)
+
+Per-repo environment config lives in **two places** — repo wins over dashboard:
+
+1. **Repo (authoritative):** `.cursor/environment.json` + `.cursor/scripts/` (this
+   checkout). Committed config overrides wizard/snapshot settings on the branch the
+   agent uses.
+2. **Dashboard (secrets + version history):** open the **environment detail page**,
+   not the top-level Cloud Agents list:
+   - Environments list: https://cursor.com/dashboard/cloud-agents#environments
+   - **This repo:** https://cursor.com/dashboard/cloud-agents/environments/r/github.com/xyehya/sift-mcps
+
+On the environment detail page: **Secrets** sidebar (`TS_AUTHKEY`, `SIFT_CA_CERT` as
+Runtime Secrets), network allowlist, version history, and **Start Setup Agent →
+Update Existing Env** (required after secret or `environment.json` changes).
+
+If `environment-info` reports `environment: null` / `build: null`, the agent booted
+JIT from the default base image — no saved environment was applied. Fix: commit
+`.cursor/environment.json` (below) and start a new cloud agent on a branch that
+includes it, or re-run setup from the dashboard.
+
 This section describes the **Cursor Cloud agent VM** dev environment, which is
 NOT the maintainer's macOS + SIFT-VM setup described in "Deploy-and-prove" above.
 The Mac-side paths there (`ssh sift-vm`, `ssh sift-gateway-tunnel`, the
