@@ -121,8 +121,10 @@ if isinstance(execute, dict):
         if security.get("allowed_binaries") in (None, [], ()):
             security["allowed_binaries"] = ["@mvp_forensic"]
             changed = True
-        if security.get("unlisted_policy") != "contained":
-            security["unlisted_policy"] = "contained"
+        # Gateway require_operator_policy accepts only "reject" (contained is
+        # rejected at startup — see sift_core.execute.security_policy).
+        if security.get("unlisted_policy") != "reject":
+            security["unlisted_policy"] = "reject"
             changed = True
 
 # Backend arg normalisation (ensure --python, --no-managed-python, --no-python-downloads)
