@@ -4,8 +4,8 @@ set -euo pipefail
 
 log() { printf '[cloud-install] %s\n' "$*"; }
 
-# Node 24 for frontend (nvm); stale exec-daemon node v22 shadows it on default PATH.
-export PATH="$HOME/.nvm/versions/node/v24.13.1/bin:$HOME/.local/bin:$PATH"
+# Prefer the workspace toolchain over the base image's stale Node 22.
+export PATH="$HOME/.local/bin:$PATH"
 
 if ! command -v tailscale >/dev/null 2>&1; then
   log "Installing Tailscale"
@@ -15,7 +15,9 @@ fi
 # Persist proxy + CA env for shells and MCP HTTP clients that honor standard vars.
 PROFILE_SNIPPET="$HOME/.cursor-cloud-tailscale.env"
 cat > "$PROFILE_SNIPPET" <<'ENV'
-# Sourced by cloud agent shells when userspace Tailscale is ready.
+# Persistent Cursor Cloud toolchain plus Tailscale network env when ready.
+# Node 24 must win over the base image's stale Node 22 for later agent shells.
+export PATH="$HOME/.nvm/versions/node/v24.13.1/bin:$HOME/.local/bin:$PATH"
 if [[ -f /tmp/tailscaled.ready ]]; then
   export ALL_PROXY="socks5h://127.0.0.1:1055"
   export HTTPS_PROXY="http://127.0.0.1:1054"
@@ -28,6 +30,7 @@ ENV
 
 for rc in "$HOME/.bashrc" "$HOME/.profile"; do
   if [[ -f "$rc" ]] && ! grep -q 'cursor-cloud-tailscale.env' "$rc" 2>/dev/null; then
+    # shellcheck disable=SC2016 # Keep $HOME literal for the shell that later sources this file.
     printf '\n# Cursor Cloud Tailscale proxy env\n[ -f "$HOME/.cursor-cloud-tailscale.env" ] && . "$HOME/.cursor-cloud-tailscale.env"\n' >> "$rc"
   fi
 done
@@ -53,17 +56,69 @@ if [[ ! -x "$HOME/.local/bin/uv" ]] && ! command -v uv >/dev/null 2>&1; then
 fi
 
 # Node 24.13.1 via nvm — frontend engines require >=24.13.1 <25.
-export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+# Pin the bootstrap version so a cold image does not depend on an unversioned
+# moving branch. PROFILE=/dev/null keeps this non-interactive hook from
+# rewriting user shell profiles; the hook owns PATH for its own process.
+# This hook owns its runtime toolchain; do not source an arbitrary caller path.
+export NVM_DIR="$HOME/.nvm"
+NVM_VERSION="v0.40.3"
+NVM_INSTALL_URL="https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh"
+NVM_INSTALL_SHA256="2d8359a64a3cb07c02389ad88ceecd43f2fa469c06104f92f98df5b6f315275f"
+
+install_nvm() {
+  local install_script
+
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    printf '%s\n' "ERROR: sha256sum is required to verify the nvm installer" >&2
+    return 1
+  fi
+
+  install_script="$(mktemp)"
+  if ! curl --fail --show-error --location --proto '=https' --tlsv1.2 \
+    "$NVM_INSTALL_URL" --output "$install_script"; then
+    rm -f "$install_script"
+    return 1
+  fi
+
+  if ! printf '%s  %s\n' "$NVM_INSTALL_SHA256" "$install_script" \
+    | sha256sum --check --status; then
+    printf '%s\n' "ERROR: nvm installer checksum verification failed" >&2
+    rm -f "$install_script"
+    return 1
+  fi
+
+  if ! NVM_INSTALL_VERSION="$NVM_VERSION" PROFILE=/dev/null bash "$install_script"; then
+    rm -f "$install_script"
+    return 1
+  fi
+  rm -f "$install_script"
+}
+
 if [[ ! -x "$NVM_DIR/versions/node/v24.13.1/bin/node" ]]; then
+  if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
+    log "Installing nvm"
+    install_nvm
+  fi
+
   log "Installing Node 24.13.1 via nvm"
   # nvm.sh is not nounset-clean; relax -u only while sourcing/using it.
   set +u
+  if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
+    printf '%s\n' "ERROR: nvm bootstrap did not create $NVM_DIR/nvm.sh" >&2
+    exit 1
+  fi
   # shellcheck source=/dev/null
-  [[ -s "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh"
+  source "$NVM_DIR/nvm.sh"
+  if ! command -v nvm >/dev/null 2>&1; then
+    printf '%s\n' "ERROR: nvm bootstrap did not provide the nvm command" >&2
+    exit 1
+  fi
   nvm install 24.13.1
   nvm alias default 24.13.1
   set -u
 fi
+
+export PATH="$NVM_DIR/versions/node/v24.13.1/bin:$PATH"
 
 log "Syncing Python workspace deps (uv sync --locked)"
 uv sync --locked \
