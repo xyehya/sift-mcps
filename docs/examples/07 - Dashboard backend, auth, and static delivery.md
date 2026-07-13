@@ -102,8 +102,10 @@ Stable source entrypoints include:
 - `frontend/src/main.jsx` and `frontend/src/App.jsx` for boot and shell lifecycle.
 - `frontend/src/api/endpoints.js` for Portal HTTP contracts.
 - `frontend/src/components/evidence/EvidenceTab.jsx` for evidence presentation.
-- `frontend/src/components/evidence/useCustodyLedgerActions.js` for durable Add/Seal,
-  Replace/Reacquire, and exact Restore interaction wiring.
+- `frontend/src/components/evidence/useCustodySealActions.js` for durable Add/Seal and resume.
+- `frontend/src/components/evidence/useCustodyLedgerActions.js` for Ignore/Delete/Retire plus
+  Replace/Reacquire and exact Restore begin/completion.
+- `frontend/src/components/evidence/useEvidenceActions.js` for composing both action hooks.
 - `frontend/src/store/useStore.js` for the shared client-state boundary.
 
 The evidence surface uses fixed operator routes for Add/Seal and resume,

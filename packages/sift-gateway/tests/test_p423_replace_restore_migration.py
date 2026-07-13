@@ -100,6 +100,10 @@ def test_current_docs_do_not_restore_removed_unseal_or_one_shot_reacquire_contra
         Path("docs/examples/07 - Dashboard backend, auth, and static delivery.md"),
     ]
     combined = "\n".join(path.read_text() for path in current_docs)
+    dashboard_example = current_docs[-1].read_text()
+    assert "useCustodySealActions.js` for durable Add/Seal and resume" in dashboard_example
+    assert "useCustodyLedgerActions.js` for Ignore/Delete/Retire" in dashboard_example
+    assert "useEvidenceActions.js` for composing both action hooks" in dashboard_example
     assert "EvidenceUnseal.test" not in combined
     assert "/api/evidence/chain/unseal" not in combined
     assert "/api/evidence/chain/reacquire" not in combined
