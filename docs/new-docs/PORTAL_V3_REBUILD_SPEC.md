@@ -222,7 +222,12 @@ Each agent: build assigned tab(s) using frozen tokens + shared primitives + moti
 - **Final additionally:** CSP `'self'`-only verified in served headers + no external font/inline-style in `dist`; both-theme WCAG AA contrast; `prefers-reduced-motion` respected; responsive 375/768/1024/1440; security agent verdict = PASS(-with-fixes resolved).
 
 ### Behavior-parity checklist (must all work as before)
-auth (login/logout/session expiry redirect) · case switch + create + activate challenge · findings list/filter/review/stage/commit (delta + Commit Drawer) · evidence list/unseal/seal/chain status · reports generate + view · backends health/manifest · hosts/accounts/IOCs/timeline render + filter · TODOs · command palette ⌘K · agent status/pulse · role-based UI (examiner vs readonly).
+auth (login/logout/session expiry redirect) · case switch + create + activate
+challenge · findings list/filter/review/stage/commit (delta + Commit Drawer) ·
+evidence list/Add-Seal/Replace-Reacquire/exact-Restore/chain status/object history ·
+reports generate + view · backends health/manifest · hosts/accounts/IOCs/timeline
+render + filter · TODOs · command palette ⌘K · agent status/pulse · role-based UI
+(examiner vs readonly).
 
 ---
 

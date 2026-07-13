@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `packages/case-dashboard` package ships the Python-side dashboard service and the packaged static portal together. On the server side, `PortalSessionMiddleware` resolves Supabase-backed session envelopes and the route handlers in packages/case-dashboard/src/case_dashboard/backends_routes.py proxy backend and service operations through the gateway. On the client side, packages/case-dashboard/src/case_dashboard/static/v2/index.html loads the compiled portal bundle and stylesheet from `/portal`, and packages/case-dashboard/src/case_dashboard/static/v2/assets/index-DD0_XmO4.js bootstraps auth, navigation, periodic data refresh, and tab loading.
+The `packages/case-dashboard` package ships the Python-side dashboard service and packaged static Portal together. On the server side, `PortalSessionMiddleware` resolves Supabase-backed session envelopes and the route handlers in `packages/case-dashboard/src/case_dashboard/backends_routes.py` proxy backend and service operations through the Gateway. On the client side, `packages/case-dashboard/src/case_dashboard/static/v2/index.html` names the current content-hashed bundle and stylesheet; stable source entrypoints bootstrap auth, navigation, periodic data refresh, and tab loading.
 
 ## How it works
 
@@ -10,7 +10,7 @@ The `packages/case-dashboard` package ships the Python-side dashboard service an
 sequenceDiagram
 participant browser as Browser
 participant html as packages case-dashboard static v2 index html
-participant bundle as index-DD0_XmO4.js
+participant bundle as current content-hashed entry bundle
 participant auth as Sn
 participant mw as PortalSessionMiddleware
 participant route as get_backends_route
@@ -85,61 +85,31 @@ The module is import-safe in routes, tests, and CLI contexts because it has no m
 
 ## Static Delivery
 
-packages/case-dashboard/src/case_dashboard/static/v2/index.html is the portal entry page. It sets the title to `sift-mcps — Examiner Portal`, loads the favicon from /portal/favicon.svg, and pulls the compiled bundle and its preload graph from `/portal/assets/`.
-
-The HTML file links these runtime assets directly:
-
-- /portal/assets/index-DD0_XmO4.js
-- /portal/assets/rolldown-runtime-Cyuzqnbw.js
-- /portal/assets/vendor-C1S9yDhC.js
-- /portal/assets/vendor-radix-DdkJLrfM.js
-- /portal/assets/vendor-react-COz7_gI3.js
-- /portal/assets/utils-CYvBWwLn.js
-- /portal/assets/useStore-C99KqBEL.js
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/index-DXZtvv9x.css
-
-packages/case-dashboard/src/case_dashboard/static/v2/assets/index-DXZtvv9x.css is the compiled stylesheet that accompanies the portal bundle. It provides the normalized element rules and the utility classes the generated UI uses.
+`packages/case-dashboard/src/case_dashboard/static/v2/index.html` is the Portal entry page.
+Vite content-hashes every compiled filename, so documentation must not name a particular generated
+asset. Read current script and stylesheet names from that committed `index.html`, or work from the
+stable frontend sources under `packages/case-dashboard/frontend/src/`.
 
 ## Packaged Frontend Runtime
 
-packages/case-dashboard/src/case_dashboard/static/v2/assets/index-DD0_XmO4.js is the portal entrypoint and runtime coordinator. It defines the `__vite__mapDeps` preload map, mounts the theme provider and toaster, initializes auth, synchronizes navigation with the hash fragment, and starts the periodic dashboard refresh loop.
+The current entry bundle mounts the theme provider and toaster, initializes auth, synchronizes
+navigation with the hash fragment, and starts periodic dashboard refresh. Its hashed filename and
+preload graph change whenever the frontend is rebuilt; `static/v2/index.html` is the deployment
+manifest and stable source modules are the implementation authority.
 
-Key runtime behaviors visible in the bundle:
+Stable source entrypoints include:
 
-- It preloads the tab chunks for `OverviewTab-D5WsTfwd.js`, `FindingsTab-Ygw7nxOA.js`, `EvidenceTab-HloqGUq5.js`, `BackendsTab-D4T24e-K.js`, `TimelineTab-DeLEXDED.js`, `HostsTab-DwG-QPK4.js`, `AccountsTab-CRRduk-r.js`, `IocsTab-BzkIXzw9.js`, `ReportsTab-Cg6obh-8.js`, `TodosTab-2nELo4LQ.js`, and `SettingsTab-BDABk4nQ.js`.
-- `Sn` calls `bt()` for `/api/auth/me`, listens for the `sift:unauthorized` event, and uses `yt()` for `/api/auth/logout`.
-- The shared HTTP helpers default to `credentials: "include"`, send `Content-Type: application/json`, and treat 401 as a special case unless `suppressUnauthorized` is requested.
-- The client-side timeout defaults are `15000` milliseconds for standard requests and `900000` milliseconds for proof exports.
-- The bundle uses `/portal` as the base path for API and asset loading.
-- The periodic refresh loop `jn` calls the dashboard endpoints for cases, findings, summary, timeline, evidence chain status, IOCs, todos, reports, portal state, and agent activity, then records `lastSync` and clears the loading flag.
-- The hash router `Bn` defaults the active tab to `overview`, keeps `window.location.hash` in sync, and supports `#/findings?sev=` filtering.
-- The keyboard shortcut handler registers meta+K to open the command palette.
+- `frontend/src/main.jsx` and `frontend/src/App.jsx` for boot and shell lifecycle.
+- `frontend/src/api/endpoints.js` for Portal HTTP contracts.
+- `frontend/src/components/evidence/EvidenceTab.jsx` for evidence presentation.
+- `frontend/src/components/evidence/useCustodyLedgerActions.js` for durable Add/Seal,
+  Replace/Reacquire, and exact Restore interaction wiring.
+- `frontend/src/store/useStore.js` for the shared client-state boundary.
 
-The bundle’s app shell is not just rendering UI; it is the client boundary for the dashboard’s API calls, auth state, and tab lifecycle.
-
-## Packaged Portal Chunks
-
-The remaining static chunks are all loaded by `index-DD0_XmO4.js` and each owns a specific slice of the portal surface.
-
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/BackendsTab-D4T24e-K.js — Backend registry and service control panel. It keeps a draft backend config, parses `argsStr` into an array, folds `envList` into an object, validates the draft through the gateway helper, and opens a reauthentication challenge before registering a backend.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/OverviewTab-D5WsTfwd.js — Default landing panel for the `overview` tab, rendered first after auth.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/ReportsTab-Cg6obh-8.js — Report builder with report labels for full IR report, executive briefing, timeline narrative, IOC export, findings detail, and status summary.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/AccountsTab-CRRduk-r.js — Aggregates findings by account, switches the view back to `findings` on row selection, and renders rows through `EntityTable-D_9BK5Fb.js`, `EntityShell-nochYvei.js`, and `EntityBadges-DUoCMEhJ.js`.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/EntityBadges-DUoCMEhJ.js — Shared confidence and status badges, plus copyable value rendering.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/EntityShell-nochYvei.js — Shared shell and filtering primitives for entity-focused views, including sorting, time range formatting, severity mapping, and empty states.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/EntityTable-D_9BK5Fb.js — Sortable table wrapper with clickable headers, row keyboard support, and per-cell render hooks.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/EvidenceTab-HloqGUq5.js — Evidence chain surface that loads evidence and chain status, supports rescan and verification, and wires the password-gated sealing, anchoring, proof export, ignore, delete, retire, reacquire, and unseal actions.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/FilterBar-zUdiYRCV.js — Search and filter controls used by findings and IOC surfaces.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/FindingsTab-Ygw7nxOA.js — Findings review surface with confidence, state, and sort controls plus staged approve and reject actions.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/HostsTab-DwG-QPK4.js — Host aggregation view built on the same shell and table primitives as the accounts view.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/IocsTab-BzkIXzw9.js — IOC inventory with category, status, and search filters, expandable details, source-finding links, and confidence rendering.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/SettingsTab-BDABk4nQ.js — Appearance and account administration surface that lets an operator choose theme, issue JWT sessions for `agent` or `service`, and revoke principals.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/TimelineTab-DeLEXDED.js — Chronological event stream with type and host filters, search, date separators, and navigation back into linked findings.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/TodosTab-2nELo4LQ.js — Todo creation, edit, toggle, and delete workflow.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/vendor-C1S9yDhC.js — Shared runtime and icon/component bundle consumed by the portal chunks.
-- packages/case-dashboard/src/case_dashboard/static/v2/assets/useStore-C99KqBEL.js — Shared client-state container read and written by the shell and tab chunks.
-
-The `useStore-C99KqBEL.js` module is the state boundary that makes the shell work: the entrypoint and tabs all read and write the same store slices for active tab, current user, active case, findings, delta, timeline, evidence chain status, portal state, loading state, last sync, and toast delivery.
+The evidence surface uses fixed operator routes for Add/Seal and resume,
+`/api/evidence/chain/replace/begin`, `/api/evidence/chain/restore/begin`, and
+`/api/evidence/chain/recovery/complete`, plus path-free object history. Standalone Unseal and
+one-shot Reacquire routes are not current Portal contracts.
 
 ## Package Metadata
 
@@ -181,6 +151,6 @@ Those tests are useful here because they confirm the current portal auth orderin
 ## Related
 
 > [!note]
-> The portal bundle uses `window.__SIFT_MOCK__` to skip the periodic dashboard refresh loop during mock-driven runs. packages/case-dashboard/src/case_dashboard/static/v2/assets/index-DD0_XmO4.js
+> The Portal uses `window.__SIFT_MOCK__` to skip periodic dashboard refresh during mock-driven runs. See stable source under `packages/case-dashboard/frontend/src/`; resolve the current built filename through `static/v2/index.html`.
 
 This page sits at the boundary between the Python dashboard service and the packaged portal. The backend route handlers in packages/case-dashboard/src/case_dashboard/backends_routes.py are what the portal bundle calls for backends and service control, while packages/case-dashboard/src/case_dashboard/auth.py determines whether those calls run under an operator, readonly principal, or no principal at all.

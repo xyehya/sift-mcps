@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 SQL = Path("supabase/migrations/202607142100_replace_restore_operations.sql").read_text()
@@ -91,9 +92,29 @@ def test_current_docs_do_not_restore_removed_unseal_or_one_shot_reacquire_contra
         Path("docs/latest/09 - API Contract.md"),
         Path("docs/latest/11 - Authentication for API and MCP.md"),
         Path("docs/new-docs/PORTAL_V3_REBUILD_SPEC.md"),
+        Path("docs/new-docs/PORTAL_V3_CLAUDE_DESIGN_BRIEF.md"),
+        Path("docs/new-docs/SYSTEM_OVERVIEW.md"),
+        Path("docs/new-docs/DEVELOPER_ENTRYPOINT.md"),
+        Path("docs/examples/01 - Monorepo entrypoints and package manifests.md"),
         Path("docs/examples/03 - Contributor automation and AI-agent guidance.md"),
+        Path("docs/examples/07 - Dashboard backend, auth, and static delivery.md"),
     ]
     combined = "\n".join(path.read_text() for path in current_docs)
     assert "EvidenceUnseal.test" not in combined
     assert "/api/evidence/chain/unseal" not in combined
     assert "/api/evidence/chain/reacquire" not in combined
+    for stale_phrase in (
+        "seal/unseal evidence",
+        "unseal requires re-auth",
+        "evidence list/unseal/seal",
+        "evidence seal/unseal/re-acquisition",
+        "evidence seal and unseal",
+        "unseal windows",
+    ):
+        assert stale_phrase not in combined
+    assert not re.search(
+        r"(?:index|EvidenceTab|BackendsTab|OverviewTab|ReportsTab|AccountsTab|"
+        r"EntityBadges|EntityShell|FilterBar|FindingsTab|HostsTab|IocsTab|"
+        r"SettingsTab|TimelineTab|TodosTab)-[A-Za-z0-9_-]+\.(?:js|css)",
+        combined,
+    )

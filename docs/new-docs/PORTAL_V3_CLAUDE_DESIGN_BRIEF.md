@@ -44,14 +44,16 @@ Reports, Settings.
 - **Supervise the agent:** see what the agent is doing *right now* (live status:
   working / awaiting-authorization / idle), its proposals, and a feed of its
   actions. **Authorize gated actions** the agent cannot self-approve (e.g. run a
-  risky command, seal/unseal evidence) — a clear approve/deny moment.
+  risky command or begin/complete an operator evidence-custody workflow) — a
+  clear approve/deny moment. MCP itself has no evidence-mutation authority.
 - **Findings review → commit:** examiner reviews agent-proposed findings (each has
   Observation/Fact, Interpretation/Analysis, Confidence & Justification),
   approves / rejects / edits, **stages** them, then **commits** to the record
   (review the delta, confirm). Keyboard-driven (e.g. j/k navigate, a approve,
   r reject).
 - **Evidence chain-of-custody:** registered / sealed / write-protected state,
-  integrity hashes, manifest; unseal requires re-auth. Integrity is front-and-centre.
+  integrity hashes, manifest; durable Add/Seal and Replace/Reacquire or exact
+  Restore require scoped re-authentication. Integrity is front-and-centre.
 - **Investigative entities** the agent populates: Timeline, IOCs, Hosts, Accounts
   — data-dense, filterable, sortable.
 - **Backends:** health/status of the MCP servers & tools the agent drives.

@@ -5,7 +5,7 @@
 `README.md` frames this repository as a monorepo for an investigation platform built around multiple MCP backends, a React case dashboard, shared security and contract libraries, Supabase-backed authority, OpenSearch ingestion, OpenCTI integration, Windows triage intelligence, and knowledge/RAG datasets. The source layout splits those concerns into user-facing applications, backend services, shared libraries, and a YAML knowledge pack.
 
 > [!warning]
-> Human operators retain authority over case activation, evidence seal and unseal, finding approval, report inclusion and export, and agent credential issuance. Agents use MCP only; portal REST is for human workflows and tests. `README.md`
+> Human operators retain authority over case activation, durable evidence Add/Seal and Replace/Reacquire or exact Restore, finding approval, report inclusion and export, and agent credential issuance. Agents use MCP only; portal REST is for human workflows and tests. `README.md`
 
 ## How it works
 

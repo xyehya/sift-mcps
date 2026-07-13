@@ -54,7 +54,7 @@ Supabase/Postgres, OpenSearch, pgvector, filesystem evidence
 ```
 
 Human operators use `/portal` for sensitive workflows: case activation,
-evidence seal/unseal/re-acquisition, finding approval, report inclusion/export,
+durable evidence Add/Seal and Replace/Reacquire or exact Restore, finding approval, report inclusion/export,
 and agent credential issuance.
 
 ## 3. Package Map

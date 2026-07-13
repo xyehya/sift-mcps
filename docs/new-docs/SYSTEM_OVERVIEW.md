@@ -52,8 +52,8 @@ sandboxing, provenance, and output labeling.
 ### Operator Portal Plane
 
 `packages/case-dashboard/` is the human examiner surface at `/portal`. It owns
-operator review and approval workflows such as case activation, evidence
-seal/unseal, finding approval, report inclusion/export, agent credential
+operator review and approval workflows such as case activation, durable evidence
+Add/Seal and Replace/Reacquire or exact Restore, finding approval, report inclusion/export, agent credential
 issuance, and health/status visibility.
 
 ### Control Plane
@@ -70,8 +70,8 @@ source while Gateway mirrors consumed metadata into `app.cases` columns or
 ### Evidence And Custody Plane
 
 Evidence bytes are mounted or copied by the operator on the SIFT VM. The system
-tracks evidence registration, seal state, immutable-file posture, unseal windows,
-re-acquisition, custody events, and the case-level evidence gate. Agent analysis
+tracks evidence registration, seal state, immutable-file posture, gate-first
+replacement/restoration operations, custody events, and the case-level evidence gate. Agent analysis
 is blocked when the evidence gate is not safe.
 
 ### Search And Derived Data Plane
