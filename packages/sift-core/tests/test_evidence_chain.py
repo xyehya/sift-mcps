@@ -741,18 +741,24 @@ class TestHardenSealedEvidence:
             {"path": "evidence/disk.E01", "immutable": True, "owner": ec.DEFAULT_SERVICE_USER}
         ]
 
-    def test_owner_reported_but_not_enforced(self, initialized, monkeypatch):
-        """A root-owned file still hardens fine — ownership is informational."""
+    def test_non_service_owned_file_fails_before_immutable_ioctl(self, initialized, monkeypatch):
+        """The gateway must not need CAP_FOWNER to seal operator-staged evidence."""
         import sift_core.evidence_chain as ec
 
         self._make_evidence(initialized)
-        monkeypatch.setattr(ec, "_set_immutable", lambda p, imm: True)
-        monkeypatch.setattr(ec, "get_immutable_flag", lambda p: True)
+        calls = []
+
+        def fake_set_immutable(path, immutable):
+            calls.append((path, immutable))
+            return True
+
+        monkeypatch.setattr(ec, "_set_immutable", fake_set_immutable)
         monkeypatch.setattr(ec, "_file_owner_name", lambda p: "root")
 
-        results = ec.harden_sealed_evidence(initialized, ["evidence/disk.E01"])
-        assert results[0]["immutable"] is True
-        assert results[0]["owner"] == "root"
+        with pytest.raises(ec.EvidenceHardeningError, match="stage-evidence.sh"):
+            ec.harden_sealed_evidence(initialized, ["evidence/disk.E01"])
+
+        assert calls == []
 
     def test_fails_closed_when_immutable_cannot_be_set(self, initialized, monkeypatch):
         import sift_core.evidence_chain as ec

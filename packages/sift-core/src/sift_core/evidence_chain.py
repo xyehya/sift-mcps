@@ -35,10 +35,9 @@ from sift_common.paths import is_under_system_tmpdir
 logger = logging.getLogger(__name__)
 
 # Default service user the gateway/worker run as. install.sh creates this
-# dedicated non-admin account. Ownership of sealed bytes is reported as
-# informational context only (never enforced); the load-bearing integrity
-# property is the immutable flag, which the service user can set/clear in-process
-# via CAP_LINUX_IMMUTABLE (granted only to the SIFT systemd services).
+# dedicated non-admin account. The supported operator intake stages evidence as
+# this user before seal: the service has CAP_LINUX_IMMUTABLE but deliberately
+# lacks CAP_FOWNER/CAP_CHOWN.
 DEFAULT_SERVICE_USER = "sift-service"
 
 
@@ -770,15 +769,14 @@ def get_immutable_flag(path: Path) -> bool | None:
 # ---------------------------------------------------------------------------
 #
 # On seal, evidence bytes must carry the immutable flag (FS_IMMUTABLE_FL). The
-# runtime user is the NON-root service account, but install.sh grants the venv
-# service-scoped CAP_LINUX_IMMUTABLE (configure_immutable_capability), so the
-# gateway can set AND clear +i IN-PROCESS even on a root:root world-readable
-# (0644) file. +i is the load-bearing, owner-independent integrity property: no
-# one — not even root — can modify, delete, or rename the file until +i is
-# cleared. There is deliberately NO chown and NO privileged helper: re-owning
-# bytes to the service user added a privileged attack surface for negative value
-# (root:root 0644 means the gateway can read but is not the owner — tighter).
-# Ownership is reported informationally only and never gates the seal.
+# runtime user is the NON-root service account and has CAP_LINUX_IMMUTABLE, but
+# deliberately lacks CAP_FOWNER/CAP_CHOWN. The gateway therefore hardens only
+# files already owned by the service user. Operator intake must use
+# scripts/stage-evidence.sh (or an equivalent pre-agent procedure) to copy,
+# chown, and set mode 0644 before the portal Seal action. Keeping chown outside
+# the gateway avoids a privileged helper and retains the narrow service profile.
+# +i remains the load-bearing integrity property: no one — not even root — can
+# modify, delete, or rename the file until +i is cleared.
 #
 # Every path is re-resolved here and proven to be a regular file strictly inside
 # the active case's evidence/ dir, with symlinks rejected: this is a privileged
@@ -824,38 +822,40 @@ def harden_sealed_evidence(
 ) -> list[dict]:
     """Set the immutable flag (+i) IN-PROCESS on each sealed evidence file.
 
-    For each path (relative to ``case_dir``, resolving strictly inside
-    ``evidence/``), set FS_IMMUTABLE_FL via the in-process ioctl helper. NO
-    chown, NO privileged helper: the SIFT systemd service process carries
-    CAP_LINUX_IMMUTABLE, so +i works
-    in-process even on a root:root world-readable (0644) file.
+    For each path (relative to case_dir, resolving strictly inside evidence/),
+    require service_user ownership and then set FS_IMMUTABLE_FL via the
+    in-process ioctl helper. The service deliberately carries
+    CAP_LINUX_IMMUTABLE without CAP_FOWNER/CAP_CHOWN, so operator-copied files
+    must first be staged with scripts/stage-evidence.sh.
 
     Fails CLOSED:
       * any path that cannot be resolved to a regular evidence file -> raise.
+      * any file not owned by service_user -> raise before its inode flags are
+        touched.
       * immutable flag cannot be set, or is absent after setting -> raise (this
         is the load-bearing integrity property).
-
-    ``service_user`` is accepted for caller compatibility but ownership is never
-    enforced; the immutable flag protects the bytes regardless of owner. Owner is
-    reported informationally (best-effort) and never raises.
 
     Returns one ``{path, immutable, owner}`` dict per input path.
     """
     results: list[dict] = []
     for rel_path in rel_paths:
         abs_path = _resolve_sealed_target(case_dir, rel_path)
+        owner = _file_owner_name(abs_path)
+        if owner != service_user:
+            raise EvidenceHardeningError(
+                f"Could not harden sealed evidence {rel_path!r} "
+                f"(current owner: {owner or 'unknown'}). The seal was NOT hardened on "
+                "disk. The supported service profile requires evidence to be owned by "
+                f"gateway service user '{service_user}' before setting +i; stage it "
+                "at operator intake with scripts/stage-evidence.sh (or sudo chown "
+                f"{service_user}:{service_user} <evidence-file>)."
+            )
 
         if not _set_immutable(abs_path, True):
-            owner = _file_owner_name(abs_path)
             raise EvidenceHardeningError(
                 f"Could not set the immutable flag on sealed evidence {rel_path!r} "
-                f"(current owner: {owner or 'unknown'}). The seal was NOT hardened on "
-                "disk. Setting +i in-process needs BOTH (a) the file owned by the "
-                f"gateway service user '{DEFAULT_SERVICE_USER}' — operator-copied "
-                "evidence is often root-owned, so chown it to the service user at "
-                "intake (e.g. `sudo chown "
-                f"{DEFAULT_SERVICE_USER}:{DEFAULT_SERVICE_USER} <evidence-file>`) — "
-                "AND (b) the SIFT service carrying CAP_LINUX_IMMUTABLE."
+                "after ownership validation. The seal was NOT hardened on disk; "
+                "verify the SIFT gateway service carries CAP_LINUX_IMMUTABLE."
             )
 
         immutable = get_immutable_flag(abs_path)
@@ -863,16 +863,6 @@ def harden_sealed_evidence(
             raise EvidenceHardeningError(
                 f"Immutable flag is not present on sealed evidence {rel_path!r} "
                 "after hardening; refusing to report a hardened seal."
-            )
-
-        owner = _file_owner_name(abs_path)
-        if owner != service_user:
-            logger.info(
-                "harden_sealed_evidence: %s is owned by %s (not %s); immutable flag "
-                "applied. Ownership is informational only and not enforced.",
-                abs_path,
-                owner,
-                service_user,
             )
 
         results.append({"path": rel_path, "immutable": True, "owner": owner})
