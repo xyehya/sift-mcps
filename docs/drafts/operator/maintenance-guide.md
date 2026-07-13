@@ -348,8 +348,8 @@ and must be **registered and sealed before analysis.** The DB
 
    # B. Direct privileged copy, then in-place preparation. --prepare takes no
    # source paths or --case: it resolves the portal's active *unsealed* case
-   # and only repairs regular root- or sift-service-owned files in its
-   # canonical evidence dir.
+   # and repairs only eligible, non-immutable regular root- or sift-service-
+   # owned files in its canonical evidence dir.
    sudo cp -- /mnt/source/IMAGE.e01 /cases/<case>/evidence/
    scripts/stage-evidence.sh --prepare                         # active case
 
@@ -360,8 +360,10 @@ and must be **registered and sealed before analysis.** The DB
    `--prepare` does **not** recurse, accept arbitrary files or paths, set `+i`,
    register evidence, or change custody state. It runs only against the
    DB-active unsealed case's native, `sift-service`-owned `0755` evidence
-   directory. It fails closed on a symlink, hardlink, special object, immutable
-   entry, or an entry not owned by `root`/`sift-service`. It pins each validated
+   directory. It fails closed on a symlink, hardlink, special object, or an
+   entry not owned by `root`/`sift-service`. Existing immutable sealed entries
+   are validated but deliberately left untouched, so adding a new file does
+   **not** require unsealing unrelated evidence. It pins each eligible incoming
    file before changing ownership/mode, so a filename race cannot redirect the
    repair. Resolve a failure manually; do not bypass it with
    `sudo stage-evidence.sh`.

@@ -92,19 +92,86 @@ def test_prepare_rejects_a_symlink_without_following_it(
     assert repairs == []
 
 
-def test_prepare_rejects_immutable_entries_before_changing_any_metadata(
+def test_prepare_skips_existing_immutable_evidence_and_repairs_only_new_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     evidence_dir = _evidence_dir(tmp_path)
-    (evidence_dir / "sealed.E01").write_bytes(b"test evidence")
+    sealed = evidence_dir / "sealed.E01"
+    sealed.write_bytes(b"already sealed evidence")
+    incoming = evidence_dir / "incoming.raw"
+    incoming.write_bytes(b"new root-owned evidence")
     repairs = _record_metadata_repairs(monkeypatch)
     monkeypatch.setattr(
         prepare_evidence,
         "_get_immutable_flags",
-        lambda _fd: prepare_evidence.FS_IMMUTABLE_FL,
+        lambda fd: (
+            prepare_evidence.FS_IMMUTABLE_FL
+            if os.fstat(fd).st_ino == sealed.stat().st_ino
+            else 0
+        ),
     )
 
-    with pytest.raises(prepare_evidence.PrepareEvidenceError, match="immutable"):
+    prepared = prepare_evidence.prepare_evidence_dir(evidence_dir, _service_identity())
+
+    service = _service_identity()
+    assert prepared == 1
+    assert repairs == [("chown", service.uid, service.gid), ("chmod", 0o644)]
+
+
+def test_prepare_never_repairs_the_descriptor_for_existing_immutable_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence_dir = _evidence_dir(tmp_path)
+    sealed = evidence_dir / "sealed.E01"
+    sealed.write_bytes(b"already sealed evidence")
+    incoming = evidence_dir / "incoming.raw"
+    incoming.write_bytes(b"new root-owned evidence")
+    repaired_inodes: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        prepare_evidence,
+        "_get_immutable_flags",
+        lambda fd: (
+            prepare_evidence.FS_IMMUTABLE_FL
+            if os.fstat(fd).st_ino == sealed.stat().st_ino
+            else 0
+        ),
+    )
+    monkeypatch.setattr(
+        prepare_evidence,
+        "os_fchown",
+        lambda fd, _uid, _gid: repaired_inodes.append(("chown", os.fstat(fd).st_ino)),
+    )
+    monkeypatch.setattr(
+        prepare_evidence,
+        "os_fchmod",
+        lambda fd, _mode: repaired_inodes.append(("chmod", os.fstat(fd).st_ino)),
+    )
+
+    assert prepare_evidence.prepare_evidence_dir(evidence_dir, _service_identity()) == 1
+    assert repaired_inodes == [("chown", incoming.stat().st_ino), ("chmod", incoming.stat().st_ino)]
+
+
+def test_prepare_with_immutable_and_invalid_entries_changes_no_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evidence_dir = _evidence_dir(tmp_path)
+    sealed = evidence_dir / "sealed.E01"
+    sealed.write_bytes(b"already sealed evidence")
+    incoming = evidence_dir / "incoming.raw"
+    incoming.write_bytes(b"new root-owned evidence")
+    os.link(incoming, evidence_dir / "incoming-linked.raw")
+    repairs = _record_metadata_repairs(monkeypatch)
+    monkeypatch.setattr(
+        prepare_evidence,
+        "_get_immutable_flags",
+        lambda fd: (
+            prepare_evidence.FS_IMMUTABLE_FL
+            if os.fstat(fd).st_ino == sealed.stat().st_ino
+            else 0
+        ),
+    )
+
+    with pytest.raises(prepare_evidence.PrepareEvidenceError, match="hard-linked"):
         prepare_evidence.prepare_evidence_dir(evidence_dir, _service_identity())
 
     assert repairs == []

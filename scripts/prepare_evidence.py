@@ -96,7 +96,13 @@ def _validate_service_directory(fd: int, service: ServiceIdentity, *, label: str
     return fd
 
 
-def _open_regular_entry(dir_fd: int, name: str, service: ServiceIdentity) -> int:
+def _open_regular_entry(dir_fd: int, name: str, service: ServiceIdentity) -> tuple[int, bool]:
+    """Open and validate one direct entry, returning its immutable state.
+
+    Immutable entries are already sealed evidence.  They are validated so a
+    malformed directory still fails closed, but callers must leave their
+    metadata untouched while preparing newly added evidence in the same case.
+    """
     flags = os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW
     try:
         fd = os.open(name, flags, dir_fd=dir_fd)
@@ -115,18 +121,17 @@ def _open_regular_entry(dir_fd: int, name: str, service: ServiceIdentity) -> int
     if info.st_uid not in (0, service.uid):
         os.close(fd)
         _die(f"refusing evidence entry not owned by root or {service.name}: {name}")
-    if _get_immutable_flags(fd) & FS_IMMUTABLE_FL:
-        os.close(fd)
-        _die(f"refusing already immutable evidence entry: {name}")
-    return fd
+    return fd, bool(_get_immutable_flags(fd) & FS_IMMUTABLE_FL)
 
 
 def _prepare_open_evidence_dir(dir_fd: int, service: ServiceIdentity) -> int:
-    """Descriptor-pin and prepare every direct regular entry in ``evidence_dir``.
+    """Descriptor-pin and prepare each eligible direct evidence entry.
 
     All entries are opened and validated before the first metadata operation.
-    The subsequent ``fchown``/``fchmod`` calls cannot follow a name changed by a
-    concurrent writer, and no source path is accepted by this helper.
+    Existing immutable evidence remains untouched; only validated, non-immutable
+    entries are held open for the subsequent ``fchown``/``fchmod`` calls, which
+    cannot follow a name changed by a concurrent writer.  No source path is
+    accepted by this helper.
     """
     entry_fds: list[int] = []
     try:
@@ -134,7 +139,11 @@ def _prepare_open_evidence_dir(dir_fd: int, service: ServiceIdentity) -> int:
         if not names:
             _die("no evidence entries found to prepare")
         for name in names:
-            entry_fds.append(_open_regular_entry(dir_fd, name, service))
+            fd, immutable = _open_regular_entry(dir_fd, name, service)
+            if immutable:
+                os.close(fd)
+            else:
+                entry_fds.append(fd)
         for fd in entry_fds:
             os_fchown(fd, service.uid, service.gid)
             os_fchmod(fd, 0o644)

@@ -11,9 +11,10 @@
 #   file root-owned and the seal then fails closed with evidence_immutability_failed.
 #   This helper has two deliberately separate modes:
 #     * copy mode copies specified source bytes in and sets their metadata; and
-#     * --prepare fixes only root- or service-owned manual copies already in the
-#       canonical active-case evidence directory. It accepts no paths and never
-#       seals evidence.
+#     * --prepare fixes only eligible, non-immutable root- or service-owned
+#       manual copies already in the canonical active-case evidence directory.
+#       Existing sealed entries are left untouched. It accepts no paths and
+#       never seals evidence.
 #
 # USAGE
 #   scripts/stage-evidence.sh <source-file> [<source-file> ...] [--case <case_key>]

@@ -123,12 +123,14 @@ mitigation; optional `isolation_tier` surfacing is separate agent-facing surface
 The gateway deliberately has no `CAP_CHOWN`/`CAP_FOWNER` and never repairs evidence ownership
 at seal time. `scripts/stage-evidence.sh` either copies named source bytes into the canonical
 case directory or, after a manual privileged copy, offers pathless `--prepare`: it resolves the
-DB-active *unsealed* case itself, requires its native service-owned `0755` evidence directory,
-and rejects non-regular/linked/untrusted or immutable entries. Its installed root-owned helper
-descriptor-pins every validated file before changing only `root`/service-owned regular files to
-the service account and `0644`. It does not register, seal, or make files immutable; the re-auth
-gated portal Seal does that. Do not expose this helper or any equivalent filesystem repair path as
-an MCP tool.
+DB-active *unsealed* case itself and requires its native service-owned `0755` evidence directory.
+It validates every direct entry, rejects non-regular/linked/untrusted entries, leaves existing
+immutable sealed files untouched, and descriptor-pins only eligible non-immutable
+`root`/service-owned regular files before changing them to the service account and `0644`.
+It does not register, seal, or make files immutable; the re-auth gated portal Seal does that.
+Thus adding a new file invalidates the case and blocks agents, but does not require unsealing an
+unrelated sealed file. Do not expose this helper or any equivalent filesystem repair path as an
+MCP tool.
 
 ## VP-5 — The `run_command` jail (ceiling + floor, both deny-default)
 `run_command(command: str)` runs `shell=False`, multi-stage argv (supports `| && || ; > >> < 2>&1`)
