@@ -324,36 +324,56 @@ and must be **registered and sealed before analysis.** The DB
 1. **Activate a case** (re-auth gated). In the portal: create/select a case and
    activate it. Activation requires password re-auth and is recorded in
    `app.audit_events`.
-2. **Place evidence bytes — service-owned.** Copy or mount the disk/memory image
-   into the active case's evidence directory `/cases/<case>/evidence/`. This is a
-   manual VM-side operation by the operator; agents never place bytes. The portal
-   does **not** upload bytes — it detects files placed here in-place. The evidence
-   directory is owned by the gateway service user (`sift-service`, `0755`), and
-   **seal requires each evidence file to be owned by `sift-service`** (it sets the
-   immutable flag in-process and deliberately never chowns for you). A plain
-   `sudo cp` lands the file `root`-owned and the seal then fails closed with
-   `evidence_immutability_failed`. Stage the bytes so they land service-owned:
+2. **Place evidence bytes — prepare them service-owned.** Copy or mount the
+   disk/memory image into the active case's evidence directory
+   `/cases/<case>/evidence/`. This is a manual VM-side operation by the operator;
+   agents never place bytes. The portal does **not** upload bytes — it detects
+   files placed here in-place. The evidence directory is owned by the gateway
+   service user (`sift-service`, `0755`), and **seal requires each evidence file
+   to be owned by `sift-service`** (it sets the immutable flag in-process and
+   deliberately never chowns for you). A plain `sudo cp` lands the file
+   `root`-owned and the seal then fails closed with
+   `evidence_immutability_failed`.
+
+   Choose one of these operator-only intake paths. Run the helper as
+   `sansforensics` (or another sudo-capable operator), **not** as
+   `sudo stage-evidence.sh`; the helper prompts for its narrow internal sudo
+   operations itself.
 
    ```bash
-   # Helper: resolves the active case, copies the bytes in, sets sift-service
-   # ownership + 0644 (run on the VM as a sudo-capable operator):
+   # A. Helper copy mode: resolves the active case, copies the bytes in, and
+   # sets sift-service ownership + 0644.
    scripts/stage-evidence.sh /mnt/source/IMAGE.e01            # active case
    scripts/stage-evidence.sh /mnt/source/IMAGE.e01 --case case-<key>
 
-   # …or by hand:
+   # B. Direct privileged copy, then in-place preparation. --prepare takes no
+   # source paths or --case: it resolves the portal's active *unsealed* case
+   # and only repairs regular root- or sift-service-owned files in its
+   # canonical evidence dir.
+   sudo cp -- /mnt/source/IMAGE.e01 /cases/<case>/evidence/
+   scripts/stage-evidence.sh --prepare                         # active case
+
+   # An explicit manual alternative (one file):
    sudo install -o sift-service -g sift-service -m 0644 \
      /mnt/source/IMAGE.e01 /cases/<case>/evidence/
-   # already copied root-owned? just fix ownership:
-   sudo chown sift-service:sift-service /cases/<case>/evidence/IMAGE.e01
    ```
+   `--prepare` does **not** recurse, accept arbitrary files or paths, set `+i`,
+   register evidence, or change custody state. It runs only against the
+   DB-active unsealed case's native, `sift-service`-owned `0755` evidence
+   directory. It fails closed on a symlink, hardlink, special object, immutable
+   entry, or an entry not owned by `root`/`sift-service`. It pins each validated
+   file before changing ownership/mode, so a filename race cannot redirect the
+   repair. Resolve a failure manually; do not bypass it with
+   `sudo stage-evidence.sh`.
 3. **Register** the evidence object (portal evidence flow). The placed file
    surfaces as `unregistered` in the evidence chain (use **Rescan** if it does
    not appear); registering records the object and computes its hash.
 4. **Seal** the evidence (re-auth gated -> `app.evidence_seal`). Sealing is the
    gate: analysis tools treat sealed evidence as read-only. On seal each byte file
-   is set read-only (`chmod 0444`) **and immutable (`chattr +i`)** and the custody
-   chain head advances. Seal **fails closed** (`evidence_immutability_failed`) if a
-   file is not `sift-service`-owned or the interpreter lacks `CAP_LINUX_IMMUTABLE`
+   retains its prepared `0644` mode and is made **immutable (`chattr +i`)**; the
+   immutable flag is the write-protection boundary and the custody-chain head
+   advances. Seal **fails closed** (`evidence_immutability_failed`) if a file is
+   not `sift-service`-owned or the interpreter lacks `CAP_LINUX_IMMUTABLE`
    (granted to the venv interpreter by `install.sh`) — fix ownership per step 2 and
    retry.
 

@@ -119,6 +119,17 @@ hostile bytes from the host kernel. MicroVM / userspace-parse isolation is a sep
 mitigation; optional `isolation_tier` surfacing is separate agent-facing surface work. Detail:
 `docs/codex-assessment/validation/cluster-EXEC.md` (DSS-CAN-007 residual).
 
+**Operator intake boundary:** placing evidence bytes is a pre-agent, human VM operation.
+The gateway deliberately has no `CAP_CHOWN`/`CAP_FOWNER` and never repairs evidence ownership
+at seal time. `scripts/stage-evidence.sh` either copies named source bytes into the canonical
+case directory or, after a manual privileged copy, offers pathless `--prepare`: it resolves the
+DB-active *unsealed* case itself, requires its native service-owned `0755` evidence directory,
+and rejects non-regular/linked/untrusted or immutable entries. Its installed root-owned helper
+descriptor-pins every validated file before changing only `root`/service-owned regular files to
+the service account and `0644`. It does not register, seal, or make files immutable; the re-auth
+gated portal Seal does that. Do not expose this helper or any equivalent filesystem repair path as
+an MCP tool.
+
 ## VP-5 — The `run_command` jail (ceiling + floor, both deny-default)
 `run_command(command: str)` runs `shell=False`, multi-stage argv (supports `| && || ; > >> < 2>&1`)
 as the `agent_runtime` uid on the SIFT VM. Two stacked layers gate it before any forensic

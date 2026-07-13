@@ -61,6 +61,30 @@ run_first_party_core_addons() {
   fi
 }
 
+install_prepare_evidence_helper() {
+  # --prepare invokes this copy with sudo. Keep its source outside the
+  # operator-writable runtime tree so the gateway service cannot race or replace
+  # descriptor-pinned preparation code between validation and fchown/fchmod.
+  local source="$REPO_DIR/scripts/prepare_evidence.py"
+  local destination="/usr/local/lib/sift/prepare_evidence.py"
+  local source_deps="$REPO_DIR/.venv/lib/python3.12/site-packages"
+  local destination_deps="/usr/local/lib/sift/prepare-evidence-python"
+  [[ -f "$source" ]] || die "missing descriptor-pinned evidence prepare helper: $source"
+  for dependency in psycopg psycopg-*.dist-info psycopg_binary psycopg_binary-*.dist-info psycopg_binary.libs typing_extensions.py typing_extensions-*.dist-info; do
+    compgen -G "$source_deps/$dependency" >/dev/null || die "missing prepare dependency: $dependency"
+  done
+  sudo_if_needed install -d -m 755 -o root -g root /usr/local/lib/sift
+  sudo_if_needed install -m 755 -o root -g root "$source" "$destination"
+  sudo_if_needed rm -rf "$destination_deps"
+  sudo_if_needed install -d -m 755 -o root -g root "$destination_deps"
+  sudo_if_needed cp -aL "$source_deps"/psycopg "$source_deps"/psycopg-*.dist-info \
+    "$source_deps"/psycopg_binary "$source_deps"/psycopg_binary-*.dist-info \
+    "$source_deps"/psycopg_binary.libs "$source_deps"/typing_extensions.py \
+    "$source_deps"/typing_extensions-*.dist-info "$destination_deps/"
+  sudo_if_needed chown -R root:root "$destination_deps"
+  sudo_if_needed chmod -R go-w "$destination_deps"
+}
+
 main() {
   local original_args=("$@")
   local uninstall_mode=0
@@ -232,6 +256,7 @@ main() {
 
   sync_workspace
   repair_pyewf_venv_link
+  install_prepare_evidence_helper
   # The service user + shared `sift` group must exist before install_state_dirs
   # chowns the state/secret tree to sift-service.
   ensure_gateway_service_user

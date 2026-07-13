@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# stage-evidence.sh — copy evidence bytes into the active SIFT case's evidence/
-# folder with the correct service-user ownership, ready to Seal in the portal.
+# stage-evidence.sh — stage or prepare evidence bytes in the active SIFT case's
+# evidence/ folder, ready to Seal in the portal.
 #
 # WHY THIS EXISTS
 #   The portal does NOT upload evidence bytes: the operator copies them onto the
@@ -9,10 +9,15 @@
 #   service user (sift-service); it deliberately never chowns for you. The case
 #   evidence dir is sift-service-owned (0755), so a plain `sudo cp` lands the
 #   file root-owned and the seal then fails closed with evidence_immutability_failed.
-#   This helper copies the bytes in AND sets the right ownership/permissions.
+#   This helper has two deliberately separate modes:
+#     * copy mode copies specified source bytes in and sets their metadata; and
+#     * --prepare fixes only root- or service-owned manual copies already in the
+#       canonical active-case evidence directory. It accepts no paths and never
+#       seals evidence.
 #
 # USAGE
 #   scripts/stage-evidence.sh <source-file> [<source-file> ...] [--case <case_key>]
+#   scripts/stage-evidence.sh --prepare
 #
 #     <source-file>   Path on the VM to the evidence byte file(s) (e.g. an E01,
 #                     raw/dd image, memory dump) — typically from a mount or the
@@ -20,27 +25,42 @@
 #     --case          Target case_key (e.g. case-rocba-round-2-06151840). If
 #                     omitted, the deployment's ACTIVE case is resolved from the
 #                     control plane (Postgres).
+#     --prepare        Prepare root-owned files already manually copied into the
+#                     active case's canonical evidence directory. No paths or
+#                     --case are allowed in this mode.
 #
 # AFTER STAGING
 #   In the portal (active case) -> Evidence -> Rescan (if needed) -> Seal.
 #
-# Run on the SIFT VM as a sudo-capable operator (e.g. sansforensics). The script
-# elevates the individual copy/chown steps with sudo itself.
+# Run on the SIFT VM as a sudo-capable operator (e.g. sansforensics), not as
+# `sudo stage-evidence.sh`. The script elevates only its individual metadata and
+# copy steps. Portal Seal remains the only operation that makes evidence immutable.
 set -euo pipefail
 
 SERVICE_USER="${SIFT_GATEWAY_SERVICE_USER:-sift-service}"
 CASES_ROOT="${SIFT_CASES_ROOT:-/cases}"
 ENV_FILE="${SIFT_CONTROL_PLANE_ENV:-/var/lib/sift/.sift/control-plane.env}"
 VENV_PY="${SIFT_VENV_PYTHON:-/opt/sift-mcps/.venv/bin/python}"
+PREPARE_PYTHON="/usr/bin/python3.12"
+PREPARE_HELPER="/usr/local/lib/sift/prepare_evidence.py"
 
 die() { echo "error: $*" >&2; exit 2; }
 
+authenticate_sudo() {
+  # A terminal lets sudo prompt normally once. A non-interactive invocation must
+  # fail rather than hang for a password; NOPASSWD operator deployments still work.
+  if [ -t 0 ]; then sudo -v; else sudo -n -v; fi
+}
+
 case_key=""
+case_requested=0
+prepare=0
 sources=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --case)   case_key="${2:-}"; shift 2 ;;
-    --case=*) case_key="${1#*=}"; shift ;;
+    --case)   case_key="${2:-}"; case_requested=1; shift 2 ;;
+    --case=*) case_key="${1#*=}"; case_requested=1; shift ;;
+    --prepare) prepare=1; shift ;;
     -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --) shift; while [ $# -gt 0 ]; do sources+=("$1"); shift; done ;;
     -*) die "unknown option: $1" ;;
@@ -48,7 +68,25 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ "${#sources[@]}" -gt 0 ] || die "no source files given. Usage: $0 <source-file> [...] [--case <case_key>]"
+if [ "$prepare" -eq 1 ]; then
+  [ "${#sources[@]}" -eq 0 ] || die "--prepare does not accept source files. Run it only after a manual sudo copy into the evidence directory."
+  [ "$case_requested" -eq 0 ] || die "--prepare always resolves the portal's active case; do not pass --case."
+else
+  [ "${#sources[@]}" -gt 0 ] || die "no source files given. Usage: $0 <source-file> [...] [--case <case_key>]"
+fi
+
+if [ "$prepare" -eq 1 ]; then
+  [ "$(id -u)" -ne 0 ] || die "run --prepare as a sudo-capable operator, not with sudo on this script"
+  # This invocation intentionally accepts no case, path, user, or environment
+  # override. The installed root-owned helper resolves the DB-active *unsealed*
+  # case itself, then descriptor-pins files before fchown/fchmod.
+  authenticate_sudo || die "sudo authentication is required"
+  sudo "$PREPARE_PYTHON" -I "$PREPARE_HELPER"
+  echo
+  echo "NEXT: portal (active case) -> Evidence tab -> Rescan (if needed) -> Seal (password)."
+  echo "      Seal, not --prepare, hashes the file and applies immutable +i (the write-protection boundary)."
+  exit 0
+fi
 
 # Resolve the active case from the control plane when --case is not supplied.
 resolve_active_case() {
@@ -83,8 +121,15 @@ if [ -z "$case_key" ]; then
   echo "Active case: $case_key"
 fi
 
-evidence_dir="$CASES_ROOT/$case_key/evidence"
-sudo test -d "$evidence_dir" || die "evidence dir not found: $evidence_dir (is the case created/activated?)"
+[[ "$case_key" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "invalid case key"
+requested_evidence_dir="$CASES_ROOT/$case_key/evidence"
+sudo test -d "$requested_evidence_dir" || die "evidence dir not found: $requested_evidence_dir (is the case created/activated?)"
+evidence_dir="$(sudo readlink -f -- "$requested_evidence_dir")" || die "cannot resolve evidence dir: $requested_evidence_dir"
+[ "$evidence_dir" = "$requested_evidence_dir" ] || die "evidence dir is not the canonical case evidence directory"
+
+# Prompt once up front for copy mode. --prepare uses its own fixed installed
+# helper above and deliberately cannot inherit these caller-configurable paths.
+authenticate_sudo || die "sudo authentication is required"
 
 echo "Target: $evidence_dir  (files will be owned by $SERVICE_USER:$SERVICE_USER, mode 0644)"
 echo
@@ -112,4 +157,4 @@ echo "Staged $staged file(s). Current evidence dir:"
 sudo ls -la "$evidence_dir"
 echo
 echo "NEXT: portal (active case) -> Evidence tab -> Rescan (if the file is not listed) -> Seal (password)."
-echo "      Seal hashes the file and sets it read-only (0444) + immutable (chattr +i)."
+echo "      Seal hashes the file and applies immutable +i (the write-protection boundary)."
