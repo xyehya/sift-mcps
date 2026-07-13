@@ -39,6 +39,29 @@ class CustodyOperationPhase(StrEnum):
     FAILED_RECOVERABLE = "FAILED_RECOVERABLE"
 
 
+class CustodyAction(StrEnum):
+    """Closed, server-selected vocabulary for durable custody operations.
+
+    Values are cumulative: later packets may implement an action-specific
+    finalizer, but must not invent another operation runner or accept a free-form
+    action from a Portal request.
+    """
+
+    ADD_SEAL = "ADD_SEAL"
+    REPLACE_REACQUIRE = "REPLACE_REACQUIRE"
+    RESTORE_EXACT = "RESTORE_EXACT"
+    IGNORE = "IGNORE"
+    DELETE_STRAY = "DELETE_STRAY"
+    RETIRE = "RETIRE"
+
+
+class RecoveryAction(StrEnum):
+    """Recovery choices Ticket 4 may delegate to Ticket 3 authority."""
+
+    REPLACE_REACQUIRE = CustodyAction.REPLACE_REACQUIRE
+    RESTORE_EXACT = CustodyAction.RESTORE_EXACT
+
+
 RESUMABLE_SEAL_PHASES = (
     CustodyOperationPhase.GATE_BLOCKED,
     CustodyOperationPhase.FILESYSTEM_APPLYING,
@@ -60,8 +83,8 @@ class SealCommand:
     resume_reauth_audit_event_id: str | None = None
 
     @property
-    def action(self) -> str:
-        return "ADD_SEAL"
+    def action(self) -> CustodyAction:
+        return CustodyAction.ADD_SEAL
 
     def operation_payload(self) -> dict[str, Any]:
         return {
@@ -69,6 +92,92 @@ class SealCommand:
             "action": self.action,
             "files": list(self.file_specs),
         }
+
+
+@dataclass(frozen=True)
+class ObjectCustodyCommand:
+    """Typed command for one server-resolved Evidence Object.
+
+    Portal request bodies must never populate ``action`` directly. Route/service
+    code selects the enum member for its fixed operator workflow.
+    """
+
+    action: CustodyAction
+    case_id: str
+    evidence_object_id: str
+    actor_user_id: str | None
+    actor_service_identity_id: str | None
+    reason: str
+    reauth_audit_event_id: str
+    idempotency_key: str
+    runner_instance_id: str = _RUNNER_INSTANCE_ID
+    resume_reauth_audit_event_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.action is CustodyAction.ADD_SEAL:
+            raise ValueError("ADD_SEAL requires SealCommand")
+
+    def operation_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": 2,
+            "action": self.action.value,
+            "evidence_object_id": self.evidence_object_id,
+        }
+
+
+class CustodyOperationCommandProtocol(Protocol):
+    """Typed internal command accepted by the shared operation repository."""
+
+    @property
+    def case_id(self) -> str: ...
+
+    @property
+    def actor_user_id(self) -> str | None: ...
+
+    @property
+    def actor_service_identity_id(self) -> str | None: ...
+
+    @property
+    def reason(self) -> str: ...
+
+    @property
+    def reauth_audit_event_id(self) -> str: ...
+
+    @property
+    def idempotency_key(self) -> str: ...
+
+    @property
+    def runner_instance_id(self) -> str: ...
+
+    @property
+    def resume_reauth_audit_event_id(self) -> str | None: ...
+
+    @property
+    def action(self) -> CustodyAction: ...
+
+    def operation_payload(self) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class RecoverySelection:
+    """Path-free recovery selection passed across the Ticket 4/Ticket 3 seam."""
+
+    case_id: str
+    evidence_object_id: str
+    action: RecoveryAction
+
+
+class RecoveryAuthorityProtocol(Protocol):
+    """Operator-only recovery authority; it never accepts paths or receipts.
+
+    Portal authentication, scoped re-authentication, durable command creation,
+    and action-specific finalization stay inside the implementing authority.
+    Inventory/disposition code may pass only this server-selected object choice.
+    """
+
+    def execute_authorized_recovery(
+        self, selection: RecoverySelection, *, examiner: str
+    ) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -88,7 +197,9 @@ class CustodyOperationRecord:
 
 
 class CustodyOperationRepositoryProtocol(Protocol):
-    def begin_or_resume(self, command: SealCommand) -> CustodyOperationRecord: ...
+    def begin_or_resume(
+        self, command: CustodyOperationCommandProtocol
+    ) -> CustodyOperationRecord: ...
 
     def advance(
         self,
@@ -155,10 +266,10 @@ def _jsonb(value: Any) -> Any:
     return Jsonb(value)
 
 
-def _request_digest(command: SealCommand) -> str:
+def _request_digest(command: CustodyOperationCommandProtocol) -> str:
     material = {
         "case_id": command.case_id,
-        "action": command.action,
+        "action": command.action.value,
         "actor_user_id": command.actor_user_id,
         "actor_service_identity_id": command.actor_service_identity_id,
         "reason": command.reason,
@@ -204,7 +315,13 @@ class CustodyOperationRepository:
     def __init__(self, connect: Callable[[], Any]) -> None:
         self._connect = connect
 
-    def begin_or_resume(self, command: SealCommand) -> CustodyOperationRecord:
+    def begin_or_resume(
+        self, command: CustodyOperationCommandProtocol
+    ) -> CustodyOperationRecord:
+        try:
+            action = CustodyAction(command.action)
+        except (TypeError, ValueError) as exc:
+            raise CustodyOperationError("custody_action_unknown", http_status=400) from exc
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -216,7 +333,7 @@ class CustodyOperationRepository:
                     """,
                     (
                         command.case_id,
-                        command.action,
+                        action.value,
                         _jsonb(command.operation_payload()),
                         _request_digest(command),
                         command.reason,
