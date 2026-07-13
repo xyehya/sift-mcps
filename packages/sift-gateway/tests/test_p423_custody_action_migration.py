@@ -52,7 +52,7 @@ def test_server_derives_action_reauth_and_exact_object_binding():
     assert "where key not in ('schema_version','action','evidence_object_id')" in MIGRATION
 
 
-def test_case_advisory_precedes_every_shared_custody_row_lock():
+def test_case_advisory_precedes_begin_and_finalizer_row_locks():
     begin = MIGRATION.split(
         "create or replace function app.custody_operation_begin_or_resume(", 1
     )[1].split("alter function app.custody_operation_commit_verified_seal", 1)[0]
@@ -65,10 +65,29 @@ def test_case_advisory_precedes_every_shared_custody_row_lock():
         "create or replace function app.custody_operation_commit_verified_seal(", 1
     )[1].split("revoke execute", 1)[0]
     assert finalizer.index("pg_advisory_xact_lock") < finalizer.index("for update")
-    assert "case, operation, then" not in MIGRATION
-    assert "lock first, then audit" not in MIGRATION
-    assert "before every custody row lock" in SPEC
-    assert "precedes every custody row lock" in ADR
+
+    advance = BASE_MIGRATION.split(
+        "create or replace function app.custody_operation_advance(", 1
+    )[1].split("create or replace function app.custody_operation_fail(", 1)[0]
+    fail = BASE_MIGRATION.split(
+        "create or replace function app.custody_operation_fail(", 1
+    )[1].split("create or replace function app.evidence_append_canonical_event_v1", 1)[0]
+    assert "pg_advisory_xact_lock" not in advance
+    assert "pg_advisory_xact_lock" not in fail
+
+    combined = "\n".join((MIGRATION, SPEC, ADR))
+    for stale in (
+        "case, operation, then",
+        "lock first, then audit",
+        "before every custody row lock",
+        "precedes every custody row lock",
+        "all custody transactions",
+        "Custody transactions acquire",
+    ):
+        assert stale not in combined
+    assert "Generalized begin and each action-specific finalizer" in ADR
+    assert "Operation-local `advance`/`fail` phase-CAS helpers are outside" in ADR
+    assert "operation-local `advance` and\n`fail` phase-CAS helpers" in SPEC
 
 
 def test_add_seal_finalizer_rejects_every_other_action_before_inner_mutation():

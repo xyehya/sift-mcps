@@ -73,8 +73,8 @@ begin
       using errcode='invalid_parameter_value';
   end if;
 
-  -- Global invariant: acquire the per-case advisory transaction lock before
-  -- any custody row lock. Each action owns and documents its internal row order.
+  -- Generalized begin invariant: acquire the per-case advisory transaction lock
+  -- before any row lock taken by begin. Each action owns its internal row order.
   perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
 
   if p_action='ADD_SEAL' then
@@ -274,8 +274,9 @@ begin
   if not found then
     raise exception 'custody_operation_missing' using errcode='no_data_found';
   end if;
-  -- Finalizers share only the case-first invariant. The Add/Seal inner
-  -- finalizer owns and documents its action-specific row order.
+  -- Action-specific finalizer invariant: case advisory transaction lock before
+  -- finalizer row locks. The Add/Seal inner function owns its row order.
+  -- Operation-local advance/fail phase CAS helpers are outside this invariant.
   perform pg_advisory_xact_lock(hashtextextended(v_case_id::text,0));
   select * into v_op from app.custody_operations
     where id=p_operation_id for update;
