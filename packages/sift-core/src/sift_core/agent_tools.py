@@ -30,6 +30,7 @@ from sift_core.case_ops import case_status_data
 from sift_core.evidence_chain import ChainStatus, chain_status
 from sift_core.evidence_ops import list_evidence_status_data
 from sift_core.execute.catalog import get_tool_def
+from sift_core.execute.evidence_binding import AdmittedEvidenceBinding
 from sift_core.execute.exceptions import SiftError
 from sift_core.execute.response import build_response
 from sift_core.execute.tools.discovery import get_tool_help as _get_tool_help
@@ -528,14 +529,31 @@ def _trusted_internal_evidence_refs(
         expected_sha256 = str(item.get("sha256") or "")
         if not evidence_id or not version_id or not expected_sha256.startswith("sha256:"):
             raise ValueError("internal evidence ref is not version-bound")
+        try:
+            binding: AdmittedEvidenceBinding = {
+                "ref": str(item.get("ref") or evidence_id),
+                "evidence_id": evidence_id,
+                "version_id": version_id,
+                "display_path": str(item.get("display_path") or ""),
+                "path": str(path),
+                "sha256": expected_sha256,
+                "bytes": int(item["bytes"]),
+                "st_dev": int(item["st_dev"]),
+                "st_ino": int(item["st_ino"]),
+                "st_mtime_ns": int(item["st_mtime_ns"]),
+                "st_ctime_ns": int(item.get("st_ctime_ns", -1)),
+                "immutable_required": bool(item.get("immutable_required", False)),
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("internal evidence ref has an invalid binding") from exc
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(path, flags)
         try:
-            validate_binding_fd(fd, item)
+            validate_binding_fd(fd, binding)
         finally:
             os.close(fd)
         paths.append(str(path))
-        bindings.append(dict(item))
+        bindings.append(dict(binding))
         public_refs.append(
             str(
                 item.get("evidence_id")
@@ -1094,7 +1112,8 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
                 )
             failed_stages.append(entry)
         pipeline_ok = exec_result["exit_code"] == 0 and not failed_stages
-        fk_name = get_tool_def(first_binary).knowledge_name if get_tool_def(first_binary) else first_binary
+        tool_def = get_tool_def(first_binary)
+        fk_name = tool_def.knowledge_name if tool_def else first_binary
         artifact_hint = _detect_artifact_context([command])
         resp_data = exec_result["_parsed"] if exec_result.get("_parsed") else exec_result
         # Output ref: the agent only ever sees a case-relative reference to the

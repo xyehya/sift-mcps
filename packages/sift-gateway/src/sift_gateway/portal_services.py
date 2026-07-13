@@ -545,7 +545,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                 correlation_id,
                             )
                             self._record_admission_violation(
-                                cur, case_id, obj_id, "unsafe_evidence_inventory_entry"
+                                cur,
+                                case_id,
+                                obj_id,
+                                "unsafe_evidence_inventory_entry",
+                                correlation_id,
                             )
                             unsafe.append("unsafe_evidence_inventory_entry")
                             continue
@@ -566,7 +570,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
                             and st.st_size != int(known["bytes"])
                         ) or (sealed_ns and st.st_ctime_ns > sealed_ns):
                             self._record_admission_violation(
-                                cur, case_id, known["id"], "sealed_evidence_changed"
+                                cur,
+                                case_id,
+                                known["id"],
+                                "sealed_evidence_changed",
+                                correlation_id,
                             )
                             unsafe.append("sealed_evidence_changed")
 
@@ -574,7 +582,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     for rel, known in sealed.items():
                         if rel not in live:
                             self._record_admission_violation(
-                                cur, case_id, known["id"], "sealed_evidence_missing"
+                                cur,
+                                case_id,
+                                known["id"],
+                                "sealed_evidence_missing",
+                                correlation_id,
                             )
                             unsafe.append("sealed_evidence_missing")
             conn.commit()
@@ -605,11 +617,16 @@ class EvidenceAuthorityService(_BasePortalDbService):
 
     @staticmethod
     def _record_admission_violation(
-        cur: Any, case_id: str, evidence_id: str, reason: str
+        cur: Any,
+        case_id: str,
+        evidence_id: str,
+        reason: str,
+        correlation_id: str | None,
     ) -> None:
         cur.execute(
-            "select app.evidence_mark_violation(%s, %s, %s, %s, null, null)",
-            (case_id, evidence_id, reason, _jsonb([reason])),
+            "select app.evidence_mark_admission_violation"
+            "(%s, %s, %s, %s, %s, null, null)",
+            (case_id, evidence_id, reason, _jsonb([reason]), correlation_id),
         )
 
     def gate_status(self, case_id: str) -> dict[str, Any]:

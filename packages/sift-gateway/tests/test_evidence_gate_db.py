@@ -190,6 +190,11 @@ async def test_mcp_evidence_gate_prefers_db_for_active_case(monkeypatch, tmp_pat
         control_plane_dsn = _DSN
         _audit = None
 
+        class evidence_service:
+            @staticmethod
+            def reconcile_for_admission(_case_id):
+                return {"state": "available", "observed": 0, "issues": []}
+
     class _Message:
         name = "run_command"
         arguments = {}
@@ -197,6 +202,7 @@ async def test_mcp_evidence_gate_prefers_db_for_active_case(monkeypatch, tmp_pat
     class _Context:
         message = _Message()
 
+    (tmp_path / "evidence").mkdir()
     case = ActiveCase(
         case_id=_CASE,
         case_key="db-case",

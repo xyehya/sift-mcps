@@ -170,6 +170,11 @@ def test_durable_revalidation_classifies_changed_sealed_identity(tmp_path, monke
     with pytest.raises(FatalJobError, match="custody_admission_denied"):
         build_custody_validator("postgresql://unused")(_job(case_dir, token), "claim")
 
-    violations = [call for call in connection.committed if "evidence_mark_violation" in call[0]]
+    violations = [
+        call
+        for call in connection.committed
+        if "evidence_mark_admission_violation" in call[0]
+    ]
     assert violations
     assert violations[0][1][1:3] == ("sealed-object", "sealed_evidence_changed")
+    assert violations[0][1][4] == "job-1"

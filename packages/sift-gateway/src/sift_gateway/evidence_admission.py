@@ -25,7 +25,7 @@ _INVENTORY_TOKEN: ContextVar[str] = ContextVar("sift_gateway_inventory_token", d
 
 def current_admitted_refs() -> list[AdmittedEvidenceBinding]:
     """Return a defensive copy of the references bound to this dispatch."""
-    return [dict(item) for item in _ADMITTED_REFS.get()]
+    return [_copy_admitted_ref(item) for item in _ADMITTED_REFS.get()]
 
 
 def current_inventory_token() -> str:
@@ -35,7 +35,7 @@ def current_inventory_token() -> str:
 def bind_admitted_refs(refs: list[AdmittedEvidenceBinding], *, inventory_token: str):
     """Bind authorized references for the duration of one middleware call."""
     return (
-        _ADMITTED_REFS.set(tuple(dict(item) for item in refs)),
+        _ADMITTED_REFS.set(tuple(_copy_admitted_ref(item) for item in refs)),
         _INVENTORY_TOKEN.set(inventory_token),
     )
 
@@ -48,24 +48,24 @@ def reset_admitted_refs(token: Any) -> None:
 
 def serialize_resolved_ref(item: AdmittedEvidenceBinding) -> AdmittedEvidenceBinding:
     """Keep a private evidence-version binding JSON-safe and explicit."""
-    keys = (
-        "ref",
-        "evidence_id",
-        "version_id",
-        "display_path",
-        "path",
-        "sha256",
-        "bytes",
-        "st_dev",
-        "st_ino",
-        "st_mtime_ns",
-        "st_ctime_ns",
-        "immutable_required",
-    )
+    return _copy_admitted_ref(item)
+
+
+def _copy_admitted_ref(item: AdmittedEvidenceBinding) -> AdmittedEvidenceBinding:
+    """Copy the complete, required private binding without widening its type."""
     return {
-        key: str(item[key]) if key == "path" else item[key]
-        for key in keys
-        if item.get(key) is not None
+        "ref": item["ref"],
+        "evidence_id": item["evidence_id"],
+        "version_id": item["version_id"],
+        "display_path": item["display_path"],
+        "path": str(item["path"]),
+        "sha256": item["sha256"],
+        "bytes": item["bytes"],
+        "st_dev": item["st_dev"],
+        "st_ino": item["st_ino"],
+        "st_mtime_ns": item["st_mtime_ns"],
+        "st_ctime_ns": item.get("st_ctime_ns", -1),
+        "immutable_required": item.get("immutable_required", False),
     }
 
 

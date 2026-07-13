@@ -7,24 +7,24 @@ import json
 import os
 import stat
 from pathlib import Path
-from typing import TypedDict
+from typing import NotRequired, Required, TypedDict
 
 from sift_core.evidence_chain import get_immutable_flag_fd
 
 
 class AdmittedEvidenceBinding(TypedDict, total=False):
-    ref: str
-    evidence_id: str
-    version_id: str
-    display_path: str
-    path: str
-    sha256: str
-    bytes: int
-    st_dev: int
-    st_ino: int
-    st_mtime_ns: int
-    st_ctime_ns: int
-    immutable_required: bool
+    ref: Required[str]
+    evidence_id: Required[str]
+    version_id: Required[str]
+    display_path: Required[str]
+    path: Required[str]
+    sha256: Required[str]
+    bytes: Required[int]
+    st_dev: Required[int]
+    st_ino: Required[int]
+    st_mtime_ns: Required[int]
+    st_ctime_ns: NotRequired[int]
+    immutable_required: NotRequired[bool]
 
 
 InventoryIdentity = tuple[str, int, int, int, int, int, int, int]

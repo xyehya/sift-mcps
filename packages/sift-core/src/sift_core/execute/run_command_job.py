@@ -130,12 +130,14 @@ def _record_inventory_change(cur: Any, job: ClaimedJob, case_dir: str) -> None:
                 detected = cur.fetchone()
                 if not safe:
                     cur.execute(
-                        "select app.evidence_mark_violation(%s, %s, %s, %s::jsonb, null, null)",
+                        "select app.evidence_mark_admission_violation"
+                        "(%s, %s, %s, %s::jsonb, %s, null, null)",
                         (
                             job.case_id,
                             detected[0] if detected else None,
                             "unsafe_evidence_inventory_entry",
                             json.dumps(["unsafe_evidence_inventory_entry"]),
+                            str(job.job_id),
                         ),
                     )
             else:
@@ -155,23 +157,27 @@ def _record_inventory_change(cur: Any, job: ClaimedJob, case_dir: str) -> None:
                     )
                     if changed:
                         cur.execute(
-                            "select app.evidence_mark_violation(%s, %s, %s, %s::jsonb, null, null)",
+                            "select app.evidence_mark_admission_violation"
+                            "(%s, %s, %s, %s::jsonb, %s, null, null)",
                             (
                                 job.case_id,
                                 row[0],
                                 "sealed_evidence_changed",
                                 json.dumps(["sealed_evidence_changed"]),
+                                str(job.job_id),
                             ),
                         )
     for rel, row in known.items():
         if row[2] == "sealed" and row[3] == "sealed" and rel not in live:
             cur.execute(
-                "select app.evidence_mark_violation(%s, %s, %s, %s::jsonb, null, null)",
+                "select app.evidence_mark_admission_violation"
+                "(%s, %s, %s, %s::jsonb, %s, null, null)",
                 (
                     job.case_id,
                     row[0],
                     "sealed_evidence_missing",
                     json.dumps(["sealed_evidence_missing"]),
+                    str(job.job_id),
                 ),
             )
 

@@ -593,6 +593,90 @@ class _ObservationConnection:
         return None
 
 
+class _SealedObservationCursor(_ObservationCursor):
+    def __init__(self, sealed):
+        super().__init__()
+        self.sealed = sealed
+
+    def fetchall(self):
+        return self.sealed
+
+
+@pytest.mark.parametrize("condition", ["changed", "missing"])
+def test_reconciliation_violation_uses_request_correlation(
+    condition, tmp_path, monkeypatch
+):
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    rel = "evidence/sealed.raw"
+    if condition == "changed":
+        (evidence / "sealed.raw").write_bytes(b"changed")
+    cursor = _SealedObservationCursor(
+        [
+            (
+                "sealed-object",
+                rel,
+                "sha256:" + "a" * 64,
+                1,
+                datetime.now(timezone.utc) + timedelta(seconds=5),
+            )
+        ]
+    )
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
+    context = ActiveCaseContext(
+        case_id="11111111-1111-1111-1111-111111111111",
+        case_key="case-one",
+        artifact_path=str(case_dir),
+        request_id="opaque-request-violation",
+        db_active=True,
+    )
+
+    with use_active_case_context(context):
+        result = service.reconcile_for_admission(context.case_id)
+
+    violations = [
+        call
+        for call in cursor.calls
+        if "evidence_mark_admission_violation" in call[0]
+    ]
+    assert len(violations) == 1
+    assert violations[0][1][1] == "sealed-object"
+    assert violations[0][1][2] == f"sealed_evidence_{condition}"
+    assert violations[0][1][4] == "opaque-request-violation"
+    assert result["state"] == "available"
+
+
+def test_unavailable_storage_is_not_recorded_as_a_violation(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    cursor = _SealedObservationCursor(
+        [
+            (
+                "sealed-object",
+                "evidence/sealed.raw",
+                "sha256:" + "a" * 64,
+                1,
+                datetime.now(timezone.utc),
+            )
+        ]
+    )
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
+
+    result = service.reconcile_for_admission(
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert result["state"] == "unavailable"
+    assert not any(
+        "evidence_mark_admission_violation" in call[0] for call in cursor.calls
+    )
+
+
 def test_inventory_reconciliation_does_not_hash_large_unchanged_sibling(tmp_path, monkeypatch):
     case_dir = tmp_path / "case"
     evidence = case_dir / "evidence"
