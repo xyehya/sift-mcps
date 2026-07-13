@@ -49,7 +49,7 @@ file-audit path and stays empty when the DB is the audit authority.
 
 | Dir | Written by | Authority | Notes |
 |---|---|---|---|
-| `evidence/` | Operator (mount/copy on the SIFT VM) | **File = primary data** | Sealed; made read-only (`0444` / immutable) at seal. Must be registered + sealed + chain-OK before any agent tool runs. |
+| `evidence/` | Operator (mount/copy on the SIFT VM) | **File = primary data** | Sealed with immutable `+i`, the disk write-protection boundary. Must be registered + sealed + chain-OK before any agent tool runs. |
 | `extractions/` | Ingest adapters / tools | DB (`app.opensearch_indices`) for the indexed copy | On-disk extraction is working data; the searchable copy lives in OpenSearch. |
 | `reports/` | Portal reporting | File = export | Generated artifacts only; report *contents/approvals* are DB-authoritative. |
 | `tmp/` | Core tools | Ephemeral | Safe to purge between runs. `vol-symbols/` is a shared Volatility cache. |

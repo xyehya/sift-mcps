@@ -633,7 +633,9 @@ batch reports RLS posture read-only — **enabled but not FORCEd**).
   (`portal_services.py:535-578`). Sensitive evidence actions (seal/ignore/retire)
   are re-auth gated. **verified 2026-06-12:** `/health` `evidence_root`:
   `path:/cases`, `readable:true`, `writable:true`, **`write_protected:false`**,
-  `case_count:0`. Sealing chmods evidence to `0444` (`evidence_chain.py`).
+  `case_count:0`. Sealing applies the immutable `+i` flag
+  (`evidence_chain.py`); that flag, rather than mode bits, is the disk
+  write-protection boundary.
 - **Threats.** A host/root actor editing `/cases` bytes directly — caught by hash on
   re-verification, but (today) **not** by kernel auditd (§11, absent). `/cases` is
   writable at rest until seal.
@@ -649,7 +651,8 @@ batch reports RLS posture read-only — **enabled but not FORCEd**).
   ```
 - **Logs.** App audit: `app.audit_events` (custody class). File mirror per case:
   `<case>/audit/*.jsonl` (proof copy only).
-- **Tests.** Custody append-only trigger test (sift-core); seal→`0444` mode test.
+- **Tests.** Custody append-only trigger test (sift-core); seal→immutable-flag
+  hardening test.
 - **Remediation plan.** Primary gap is the **missing kernel auditd** watch on
   `/cases` + `/var/lib/sift` (→ §11/HR3). The custody model itself is well-built;
   no change owed here beyond enabling auditd.
