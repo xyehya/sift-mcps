@@ -6,7 +6,7 @@ const NEXT_ACTION = {
   LEDGER_COMMITTED: 'Wait for the operation result to finalize.',
 }
 
-export function IncompleteCustodyOperation({ operation }) {
+export function IncompleteCustodyOperation({ operation, onResume }) {
   if (!operation) return null
   const phase = String(operation.phase || 'UNKNOWN')
   const nextAction = NEXT_ACTION[phase] || 'Refresh custody status before taking another action.'
@@ -16,6 +16,7 @@ export function IncompleteCustodyOperation({ operation }) {
       <div className="mono mt-1 text-foreground">State: {phase}</div>
       {operation.failed_from_phase && <div className="mono text-muted-foreground">Interrupted from: {operation.failed_from_phase}</div>}
       <p className="mt-1 text-muted-foreground">Next action: {nextAction}</p>
+      {operation.recoverable && <button type="button" onClick={onResume} className="mono mt-2 rounded-lg border border-status-pending/40 px-3 py-1.5 font-semibold text-status-pending">Resume Add &amp; Seal</button>}
     </section>
   )
 }

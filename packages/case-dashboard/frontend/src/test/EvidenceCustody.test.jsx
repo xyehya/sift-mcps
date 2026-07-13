@@ -31,6 +31,7 @@ vi.mock('@/api/endpoints', async (importOriginal) => {
     getChainStatus: vi.fn(),
     postChainRescan: vi.fn(),
     postChainSeal: vi.fn(),
+    postChainSealResume: vi.fn(),
     postChainIgnore: vi.fn(),
     postChainDelete: vi.fn(),
     postChainRetire: vi.fn(),
@@ -170,6 +171,25 @@ describe('Seal manifest flow', () => {
     expect(within(notice).getByText('Interrupted from: FILESYSTEM_APPLYING')).toBeInTheDocument()
     expect(within(notice).getByText(/Retry Add & Seal with the same intent/i)).toBeInTheDocument()
     expect(notice).not.toHaveTextContent('evidence/')
+  })
+
+  it('resumes the same server operation after a fresh component state', async () => {
+    const operation = { operation_id: 'op-reload-1', action: 'ADD_SEAL', phase: 'FAILED_RECOVERABLE', recoverable: true }
+    seed({ status: 'unsealed', unregistered: [], incomplete_operation: operation })
+    const first = render(<EvidenceTab />)
+    await screen.findByText('State: FAILED_RECOVERABLE')
+    first.unmount()
+    endpoints.postChainSealResume.mockResolvedValue({ sealed: true, manifest_version: 8, operation_id: operation.operation_id })
+    render(<EvidenceTab />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume Add & Seal' }))
+    const modal = await screen.findByRole('dialog')
+    fireEvent.change(within(modal).getByPlaceholderText('Enter password...'), { target: { value: 'fresh-password' } })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Resume' }))
+    await waitFor(() => expect(endpoints.postChainSealResume).toHaveBeenCalledWith({
+      password: 'fresh-password', operation_id: 'op-reload-1',
+    }))
+    expect(endpoints.postChainSealResume).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -976,6 +976,42 @@ class EvidenceAuthorityService(_BasePortalDbService):
         except CustodyOperationError as exc:
             raise PortalServiceError(exc.reason, http_status=exc.http_status) from exc
 
+    def resume_seal(
+        self, *, case_id: str, operation_id: str, actor: Any, examiner: str
+    ) -> dict[str, Any]:
+        """Resume one path-free incomplete Add/Seal operation after fresh Portal re-auth."""
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        if actor_type != "user" or not actor_user or actor_service:
+            raise PortalServiceError("seal_resume_actor_mismatch", http_status=403)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select command,reason,idempotency_key,reauth_audit_event_id::text,
+                              actor_user_id::text,actor_service_identity_id::text
+                       from app.custody_operations
+                       where id=%s and case_id=%s and action='ADD_SEAL'
+                         and phase<>'COMPLETED'""",
+                    (operation_id, case_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise PortalServiceError("custody_operation_not_resumable", http_status=404)
+        if str(row[4] or "") != actor_user or row[5] is not None:
+            raise PortalServiceError("seal_resume_actor_mismatch", http_status=403)
+        command = row[0] if isinstance(row[0], dict) else {}
+        files = command.get("files") if isinstance(command, dict) else None
+        if command.get("action") != "ADD_SEAL" or not isinstance(files, list):
+            raise PortalServiceError("custody_operation_command_invalid", http_status=409)
+        return self.seal(
+            case_id=case_id,
+            file_specs=files,
+            reason=str(row[1] or ""),
+            idempotency_key=str(row[2] or ""),
+            reauth_audit_event_id=str(row[3] or ""),
+            actor=actor,
+            examiner=examiner,
+        )
+
     def _seal_object_for_path(self, case_id: str, display_path: str) -> dict[str, Any]:
         with self._connect() as conn:
             with conn.cursor() as cur:

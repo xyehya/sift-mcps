@@ -1,4 +1,4 @@
-import { getChainStatus, postChainSeal, postChainVerifyHmac } from '@/api/endpoints'
+import { getChainStatus, postChainSeal, postChainSealResume, postChainVerifyHmac } from '@/api/endpoints'
 
 import { runGuard } from '@/components/evidence/custody-guard'
 
@@ -71,5 +71,24 @@ export function useCustodySealActions({
     }
   }
 
-  return { handleVerifyHmac, handleSealEvidence }
+  async function handleResumeSeal(e) {
+    e.preventDefault()
+    if (!guard(false)) return
+    try {
+      const res = await postChainSealResume({
+        password: modalPassword,
+        operation_id: chainStatus?.incomplete_operation?.operation_id,
+      })
+      if (!res.sealed) throw new Error(res.error || 'Resume failed')
+      setModalResult(res)
+      addToast(`Manifest version ${res.manifest_version} sealed successfully!`, 'success')
+      afterSuccess(refreshData)
+    } catch (err) {
+      setModalError(err.message || 'Resume failed')
+    } finally {
+      setModalLoading(false)
+    }
+  }
+
+  return { handleVerifyHmac, handleSealEvidence, handleResumeSeal }
 }

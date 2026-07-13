@@ -199,6 +199,10 @@ function VerifyHmacModal({ password, onPasswordChange, loading, error, result, o
   )
 }
 
+function ResumeSealModal({ password, onPasswordChange, loading, error, result, onClose, onSubmit }) {
+  return <ModalShell title="Resume Add & Seal"><p className="text-xs text-muted-foreground">Re-authenticate to resume the server-stored custody operation. No evidence paths or credentials are stored in this page.</p><form id="modal-resume-seal" onSubmit={onSubmit} className="space-y-4"><PasswordField value={password} onChange={onPasswordChange} disabled={loading} /><ModalError error={error} />{loading && <ModalLoading message="Resuming durable custody operation…" />}{result?.sealed && <ModalSuccess message={`Manifest version ${result.manifest_version} sealed successfully!`} />}<div className="flex justify-end gap-2"><CancelButton onClose={onClose} /><ConfirmButton formId="modal-resume-seal" label="Resume" tone="jade" disabled={loading} /></div></form></ModalShell>
+}
+
 // ── Ignore ─────────────────────────────────────────────────────────────────
 function IgnoreModal({ path, password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
   return (
@@ -360,6 +364,7 @@ export function EvidenceModals({ activeModal, pendingPath, password, reason, loa
         <VerifyHmacModal key="verify_hmac" {...common} onSubmit={handlers.onVerifyHmac} />
       )}
       {activeModal === 'seal' && <EvidenceSealModal key="seal" {...common} onSubmit={handlers.onSeal} />}
+      {activeModal === 'resume_seal' && <ResumeSealModal key="resume_seal" {...common} onSubmit={handlers.onResumeSeal} />}
       {activeModal === 'ignore' && <IgnoreModal key="ignore" {...common} onSubmit={handlers.onIgnore} />}
       {activeModal === 'delete' && <DeleteModal key="delete" {...common} onSubmit={handlers.onDelete} />}
       {activeModal === 'retire' && <RetireModal key="retire" {...common} onSubmit={handlers.onRetire} />}

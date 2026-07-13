@@ -1174,6 +1174,48 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     return JSONResponse(resp)
 
 
+async def post_evidence_chain_seal_resume(request: Request) -> JSONResponse:
+    """Resume a server-stored incomplete Add/Seal after fresh operator re-auth."""
+    role_err = _require_examiner_role(request)
+    if role_err:
+        return role_err
+    if (err := _must_reset_check(request)) is not None:
+        return err
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(body, dict) or set(body) - {"password", "operation_id"}:
+        return JSONResponse({"error": "Unknown resume request field"}, status_code=400)
+    operation_id = str(body.get("operation_id") or "").strip()
+    if not operation_id or len(operation_id) > 64:
+        return JSONResponse({"error": "operation_id is required"}, status_code=400)
+    if (reauth_err := await _supabase_reverify(request, body)) is not None:
+        return reauth_err
+    resumer = getattr(_EVIDENCE_DB, "resume_seal", None) if _EVIDENCE_DB is not None else None
+    if not callable(resumer):
+        return _no_case_response()
+    if not _record_reauth_event(request, examiner, "evidence_seal_resume"):
+        return JSONResponse({"error": "Re-auth audit event required for resume"}, status_code=403)
+    try:
+        result = resumer(
+            case_id=_active_case_id(), operation_id=operation_id,
+            actor=_request_principal(request), examiner=examiner,
+        )
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
+    result = result if isinstance(result, dict) else {}
+    return JSONResponse({
+        "sealed": result.get("seal_status") == "sealed",
+        "manifest_version": result.get("manifest_version"),
+        "seal_status": result.get("seal_status"),
+        "operation_id": result.get("operation_id"),
+    })
+
+
 async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     """Mark an unregistered evidence file as intentionally ignored with HMAC confirmation.
 
@@ -5587,6 +5629,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/chain/status", get_evidence_chain_status, methods=["GET"]),
         Route("/api/evidence/chain/rescan", post_evidence_chain_rescan, methods=["POST"]),
         Route("/api/evidence/chain/seal", post_evidence_chain_seal, methods=["POST"]),
+        Route("/api/evidence/chain/seal/resume", post_evidence_chain_seal_resume, methods=["POST"]),
         Route("/api/evidence/chain/ignore", post_evidence_chain_ignore, methods=["POST"]),
         Route("/api/evidence/chain/delete", post_evidence_chain_delete, methods=["POST"]),
         Route("/api/evidence/chain/retire", post_evidence_chain_retire, methods=["POST"]),

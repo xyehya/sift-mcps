@@ -127,7 +127,7 @@ export function EvidenceTab() {
       >
         <EvidenceHeader chainStatus={chainStatus} onRescan={custody.handleRescan} />
 
-        <IncompleteCustodyOperation operation={chainStatus?.incomplete_operation} />
+        <IncompleteCustodyOperation operation={chainStatus?.incomplete_operation} onResume={() => openModal('resume_seal')} />
 
         <HmacBar chainStatus={chainStatus} onVerifyClick={() => openModal('verify_hmac')} />
 
@@ -191,6 +191,7 @@ export function EvidenceTab() {
           onClose: closeModal,
           onVerifyHmac: custody.handleVerifyHmac,
           onSeal: custody.handleSealEvidence,
+          onResumeSeal: custody.handleResumeSeal,
           onIgnore: custody.handleIgnoreEvidence,
           onDelete: custody.handleDeleteEvidence,
           onRetire: custody.handleRetireEvidence,

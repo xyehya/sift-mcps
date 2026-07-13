@@ -161,25 +161,40 @@ def test_final_commit_rollback_replay_sibling_preservation_and_grants():
                    values(%s,1,%s,'sealed',1)""",
                 (case_id, "sha256:" + "c" * 64),
             )
+            second_id = uuid.uuid4()
+            while second_id.int <= intent[3].int:
+                second_id = uuid.uuid4()
+            second_path = "evidence/" + uuid.uuid4().hex + ".raw"
+            cur.execute("insert into app.evidence_objects(id,case_id,display_name,display_path,status,seal_status) values(%s,%s,%s,%s,'detected','unsealed')", (second_id, case_id, second_path.rsplit('/', 1)[-1], second_path))
+            intent[6]["files"].append({"path": second_path, "description": None, "source": None})
+            cur.execute("update app.audit_events set details=jsonb_set(details,'{binding,targets}',%s) where id=%s", (Jsonb(sorted([intent[5], second_path])), intent[2]))
             op_id, _phase = _begin(cur, intent, "runner-final")
             prepared, verified, item = _facts(intent)
-            cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s)", (op_id, Jsonb(prepared)))
-            cur.execute("select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s)", (op_id, Jsonb(verified)))
+            second_item = {**item, "evidence_object_id": str(second_id), "path": second_path, "display_path": second_path, "display_name": second_path.rsplit('/', 1)[-1], "st_ino": 22}
+            prepared["items"].append({k: v for k, v in second_item.items() if k not in {"owner", "mode", "immutable", "st_mtime_ns", "st_ctime_ns"}})
+            verified["items"].append(second_item)
+            cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'runner-final')", (op_id, Jsonb(prepared)))
+            cur.execute("select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-final')", (op_id, Jsonb(verified)))
 
             cur.execute("savepoint mismatched_verified")
-            bad = [{**item, "bytes": 18}]
-            with pytest.raises(psycopg.errors.DataException):
-                cur.execute("select phase from app.custody_operation_commit_verified_seal(%s,%s,'test')", (op_id, Jsonb(bad)))
+            cur.execute("update app.evidence_objects set status='ignored' where id=%s", (second_id,))
+            with pytest.raises(psycopg.errors.InvalidParameterValue):
+                cur.execute("select phase from app.custody_operation_commit_verified_seal(%s,%s,'test','runner-final')", (op_id, Jsonb(verified["items"])))
             cur.execute("rollback to savepoint mismatched_verified")
             cur.execute("select count(*) from app.evidence_manifests where operation_id=%s", (op_id,))
             assert cur.fetchone()[0] == 0
+            cur.execute("select count(*) from app.evidence_versions where custody_operation_id=%s", (op_id,))
+            assert cur.fetchone()[0] == 0
+            cur.execute("select count(*) from app.evidence_custody_events where custody_operation_id=%s", (op_id,))
+            assert cur.fetchone()[0] == 0
+            cur.execute("update app.evidence_objects set status='detected' where id=%s", (second_id,))
 
-            cur.execute("select result from app.custody_operation_commit_verified_seal(%s,%s,'test')", (op_id, Jsonb([item])))
+            cur.execute("select result from app.custody_operation_commit_verified_seal(%s,%s,'test','runner-final')", (op_id, Jsonb(verified["items"])))
             first_result = cur.fetchone()[0]
-            cur.execute("select result from app.custody_operation_commit_verified_seal(%s,%s,'test')", (op_id, Jsonb([item])))
+            cur.execute("select result from app.custody_operation_commit_verified_seal(%s,%s,'test','runner-final')", (op_id, Jsonb(verified["items"])))
             assert cur.fetchone()[0] == first_result  # response-loss replay
             cur.execute("select count(*) from app.evidence_manifests where operation_id=%s", (op_id,))
-            assert cur.fetchone()[0] == 1
+            assert cur.fetchone()[0] == 2
             cur.execute("select count(*) from app.evidence_versions where custody_operation_id=%s", (op_id,))
             assert cur.fetchone()[0] == 1
             cur.execute("select item_facts from app.evidence_manifests where operation_id=%s", (op_id,))
@@ -187,10 +202,10 @@ def test_final_commit_rollback_replay_sibling_preservation_and_grants():
             assert any(x.get("evidence_object_id") == str(sibling_id) and x.get("preserved_sibling") for x in facts)
             cur.execute("select count(*) from app.evidence_custody_events where custody_operation_id=%s and event_type='MANIFEST_SEALED'", (op_id,))
             assert cur.fetchone()[0] == 1
-            cur.execute("select has_function_privilege('public','app.custody_operation_commit_verified_seal(uuid,jsonb,text)','EXECUTE')")
+            cur.execute("select has_function_privilege('public','app.custody_operation_commit_verified_seal(uuid,jsonb,text,text)','EXECUTE')")
             assert cur.fetchone()[0] is False
-            cur.execute("select has_table_privilege('authenticated','app.custody_operations','SELECT'),has_table_privilege('authenticated','app.custody_operations','INSERT')")
-            assert cur.fetchone() == (True, False)
+            cur.execute("select has_schema_privilege('authenticated','app','USAGE'),has_table_privilege('authenticated','app.custody_operations','SELECT'),has_table_privilege('authenticated','app.custody_operations','INSERT')")
+            assert cur.fetchone() == (False, False, False)
             cur.execute("select id from auth.users order by created_at limit 1")
             auth_row = cur.fetchone()
             if auth_row:
@@ -198,16 +213,20 @@ def test_final_commit_rollback_replay_sibling_preservation_and_grants():
                 cur.execute("insert into app.case_members(case_id,operator_profile_id,role,status) values(%s,%s,'operator','active')", (case_id, intent[1]))
         conn.commit()
 
-        if auth_row:
-            with psycopg.connect(_dsn()) as rls:
-                with rls.cursor() as cur:
-                    cur.execute("set local role authenticated")
-                    cur.execute("select set_config('request.jwt.claim.sub',%s,true)", (str(auth_row[0]),))
-                    cur.execute("select count(*) from app.custody_operations where case_id=%s", (case_id,))
-                    assert cur.fetchone()[0] == 1
-                    cur.execute("select set_config('request.jwt.claim.sub',%s,true)", (str(uuid.uuid4()),))
-                    cur.execute("select count(*) from app.custody_operations where case_id=%s", (case_id,))
-                    assert cur.fetchone()[0] == 0
+        with conn.cursor() as cur:
+            for table in ("custody_operation_history", "evidence_manifests", "evidence_versions", "evidence_custody_events"):
+                for statement in (f"update app.{table} set created_at=created_at", f"delete from app.{table}", f"truncate app.{table}"):
+                    cur.execute("savepoint append_only_probe")
+                    with pytest.raises(psycopg.Error):
+                        cur.execute(statement)
+                    cur.execute("rollback to savepoint append_only_probe")
+
+        with psycopg.connect(_dsn()) as metadata:
+            with metadata.cursor() as cur:
+                cur.execute("select relrowsecurity,relforcerowsecurity from pg_class where oid='app.custody_operations'::regclass")
+                assert cur.fetchone() == (True, True)
+                cur.execute("select count(*) from pg_policies where schemaname='app' and tablename='custody_operations' and cmd='SELECT'")
+                assert cur.fetchone()[0] == 1
 
 
 def test_violation_reauth_scope_and_restart_instance_recovery_fail_closed():
@@ -227,14 +246,14 @@ def test_violation_reauth_scope_and_restart_instance_recovery_fail_closed():
         prepared, verified, item = _facts(intent)
         with conn.cursor() as cur:
             op_id, _ = _begin(cur, intent, "runner-final-violation")
-            cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s)", (op_id, Jsonb(prepared)))
-            cur.execute("select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s)", (op_id, Jsonb(verified)))
+            cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'runner-final-violation')", (op_id, Jsonb(prepared)))
+            cur.execute("select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-final-violation')", (op_id, Jsonb(verified)))
             cur.execute("update app.evidence_chain_heads set seal_status='violated',issues='[\"changed\"]' where case_id=%s", (intent[0],))
             cur.execute("savepoint final_violation")
             with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
-                cur.execute("select phase from app.custody_operation_commit_verified_seal(%s,%s,'test')", (op_id, Jsonb([item])))
+                cur.execute("select phase from app.custody_operation_commit_verified_seal(%s,%s,'test','runner-final-violation')", (op_id, Jsonb([item])))
             cur.execute("rollback to savepoint final_violation")
-            cur.execute("select phase from app.custody_operation_fail(%s,'FILESYSTEM_VERIFIED','final_violation')", (op_id,))
+            cur.execute("select phase from app.custody_operation_fail(%s,'FILESYSTEM_VERIFIED','final_violation','runner-final-violation')", (op_id,))
             assert cur.fetchone()[0] == "FAILED_RECOVERABLE"
             cur.execute("select seal_status,issues from app.evidence_chain_heads where case_id=%s", (intent[0],))
             assert cur.fetchone() == ("violated", ["changed"])
@@ -253,22 +272,38 @@ def test_violation_reauth_scope_and_restart_instance_recovery_fail_closed():
         prepared, verified, _item = _facts(intent)
         with conn.cursor() as cur:
             op_id, _ = _begin(cur, intent, "invocation-1")
-            cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s)", (op_id, Jsonb(prepared)))
-            conn.commit()  # hard interruption after durable FILESYSTEM_APPLYING
+            conn.commit()  # hard interruption at durable GATE_BLOCKED
+            assert _begin(cur, intent, "invocation-2")[1] == "GATE_BLOCKED"
+            cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'invocation-2')", (op_id, Jsonb(prepared)))
+            conn.commit()
             with pytest.raises(psycopg.Error) as same:
-                _begin(cur, intent, "invocation-1")
+                _begin(cur, intent, "invocation-2")
             assert same.value.sqlstate == "P4232"
             conn.rollback()
-            assert _begin(cur, intent, "invocation-2")[1] == "GATE_BLOCKED"
-            cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s)", (op_id, Jsonb(prepared)))
-            cur.execute("select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s)", (op_id, Jsonb(verified)))
-            conn.commit()  # hard interruption after durable FILESYSTEM_VERIFIED
+            with pytest.raises(psycopg.Error) as stale_begin:
+                _begin(cur, intent, "invocation-1")
+            assert stale_begin.value.sqlstate == "P4232"
+            conn.rollback()
+            for sql, args in (
+                ("select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'invocation-1')", (op_id, Jsonb(verified))),
+                ("select phase from app.custody_operation_fail(%s,'FILESYSTEM_APPLYING','stale','invocation-1')", (op_id,)),
+                ("select phase from app.custody_operation_commit_verified_seal(%s,%s,'test','invocation-1')", (op_id, Jsonb(verified["items"]))),
+            ):
+                with pytest.raises(psycopg.errors.SerializationFailure):
+                    cur.execute(sql, args)
+                conn.rollback()
+            cur.execute("select phase,runner_instance_id from app.custody_operations where id=%s", (op_id,))
+            assert cur.fetchone() == ("FILESYSTEM_APPLYING", "invocation-2")
             assert _begin(cur, intent, "invocation-3")[1] == "GATE_BLOCKED"
+            cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'invocation-3')", (op_id, Jsonb(prepared)))
+            cur.execute("select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'invocation-3')", (op_id, Jsonb(verified)))
+            conn.commit()  # hard interruption after durable FILESYSTEM_VERIFIED
+            assert _begin(cur, intent, "invocation-4")[1] == "GATE_BLOCKED"
             changed_verified = {
                 "items": [{**verified["items"][0], "st_ctime_ns": 999}]
             }
-            cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s)", (op_id, Jsonb(prepared)))
-            cur.execute("select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s)", (op_id, Jsonb(changed_verified)))
+            cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'invocation-4')", (op_id, Jsonb(prepared)))
+            cur.execute("select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'invocation-4')", (op_id, Jsonb(changed_verified)))
             assert cur.fetchone()[0] == "FILESYSTEM_VERIFIED"
             cur.execute("select phase,facts from app.custody_operation_history where operation_id=%s order by id", (op_id,))
             history = cur.fetchall()

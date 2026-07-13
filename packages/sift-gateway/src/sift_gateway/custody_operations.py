@@ -234,8 +234,8 @@ class CustodyOperationRepository:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""select {_OP_COLUMNS}
-                         from app.custody_operation_advance(%s, %s, %s, %s)""",
-                    (operation_id, expected.value, target.value, _jsonb(facts or {})),
+                         from app.custody_operation_advance(%s, %s, %s, %s, %s)""",
+                    (operation_id, expected.value, target.value, _jsonb(facts or {}), _RUNNER_INSTANCE_ID),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -251,8 +251,8 @@ class CustodyOperationRepository:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""select {_OP_COLUMNS}
-                         from app.custody_operation_fail(%s, %s, %s)""",
-                    (operation_id, expected.value, failure_code[:96]),
+                         from app.custody_operation_fail(%s, %s, %s, %s)""",
+                    (operation_id, expected.value, failure_code[:96], _RUNNER_INSTANCE_ID),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -269,8 +269,8 @@ class CustodyOperationRepository:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""select {_OP_COLUMNS}
-                         from app.custody_operation_commit_verified_seal(%s, %s, %s)""",
-                    (operation_id, _jsonb(items), examiner),
+                         from app.custody_operation_commit_verified_seal(%s, %s, %s, %s)""",
+                    (operation_id, _jsonb(items), examiner, _RUNNER_INSTANCE_ID),
                 )
                 row = cur.fetchone()
             conn.commit()

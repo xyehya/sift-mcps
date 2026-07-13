@@ -55,6 +55,7 @@ def test_new_security_definers_pin_search_path_and_revoke_public():
     ):
         assert f"revoke execute on function app.{fn}" in MIGRATION
     assert "from public,anon,authenticated" in MIGRATION
+    assert "grant select on app.custody_operations,app.custody_operation_history,app.evidence_manifests to authenticated" not in MIGRATION
 
 
 def test_restart_ownership_recovery_is_atomic_and_same_runner_conflicts():
@@ -70,6 +71,11 @@ def test_restart_ownership_recovery_is_atomic_and_same_runner_conflicts():
     assert "phase='GATE_BLOCKED'" in begin
     assert "prepared_facts_mismatch" in MIGRATION
     assert "verified_facts_mismatch" in MIGRATION
+    assert "v_op.phase='GATE_BLOCKED' and v_op.runner_instance_id<>p_runner_instance_id" in begin
+    assert MIGRATION.count("runner_instance_id<>p_runner_instance_id") >= 3
+    assert "and runner_instance_id=p_runner_instance_id" in MIGRATION
+    assert "retired_runner_instance_ids ? p_runner_instance_id" in begin
+    assert "retired_runner_instance_ids||jsonb_build_array" in begin
 
 
 def test_reauth_violation_and_verified_items_are_db_authority_checks():

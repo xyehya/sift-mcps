@@ -61,6 +61,7 @@ class FakeEvidenceDB:
         self._objects = objects if objects is not None else []
         self.reauth_calls: list = []
         self.seal_calls: list = []
+        self.resume_calls: list = []
         self.ignore_calls: list = []
         self.retire_calls: list = []
         self.delete_calls: list = []
@@ -88,7 +89,11 @@ class FakeEvidenceDB:
         assert reauth_audit_event_id, "seal must receive a re-auth audit event id"
         self.seal_calls.append((case_id, file_specs, reauth_audit_event_id))
         self.seal_status = "sealed"
-        return {"manifest_version": 1, "seal_status": "sealed"}
+        return {"seal_status": "sealed", "manifest_version": 1}
+
+    def resume_seal(self, *, case_id, operation_id, actor, examiner):
+        self.resume_calls.append((case_id, operation_id, examiner))
+        return {"seal_status": "sealed", "manifest_version": 2, "operation_id": operation_id}
 
     def ignore(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
         assert reauth_audit_event_id
@@ -406,6 +411,18 @@ class TestEvidenceChainSeal:
         data = resp.json()
         assert data["manifest_version"] == 1
         assert "evidence/disk.raw" in data["files_added"]
+
+    def test_resume_uses_server_operation_id_after_fresh_reauth(self, authed_client, evidence_db):
+        resp = authed_client.post(
+            "/api/evidence/chain/seal/resume",
+            json={"password": GOOD_PASSWORD, "operation_id": "33333333-3333-3333-3333-333333333333"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["manifest_version"] == 2
+        assert evidence_db.resume_calls == [
+            (_CASE_ID, "33333333-3333-3333-3333-333333333333", "alice")
+        ]
+        assert evidence_db.reauth_calls[-1][2] == "evidence_seal_resume"
 
     def test_seal_wrong_password_returns_401(self, authed_client, evidence_db):
         resp = authed_client.post(

@@ -16,6 +16,7 @@ create table app.custody_operations (
   failed_from_phase text null,
   failure_code text null,
   runner_instance_id text not null,
+  retired_runner_instance_ids jsonb not null default '[]'::jsonb,
   prepared_facts jsonb not null default '{}'::jsonb,
   verified_facts jsonb not null default '{}'::jsonb,
   result jsonb null,
@@ -164,7 +165,16 @@ begin
     if v_op.request_digest <> p_request_digest then
       raise exception 'idempotency_key_reused' using errcode='P4231';
     end if;
-    if v_op.phase in ('FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED') then
+    if v_op.retired_runner_instance_ids ? p_runner_instance_id then
+      raise exception 'custody_operation_retired_runner' using errcode='P4232';
+    end if;
+    if v_op.phase='GATE_BLOCKED' and v_op.runner_instance_id<>p_runner_instance_id then
+      update app.custody_operations set runner_instance_id=p_runner_instance_id,
+        retired_runner_instance_ids=retired_runner_instance_ids||jsonb_build_array(v_op.runner_instance_id),updated_at=now()
+        where id=v_op.id and phase='GATE_BLOCKED' returning * into v_op;
+      insert into app.custody_operation_history(operation_id,phase,facts)
+        values(v_op.id,'GATE_BLOCKED',jsonb_build_object('runner_claimed',true));
+    elsif v_op.phase in ('FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED') then
       if v_op.runner_instance_id=p_runner_instance_id then
         raise exception 'custody_operation_same_runner_active' using errcode='P4232';
       end if;
@@ -178,6 +188,8 @@ begin
     if v_op.phase='FAILED_RECOVERABLE' then
       update app.custody_operations set phase='GATE_BLOCKED', failure_code=null,
         runner_instance_id=p_runner_instance_id,
+        retired_runner_instance_ids=case when runner_instance_id=p_runner_instance_id
+          then retired_runner_instance_ids else retired_runner_instance_ids||jsonb_build_array(runner_instance_id) end,
         verified_facts=case when failed_from_phase='FILESYSTEM_VERIFIED'
           then '{}'::jsonb else verified_facts end,
         updated_at=now()
@@ -205,13 +217,13 @@ begin
 end $$;
 
 create or replace function app.custody_operation_advance(
-  p_operation_id uuid,p_expected text,p_target text,p_facts jsonb default '{}'::jsonb
+  p_operation_id uuid,p_expected text,p_target text,p_facts jsonb,p_runner_instance_id text
 ) returns app.custody_operations
 language plpgsql security definer set search_path=pg_catalog,app as $$
 declare v_op app.custody_operations;
 begin
   select * into v_op from app.custody_operations where id=p_operation_id for update;
-  if not found or v_op.phase<>p_expected then
+  if not found or v_op.phase<>p_expected or v_op.runner_instance_id<>p_runner_instance_id then
     raise exception 'custody_operation_phase_conflict' using errcode='serialization_failure';
   end if;
   if not ((p_expected='GATE_BLOCKED' and p_target='FILESYSTEM_APPLYING') or
@@ -236,14 +248,15 @@ begin
 end $$;
 
 create or replace function app.custody_operation_fail(
-  p_operation_id uuid,p_expected text,p_failure_code text
+  p_operation_id uuid,p_expected text,p_failure_code text,p_runner_instance_id text
 ) returns app.custody_operations
 language plpgsql security definer set search_path=pg_catalog,app as $$
 declare v_op app.custody_operations;
 begin
   update app.custody_operations set phase='FAILED_RECOVERABLE',failed_from_phase=p_expected,
     failure_code=left(regexp_replace(coalesce(p_failure_code,'failure'),'[^a-zA-Z0-9_.-]','','g'),96),
-    updated_at=now() where id=p_operation_id and phase=p_expected returning * into v_op;
+    updated_at=now() where id=p_operation_id and phase=p_expected
+      and runner_instance_id=p_runner_instance_id returning * into v_op;
   if not found then
     raise exception 'custody_operation_phase_conflict' using errcode='serialization_failure';
   end if;
@@ -289,7 +302,7 @@ begin
 end $$;
 
 create or replace function app.custody_operation_commit_verified_seal(
-  p_operation_id uuid,p_items jsonb,p_examiner text
+  p_operation_id uuid,p_items jsonb,p_examiner text,p_runner_instance_id text
 ) returns app.custody_operations
 language plpgsql security definer set search_path=pg_catalog,app as $$
 declare v_op app.custody_operations; v_head app.evidence_chain_heads; v_item jsonb;
@@ -297,6 +310,8 @@ declare v_op app.custody_operations; v_head app.evidence_chain_heads; v_item jso
   v_manifest_hash text; v_new_facts jsonb; v_facts jsonb; v_result jsonb; v_manifest_id uuid;
 begin
   select * into v_op from app.custody_operations where id=p_operation_id for update;
+  if v_op.runner_instance_id<>p_runner_instance_id then
+    raise exception 'custody_operation_runner_conflict' using errcode='serialization_failure'; end if;
   if v_op.phase='COMPLETED' then return v_op; end if;
   if v_op.phase<>'FILESYSTEM_VERIFIED' or jsonb_typeof(p_items)<>'array' or jsonb_array_length(p_items)=0 then
     raise exception 'verified_seal_required' using errcode='invalid_parameter_value'; end if;
@@ -379,16 +394,15 @@ begin
 end $$;
 
 revoke all on app.custody_operations,app.custody_operation_history,app.evidence_manifests from public,anon,authenticated;
-grant select on app.custody_operations,app.custody_operation_history,app.evidence_manifests to authenticated;
 revoke execute on function app.custody_operation_begin_or_resume(uuid,text,jsonb,text,text,uuid,text,uuid,uuid,text) from public,anon,authenticated;
-revoke execute on function app.custody_operation_advance(uuid,text,text,jsonb) from public,anon,authenticated;
-revoke execute on function app.custody_operation_fail(uuid,text,text) from public,anon,authenticated;
+revoke execute on function app.custody_operation_advance(uuid,text,text,jsonb,text) from public,anon,authenticated;
+revoke execute on function app.custody_operation_fail(uuid,text,text,text) from public,anon,authenticated;
 revoke execute on function app.evidence_append_canonical_event_v1(uuid,uuid,text,integer,text,jsonb,jsonb,jsonb) from public,anon,authenticated;
-revoke execute on function app.custody_operation_commit_verified_seal(uuid,jsonb,text) from public,anon,authenticated;
+revoke execute on function app.custody_operation_commit_verified_seal(uuid,jsonb,text,text) from public,anon,authenticated;
 do $$ begin if exists(select 1 from pg_roles where rolname='service_role') then
   grant select on app.custody_operations,app.custody_operation_history,app.evidence_manifests to service_role;
   grant execute on function app.custody_operation_begin_or_resume(uuid,text,jsonb,text,text,uuid,text,uuid,uuid,text) to service_role;
-  grant execute on function app.custody_operation_advance(uuid,text,text,jsonb) to service_role;
-  grant execute on function app.custody_operation_fail(uuid,text,text) to service_role;
-  grant execute on function app.custody_operation_commit_verified_seal(uuid,jsonb,text) to service_role;
+  grant execute on function app.custody_operation_advance(uuid,text,text,jsonb,text) to service_role;
+  grant execute on function app.custody_operation_fail(uuid,text,text,text) to service_role;
+  grant execute on function app.custody_operation_commit_verified_seal(uuid,jsonb,text,text) to service_role;
 end if; end $$;
