@@ -731,8 +731,12 @@ def test_admitted_sparse_19gib_reference_never_reads_file_content(tmp_path, monk
     monkeypatch.setattr(service, "_connect", lambda: _ResolveConnection(row))
     monkeypatch.setattr(service, "_resolve_evidence_path", lambda *_args: image)
     monkeypatch.setattr(
-        "sift_gateway.portal_services._admission_fingerprint",
-        lambda _path: (image.stat(), True),
+        "sift_core.evidence_chain.get_immutable_flag_fd",
+        lambda _fd: True,
+    )
+    monkeypatch.setattr(
+        "sift_gateway.portal_services._hash_file",
+        lambda _path: pytest.fail("admission must not hash evidence bytes"),
     )
     monkeypatch.setattr(
         os,
