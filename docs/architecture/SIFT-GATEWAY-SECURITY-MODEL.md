@@ -85,7 +85,7 @@ authority, fail-closed on outage.)*
 4. **CaseContext** — inject the DB active-case context (no env / pointer trust).
 5. **AuditEnvelope** — pre-dispatch DB audit write · fail-closed for write tools · append-only.
 6. **ProxyActiveCase** — propagate the active case to the proxied add-on backend.
-7. **EvidenceGate** — REQUIRE evidence registered + sealed + `chain_status` OK, else block. *(the hard interlock)*
+7. **EvidenceGate** — read-only reconcile mounted inventory into Postgres custody observations; REQUIRE the case-wide Custody Gate `OPEN` and every evidence input resolve to an active sealed Evidence Version, else block before dispatch. *(the hard interlock; target contract in `EVIDENCE-CUSTODY-SPEC.md`)*
 8. **ResponseGuard** — redact secrets → `[REDACTED:*]` · label untrusted output · no path/traceback leaks.
 9. **OpenSearchJobDispatch** — ingest/enrich → durable worker job, non-blocking (returns `job_id`).
 
@@ -123,14 +123,23 @@ mitigation; optional `isolation_tier` surfacing is separate agent-facing surface
 The gateway deliberately has no `CAP_CHOWN`/`CAP_FOWNER` and never repairs evidence ownership
 at seal time. `scripts/stage-evidence.sh` either copies named source bytes into the canonical
 case directory or, after a manual privileged copy, offers pathless `--prepare`: it resolves the
-DB-active *unsealed* case itself and requires its native service-owned `0755` evidence directory.
+DB-active custody-blocked case itself and requires its native service-owned `0755` evidence directory.
 It validates every direct entry, rejects non-regular/linked/untrusted entries, leaves existing
 immutable sealed files untouched, and descriptor-pins only eligible non-immutable
 `root`/service-owned regular files before changing them to the service account and `0644`.
 It does not register, seal, or make files immutable; the re-auth gated portal Seal does that.
-Thus adding a new file invalidates the case and blocks agents, but does not require unsealing an
-unrelated sealed file. Do not expose this helper or any equivalent filesystem repair path as an
-MCP tool.
+Adding a new file must block agent dispatch without requiring an unrelated sealed file to be
+unprotected. MCP tools have zero evidence-folder mutation authority: Gateway admission may inspect
+the mounted tree read-only and persist the resulting custody observation, but only Portal/operator
+workflows may copy, repair, protect, replace, disposition, or seal evidence. Do not expose this
+helper or any equivalent filesystem/custody mutation path as an MCP tool. The canonical vocabulary,
+state model, workflows, and test contract are in `docs/architecture/EVIDENCE-CUSTODY-SPEC.md`.
+
+**Known current drift (2026-07-13):** the installed MCP evidence gate reads the persisted Postgres
+head without first reconciling the mounted inventory, and active-case containment can authorize an
+unregistered evidence path. P4.23 demonstrated a successful read of post-seal unregistered bytes.
+Until the spec's pre-dispatch reconciliation and sealed-version authorization both land, the design
+contract above is not fully enforced by code.
 
 ## VP-5 — The `run_command` jail (ceiling + floor, both deny-default)
 `run_command(command: str)` runs `shell=False`, multi-stage argv (supports `| && || ; > >> < 2>&1`)

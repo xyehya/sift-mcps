@@ -1,0 +1,5 @@
+# Operator-owned evidence custody with read-only MCP admission
+
+Protocol SIFT assigns every evidence-filesystem mutation to operator-authorized Portal workflows or fixed local helpers; MCP tools have zero authority to create, replace, rename, delete, chmod, chown, link, relabel, protect, unprotect, register, seal, retire, or recover evidence. The Gateway may inspect mounted evidence read-only before MCP dispatch and persist the resulting custody observation in Postgres, but it must deny the tool before execution when inventory or sealed-object authorization is not current. We chose this split over an MCP-accessible custody service or a file-manifest authority because operator control, Postgres authority, and an independently enforced read-only agent boundary are easier to audit and fail closed.
+
+This decision accepts a bounded pre-dispatch metadata cost and requires storage-profile-aware reconciliation. It also requires two independent agent controls: a current case-wide Custody Gate and active sealed Evidence Version authorization for every evidence path. Neither active-case containment nor a stale `OPEN` gate is sufficient.
