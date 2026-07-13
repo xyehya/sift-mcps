@@ -22,7 +22,12 @@ from opensearch_mcp.ingest import discover, ingest
 from opensearch_mcp.ingest_status import write_status
 from opensearch_mcp.manifest import sha256_file
 from opensearch_mcp.parse_csv import ingest_csv
-from opensearch_mcp.paths import build_index_pattern, sanitize_index_component, sift_dir
+from opensearch_mcp.paths import (
+    build_index_pattern,
+    normalize_case_key,
+    sanitize_index_component,
+    sift_dir,
+)
 from opensearch_mcp.tools import TOOLS
 
 logger = logging.getLogger(__name__)
@@ -1091,8 +1096,15 @@ def cmd_scan(args: argparse.Namespace) -> None:
         # bulk provenance context, and (after the run) write the authoritative
         # Postgres receipt. job_id is NULL — this is a direct, non-job ingest.
         provenance_id = str(uuid.uuid4())
+        # ``case_id`` is the directory basename (normally ``case-<key>``),
+        # whereas the index prefix uses ``normalize_case_key``.  Stamp the same
+        # normalized derived key that query-side term defense-in-depth resolves;
+        # the DB UUID remains control-plane-only and never enters this field.
         _prov_token = set_ingest_provenance(
-            {"sift.case_id": case_id, "sift.provenance_id": provenance_id}
+            {
+                "sift.case_id": normalize_case_key(case_id),
+                "sift.provenance_id": provenance_id,
+            }
         )
         try:
             result = ingest(

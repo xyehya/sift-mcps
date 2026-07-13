@@ -950,6 +950,7 @@ def opensearch_search(
         query_body = {
             "bool": {"must": [{"query_string": {"query": query}}, {"range": range_filter}]}
         }
+    query_body = case_scoped.with_case_id_term_filter(query_body, case_id, case_dir)
 
     search_body: dict = {
         "query": query_body,
@@ -1068,10 +1069,13 @@ def opensearch_count(
     if err:
         return {"error": err}
     client = _get_os()
+    query_body = case_scoped.with_case_id_term_filter(
+        {"query_string": {"query": query}}, case_id, case_dir
+    )
     result = _os_call(
         client.count,
         index=index,
-        body={"query": {"query_string": {"query": query}}},
+        body={"query": query_body},
     )
     resp = {"count": result["count"]}
     aid = audit.log(
@@ -1140,11 +1144,14 @@ def opensearch_aggregate(
     client = _get_os()
     limit = min(limit, 500)
 
+    query_body = case_scoped.with_case_id_term_filter(
+        {"query_string": {"query": query}}, case_id, case_dir
+    )
     result = _os_call(
         client.search,
         index=index,
         body={
-            "query": {"query_string": {"query": query}},
+            "query": query_body,
             "aggs": {"agg": {"terms": {"field": field, "size": limit}}},
             "size": 0,
         },
@@ -1298,6 +1305,7 @@ def opensearch_timeline(
         query_body = {
             "bool": {"must": [{"query_string": {"query": query}}, {"range": range_filter}]}
         }
+    query_body = case_scoped.with_case_id_term_filter(query_body, case_id, case_dir)
 
     result = _os_call(
         client.search,
@@ -1382,11 +1390,14 @@ def opensearch_field_values(
     client = _get_os()
     limit = min(limit, 500)
 
+    query_body = case_scoped.with_case_id_term_filter(
+        {"query_string": {"query": query}}, case_id, case_dir
+    )
     result = _os_call(
         client.search,
         index=index,
         body={
-            "query": {"query_string": {"query": query}},
+            "query": query_body,
             "aggs": {"values": {"terms": {"field": field, "size": limit}}},
             "size": 0,
         },

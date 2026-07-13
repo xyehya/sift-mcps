@@ -143,6 +143,9 @@ class TestEnsureWinlogPipeline:
             "put_pipeline must run before put_index_template(evtx) "
             "so the evtx template never references a missing pipeline"
         )
+        assert "sift-case-metadata" in client.mock_calls[put_evtx_idx].kwargs["body"].get(
+            "composed_of", []
+        )
 
     def test_refuses_on_priority_collision(self):
         client = self._mock_client_ok()

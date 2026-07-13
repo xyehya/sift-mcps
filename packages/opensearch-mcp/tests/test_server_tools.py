@@ -1700,6 +1700,70 @@ class TestCaseDirKwargNoRaiseLive:
         assert plain["values"] == injected["values"] == []
 
 
+class TestCaseIdTermFilter:
+    """P3.2: every query body carries the derived active-case consistency clause."""
+
+    @pytest.mark.parametrize(
+        ("tool", "client_method", "response"),
+        [
+            (
+                "search",
+                "search",
+                {"hits": {"total": {"value": 0}, "hits": []}},
+            ),
+            ("count", "count", {"count": 0}),
+            (
+                "aggregate",
+                "search",
+                {"hits": {"total": {"value": 0}}, "aggregations": {"agg": {"buckets": []}}},
+            ),
+            (
+                "timeline",
+                "search",
+                {
+                    "hits": {"total": {"value": 0}},
+                    "aggregations": {"timeline": {"buckets": []}},
+                },
+            ),
+            (
+                "field_values",
+                "search",
+                {
+                    "hits": {"total": {"value": 1}},
+                    "aggregations": {"values": {"buckets": [{"key": "x", "doc_count": 1}]}},
+                },
+            ),
+        ],
+    )
+    def test_gateway_uuid_resolves_to_generated_normalized_case_term(
+        self, tool, client_method, response, mock_client, tmp_path
+    ):
+        case_dir = tmp_path / "case-Foo"
+        case_dir.mkdir()
+        getattr(mock_client, client_method).return_value = response
+        common = {
+            "query": "event.code:4624",
+            "case_id": "674425ae-78ea-4c9c-9a14-3c9d0b6f900c",
+            "case_dir": str(case_dir),
+        }
+
+        if tool == "search":
+            opensearch_search(**common)
+        elif tool == "count":
+            opensearch_count(**common)
+        elif tool == "aggregate":
+            opensearch_aggregate(field="host.name", **common)
+        elif tool == "timeline":
+            opensearch_timeline(interval="1h", **common)
+        else:
+            opensearch_field_values(field="host.name", **common)
+
+        body = getattr(mock_client, client_method).call_args.kwargs["body"]
+        wrapped = body["query"]
+        assert wrapped["bool"]["filter"] == [{"term": {"sift.case_id": "foo"}}]
+        assert "event.code:4624" in str(wrapped["bool"]["must"])
+
+
 _FAKE_DURABLE_ROW = {
     "job_id": "aabb-1234-ccdd-5678",
     "job_type": "ingest",

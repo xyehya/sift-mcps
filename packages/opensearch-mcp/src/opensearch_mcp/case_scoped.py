@@ -26,18 +26,19 @@ return an empty / zero result — NEVER a cluster-wide one. This mirrors SEC-7
 ``opensearch_status``/``opensearch_shard_status`` (empty index list with no
 active case rather than enumerating every case).
 
-``sift.case_id`` term-filter (DEFERRED — see :func:`case_id_term_filter`)
-------------------------------------------------------------------------
-A ``{"term": {"sift.case_id": <case_id>}}`` query clause would be a useful
-belt-and-suspenders filter ON TOP of the index-prefix boundary. It is NOT wired
-in Phase 1 because the field is not safe to filter on yet: ``sift.case_id`` is
-stamped opportunistically by the ingest provenance channel (``bulk.py``) but is
-NOT declared in any index mapping template under ``mappings/`` (its siblings
-``sift.source_file``/``sift.ingest_audit_id`` ARE), so it falls to dynamic
-mapping and is not guaranteed to be a ``keyword`` a ``term`` query would match.
-Adding the clause today would be inert-or-incorrect. Closing this needs a mapping
-migration declaring ``sift.case_id: keyword`` + a backfill, tracked as Phase 2.
-The index-prefix boundary is the enforced isolation primitive in the meantime.
+``sift.case_id`` term-filter (defense in depth)
+------------------------------------------------
+A ``{"term": {"sift.case_id": <case-key>}}`` clause is applied on top of the
+index-prefix boundary for every case-scoped query.  The field is stamped by the
+ingest provenance channel and declared as a ``keyword`` by the shared case
+metadata component template.  ``case_id`` supplied by the Gateway is an opaque
+database UUID, whereas the index and ingest value use the case-directory key, so
+the helper resolves that key from the injected active-case directory.  It must
+never compare the UUID to the derived field.
+
+Existing indices are handled by the operator-only ``case_id_backfill`` module.
+The prefix remains the authorization/isolation primitive; this clause is a
+derived-data consistency check and must not be repurposed as authorization.
 """
 
 from __future__ import annotations
@@ -171,13 +172,34 @@ def strip_case_prefix(index: str, prefix: str) -> str:
     return index[len(prefix):] if index.startswith(prefix) else index
 
 
-def case_id_term_filter(case_id: str) -> dict[str, Any] | None:
-    """DEFERRED defense-in-depth ``sift.case_id`` term clause — returns ``None``.
+def case_id_term_filter(case_id: str = "", case_dir: str = "") -> dict[str, Any] | None:
+    """Return the active case-key's keyword term filter, or ``None`` standalone.
 
-    Intentionally a no-op in Phase 1. See the module docstring: ``sift.case_id``
-    is not declared ``keyword`` in any mapping template, so a ``term`` filter on
-    it is not guaranteed to match and must not be relied on for isolation. This
-    stub marks the single place to wire the clause once a mapping migration lands
-    (Phase 2); until then the index-prefix boundary is the enforced primitive.
+    Gateway calls receive the opaque database UUID in ``case_id`` and the
+    authoritative case directory in ``case_dir``.  Indexed documents carry the
+    directory-derived case key, so resolve the prefix first and extract that key.
+    A standalone caller with no resolvable case keeps the existing compatibility
+    behavior (no derived term clause); agent calls are always gateway-bound.
     """
-    return None
+    prefix = resolve_active_case_prefix(case_id, case_dir)
+    if not prefix or not prefix.startswith("case-") or not prefix.endswith("-"):
+        return None
+    case_key = prefix.removeprefix("case-").removesuffix("-")
+    if not case_key:
+        return None
+    return {"term": {"sift.case_id": case_key}}
+
+
+def with_case_id_term_filter(
+    query: Mapping[str, Any], case_id: str = "", case_dir: str = ""
+) -> dict[str, Any]:
+    """Wrap a query with the active case's derived ``sift.case_id`` filter.
+
+    The original query remains in ``must`` so user-supplied query syntax cannot
+    escape the generated filter.  Absence of an active case is a standalone-only
+    compatibility case; the Gateway supplies authoritative context for agents.
+    """
+    term_filter = case_id_term_filter(case_id, case_dir)
+    if term_filter is None:
+        return dict(query)
+    return {"bool": {"must": [dict(query)], "filter": [term_filter]}}

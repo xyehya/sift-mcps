@@ -25,8 +25,11 @@ _EVTX_TEMPLATE_FILE = _MAPPINGS_DIR / "evtx_ecs_template.json"
 # OpenSearch rejects composable PUT if referenced components don't yet
 # exist. See install_component_templates() below.
 _COMPONENT_TEMPLATES_REGISTRY: list[tuple[str, str]] = [
+    ("sift-case-metadata", "case_metadata.json"),
     ("sift-json-type-stability", "json_type_stability.json"),
 ]
+
+_CASE_METADATA_COMPONENT = "sift-case-metadata"
 
 _PIPELINE_ID = "winlog_data_normalize_v1"
 # Canonical evtx template name. Earlier versions installed under "sift-evtx";
@@ -65,6 +68,15 @@ _TEMPLATES_REGISTRY: list[tuple[str, str]] = [
 
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text())
+
+
+def _compose_case_metadata(body: dict[str, Any]) -> dict[str, Any]:
+    """Attach the common derived case-ID mapping without mutating disk JSON."""
+    composed_of = list(body.get("composed_of") or [])
+    if _CASE_METADATA_COMPONENT not in composed_of:
+        composed_of.append(_CASE_METADATA_COMPONENT)
+    body["composed_of"] = composed_of
+    return body
 
 
 def install_component_templates(client) -> dict[str, Any]:
@@ -130,7 +142,7 @@ def install_all_templates(client) -> dict[str, Any]:
             results["skipped"].append(tpl_name)
             continue
         try:
-            body = _load_json(path)
+            body = _compose_case_metadata(_load_json(path))
             client.indices.put_index_template(name=tpl_name, body=body)
             results["installed"].append(tpl_name)
         except Exception as e:
@@ -295,7 +307,7 @@ def ensure_winlog_pipeline(client) -> dict[str, Any]:
             client.indices.delete_index_template(name=_LEGACY_TEMPLATE_NAME, ignore=[404])
         except Exception as _legacy_e:
             logger.debug("legacy evtx template delete non-fatal: %s", _legacy_e)
-        template_body = _load_json(_EVTX_TEMPLATE_FILE)
+        template_body = _compose_case_metadata(_load_json(_EVTX_TEMPLATE_FILE))
         client.indices.put_index_template(name=_TEMPLATE_NAME, body=template_body)
 
         # 5. Legacy re-ingest guard (non-fatal).

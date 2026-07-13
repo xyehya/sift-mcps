@@ -1,0 +1,16 @@
+{
+  "template": {
+    "mappings": {
+      "properties": {
+        "sift.case_id": {
+          "type": "keyword",
+          "ignore_above": 1024
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Derived case-key metadata stamped on every OpenSearch ingest. This is defense in depth; Postgres active-case authority and the case index prefix remain authoritative.",
+    "version": 1
+  }
+}
