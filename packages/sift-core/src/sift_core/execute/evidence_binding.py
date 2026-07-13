@@ -2,15 +2,66 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import stat
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 from sift_core.evidence_chain import get_immutable_flag_fd
 
 
-def validate_binding_fd(fd: int, binding: dict[str, Any]) -> os.stat_result:
+class AdmittedEvidenceBinding(TypedDict, total=False):
+    ref: str
+    evidence_id: str
+    version_id: str
+    display_path: str
+    path: str
+    sha256: str
+    bytes: int
+    st_dev: int
+    st_ino: int
+    st_mtime_ns: int
+    st_ctime_ns: int
+    immutable_required: bool
+
+
+InventoryIdentity = tuple[str, int, int, int, int, int, int, int]
+
+
+def inventory_identity_rows(case_dir: str) -> list[InventoryIdentity]:
+    """Return the shared pure direct-entry identity scan for custody freshness."""
+    evidence_dir = Path(case_dir).resolve() / "evidence"
+    rows: list[InventoryIdentity] = []
+    with os.scandir(evidence_dir) as entries:
+        for entry in sorted(entries, key=lambda item: item.name):
+            st = entry.stat(follow_symlinks=False)
+            rows.append(
+                (
+                    entry.name,
+                    st.st_mode,
+                    st.st_dev,
+                    st.st_ino,
+                    st.st_size,
+                    st.st_mtime_ns,
+                    st.st_ctime_ns,
+                    st.st_nlink,
+                )
+            )
+    return rows
+
+
+def inventory_token(case_dir: str) -> str:
+    material = json.dumps(
+        inventory_identity_rows(case_dir), separators=(",", ":"), ensure_ascii=True
+    ).encode()
+    return hashlib.sha256(material).hexdigest()
+
+
+def validate_binding_fd(
+    fd: int, binding: AdmittedEvidenceBinding
+) -> os.stat_result:
     """Validate a pinned descriptor against the Gateway admission fingerprint."""
     current = os.fstat(fd)
     if not stat.S_ISREG(current.st_mode) or current.st_nlink != 1:
@@ -36,7 +87,7 @@ def validate_binding_fd(fd: int, binding: dict[str, Any]) -> os.stat_result:
     return current
 
 
-def open_bound_evidence(bindings: list[dict[str, Any]]) -> dict[str, int]:
+def open_bound_evidence(bindings: list[AdmittedEvidenceBinding]) -> dict[str, int]:
     """Open and validate every admitted path without following symlinks."""
     opened: dict[str, int] = {}
     try:
@@ -84,6 +135,11 @@ def rewrite_bound_operands(
         lexical_path = os.path.abspath(os.path.normpath(candidate))
         fd = opened.get(lexical_path)
         if fd is None:
+            # Evidence symlink aliases are unsupported. If a different lexical
+            # operand resolves to an admitted file, fail closed instead of
+            # letting the tool reopen the alias pathname after authorization.
+            if os.path.realpath(lexical_path) in opened:
+                raise ValueError("evidence symlink aliases are not supported")
             return value
         fd_root = "/proc/self/fd" if Path("/proc/self/fd").is_dir() else "/dev/fd"
         return f"{prefix}{fd_root}/{fd}"

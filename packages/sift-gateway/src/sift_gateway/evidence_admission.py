@@ -8,20 +8,22 @@ bytes or metadata.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-_ADMITTED_REFS: ContextVar[tuple[dict[str, Any], ...]] = ContextVar(
+from sift_core.execute.evidence_binding import (
+    AdmittedEvidenceBinding,
+)
+
+_ADMITTED_REFS: ContextVar[tuple[AdmittedEvidenceBinding, ...]] = ContextVar(
     "sift_gateway_admitted_evidence_refs", default=()
 )
 _INVENTORY_TOKEN: ContextVar[str] = ContextVar("sift_gateway_inventory_token", default="")
 
 
-def current_admitted_refs() -> list[dict[str, Any]]:
+def current_admitted_refs() -> list[AdmittedEvidenceBinding]:
     """Return a defensive copy of the references bound to this dispatch."""
     return [dict(item) for item in _ADMITTED_REFS.get()]
 
@@ -30,7 +32,7 @@ def current_inventory_token() -> str:
     return _INVENTORY_TOKEN.get()
 
 
-def bind_admitted_refs(refs: list[dict[str, Any]], *, inventory_token: str):
+def bind_admitted_refs(refs: list[AdmittedEvidenceBinding], *, inventory_token: str):
     """Bind authorized references for the duration of one middleware call."""
     return (
         _ADMITTED_REFS.set(tuple(dict(item) for item in refs)),
@@ -44,30 +46,7 @@ def reset_admitted_refs(token: Any) -> None:
     _INVENTORY_TOKEN.reset(inventory_token)
 
 
-def inventory_token(case_dir: str) -> str:
-    """Return a cheap deterministic token for direct evidence membership/identity."""
-    evidence_dir = Path(case_dir).resolve() / "evidence"
-    rows: list[tuple[Any, ...]] = []
-    with os.scandir(evidence_dir) as entries:
-        for entry in sorted(entries, key=lambda item: item.name):
-            st = entry.stat(follow_symlinks=False)
-            rows.append(
-                (
-                    entry.name,
-                    st.st_mode,
-                    st.st_dev,
-                    st.st_ino,
-                    st.st_size,
-                    st.st_mtime_ns,
-                    st.st_ctime_ns,
-                    st.st_nlink,
-                )
-            )
-    material = json.dumps(rows, separators=(",", ":"), ensure_ascii=True).encode()
-    return hashlib.sha256(material).hexdigest()
-
-
-def serialize_resolved_ref(item: dict[str, Any]) -> dict[str, Any]:
+def serialize_resolved_ref(item: AdmittedEvidenceBinding) -> AdmittedEvidenceBinding:
     """Keep a private evidence-version binding JSON-safe and explicit."""
     keys = (
         "ref",
@@ -135,12 +114,15 @@ def command_evidence_references(
         candidate = Path(value)
         if not candidate.is_absolute():
             candidate = cwd / candidate
+        lexical = Path(os.path.abspath(os.path.normpath(candidate)))
         try:
             resolved = candidate.resolve(strict=False)
         except OSError:
-            resolved = candidate.absolute()
+            resolved = lexical
         if not resolved.is_relative_to(evidence_root):
             continue
+        if lexical != resolved:
+            raise ValueError("evidence symlink aliases are not supported")
         rel = resolved.relative_to(case_root).as_posix()
         if rel not in found:
             found.append(rel)

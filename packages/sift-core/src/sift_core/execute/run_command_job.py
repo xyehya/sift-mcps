@@ -13,6 +13,7 @@ from sift_common.audit import AuditWriter
 
 from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
 from sift_core.agent_tools import _run_command
+from sift_core.execute.evidence_binding import inventory_token as _inventory_token
 from sift_core.execute.job_worker import (
     ClaimedJob,
     FatalJobError,
@@ -95,29 +96,6 @@ def build_custody_validator(dsn: str):
     return validate
 
 
-def _inventory_token(case_dir: str) -> str:
-    evidence_dir = Path(case_dir).resolve() / "evidence"
-    rows: list[tuple[Any, ...]] = []
-    with os.scandir(evidence_dir) as entries:
-        for entry in sorted(entries, key=lambda item: item.name):
-            st = entry.stat(follow_symlinks=False)
-            rows.append(
-                (
-                    entry.name,
-                    st.st_mode,
-                    st.st_dev,
-                    st.st_ino,
-                    st.st_size,
-                    st.st_mtime_ns,
-                    st.st_ctime_ns,
-                    st.st_nlink,
-                )
-            )
-    return hashlib.sha256(
-        json.dumps(rows, separators=(",", ":"), ensure_ascii=True).encode()
-    ).hexdigest()
-
-
 def _record_inventory_change(cur: Any, job: ClaimedJob, case_dir: str) -> None:
     """Persist read-only worker observations before denying a stale durable job."""
     evidence_dir = Path(case_dir).resolve() / "evidence"
@@ -140,8 +118,14 @@ def _record_inventory_change(cur: Any, job: ClaimedJob, case_dir: str) -> None:
                 safe = False
             if rel not in known:
                 cur.execute(
-                    "select app.evidence_detect(%s, %s, %s, %s, null, null)",
-                    (job.case_id, rel, entry.name, st.st_size if st else None),
+                    "select app.evidence_observe_admission(%s, %s, %s, %s, %s, null, null)",
+                    (
+                        job.case_id,
+                        rel,
+                        entry.name,
+                        st.st_size if st else None,
+                        str(job.job_id),
+                    ),
                 )
                 detected = cur.fetchone()
                 if not safe:

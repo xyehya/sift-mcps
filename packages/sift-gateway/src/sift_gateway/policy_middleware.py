@@ -23,6 +23,7 @@ from sift_core.active_case_context import (
 )
 from sift_core.agent_tools import core_tool_names
 from sift_core.evidence_chain import ChainStatus
+from sift_core.execute.evidence_binding import AdmittedEvidenceBinding, inventory_token
 
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
 from sift_gateway.audit_helpers import (
@@ -36,7 +37,6 @@ from sift_gateway.audit_helpers import (
 from sift_gateway.evidence_admission import (
     bind_admitted_refs,
     command_evidence_references,
-    inventory_token,
     reset_admitted_refs,
 )
 from sift_gateway.evidence_gate import (
@@ -647,29 +647,33 @@ class EvidenceGateMiddleware(Middleware):
         if not gate["blocked"]:
             refs: list[str] = []
             args = _tool_args(context)
-            if name in {"run_command", "run_command_job"}:
-                declared = args.get("evidence_refs")
-                if isinstance(declared, str):
-                    refs.append(declared)
-                elif isinstance(declared, (list, tuple)):
-                    refs.extend(str(item) for item in declared if str(item).strip())
-                refs.extend(
-                    command_evidence_references(
-                        args.get("command"),
-                        case_dir=str(case.artifact_path or ""),
-                        working_dir=args.get("working_dir"),
-                    )
-                )
-            admitted: list[dict[str, Any]] = []
+            admitted: list[AdmittedEvidenceBinding] = []
             resolver = getattr(service, "resolve_evidence_reference", None)
             try:
+                if name in {"run_command", "run_command_job"}:
+                    declared = args.get("evidence_refs")
+                    if isinstance(declared, str):
+                        refs.append(declared)
+                    elif isinstance(declared, (list, tuple)):
+                        refs.extend(
+                            str(item) for item in declared if str(item).strip()
+                        )
+                    refs.extend(
+                        command_evidence_references(
+                            args.get("command"),
+                            case_dir=str(case.artifact_path or ""),
+                            working_dir=args.get("working_dir"),
+                        )
+                    )
                 for ref in dict.fromkeys(refs):
                     if not callable(resolver):
                         raise RuntimeError("evidence resolver unavailable")
                     item = resolver(case.case_id, ref)
                     if not isinstance(item, dict):
                         raise RuntimeError("evidence resolver returned invalid data")
-                    admitted.append({"ref": ref, **item})
+                    admitted.append(
+                        cast(AdmittedEvidenceBinding, {"ref": ref, **item})
+                    )
             except Exception:
                 logger.info("evidence_admission: sealed-version authorization denied")
                 gate = {

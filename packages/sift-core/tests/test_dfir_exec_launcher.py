@@ -359,3 +359,41 @@ def test_launcher_pins_admitted_inode_before_landlock_and_exec(tmp_path, monkeyp
     assert captured["bytes"] == b"admitted"
     assert target.read_bytes() == b"replacement"
     assert captured["argv"][1].startswith(("/proc/self/fd/", "/dev/fd/"))
+
+
+def test_launcher_rejects_symlink_alias_to_admitted_evidence(tmp_path, monkeypatch):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    target = evidence / "sealed.raw"
+    target.write_bytes(b"sealed")
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    alias = agent / "alias.raw"
+    alias.symlink_to(target)
+    st = target.stat()
+    binding = {
+        "path": str(target),
+        "bytes": st.st_size,
+        "st_dev": st.st_dev,
+        "st_ino": st.st_ino,
+        "st_mtime_ns": st.st_mtime_ns,
+        "st_ctime_ns": st.st_ctime_ns,
+        "immutable_required": False,
+    }
+    exec_called = False
+
+    monkeypatch.setattr(launcher, "_close_inherited_fds", lambda: None)
+
+    def fake_execvpe(*_args):
+        nonlocal exec_called
+        exec_called = True
+
+    monkeypatch.setattr(launcher.os, "execvpe", fake_execvpe)
+
+    with pytest.raises(ValueError, match="symlink aliases"):
+        launcher._prepare_and_exec(
+            {"cwd": str(tmp_path), "evidence_bindings": [binding]},
+            ["/bin/cat", str(alias)],
+        )
+
+    assert exec_called is False

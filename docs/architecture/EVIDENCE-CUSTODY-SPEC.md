@@ -139,6 +139,7 @@ stateDiagram-v2
 - Full SHA-256 is mandatory at Seal, Replace/Reacquire completion, exact restoration, Full Verify Evidence, Proof Export, and external remount/reconnect recovery.
 - A same-size change cannot be considered safe merely because a cheap fingerprint matches. The implementation must use a trustworthy change token/fingerprint strategy for the selected storage profile or block for full verification.
 - New entries produce `BLOCKED_PENDING`; sealed-object loss/change or ledger/signature failure produces `BLOCKED_VIOLATION`; whole-storage loss or required signing-authority outage produces `BLOCKED_UNAVAILABLE`.
+- Each admission-created custody observation stores the same opaque correlation ID used by the general MCP audit envelope (or the durable job ID at worker revalidation). This links the append-only custody and audit/job ledgers without reusing the human re-authentication linkage field.
 
 ### Operator actions and disposition
 

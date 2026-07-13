@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
 import pytest
 import sift_core.agent_tools as agent_tools
@@ -335,8 +336,8 @@ def test_run_command_accepts_gateway_resolved_db_evidence_ref_without_manifest(
                         "bytes": ev.stat().st_size,
                         "st_dev": ev.stat().st_dev,
                         "st_ino": ev.stat().st_ino,
-                            "st_mtime_ns": ev.stat().st_mtime_ns,
-                            "st_ctime_ns": ev.stat().st_ctime_ns,
+                        "st_mtime_ns": ev.stat().st_mtime_ns,
+                        "st_ctime_ns": ev.stat().st_ctime_ns,
                     }
                 ],
             },
@@ -350,6 +351,86 @@ def test_run_command_accepts_gateway_resolved_db_evidence_ref_without_manifest(
     blob = json.dumps(out)
     assert str(case_dir) not in blob
     assert str(ev) not in blob
+
+
+def test_gateway_admitted_provenance_uses_bound_db_sha_without_path_reopen(
+    tmp_path, monkeypatch
+):
+    from sift_core.execute import evidence_binding
+
+    case_dir = tmp_path / "case-db-provenance"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "CASE.yaml").write_text("case_id: DB-002\nexaminer: analyst\n")
+    evidence = case_dir / "evidence" / "sealed.raw"
+    evidence.write_bytes(b"admitted bytes")
+    admitted_stat = evidence.stat()
+    admitted_sha = "sha256:" + hashlib.sha256(b"admitted bytes").hexdigest()
+    replacement = case_dir / "replacement.raw"
+    replacement.write_bytes(b"replacement bytes")
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    monkeypatch.setenv("SIFT_EXAMINER", "analyst")
+
+    real_validate = evidence_binding.validate_binding_fd
+
+    def validate_then_replace(fd, binding):
+        result = real_validate(fd, binding)
+        os.replace(replacement, evidence)
+        return result
+
+    monkeypatch.setattr(evidence_binding, "validate_binding_fd", validate_then_replace)
+    monkeypatch.setattr(
+        agent_tools,
+        "open",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Gateway-admitted provenance must not reopen evidence content"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        agent_tools,
+        "_execute_command",
+        lambda *_args, **_kwargs: {
+            "exit_code": 0,
+            "stdout": "ok\n",
+            "stderr": "",
+            "stdout_total_bytes": 3,
+        },
+    )
+    binding = {
+        "evidence_id": "ev-2",
+        "version_id": "ver-2",
+        "display_path": "evidence/sealed.raw",
+        "path": str(evidence),
+        "sha256": admitted_sha,
+        "bytes": admitted_stat.st_size,
+        "st_dev": admitted_stat.st_dev,
+        "st_ino": admitted_stat.st_ino,
+        "st_mtime_ns": admitted_stat.st_mtime_ns,
+        "st_ctime_ns": admitted_stat.st_ctime_ns,
+        "immutable_required": False,
+    }
+    context = ActiveCaseContext(
+        case_id="11111111-1111-1111-1111-111111111112",
+        case_key="DB-002",
+        artifact_path=str(case_dir),
+        db_active=True,
+    )
+
+    with use_active_case_context(context):
+        result = _run_command(
+            {
+                "command": "cat evidence/sealed.raw",
+                "purpose": "bound provenance",
+                "evidence_refs": ["ev-2"],
+                "_resolved_evidence_refs": [binding],
+            },
+            examiner="analyst",
+            audit=AuditWriter(mcp_name="sift-core"),
+        )
+
+    assert result["success"] is True
+    assert result["provenance"]["input_sha256s"] == [admitted_sha]
+    assert evidence.read_bytes() == b"replacement bytes"
 
 
 def test_run_command_saved_output_uses_db_active_case_not_stale_env(

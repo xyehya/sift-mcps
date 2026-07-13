@@ -20,7 +20,7 @@ class _Cursor:
         self.calls.append((normalized, params))
         if "from app.evidence_objects where case_id" in normalized:
             self._all = []
-        elif "app.evidence_detect" in normalized:
+        elif "app.evidence_observe_admission" in normalized:
             self._one = ("detected-object",)
         elif "app.evidence_gate_status" in normalized:
             self._one = ("sealed",)
@@ -102,10 +102,15 @@ def test_durable_revalidation_records_force_added_sibling_before_denial(tmp_path
     with pytest.raises(FatalJobError, match="custody_admission_denied"):
         build_custody_validator("postgresql://unused")(_job(case_dir, token), "claim")
 
-    detects = [call for call in cursor.calls if "app.evidence_detect" in call[0]]
+    detects = [
+        call for call in cursor.calls if "app.evidence_observe_admission" in call[0]
+    ]
     assert len(detects) == 1
     assert detects[0][1][1] == "evidence/force-added.raw"
-    assert any("app.evidence_detect" in call[0] for call in connection.committed)
+    assert detects[0][1][4] == "job-1"
+    assert any(
+        "app.evidence_observe_admission" in call[0] for call in connection.committed
+    )
     assert not any("app.evidence_gate_status" in call[0] for call in cursor.calls)
 
 

@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastmcp import FastMCP
+from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
 from sift_core.evidence_chain import ChainStatus
 from sift_gateway.active_case import ActiveCase
+from sift_gateway.identity import Identity
 from sift_gateway.policy_middleware import gateway_policy_middlewares
 from sift_gateway.portal_services import (
     EvidenceAuthorityService,
@@ -19,6 +22,18 @@ from sift_gateway.portal_services import (
 
 def _tree_snapshot(root, target):
     st = target.stat(follow_symlinks=False)
+    inode_flags = getattr(st, "st_flags", None)
+    if sys.platform.startswith("linux"):
+        import ctypes
+        import fcntl
+
+        value = ctypes.c_int(0)
+        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            fcntl.ioctl(fd, 0x80086601, value)
+            inode_flags = value.value
+        finally:
+            os.close(fd)
     if hasattr(os, "listxattr") and hasattr(os, "getxattr"):
         xattrs = {
             name: os.getxattr(target, name, follow_symlinks=False)
@@ -36,7 +51,7 @@ def _tree_snapshot(root, target):
         "uid": st.st_uid,
         "gid": st.st_gid,
         "mode": st.st_mode,
-        "flags": getattr(st, "st_flags", None),
+        "flags": inode_flags,
         "nlink": st.st_nlink,
         "xattrs": xattrs,
     }
@@ -220,8 +235,29 @@ async def test_authenticated_catalog_has_no_custody_mutation_tools(tmp_path):
     from sift_gateway.mcp_server import create_gateway_mcp_server
 
     (tmp_path / "evidence").mkdir()
-    mcp = create_gateway_mcp_server(_gateway(tmp_path, _AdmissionService()), api_keys={})
-    names = {tool.name for tool in await mcp.list_tools()}
+    token = "test-agent-token"
+    mcp = create_gateway_mcp_server(
+        _gateway(tmp_path, _AdmissionService()),
+        api_keys={token: {"examiner": "agent", "role": "agent"}},
+    )
+    identity = Identity(
+        principal="agent",
+        principal_type="agent",
+        token_id="token-1",
+        agent_id="agent-1",
+        created_by=None,
+        role="agent",
+        source_ip="127.0.0.1",
+        auth_surface="mcp",
+        tool_scopes=frozenset({"mcp:*"}),
+        token_fingerprint="fingerprint",
+        principal_id="agent-1",
+        auth_user_id="auth-agent-1",
+    )
+    with patch(
+        "sift_gateway.policy_middleware.current_mcp_identity", return_value=identity
+    ):
+        names = {tool.name for tool in await mcp.list_tools()}
     forbidden = {
         "evidence_prepare",
         "evidence_rescan",
@@ -387,6 +423,37 @@ def test_final_process_reads_pinned_descriptor_after_path_replacement(tmp_path):
     assert target.read_bytes() == b"replacement"
 
 
+@pytest.mark.asyncio
+async def test_evidence_symlink_alias_is_denied_before_aggregate_tool(tmp_path):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    sealed = evidence / "sealed.raw"
+    sealed.write_bytes(b"sealed")
+    agent = tmp_path / "agent"
+    agent.mkdir()
+    (agent / "alias.raw").symlink_to(sealed)
+    service = _AdmissionService(case_dir=tmp_path, known={"evidence/sealed.raw"})
+    gateway = _gateway(tmp_path, service)
+    mcp = FastMCP("aggregate", middleware=gateway_policy_middlewares(gateway))
+    ran = False
+
+    @mcp.tool(name="run_command")
+    async def run_command(command: str):
+        nonlocal ran
+        ran = True
+        return command
+
+    opened = {"blocked": False, "status": ChainStatus.OK, "issues": [], "manifest_version": 3}
+    with patch("sift_gateway.policy_middleware.check_evidence_gate_db", return_value=opened), patch(
+        "sift_gateway.policy_middleware.current_mcp_identity", return_value=None
+    ):
+        result = await mcp.call_tool("run_command", {"command": "cat agent/alias.raw"})
+
+    assert ran is False
+    assert result.is_error is True
+    assert "active sealed version" in result.content[0].text
+
+
 def test_linux_final_binding_uses_proc_self_fd(tmp_path, monkeypatch):
     from sift_core.execute.evidence_binding import rewrite_bound_operands
 
@@ -404,6 +471,21 @@ def test_linux_final_binding_uses_proc_self_fd(tmp_path, monkeypatch):
         ["cat", str(target)], [], {str(target.resolve()): 19}, cwd=str(tmp_path)
     )
     assert argv[1] == "/proc/self/fd/19"
+
+
+def test_normalized_non_symlink_spelling_still_rewrites_to_pinned_fd(tmp_path):
+    from sift_core.execute.evidence_binding import rewrite_bound_operands
+
+    target = tmp_path / "evidence" / "sealed.raw"
+    target.parent.mkdir()
+    target.write_bytes(b"sealed")
+    argv, _ = rewrite_bound_operands(
+        ["cat", "evidence/../evidence/sealed.raw"],
+        [],
+        {str(target): 23},
+        cwd=str(tmp_path),
+    )
+    assert argv[1].endswith("/fd/23")
 
 
 class _Cursor:
@@ -471,6 +553,46 @@ class _ResolveConnection:
         return None
 
 
+class _ObservationCursor:
+    def __init__(self):
+        self.calls = []
+        self._one = None
+
+    def execute(self, sql, params):
+        normalized = " ".join(sql.split())
+        self.calls.append((normalized, params))
+        self._one = ("observed-evidence",) if "evidence_observe_admission" in normalized else None
+
+    def fetchall(self):
+        return []
+
+    def fetchone(self):
+        return self._one
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+
+class _ObservationConnection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def cursor(self):
+        return self._cursor
+
+    def commit(self):
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+
 def test_inventory_reconciliation_does_not_hash_large_unchanged_sibling(tmp_path, monkeypatch):
     case_dir = tmp_path / "case"
     evidence = case_dir / "evidence"
@@ -489,7 +611,12 @@ def test_inventory_reconciliation_does_not_hash_large_unchanged_sibling(tmp_path
     )
 
     result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
-    assert result == {"state": "available", "observed": 1, "issues": []}
+    assert result == {
+        "state": "available",
+        "observed": 1,
+        "issues": [],
+        "correlation_id": None,
+    }
     assert image.stat().st_size == 19 * 1024 * 1024 * 1024
 
 
@@ -565,3 +692,70 @@ def test_local_immutable_posture_drift_denies_reference(tmp_path, monkeypatch):
 
     with pytest.raises(PortalServiceError, match="evidence_posture_changed"):
         service.resolve_evidence_reference("case-1", "evidence/sealed.raw")
+
+
+def test_reconciliation_custody_observation_uses_audit_envelope_request_id(
+    tmp_path, monkeypatch
+):
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    (evidence / "new.raw").write_bytes(b"new")
+    cursor = _ObservationCursor()
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
+    context = ActiveCaseContext(
+        case_id="11111111-1111-1111-1111-111111111111",
+        case_key="case-one",
+        artifact_path=str(case_dir),
+        request_id="opaque-request-123",
+        db_active=True,
+    )
+
+    with use_active_case_context(context):
+        result = service.reconcile_for_admission(context.case_id)
+
+    observation = next(call for call in cursor.calls if "evidence_observe_admission" in call[0])
+    assert observation[1][4] == "opaque-request-123"
+    assert result["correlation_id"] == "opaque-request-123"
+
+
+@pytest.mark.asyncio
+async def test_aggregate_audit_and_custody_ledgers_share_opaque_request_id(
+    tmp_path, monkeypatch
+):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "new.raw").write_bytes(b"new")
+    cursor = _ObservationCursor()
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: tmp_path)
+    monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
+    gateway = _gateway(tmp_path, service)
+    mcp = FastMCP("aggregate", middleware=gateway_policy_middlewares(gateway))
+
+    @mcp.tool(name="run_command")
+    async def run_command(command: str):
+        return command
+
+    blocked = {
+        "blocked": True,
+        "status": ChainStatus.UNSEALED,
+        "issues": ["pending"],
+        "manifest_version": 1,
+    }
+    with patch("sift_gateway.policy_middleware.check_evidence_gate_db", return_value=blocked), patch(
+        "sift_gateway.policy_middleware.current_mcp_identity", return_value=None
+    ):
+        await mcp.call_tool("run_command", {"command": "date"})
+
+    observation = next(call for call in cursor.calls if "evidence_observe_admission" in call[0])
+    custody_correlation = observation[1][4]
+    envelope = next(
+        call
+        for call in gateway._audit.log.mock_calls
+        if call.kwargs.get("source") == "gateway_mcp_envelope"
+    )
+    assert custody_correlation
+    assert envelope.kwargs["extra"]["request_id"] == custody_correlation

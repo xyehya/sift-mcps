@@ -979,26 +979,36 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             detection_method = "none"
 
     input_hashes: dict[str, str] = {}
-    case_root_path = Path(case_root).resolve() if case_root else None
-    for fpath in detected_inputs:
-        try:
-            p = Path(fpath).resolve()
-            # Provenance collection is itself a file read.  Keep it on the
-            # same active-case floor as command arguments so parsed/stale raw
-            # paths can never turn the gateway into a host-file hash oracle.
-            if case_root_path is None or not p.is_relative_to(case_root_path):
+    if execution_evidence_bindings:
+        # DB-authority provenance is the admitted Evidence Version identity.
+        # Never reopen the pathname here: final execution consumes a separately
+        # pinned descriptor, and a pathname reopen would recreate the read/hash
+        # TOCTOU that admission is designed to close.
+        for binding in execution_evidence_bindings:
+            path = str(binding.get("path") or "")
+            sha256 = str(binding.get("sha256") or "")
+            if path and sha256:
+                input_hashes[path] = sha256
+    else:
+        case_root_path = Path(case_root).resolve() if case_root else None
+        for fpath in detected_inputs:
+            try:
+                p = Path(fpath).resolve()
+                # Legacy non-DB calls retain bounded provenance hashing under
+                # the active-case floor. Gateway-admitted refs never enter here.
+                if case_root_path is None or not p.is_relative_to(case_root_path):
+                    continue
+                if p.is_file():
+                    if p.stat().st_size > 1_000_000_000:
+                        input_hashes[str(p)] = "skipped:too_large"
+                    else:
+                        h = hashlib.sha256()
+                        with open(p, "rb") as hf:
+                            for chunk in iter(lambda: hf.read(65536), b""):
+                                h.update(chunk)
+                        input_hashes[str(p)] = h.hexdigest()
+            except OSError:
                 continue
-            if p.is_file():
-                if p.stat().st_size > 1_000_000_000:
-                    input_hashes[str(p)] = "skipped:too_large"
-                else:
-                    h = hashlib.sha256()
-                    with open(p, "rb") as hf:
-                        for chunk in iter(lambda: hf.read(65536), b""):
-                            h.update(chunk)
-                    input_hashes[str(p)] = h.hexdigest()
-        except OSError:
-            continue
 
     try:
         save_output_arg = args.get("save_output")
