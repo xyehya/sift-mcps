@@ -172,6 +172,85 @@ async def opensearch_field_catalog_resource():
     assert flagged == {("opensearch_field_catalog_resource", "search", "case-*")}
 
 
+def test_query_target_wrappers_delegate_to_case_scoped_chokepoint(monkeypatch) -> None:
+    """Fail on a revert that restores target policy inside ``server``."""
+    from opensearch_mcp import server
+
+    resolve_calls: list[tuple[str, str, str]] = []
+    validate_calls: list[tuple[str, str | None]] = []
+
+    def resolve(index: str, case_id: str, *, active_case_key: str) -> str:
+        resolve_calls.append((index, case_id, active_case_key))
+        return "case-alpha-*"
+
+    def validate(index: str, *, active_prefix: str | None) -> str | None:
+        validate_calls.append((index, active_prefix))
+        return None
+
+    monkeypatch.setattr(server.case_scoped, "resolve_query_index", resolve)
+    monkeypatch.setattr(server.case_scoped, "validate_query_index", validate)
+    monkeypatch.setattr(server, "_get_active_case", lambda: "case-alpha")
+    monkeypatch.setattr(server, "_active_index_prefix", lambda: "case-alpha-")
+
+    assert server._resolve_index("", "opaque-case-id") == "case-alpha-*"
+    assert server._validate_index("case-alpha-evtx-*") is None
+    assert resolve_calls == [("", "opaque-case-id", "case-alpha")]
+    assert validate_calls == [("case-alpha-evtx-*", "case-alpha-")]
+
+
+def test_query_tools_cannot_bypass_case_scoped_target_wrappers() -> None:
+    """Fail on a query-tool revert that reaches OpenSearch outside the chokepoint."""
+    tree = ast.parse((_SRC / "server.py").read_text(encoding="utf-8"))
+    query_tools = {
+        "opensearch_search",
+        "opensearch_count",
+        "opensearch_aggregate",
+        "opensearch_timeline",
+        "opensearch_field_values",
+    }
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in query_tools | {"opensearch_get_event"}
+    }
+    assert functions.keys() == query_tools | {"opensearch_get_event"}
+
+    def called_names(function: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+        return {
+            call.func.id
+            for call in ast.walk(function)
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+        }
+
+    def first_call_line(
+        function: ast.FunctionDef | ast.AsyncFunctionDef, name: str
+    ) -> int:
+        return min(
+            call.lineno
+            for call in ast.walk(function)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == name
+        )
+
+    for name in query_tools:
+        calls = called_names(functions[name])
+        assert {"_resolve_index", "_validate_index"} <= calls, name
+        assert first_call_line(functions[name], "_validate_index") < first_call_line(
+            functions[name], "_get_os"
+        ), name
+
+    # ``get_event`` has a Gateway-bound exact index and intentionally has no
+    # injected case context; it retains the validator defense-in-depth only.
+    get_event_calls = called_names(functions["opensearch_get_event"])
+    assert "_validate_index" in get_event_calls
+    assert "_resolve_index" not in get_event_calls
+    assert first_call_line(functions["opensearch_get_event"], "_validate_index") < first_call_line(
+        functions["opensearch_get_event"], "_get_os"
+    )
+
+
 class _FieldCatalogCat:
     def __init__(self) -> None:
         self.calls: list[str] = []

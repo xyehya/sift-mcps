@@ -42,8 +42,16 @@ The index-prefix boundary is the enforced isolation primitive in the meantime.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any
+
+from opensearch_mcp.paths import build_index_pattern
+
+_UUID_CASE_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 def resolve_active_case_prefix(case_id: str = "", case_dir: str = "") -> str | None:
@@ -66,6 +74,60 @@ def active_case_index_pattern(prefix: str) -> str:
     Use this in place of any ``case-*`` (all-cases) target.
     """
     return f"{prefix}*"
+
+
+def resolve_query_index(
+    index: str,
+    case_id: str,
+    *,
+    active_case_key: str,
+) -> str:
+    """Resolve a query target without bypassing the case-scoped chokepoint.
+
+    The Gateway normally injects an opaque database UUID as ``case_id`` and an
+    active-case directory that the backend has already reduced to
+    ``active_case_key``.  The UUID is deliberately not made into an index name;
+    a standalone caller may still provide a case key.  Callers must pair this
+    with :func:`validate_query_index` before OpenSearch I/O.
+    """
+    if index:
+        return index
+    case_key = case_id.strip()
+    if _UUID_CASE_ID_RE.fullmatch(case_key):
+        case_key = ""
+    if not case_key:
+        case_key = active_case_key.strip()
+    return build_index_pattern(case_key) if case_key else "case-*"
+
+
+def validate_query_index(index: str, *, active_prefix: str | None) -> str | None:
+    """Reject an empty, broad, system, or foreign-case query target.
+
+    With Gateway-injected active-case context, every comma-separated segment
+    must begin with that exact prefix.  Without it, preserve the standalone
+    compatibility floor that permits only ``case-`` targets; the Gateway still
+    owns authorization and complete active-case binding for agent calls.
+    """
+    if not index or not index.strip():
+        return "Index parameter must not be empty"
+    for segment in index.split(","):
+        segment = segment.strip()
+        if not segment:
+            return "Index contains an empty segment (remove stray/leading/trailing commas)"
+        if active_prefix is not None:
+            if not segment.startswith(active_prefix):
+                return (
+                    f"Index segment '{segment}' is outside the active case "
+                    "(security: cross-case access denied; allowed prefix "
+                    f"'{active_prefix}')"
+                )
+            continue
+        if not segment.startswith("case-"):
+            return (
+                f"Index segment '{segment}' must start with 'case-' "
+                "(security: blocks access to system indices)"
+            )
+    return None
 
 
 def artifact_index_pattern(prefix: str, artifact: str) -> str:

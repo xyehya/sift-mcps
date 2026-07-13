@@ -32,6 +32,7 @@ from opensearchpy.exceptions import ConnectionError as OSConnectionError
 from sift_common.audit import AuditWriter
 from sift_core.case_io import cases_root, resolve_case_path
 
+from opensearch_mcp import case_scoped
 from opensearch_mcp.case_scoped import (
     artifact_index_pattern,
     in_active_case,
@@ -162,51 +163,8 @@ def _active_index_prefix() -> str | None:
 
 
 def _validate_index(index: str) -> str | None:
-    """Bind every index segment to the DB-active case. Returns error or None.
-
-    SEC-2 / DSS-CAN-010: a caller-supplied ``index`` must stay within the active
-    case. When an active case is resolvable, every comma-separated segment MUST
-    start with the active-case prefix ``case-{key}-`` (which a concrete index
-    name, a ``case-{key}-*`` pattern, and an intra-case artifact-family pattern
-    like ``case-{key}-evtx-*`` all satisfy). This denies the cross-case read
-    primitive: ``case-*`` (all cases), another case's pattern, and an exact
-    other-case index name are all rejected. The active-case prefix already starts
-    with ``case-`` so system/`.`-indices remain blocked.
-
-    When NO active case is resolvable in this context (standalone CLI without an
-    active case, or ``opensearch_get_event`` under the Gateway — which carries no
-    injected ``case_dir``), this falls back to the legacy system-index guard
-    (``case-`` prefix). Active-case binding for those paths is enforced at the
-    Gateway policy boundary, which holds the authoritative ``case_key`` and
-    validates ``index`` there too (defense in depth, both layers).
-    """
-    if not index or not index.strip():
-        return "Index parameter must not be empty"
-    active_prefix = _active_index_prefix()
-    for segment in index.split(","):
-        segment = segment.strip()
-        if not segment:
-            # Fail closed: a blank comma segment (e.g. trailing/leading/double
-            # comma) is rejected rather than skipped, so a value cannot pass on
-            # the strength of its other segments alone (SEC-2 hardening).
-            return (
-                "Index contains an empty segment "
-                "(remove stray/leading/trailing commas)"
-            )
-        if active_prefix is not None:
-            if not segment.startswith(active_prefix):
-                return (
-                    f"Index segment '{segment}' is outside the active case "
-                    "(security: cross-case access denied; allowed prefix "
-                    f"'{active_prefix}')"
-                )
-            continue
-        if not segment.startswith("case-"):
-            return (
-                f"Index segment '{segment}' must start with 'case-' "
-                "(security: blocks access to system indices)"
-            )
-    return None
+    """Compatibility wrapper for the shared query-target validator."""
+    return case_scoped.validate_query_index(index, active_prefix=_active_index_prefix())
 
 
 audit = AuditWriter(mcp_name="opensearch-mcp")
@@ -738,33 +696,12 @@ _UUID_RE = _re.compile(
 
 
 def _resolve_index(index: str, case_id: str) -> str:
-    """Resolve index pattern from explicit index, case_id, or active case.
-
-    Index names are built from the case *key* (the case directory basename,
-    e.g. ``case-rocba-case-06132304``) via :func:`build_index_name`. The
-    DB-authoritative active case is the only reliable source of that key inside
-    a Gateway deployment, so it takes precedence here. A caller-supplied
-    ``case_id`` that is the opaque DB UUID (which the Gateway uses internally
-    and would otherwise build a ``case-<uuid>-*`` pattern that matches nothing)
-    is ignored in favour of the active-case directory basename. See B1.
-
-    SEC-2: a caller-supplied ``index`` is returned as the query target (to keep
-    legitimate intra-case artifact-family narrowing, e.g. ``case-{key}-evtx-*``)
-    but is NOT trusted blindly — every handler runs :func:`_validate_index`
-    immediately after, which rejects any segment outside the DB-active case. The
-    short-circuit below therefore no longer overrides isolation: the active case
-    is the authority and a cross-case ``index`` is denied at validation.
-    """
-    if index:
-        return index
-    cid = ""
-    if case_id and not _UUID_RE.match(case_id.strip()):
-        cid = case_id.strip()
-    if not cid:
-        cid = _get_active_case() or ""
-    if cid:
-        return build_index_pattern(cid)
-    return "case-*"
+    """Compatibility wrapper for the shared query-target resolver."""
+    return case_scoped.resolve_query_index(
+        index,
+        case_id,
+        active_case_key=_get_active_case() or "",
+    )
 
 
 def _detect_preparsed_csvs(path: Path) -> str | None:
