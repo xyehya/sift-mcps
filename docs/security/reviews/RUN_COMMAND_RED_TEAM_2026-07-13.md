@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **IN REVIEW — two confirmed policy-ceiling bypasses** |
+| Status | **RESOLVED — live remediation proven** |
 | Target | Agent-facing SIFT MCP `run_command` and its durable `run_command_job` lane |
 | Revision | `f0b7dc8371395283ecb1be53de3b37b2f2ac68dc` (`main`) |
 | Attacker model | Authenticated MCP agent with an active, sealed case; no SSH, root, service-user, or control-plane access |
@@ -25,6 +25,24 @@ shutdown, mount, or network egress was attempted or demonstrated.  The
 findings nevertheless invalidate the intended allowlisted **policy ceiling**,
 so they are reportable as Medium-severity, high-confidence command-execution
 control failures.
+
+## Remediation verification
+
+The policy now blocks `find -ok`, `find -okdir`, and AWK program-file modes
+(`-f` / `--file`) before the executor. Focused regression tests also pin direct
+shell-script invocation and preserve ordinary non-executing `find` and inline
+AWK workflows.
+
+After deployment, cache clear, and restart of `sift-gateway`, both OpenSearch
+workers, and `sift-job-worker`, the same live MCP interface returned:
+
+- `find -ok` proof denied: `Blocked dangerous flag '-ok' for find`
+  (`siftgateway-claudy-20260713-001`);
+- `awk -f -` proof denied: `Blocked dangerous flag '-f' for awk`
+  (`...-003`);
+- `sh agent/harmless.sh` denied by the shell deny floor (`...-005`);
+- ordinary `find` and inline AWK controls succeeded under the complete sandbox
+  (`...-007`, `...-009`).
 
 ## What was actually exercised
 
@@ -191,10 +209,10 @@ schemas; details are retained in the scan artifact ledger as C-PP-003A–E.
 ## Signoff
 
 ```text
-Result: IN REVIEW
+Result: DONE
 Branch/commit: main / f0b7dc8371395283ecb1be53de3b37b2f2ac68dc
-Changed: this review report and security-scan artifacts only; no runtime code or VM configuration changed
-Validation: 213 focused tests passed; live MCP and read-only VM evidence recorded above
-Residual risk: two policy-ceiling child-process bypasses remain until fixed; OS floor reduced the demonstrated impact but does not repair the authorization gap
-Next action: implement the two focused ceiling fixes, then deploy-and-prove the live denials and repair the async positive-control failure
+Changed: review report plus focused policy/test remediation; VM deployed through the normal source/cache-clear/restart procedure
+Validation: 219 focused tests passed; post-fix live MCP denials and normal controls recorded above
+Residual risk: deferred tool-native output-sink validation and the separate async positive-control failure remain
+Next action: repair the async positive-control failure, then close the deferred per-tool output-sink matrix
 ```

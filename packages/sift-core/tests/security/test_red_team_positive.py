@@ -106,6 +106,16 @@ POSITIVE_FORENSIC_COMMANDS = [
         id="positive-rg-search",
     ),
     pytest.param(
+        "find evidence -maxdepth 1 -type f",
+        "find-nonexecuting",
+        id="positive-find-nonexecuting",
+    ),
+    pytest.param(
+        "awk 'NR <= 1 { print }' evidence/log.txt",
+        "awk-inline-program",
+        id="positive-awk-inline-program",
+    ),
+    pytest.param(
         "strings evidence/mem.raw | rg -i pass > extractions/hits.txt",
         "pipeline-redirect",
         id="positive-pipeline-redirect",

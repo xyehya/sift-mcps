@@ -215,6 +215,26 @@ CEILING_NEGATIVE_CASES = [
         id="ceiling-find-exec",
     ),
     pytest.param(
+        r"find evidence -ok sh \;",
+        "B-CEIL blocked flags must reject find -ok child execution",
+        id="ceiling-find-ok",
+    ),
+    pytest.param(
+        r"find evidence -okdir sh \;",
+        "B-CEIL blocked flags must reject find -okdir child execution",
+        id="ceiling-find-okdir",
+    ),
+    pytest.param(
+        "echo 'BEGIN { system(\"printf bypass\") }' | awk -f -",
+        "B-CEIL blocked flags must reject AWK program-file stdin execution",
+        id="ceiling-awk-file-stdin",
+    ),
+    pytest.param(
+        "sh agent/harmless.sh",
+        "DENY_FLOOR must reject scripted shell files through the shell interpreter",
+        id="ceiling-shell-script",
+    ),
+    pytest.param(
         "tar --checkpoint-action=exec=id -cf agent/archive.tar evidence",
         "B-CEIL blocked flags must reject tar checkpoint exec",
         id="ceiling-tar-checkpoint-exec",

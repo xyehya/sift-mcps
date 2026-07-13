@@ -351,7 +351,21 @@ DEFAULT_SECURITY_POLICY: dict[str, Any] = {
         "zgrep": ["-e", "-E"],
     },
     "tool_blocked_flags": {
-        "find": ["-exec", "-execdir", "-delete", "-fls", "-fprint", "-fprint0", "-fprintf"],
+        "find": [
+            "-exec",
+            "-execdir",
+            "-ok",
+            "-okdir",
+            "-delete",
+            "-fls",
+            "-fprint",
+            "-fprint0",
+            "-fprintf",
+        ],
+        # An AWK program loaded from a file or stdin bypasses the positional
+        # program-text scanner and can invoke system(). Keep agent usage to
+        # scanner-covered inline programs.
+        "awk": ["-f", "--file"],
         "sed": ["-i", "--in-place", "-e", "--expression", "-f", "--file"],
         "sqlite3": ["-cmd", "-init"],
         "tshark": ["-X", "--lua-script", "-z", "--extcap-interface", "-i", "-G"],
