@@ -273,6 +273,17 @@ and passes pinned descriptors rather than reopening authorized raw paths. Exact-
 proved force-add denial, zero process/enqueue, metadata invariance under mutation attempts, Portal
 Seal recovery, sealed-reference success, and ignored-sibling denial on 2026-07-13.
 
+P4.23.2 and exact-source VM Gate B were live-proven on 2026-07-14 at integrated revision
+`921a801`. Portal Add/Seal durably reached `GATE_BLOCKED` before filesystem work, the Gateway was
+forcibly interrupted, and all four services restarted while Postgres remained unsealed at manifest
+v5 with zero operation manifests, versions, or custody events. A fresh Portal load exposed only the
+path-free incomplete-operation summary and required a new operation-bound re-authentication to
+resume. The single retry completed the same operation with exactly one manifest v6, one new Evidence
+Version, one `EVIDENCE_REGISTERED`, and one `MANIFEST_SEALED` event. The new 5 GiB file retained its
+pre-resume digest, inode, ownership, mode, link count, and xattrs while gaining immutable posture;
+the existing immutable sibling retained its digest and all observed metadata. Authenticated MCP
+`case_info` and `evidence_info` succeeded only after the custody gate returned to sealed v6.
+
 These items must be replaced in dependency order. Tests that describe obsolete behavior are removed only after stronger public-seam replacements land.
 
 ## Out of Scope

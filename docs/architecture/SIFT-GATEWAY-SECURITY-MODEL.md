@@ -149,6 +149,19 @@ denied. The fixed operator `stage-evidence.sh --prepare` helper was required bef
 deliberately root-owned `0640` force-add was unreadable to the service; that helper preserved bytes
 and inode while changing only eligible ownership/mode, and Portal Seal then applied immutable `+i`.
 
+**P4.23.2 status (2026-07-14; source and VM Gate B live-proven):** operator Add/Seal is a durable,
+one-active-operation-per-case state machine whose Postgres transaction blocks MCP admission before
+filesystem preparation. Exact revision `921a801` was interrupted immediately after its durable
+`GATE_BLOCKED` record and before filesystem apply; after all four services restarted, the same
+operation remained blocked at manifest v5 with no manifest, version, or custody event committed. The
+Portal status route exposes a fixed six-field, path-free incomplete-operation allowlist; it cannot
+surface stored commands, paths, reasons, idempotency keys, credentials, or re-authentication material.
+A fresh operation-bound re-authentication resumed that exact operation once and atomically produced
+manifest v6, one Evidence Version, and one canonical event of each required type. The existing sealed
+sibling remained immutable and byte/metadata-identical. Authenticated MCP reads remained denied while
+blocked and succeeded after the Postgres gate returned to sealed v6. MCP still has no custody mutation
+tool, database grant, filesystem mutation path, or operator resume authority.
+
 ## VP-5 — The `run_command` jail (ceiling + floor, both deny-default)
 `run_command(command: str)` runs `shell=False`, multi-stage argv (supports `| && || ; > >> < 2>&1`)
 as the `agent_runtime` uid on the SIFT VM. Two stacked layers gate it before any forensic
