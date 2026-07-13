@@ -15,6 +15,8 @@ The evidence gate is also asserted to be DB-authority only (no file branch).
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from sift_core.evidence_chain import ChainStatus
 from sift_gateway.active_case import ActiveCase
@@ -40,6 +42,13 @@ class _Gateway:
     def __init__(self, dsn):
         self.control_plane_dsn = dsn
         self._audit = _Audit()
+        self.evidence_service = SimpleNamespace(
+            reconcile_for_admission=lambda _case_id: {
+                "state": "available",
+                "observed": 0,
+                "issues": [],
+            }
+        )
 
 
 class _Message:
@@ -147,6 +156,7 @@ async def test_backstop_transparent_with_dsn():
 
 async def test_evidence_gate_uses_db_authority_only(monkeypatch, tmp_path):
     calls = {}
+    (tmp_path / "evidence").mkdir()
 
     def fake_db_gate(case_id, dsn):
         calls["db"] = (case_id, dsn)

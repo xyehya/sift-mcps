@@ -66,8 +66,16 @@ class _Resolver:
         self.calls.append((case_id, reference))
         return {
             "evidence_id": "ev-1",
+            "version_id": "ver-1",
             "display_path": "evidence/disk.E01",
             "path": "/cases/case-one/evidence/disk.E01",
+            "sha256": "sha256:" + "a" * 64,
+            "bytes": 4096,
+            "st_dev": 1,
+            "st_ino": 2,
+            "st_mtime_ns": 3,
+            "st_ctime_ns": 4,
+            "immutable_required": True,
         }
 
 
@@ -145,8 +153,16 @@ def test_run_command_evidence_refs_are_resolved_only_by_active_case_service():
     assert prepared["_resolved_evidence_refs"] == [{
         "ref": "evidence/disk.E01",
         "evidence_id": "ev-1",
+        "version_id": "ver-1",
         "display_path": "evidence/disk.E01",
         "path": "/cases/case-one/evidence/disk.E01",
+        "sha256": "sha256:" + "a" * 64,
+        "bytes": 4096,
+        "st_dev": 1,
+        "st_ino": 2,
+        "st_mtime_ns": 3,
+        "st_ctime_ns": 4,
+        "immutable_required": True,
     }]
     assert resolver.calls == [(_CASE.case_id, "evidence/disk.E01")]
 
@@ -164,6 +180,26 @@ def test_run_command_reference_resolution_failure_is_internal_and_typed():
         )
 
     assert prepared["_evidence_ref_error"] == "evidence_not_registered"
+    assert "_resolved_evidence_refs" not in prepared
+
+
+def test_run_command_incomplete_authority_binding_fails_closed():
+    class _IncompleteResolver:
+        def resolve_evidence_reference(self, *_):
+            return {
+                "evidence_id": "ev-1",
+                "display_path": "evidence/disk.E01",
+                "path": "/cases/case-one/evidence/disk.E01",
+            }
+
+    with _use_gateway_active_case(_CASE):
+        prepared = _prepare_core_tool_arguments(
+            _gateway(evidence_service=_IncompleteResolver()),
+            "run_command",
+            {"evidence_refs": ["evidence/disk.E01"]},
+        )
+
+    assert prepared["_evidence_ref_error"] == "evidence_binding_incomplete"
     assert "_resolved_evidence_refs" not in prepared
 
 

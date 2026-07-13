@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -564,22 +565,23 @@ class _BoundCaseService:
         return self._case
 
 
-def _bound_case():
+def _bound_case(tmp_path):
     from sift_gateway.active_case import ActiveCase
 
+    (tmp_path / "evidence").mkdir(exist_ok=True)
     return ActiveCase(
         case_id="11111111-1111-1111-1111-111111111111",
         case_key="db-case",
         title="DB Case",
         description=None,
         status="active",
-        artifact_path="/tmp/sift-phase4-case",
+        artifact_path=str(tmp_path),
         metadata={},
         membership_role="agent",
     )
 
 
-def _gate_test_gateway():
+def _gate_test_gateway(tmp_path):
     gw = MagicMock()
     gw._tool_map = {"record_finding": "sift-core"}
     gw._tool_cache = {}
@@ -589,7 +591,14 @@ def _gate_test_gateway():
     gw._audit.log = MagicMock(return_value="aid-1")
     # BU3: tool-serving gateway carries a control-plane DSN and binds a case.
     gw.control_plane_dsn = "postgresql://service@localhost/sift"
-    gw.active_case_service = _BoundCaseService(_bound_case())
+    gw.active_case_service = _BoundCaseService(_bound_case(tmp_path))
+    gw.evidence_service = SimpleNamespace(
+        reconcile_for_admission=lambda _case_id: {
+            "state": "available",
+            "observed": 0,
+            "issues": [],
+        }
+    )
     return gw
 
 
@@ -612,16 +621,16 @@ async def _drive_call_tool(gateway, tool_name, gate_status):
         return " ".join(tc.text if hasattr(tc, "text") else str(tc) for tc in contents)
 
 
-async def test_gate_ok_allows_tool():
-    gw = _gate_test_gateway()
+async def test_gate_ok_allows_tool(tmp_path):
+    gw = _gate_test_gateway(tmp_path)
     combined = await _drive_call_tool(gw, "record_finding", ChainStatus.OK)
     assert "ok" in combined
     assert "blocked" not in combined
     gw.call_tool.assert_awaited()  # the tool actually ran
 
 
-async def test_gate_unsealed_blocks_tool():
-    gw = _gate_test_gateway()
+async def test_gate_unsealed_blocks_tool(tmp_path):
+    gw = _gate_test_gateway(tmp_path)
     combined = await _drive_call_tool(gw, "record_finding", ChainStatus.UNSEALED)
     assert "blocked" in combined
     gw.call_tool.assert_not_awaited()  # tool never ran
@@ -632,23 +641,23 @@ async def test_gate_unsealed_blocks_tool():
     assert "gateway_mcp_envelope" in sources
 
 
-async def test_gate_violation_blocks_tool():
-    gw = _gate_test_gateway()
+async def test_gate_violation_blocks_tool(tmp_path):
+    gw = _gate_test_gateway(tmp_path)
     combined = await _drive_call_tool(gw, "record_finding", ChainStatus.MODIFIED)
     assert "blocked" in combined
     gw.call_tool.assert_not_awaited()
 
 
-async def test_gate_blocks_environment_summary_when_unsealed():
+async def test_gate_blocks_environment_summary_when_unsealed(tmp_path):
     # F-A regression: the synthetic environment_summary must be gated like any
     # other agent tool — it must not aggregate backend health on an unsealed case.
-    gw = _gate_test_gateway()
+    gw = _gate_test_gateway(tmp_path)
     combined = await _drive_call_tool(gw, "environment_summary", ChainStatus.UNSEALED)
     assert "blocked" in combined
     gw.call_tool.assert_not_awaited()
 
 
-async def test_gate_allows_environment_summary_when_ok():
-    gw = _gate_test_gateway()
+async def test_gate_allows_environment_summary_when_ok(tmp_path):
+    gw = _gate_test_gateway(tmp_path)
     combined = await _drive_call_tool(gw, "environment_summary", ChainStatus.OK)
     assert "blocked" not in combined

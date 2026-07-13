@@ -20,6 +20,7 @@ from mcp.types import TextContent, ToolAnnotations
 from pydantic import PrivateAttr
 from sift_common.registry_helpers import tool_output_schema
 from sift_core.agent_tools import call_core_tool, core_tool_specs
+from sift_core.execute.evidence_binding import AdmittedEvidenceBinding
 
 from sift_gateway.backends.egress import (
     make_pinned_egress_factory,
@@ -232,7 +233,9 @@ def _prepare_core_tool_arguments(gateway: Any, tool_name: str, arguments: dict[s
     return prepared
 
 
-def _resolve_db_evidence_refs(gateway: Any, evidence_refs: Any) -> list[dict[str, str]]:
+def _resolve_db_evidence_refs(
+    gateway: Any, evidence_refs: Any
+) -> list[AdmittedEvidenceBinding]:
     if not evidence_refs:
         return []
     if isinstance(evidence_refs, str):
@@ -241,6 +244,7 @@ def _resolve_db_evidence_refs(gateway: Any, evidence_refs: Any) -> list[dict[str
         refs = [str(ref) for ref in evidence_refs if str(ref).strip()]
     else:
         return []
+    from sift_gateway.evidence_admission import serialize_resolved_ref
     from sift_gateway.policy_middleware import _current_gateway_active_case
 
     case = _current_gateway_active_case()
@@ -248,19 +252,18 @@ def _resolve_db_evidence_refs(gateway: Any, evidence_refs: Any) -> list[dict[str
     resolver = getattr(service, "resolve_evidence_reference", None)
     if case is None or not callable(resolver):
         return []
-    resolved: list[dict[str, str]] = []
+    resolved: list[AdmittedEvidenceBinding] = []
     for ref in refs:
         item = resolver(case.case_id, ref)
         if not isinstance(item, dict):
             raise _OrientationAuthorityError("DB evidence resolver returned invalid data")
-        resolved.append(
-            {
-                "ref": ref,
-                "evidence_id": str(item.get("evidence_id") or ""),
-                "display_path": str(item.get("display_path") or ref),
-                "path": str(item.get("path") or ""),
-            }
-        )
+        try:
+            binding = serialize_resolved_ref(
+                cast(AdmittedEvidenceBinding, {"ref": ref, **item})
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise _OrientationAuthorityError("evidence_binding_incomplete") from exc
+        resolved.append(binding)
     return resolved
 
 

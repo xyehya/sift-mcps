@@ -14,6 +14,7 @@ Acceptance covered here:
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from fastmcp import FastMCP
@@ -176,6 +177,13 @@ def _fake_gateway():
     gateway._audit.log = MagicMock(return_value="aid-1")
     gateway._tool_map = {}
     gateway.active_case_service = None
+    gateway.evidence_service = SimpleNamespace(
+        reconcile_for_admission=lambda _case_id: {
+            "state": "available",
+            "observed": 0,
+            "issues": [],
+        }
+    )
     return gateway
 
 
@@ -192,6 +200,7 @@ class _BoundCaseService:
 def _bound_case(tmp_path):
     from sift_gateway.active_case import ActiveCase
 
+    (tmp_path / "evidence").mkdir(exist_ok=True)
     return ActiveCase(
         case_id="11111111-1111-1111-1111-111111111111",
         case_key="db-case",

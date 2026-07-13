@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -137,6 +138,7 @@ def _gateway_with_backends(*manifests: dict) -> Gateway:
     gateway = Gateway({"backends": {}, **_execute_security()})
     # BU3 (XYE-21): tool-serving gateways always carry a control-plane DSN.
     gateway.control_plane_dsn = "postgresql://service@localhost/sift"
+    gateway.evidence_service = _available_admission_service()
     for manifest in manifests:
         gateway.backends[manifest["name"]] = _FakeBackend(manifest)
     asyncio.run(gateway._build_tool_map())
@@ -146,6 +148,7 @@ def _gateway_with_backends(*manifests: dict) -> Gateway:
 async def _async_gateway_with_backends(*manifests: dict) -> Gateway:
     gateway = Gateway({"backends": {}, **_execute_security()})
     gateway.control_plane_dsn = "postgresql://service@localhost/sift"
+    gateway.evidence_service = _available_admission_service()
     for manifest in manifests:
         gateway.backends[manifest["name"]] = _FakeBackend(manifest)
     await gateway._build_tool_map()
@@ -182,6 +185,17 @@ _OPEN_GATE = {
     "issues": [],
     "manifest_version": 1,
 }
+
+
+def _available_admission_service():
+    """Explicit read-only admission seam for tests outside custody behavior."""
+    return SimpleNamespace(
+        reconcile_for_admission=lambda _case_id: {
+            "state": "available",
+            "observed": 0,
+            "issues": [],
+        }
+    )
 
 
 def _repo_root() -> Path:
@@ -859,11 +873,13 @@ async def test_agent_path_denies_get_event_cross_case_exact_index():
     assert "cross-case access denied" in payload["detail"]
 
 
-async def test_agent_path_allows_intra_case_index():
+async def test_agent_path_allows_intra_case_index(tmp_path):
     """SEC-2: an `index` that narrows WITHIN the active case passes the boundary
     check on the agent path (search + get_event) and dispatches."""
+    case_dir = tmp_path / "case-a-1234"
+    (case_dir / "evidence").mkdir(parents=True)
     gateway = await _async_gateway_with_backends(_opensearch_query_manifest())
-    gateway.active_case_service = _active_case_service("case-a-1234", "/cases/case-a-1234")
+    gateway.active_case_service = _active_case_service("case-a-1234", str(case_dir))
 
     for inside in ("case-a-1234-*", "case-a-1234-evtx-*", ""):
         result = await _agent_call(gateway, "opensearch_search", {"index": inside})

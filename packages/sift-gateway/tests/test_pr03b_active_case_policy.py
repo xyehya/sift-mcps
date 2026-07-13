@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from fastmcp import FastMCP
@@ -26,6 +27,7 @@ def _identity() -> Identity:
 
 
 def _case(tmp_path) -> ActiveCase:
+    (tmp_path / "evidence").mkdir(exist_ok=True)
     return ActiveCase(
         case_id="11111111-1111-1111-1111-111111111111",
         case_key="db-case",
@@ -60,6 +62,13 @@ class _Gateway:
                           "addon_no_case_arg": "addon"}
         self._safe_args = safe_args
         self._gateway_local_tools = set(local_tools or ())
+        self.evidence_service = SimpleNamespace(
+            reconcile_for_admission=lambda _case_id: {
+                "state": "available",
+                "observed": 0,
+                "issues": [],
+            }
+        )
 
     def is_case_scoped_tool(self, name):
         return name.startswith("addon_") or name in self._gateway_local_tools

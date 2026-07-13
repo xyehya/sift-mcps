@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -72,10 +73,20 @@ class _EvidenceService:
         self.case_dir = case_dir
 
     def resolve_evidence_reference(self, case_id, ref):
+        path = self.case_dir / "evidence" / "disk.E01"
+        st = path.stat()
         return {
             "evidence_id": "ev-1",
+            "version_id": "ver-1",
             "display_path": "evidence/disk.E01",
-            "path": self.case_dir / "evidence" / "disk.E01",
+            "path": path,
+            "sha256": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+            "bytes": st.st_size,
+            "st_dev": st.st_dev,
+            "st_ino": st.st_ino,
+            "st_mtime_ns": st.st_mtime_ns,
+            "st_ctime_ns": st.st_ctime_ns,
+            "immutable_required": False,
         }
 
     def reconcile_for_admission(self, case_id):
@@ -180,8 +191,16 @@ def test_run_command_job_enqueues_public_args_and_internal_case_dir(tmp_path):
         {
             "ref": "evidence/disk.E01",
             "evidence_id": "ev-1",
+            "version_id": "ver-1",
             "display_path": "evidence/disk.E01",
             "path": str(case_dir / "evidence" / "disk.E01"),
+            "sha256": "sha256:" + hashlib.sha256(b"disk").hexdigest(),
+            "bytes": 4,
+            "st_dev": (case_dir / "evidence" / "disk.E01").stat().st_dev,
+            "st_ino": (case_dir / "evidence" / "disk.E01").stat().st_ino,
+            "st_mtime_ns": (case_dir / "evidence" / "disk.E01").stat().st_mtime_ns,
+            "st_ctime_ns": (case_dir / "evidence" / "disk.E01").stat().st_ctime_ns,
+            "immutable_required": False,
         }
     ]
     assert "case_dir" not in json.dumps(body)
@@ -420,6 +439,8 @@ def test_prepare_run_command_args_resolves_db_refs_and_strips_private(tmp_path):
     from sift_gateway import mcp_server
 
     case_dir = tmp_path / "case"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
     gateway = _Gateway(case_dir)
     with patch(
         "sift_gateway.policy_middleware._current_gateway_active_case",
@@ -440,8 +461,16 @@ def test_prepare_run_command_args_resolves_db_refs_and_strips_private(tmp_path):
         {
             "ref": "ev-1",
             "evidence_id": "ev-1",
+            "version_id": "ver-1",
             "display_path": "evidence/disk.E01",
             "path": str(case_dir / "evidence" / "disk.E01"),
+            "sha256": "sha256:" + hashlib.sha256(b"disk").hexdigest(),
+            "bytes": 4,
+            "st_dev": (case_dir / "evidence" / "disk.E01").stat().st_dev,
+            "st_ino": (case_dir / "evidence" / "disk.E01").stat().st_ino,
+            "st_mtime_ns": (case_dir / "evidence" / "disk.E01").stat().st_mtime_ns,
+            "st_ctime_ns": (case_dir / "evidence" / "disk.E01").stat().st_ctime_ns,
+            "immutable_required": False,
         }
     ]
     assert "_evidence_ref_error" not in prepared
