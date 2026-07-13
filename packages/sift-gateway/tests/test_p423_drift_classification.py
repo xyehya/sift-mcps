@@ -1,7 +1,9 @@
+import pytest
 from sift_gateway.custody_drift import (
     AuthorityEvidence,
     CustodyGateState,
     DriftCode,
+    DriftFinding,
     EntryKind,
     FileIdentity,
     InventorySnapshot,
@@ -375,9 +377,176 @@ def test_conflicting_observations_for_one_object_fail_closed() -> None:
 
 
 def test_fact_identifiers_are_bounded_and_cannot_carry_paths() -> None:
-    try:
-        _mounted(observation_id="evidence/secret.E01")
-    except ValueError as exc:
-        assert str(exc) == "observation_id must be a bounded opaque identifier"
-    else:
-        raise AssertionError("path-shaped observation identifier was accepted")
+    for path_shape in ("evidence/secret.E01", "C:secret", "file:secret", "https:evil"):
+        with pytest.raises(
+            ValueError, match="observation_id must be a bounded opaque identifier"
+        ):
+            _mounted(observation_id=path_shape)
+
+
+@pytest.mark.parametrize("invalid", ["false", 0, 1, None])
+def test_ledger_valid_requires_an_exact_boolean(invalid: object) -> None:
+    with pytest.raises(ValueError, match="ledger_valid must be a boolean"):
+        InventorySnapshot(
+            availability=StorageAvailability.AVAILABLE,
+            ledger_valid=invalid,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("invalid", [True, False, "2", 1.5, 0, 65])
+def test_inventory_depth_requires_a_bounded_non_boolean_integer(invalid: object) -> None:
+    with pytest.raises(ValueError, match="depth must be an integer from 1 to 64"):
+        _mounted(depth=invalid)
+
+
+def test_local_authority_rejects_external_mount_identity_facts() -> None:
+    with pytest.raises(
+        ValueError, match="local immutable authority cannot carry mount identity"
+    ):
+        _sealed_local(mount_identity="mount-a")
+
+    with pytest.raises(
+        ValueError, match="local immutable observation cannot carry external facts"
+    ):
+        classify_inventory(
+            InventorySnapshot(
+                availability=StorageAvailability.AVAILABLE,
+                expected=(_sealed_local(),),
+                observed=(_mounted(mount_identity="mount-a"),),
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("availability", "availability_code"),
+    [
+        (StorageAvailability.UNAVAILABLE, DriftCode.STORAGE_UNAVAILABLE),
+        (StorageAvailability.SCAN_FAILED, DriftCode.INVENTORY_SCAN_FAILED),
+    ],
+)
+def test_outage_preserves_independent_ledger_invalid_finding(
+    availability: StorageAvailability, availability_code: DriftCode
+) -> None:
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=availability,
+            ledger_valid=False,
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_UNAVAILABLE
+    assert {finding.code: finding.recovery for finding in result.findings} == {
+        availability_code: RecoveryRequirement.INVESTIGATE_AVAILABILITY,
+        DriftCode.LEDGER_INVALID: RecoveryRequirement.REPAIR_LEDGER,
+    }
+
+
+def test_conflicting_duplicate_authority_fails_closed_once() -> None:
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.AVAILABLE,
+            expected=(_sealed_local(), _sealed_local(sha256="b" * 64)),
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_VIOLATION
+    assert [finding.code for finding in result.findings] == [
+        DriftCode.CONFLICTING_AUTHORITY
+    ]
+
+
+def test_exact_duplicate_authority_is_idempotent() -> None:
+    authority = _sealed_local()
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.AVAILABLE,
+            expected=(authority, authority),
+            observed=(_mounted(),),
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.OPEN
+    assert result.findings == ()
+
+
+def test_same_observation_identifier_with_conflicting_facts_fails_closed_once() -> None:
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.AVAILABLE,
+            expected=(_sealed_local(),),
+            observed=(_mounted(), _mounted(sha256="b" * 64)),
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_VIOLATION
+    assert [finding.code for finding in result.findings] == [
+        DriftCode.CONFLICTING_OBSERVATION
+    ]
+
+
+def test_unknown_authority_binding_fails_closed() -> None:
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.AVAILABLE,
+            observed=(_mounted(evidence_object_id="unknown-object"),),
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_VIOLATION
+    assert result.findings[0].code is DriftCode.UNKNOWN_OBJECT_BINDING
+
+
+def test_mixed_findings_retain_each_fact_and_strongest_gate() -> None:
+    external = AuthorityEvidence(
+        evidence_object_id="object-external",
+        sha256="a" * 64,
+        byte_count=4096,
+        storage_profile=StorageProfile.EXTERNALLY_READ_ONLY,
+        mount_identity="mount-a",
+    )
+    local = _sealed_local(evidence_object_id="object-local")
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.AVAILABLE,
+            expected=(external, local),
+            observed=(
+                _mounted(
+                    observation_id="external-observation",
+                    evidence_object_id="object-external",
+                    identity=None,
+                    immutable=None,
+                    read_only=True,
+                    mount_identity="mount-b",
+                ),
+                _mounted(
+                    observation_id="local-observation",
+                    evidence_object_id="object-local",
+                    sha256="b" * 64,
+                ),
+                _mounted(
+                    observation_id="pending-observation",
+                    evidence_object_id=None,
+                    sha256=None,
+                    immutable=None,
+                ),
+            ),
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_UNAVAILABLE
+    assert {finding.code for finding in result.findings} == {
+        DriftCode.MOUNT_IDENTITY_CHANGED,
+        DriftCode.CONTENT_CHANGED,
+        DriftCode.DETECTED_NEW_ITEM,
+    }
+    assert all(finding.authorizes_new_version is False for finding in result.findings)
+
+
+def test_new_version_authority_cannot_be_supplied_to_a_finding() -> None:
+    with pytest.raises(TypeError, match="authorizes_new_version"):
+        DriftFinding(
+            code=DriftCode.CONTENT_CHANGED,
+            gate_state=CustodyGateState.BLOCKED_VIOLATION,
+            recovery=RecoveryRequirement.RESTORE_REACQUIRE_RETIRE,
+            authorizes_new_version=True,  # type: ignore[call-arg]
+        )

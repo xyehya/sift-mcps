@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
-_OPAQUE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9:_-]{0,127}\Z")
+_OPAQUE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_MAX_INVENTORY_DEPTH = 64
 
 
 class CustodyGateState(StrEnum):
@@ -112,10 +113,17 @@ class AuthorityEvidence:
             raise ValueError("byte_count must be non-negative")
         if not isinstance(self.storage_profile, StorageProfile):
             raise ValueError("storage_profile must use the closed vocabulary")
+        if self.identity is not None and not isinstance(self.identity, FileIdentity):
+            raise ValueError("identity must use FileIdentity")
         if self.identity is not None and self.identity.byte_count != self.byte_count:
             raise ValueError("authority identity byte count must match authority bytes")
         if self.mount_identity is not None:
             _validate_opaque_id("mount_identity", self.mount_identity)
+        if (
+            self.storage_profile is StorageProfile.LOCAL_IMMUTABLE
+            and self.mount_identity is not None
+        ):
+            raise ValueError("local immutable authority cannot carry mount identity")
         if self.storage_profile is StorageProfile.EXTERNALLY_READ_ONLY:
             _validate_opaque_id("mount_identity", self.mount_identity)
 
@@ -142,6 +150,8 @@ class MountedEvidence:
             _validate_opaque_id("evidence_object_id", self.evidence_object_id)
         if not isinstance(self.entry_kind, EntryKind):
             raise ValueError("entry_kind must use the closed vocabulary")
+        if self.identity is not None and not isinstance(self.identity, FileIdentity):
+            raise ValueError("identity must use FileIdentity")
         if self.byte_count is not None:
             if (
                 not isinstance(self.byte_count, int)
@@ -155,8 +165,18 @@ class MountedEvidence:
             _validate_sha256(self.sha256)
         if self.mount_identity is not None:
             _validate_opaque_id("mount_identity", self.mount_identity)
-        if self.depth < 1:
-            raise ValueError("depth must be positive")
+        for name in ("immutable", "read_only"):
+            value = getattr(self, name)
+            if value is not None and type(value) is not bool:
+                raise ValueError(f"{name} must be a boolean when supplied")
+        if type(self.hidden) is not bool:
+            raise ValueError("hidden must be a boolean")
+        if (
+            not isinstance(self.depth, int)
+            or isinstance(self.depth, bool)
+            or not 1 <= self.depth <= _MAX_INVENTORY_DEPTH
+        ):
+            raise ValueError("depth must be an integer from 1 to 64")
 
     @property
     def observed_byte_count(self) -> int | None:
@@ -183,6 +203,12 @@ class InventorySnapshot:
             raise ValueError("availability must use the closed vocabulary")
         if not isinstance(self.expected, tuple) or not isinstance(self.observed, tuple):
             raise ValueError("inventory facts must be immutable tuples")
+        if not all(isinstance(item, AuthorityEvidence) for item in self.expected):
+            raise ValueError("expected must contain authority evidence facts")
+        if not all(isinstance(item, MountedEvidence) for item in self.observed):
+            raise ValueError("observed must contain mounted evidence facts")
+        if type(self.ledger_valid) is not bool:
+            raise ValueError("ledger_valid must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,7 +220,7 @@ class DriftFinding:
     observation_id: str | None = None
     full_verification_required: bool = False
     # Classification is read-only and can never authorize a version mutation.
-    authorizes_new_version: bool = False
+    authorizes_new_version: bool = field(default=False, init=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,21 +231,29 @@ class InventoryClassification:
 
 def classify_inventory(snapshot: InventorySnapshot) -> InventoryClassification:
     """Classify already-resolved facts without consulting ambient authority."""
+    findings: list[DriftFinding] = []
     if snapshot.availability is not StorageAvailability.AVAILABLE:
         code = (
             DriftCode.INVENTORY_SCAN_FAILED
             if snapshot.availability is StorageAvailability.SCAN_FAILED
             else DriftCode.STORAGE_UNAVAILABLE
         )
-        return _result(
-            (
-                _finding(
-                    code,
-                    CustodyGateState.BLOCKED_UNAVAILABLE,
-                    RecoveryRequirement.INVESTIGATE_AVAILABILITY,
-                ),
+        findings.append(
+            _finding(
+                code,
+                CustodyGateState.BLOCKED_UNAVAILABLE,
+                RecoveryRequirement.INVESTIGATE_AVAILABILITY,
             )
         )
+        if not snapshot.ledger_valid:
+            findings.append(
+                _finding(
+                    DriftCode.LEDGER_INVALID,
+                    CustodyGateState.BLOCKED_VIOLATION,
+                    RecoveryRequirement.REPAIR_LEDGER,
+                )
+            )
+        return _result(tuple(findings))
     if not snapshot.ledger_valid:
         return _result(
             (
@@ -231,7 +265,6 @@ def classify_inventory(snapshot: InventorySnapshot) -> InventoryClassification:
             )
         )
 
-    findings: list[DriftFinding] = []
     expected_by_object: dict[str, AuthorityEvidence] = {}
     conflicting_authority: set[str] = set()
     for item in snapshot.expected:
@@ -251,17 +284,27 @@ def classify_inventory(snapshot: InventorySnapshot) -> InventoryClassification:
         if len(items) > 1
     }
 
+    conflicting_bound_ids: set[str] = set()
+    for observation_id in sorted(conflicting_observation_ids):
+        items = observations_by_id[observation_id]
+        object_ids = {
+            item.evidence_object_id
+            for item in items
+            if item.evidence_object_id is not None
+        }
+        conflicting_bound_ids.update(object_ids)
+        findings.append(
+            _finding(
+                DriftCode.CONFLICTING_OBSERVATION,
+                CustodyGateState.BLOCKED_VIOLATION,
+                evidence_object_id=next(iter(object_ids)) if len(object_ids) == 1 else None,
+                observation_id=observation_id,
+            )
+        )
+
     bound: dict[str, list[MountedEvidence]] = defaultdict(list)
     for item in unique_observations:
         if item.observation_id in conflicting_observation_ids:
-            findings.append(
-                _finding(
-                    DriftCode.CONFLICTING_OBSERVATION,
-                    CustodyGateState.BLOCKED_VIOLATION,
-                    evidence_object_id=item.evidence_object_id,
-                    observation_id=item.observation_id,
-                )
-            )
             continue
         if item.evidence_object_id is None:
             findings.append(_classify_pending(item))
@@ -303,7 +346,11 @@ def classify_inventory(snapshot: InventorySnapshot) -> InventoryClassification:
                 findings.append(finding)
 
     for object_id in sorted(expected_by_object):
-        if object_id not in bound and object_id not in conflicting_authority:
+        if (
+            object_id not in bound
+            and object_id not in conflicting_authority
+            and object_id not in conflicting_bound_ids
+        ):
             findings.append(
                 _finding(
                     DriftCode.SEALED_EVIDENCE_MISSING,
@@ -329,6 +376,15 @@ def _classify_bound(
 ) -> DriftFinding | None:
     object_id = expected.evidence_object_id
     observation_id = observed.observation_id
+    if expected.storage_profile is StorageProfile.LOCAL_IMMUTABLE and (
+        observed.mount_identity is not None or observed.read_only is not None
+    ):
+        raise ValueError("local immutable observation cannot carry external facts")
+    if (
+        expected.storage_profile is StorageProfile.EXTERNALLY_READ_ONLY
+        and observed.immutable is not None
+    ):
+        raise ValueError("external observation cannot carry local immutable facts")
     if observed.unsafe_shape:
         return _finding(
             DriftCode.UNSAFE_SEALED_ENTRY,
