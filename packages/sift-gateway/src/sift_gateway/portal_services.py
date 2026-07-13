@@ -20,6 +20,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sift_gateway.custody_operations import (
+    CustodyOperationError,
+    CustodyOperationRepository,
+    CustodyOperationRepositoryProtocol,
+    LocalImmutablePostureAdapter,
+    LocalImmutablePostureProtocol,
+    SealCommand,
+    SealCustodyOperation,
+    public_operation,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -478,6 +489,20 @@ class contextlib_suppress_oserror:
 class EvidenceAuthorityService(_BasePortalDbService):
     """DB evidence/custody adapter over the C1 RPCs."""
 
+    def __init__(
+        self,
+        dsn: str,
+        *,
+        legacy_sync: bool = False,
+        custody_repository: CustodyOperationRepositoryProtocol | None = None,
+        posture_adapter: LocalImmutablePostureProtocol | None = None,
+    ) -> None:
+        super().__init__(dsn, legacy_sync=legacy_sync)
+        self._custody_repository = custody_repository or CustodyOperationRepository(
+            self._connect
+        )
+        self._posture_adapter = posture_adapter or LocalImmutablePostureAdapter()
+
     def reconcile_for_admission(self, case_id: str) -> dict[str, Any]:
         """Observe the mounted inventory and persist custody state, fail closed.
 
@@ -652,6 +677,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     (case_id,),
                 )
                 unregistered = [str(r[0]) for r in cur.fetchall()]
+        incomplete = public_operation(self._custody_repository.get_incomplete(case_id))
         if not row:
             return {
                 "seal_status": "unsealed",
@@ -661,6 +687,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 "issues": [],
                 "last_verified_at": None,
                 "unregistered": unregistered,
+                "incomplete_operation": incomplete,
             }
         return {
             "seal_status": row[0],
@@ -670,6 +697,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "issues": row[4] if isinstance(row[4], list) else [],
             "last_verified_at": _iso(row[5]),
             "unregistered": unregistered,
+            "incomplete_operation": incomplete,
         }
 
     def list_evidence(self, case_id: str) -> list[dict[str, Any]]:
@@ -794,11 +822,65 @@ class EvidenceAuthorityService(_BasePortalDbService):
         }
 
     def record_reauth_event(
-        self, *, case_id: str, actor: Any, examiner: str, action: str
+        self,
+        *,
+        case_id: str,
+        actor: Any,
+        examiner: str,
+        action: str,
+        binding: dict[str, Any] | None = None,
     ) -> str | None:
         actor_type, actor_user, actor_agent, actor_service = _actor_columns(actor)
+        details: dict[str, Any] = {"examiner": examiner, "action": action}
+        if binding is not None:
+            details["binding"] = binding
         with self._connect() as conn:
             with conn.cursor() as cur:
+                if binding is not None:
+                    lock_material = json.dumps(
+                        {
+                            "case_id": case_id,
+                            "action": action,
+                            "actor_type": actor_type,
+                            "actor_user": actor_user,
+                            "actor_service": actor_service,
+                            "idempotency_key": binding.get("idempotency_key"),
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    cur.execute(
+                        "select pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (lock_material,),
+                    )
+                    cur.execute(
+                        """
+                        select id::text, details
+                        from app.audit_events
+                        where case_id = %s and event_type = %s
+                          and source = 'portal_reauth'
+                          and actor_type = %s
+                          and actor_user_id is not distinct from %s
+                          and actor_service_identity_id is not distinct from %s
+                          and details->'binding'->>'idempotency_key' = %s
+                        order by created_at desc limit 1
+                        """,
+                        (
+                            case_id,
+                            f"reauth.{action}",
+                            actor_type,
+                            actor_user,
+                            actor_service,
+                            str(binding.get("idempotency_key") or ""),
+                        ),
+                    )
+                    existing = cur.fetchone()
+                    if existing:
+                        if existing[1] != details:
+                            raise PortalServiceError(
+                                "idempotency_key_reused", http_status=409
+                            )
+                        return str(existing[0])
                 cur.execute(
                     """
                     insert into app.audit_events
@@ -817,7 +899,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         actor_agent,
                         actor_service,
                         f"operator re-auth for {action}",
-                        _jsonb({"examiner": examiner, "action": action}),
+                        _jsonb(details),
                     ),
                 )
                 row = cur.fetchone()
@@ -829,66 +911,83 @@ class EvidenceAuthorityService(_BasePortalDbService):
         *,
         case_id: str,
         file_specs: list[dict[str, Any]],
+        reason: str,
+        idempotency_key: str,
         reauth_audit_event_id: str,
         actor: Any,
         examiner: str,
     ) -> dict[str, Any]:
+        """Validate the Portal command, then delegate the durable operation."""
+        reason = " ".join(reason.split())
+        idempotency_key = idempotency_key.strip()
+        if not reason:
+            raise PortalServiceError("seal_reason_required", http_status=400)
+        if not idempotency_key or len(idempotency_key) > 128:
+            raise PortalServiceError("seal_idempotency_key_required", http_status=400)
+        if not reauth_audit_event_id:
+            raise PortalServiceError("seal_requires_reauth", http_status=403)
+        if not file_specs or len(file_specs) > 1000:
+            raise PortalServiceError("seal_requires_items", http_status=400)
+
+        allowed_spec_keys = {"path", "description", "source"}
+        normalized_specs: list[dict[str, str | None]] = []
+        seen_paths: set[str] = set()
+        for spec in file_specs:
+            if not isinstance(spec, dict) or set(spec) - allowed_spec_keys:
+                raise PortalServiceError("invalid_seal_file_spec", http_status=400)
+            display_path = _relative_display_path(str(spec.get("path") or ""))
+            if len(display_path) > 1024:
+                raise PortalServiceError("evidence_path_too_long", http_status=400)
+            if display_path in seen_paths:
+                raise PortalServiceError("duplicate_seal_path", http_status=400)
+            seen_paths.add(display_path)
+            description = str(spec.get("description") or "")
+            source = str(spec.get("source") or "")
+            if len(description) > 1000 or len(source) > 500:
+                raise PortalServiceError("evidence_metadata_too_long", http_status=400)
+            normalized_specs.append(
+                {
+                    "path": display_path,
+                    "description": description or None,
+                    "source": source or None,
+                }
+            )
+        normalized_specs.sort(key=lambda item: str(item["path"]))
+
         self._scan_evidence(case_id)
         actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
         del actor_type
-        items: list[dict[str, Any]] = []
-        for spec in file_specs:
-            display_path = _relative_display_path(str(spec.get("path") or ""))
-            evidence_id = self._ensure_registered(
-                case_id,
-                display_path,
-                display_name=Path(display_path).name,
-                description=str(spec.get("description") or "") or None,
-                source=str(spec.get("source") or "") or None,
-                actor_user_id=actor_user,
-                actor_service_identity_id=actor_service,
-            )
-            path = self._resolve_evidence_path(case_id, display_path)
-            sha256, size = _hash_file(path)
-            items.append(
-                {
-                    "evidence_object_id": evidence_id,
-                    "sha256": f"sha256:{sha256}",
-                    "bytes": size,
-                    "registered_by": examiner,
-                }
-            )
-        if not items:
-            raise PortalServiceError("seal_requires_items", http_status=400)
-        manifest_version = self._next_manifest_version(case_id)
-        manifest_hash = _manifest_hash(case_id, manifest_version, items)
-        # B-MVP-048: harden the bytes on disk (service-owned + immutable) BEFORE
-        # recording the logical seal, so a seal can never be recorded as sealed
-        # while the evidence is still operator-copied root:root and mutable. Fail
-        # CLOSED: if the FS posture cannot be applied, the DB seal is not written.
-        self._harden_sealed_files(case_id, file_specs)
+        command = SealCommand(
+            case_id=case_id,
+            file_specs=tuple(normalized_specs),
+            actor_user_id=actor_user,
+            actor_service_identity_id=actor_service,
+            reason=reason,
+            reauth_audit_event_id=reauth_audit_event_id,
+            idempotency_key=idempotency_key,
+        )
+        try:
+            return SealCustodyOperation(
+                self._custody_repository,
+                self._posture_adapter,
+                self._case_artifact_path,
+                self._seal_object_for_path,
+            ).execute(command, examiner=examiner)
+        except CustodyOperationError as exc:
+            raise PortalServiceError(exc.reason, http_status=exc.http_status) from exc
+
+    def _seal_object_for_path(self, case_id: str, display_path: str) -> dict[str, Any]:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    select case_id::text, manifest_version, head_seq, head_hash,
-                           manifest_hash, seal_status, active_count, issues,
-                           last_event_type, last_verified_at
-                    from app.evidence_seal(%s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        case_id,
-                        _jsonb(items),
-                        manifest_version,
-                        manifest_hash,
-                        reauth_audit_event_id,
-                        actor_user,
-                        actor_service,
-                    ),
+                    """select id::text, status from app.evidence_objects
+                       where case_id = %s and display_path = %s""",
+                    (case_id, display_path),
                 )
                 row = cur.fetchone()
-            conn.commit()
-        return _chain_head_dict(row)
+        if not row:
+            raise PortalServiceError("evidence_object_not_found", http_status=404)
+        return {"evidence_object_id": str(row[0]), "status": str(row[1])}
 
     def _harden_sealed_files(
         self, case_id: str, file_specs: list[dict[str, Any]]

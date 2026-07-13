@@ -58,7 +58,7 @@ class FakeEvidenceDB:
         self.retire_calls = []
         self.verify_calls = []
 
-    def record_reauth_event(self, *, case_id, actor, examiner, action):
+    def record_reauth_event(self, *, case_id, actor, examiner, action, binding=None):
         self.reauth_calls.append((case_id, examiner, action))
         return "audit-evt-001"
 
@@ -92,7 +92,7 @@ class FakeEvidenceDB:
         self.verify_calls.append((case_id, actor))
         return {"verified": True, "issues": []}
 
-    def seal(self, *, case_id, file_specs, reauth_audit_event_id, actor, examiner):
+    def seal(self, *, case_id, file_specs, reason, idempotency_key, reauth_audit_event_id, actor, examiner):
         assert reauth_audit_event_id, "seal must receive a re-auth audit event id"
         self.seal_calls.append((case_id, file_specs, reauth_audit_event_id))
         return {"manifest_version": 3, "seal_status": "sealed"}
@@ -107,7 +107,7 @@ class FakeEvidenceDB:
 
 
 class FakeEvidenceDBNoReauth(FakeEvidenceDB):
-    def record_reauth_event(self, *, case_id, actor, examiner, action):
+    def record_reauth_event(self, *, case_id, actor, examiner, action, binding=None):
         return None  # simulate no DB audit sink -> seal must be refused
 
 
@@ -258,6 +258,7 @@ class TestEvidenceDBAuthority:
         # CL3a: the operator password is re-verified against Supabase.
         resp = c.post("/api/evidence/chain/seal", json={
             "password": GOOD_PASSWORD,
+            "reason": "initial intake", "idempotency_key": "e1-seal-1",
             "file_specs": [{"path": "evidence/disk.E01"}],
         })
         assert resp.status_code == 200
@@ -273,6 +274,7 @@ class TestEvidenceDBAuthority:
         c = _examiner(_make_client(evidence_service=ev))
         resp = c.post("/api/evidence/chain/seal", json={
             "password": GOOD_PASSWORD,
+            "reason": "initial intake", "idempotency_key": "e1-seal-2",
             "file_specs": [{"path": "evidence/disk.E01"}],
         })
         assert resp.status_code == 403
@@ -283,7 +285,7 @@ class TestEvidenceDBAuthority:
         ev = FakeEvidenceDB()
         c = _examiner(_make_client(evidence_service=ev))
         resp = c.post("/api/evidence/chain/seal", json={
-            "password": "wrong-password", "file_specs": [{"path": "evidence/d"}],
+            "password": "wrong-password", "reason": "initial intake", "idempotency_key": "e1-seal-3", "file_specs": [{"path": "evidence/d"}],
         })
         assert resp.status_code == 401
         assert not ev.seal_calls
@@ -298,7 +300,7 @@ class TestEvidenceDBAuthority:
         c = TestClient(app)
         set_operator_session(c, _SECRET)
         resp = c.post("/api/evidence/chain/seal", json={
-            "password": GOOD_PASSWORD, "file_specs": [{"path": "evidence/d"}],
+            "password": GOOD_PASSWORD, "reason": "initial intake", "idempotency_key": "e1-seal-4", "file_specs": [{"path": "evidence/d"}],
         })
         assert resp.status_code == 503
         assert not ev.seal_calls
@@ -324,7 +326,7 @@ class TestEvidenceDBAuthority:
         ev = FakeEvidenceDB()
         c = _readonly_client(evidence_service=ev)
         resp = c.post("/api/evidence/chain/seal", json={
-            "password": GOOD_PASSWORD, "file_specs": [{"path": "evidence/d"}],
+            "password": GOOD_PASSWORD, "reason": "initial intake", "idempotency_key": "e1-seal-5", "file_specs": [{"path": "evidence/d"}],
         })
         assert resp.status_code == 403
         assert not ev.seal_calls

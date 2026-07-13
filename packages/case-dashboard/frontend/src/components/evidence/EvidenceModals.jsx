@@ -199,7 +199,7 @@ function VerifyHmacModal({ password, onPasswordChange, loading, error, result, o
 }
 
 // ── Seal Manifest ──────────────────────────────────────────────────────────
-function SealModal({ password, onPasswordChange, loading, error, result, onClose, onSubmit }) {
+function SealModal({ password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
   return (
     <ModalShell title="Seal Evidence Manifest">
       <p className="text-xs text-muted-foreground">
@@ -211,6 +211,12 @@ function SealModal({ password, onPasswordChange, loading, error, result, onClose
         open until it completes.
       </p>
       <form id="modal-seal" onSubmit={onSubmit} className="space-y-4">
+        <ReasonField
+          value={reason}
+          onChange={onReasonChange}
+          disabled={loading}
+          placeholder="e.g. Initial evidence intake from validated source"
+        />
         <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
         <ModalError error={error} />
         {loading && <ModalLoading message="Generating key and signing…" />}

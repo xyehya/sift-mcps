@@ -57,6 +57,7 @@ export function EvidenceTab() {
   const [modalLoading, setModalLoading] = useState(false)
   const [modalError, setModalError] = useState('')
   const [modalResult, setModalResult] = useState(null)
+  const [sealIntentId, setSealIntentId] = useState(null)
 
   function openModal(name, path = null) {
     setActiveModal(name)
@@ -65,6 +66,7 @@ export function EvidenceTab() {
     setModalReason('')
     setModalError('')
     setModalResult(null)
+    setSealIntentId(name === 'seal' ? crypto.randomUUID() : null)
   }
 
   function closeModal() {
@@ -74,6 +76,7 @@ export function EvidenceTab() {
     setModalReason('')
     setModalError('')
     setModalResult(null)
+    setSealIntentId(null)
   }
 
   // Close + refresh after a successful custody action (1.5s success-state dwell).
@@ -90,6 +93,7 @@ export function EvidenceTab() {
     addToast,
     modalPassword,
     modalReason,
+    sealIntentId,
     pendingPath,
     unregisteredMetadata,
     setModalLoading,

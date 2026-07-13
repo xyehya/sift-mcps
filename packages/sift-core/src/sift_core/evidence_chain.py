@@ -774,6 +774,25 @@ def get_immutable_flag_fd(fd: int) -> bool | None:
         return None
 
 
+def set_immutable_flag_fd(fd: int, immutable: bool) -> bool:
+    """Set immutable posture on an already-authorized pinned descriptor.
+
+    The caller retains ownership of ``fd``.  Returning ``False`` is fail-closed:
+    callers must verify the resulting flag before recording custody state.
+    """
+    try:
+        flags_val = ctypes.c_int(0)
+        fcntl.ioctl(fd, _FS_IOC_GETFLAGS, flags_val)
+        if immutable:
+            flags_val.value |= _FS_IMMUTABLE_FL
+        else:
+            flags_val.value &= ~_FS_IMMUTABLE_FL
+        fcntl.ioctl(fd, _FS_IOC_SETFLAGS, flags_val)
+        return True
+    except (OSError, AttributeError):
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Sealed-evidence filesystem hardening (B-MVP-048)
 # ---------------------------------------------------------------------------

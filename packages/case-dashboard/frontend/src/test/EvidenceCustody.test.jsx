@@ -101,12 +101,14 @@ describe('Seal manifest flow', () => {
     expect(endpoints.postChainSeal).not.toHaveBeenCalled()
 
     // Happy path: fill password → seals with file specs derived from the row inputs.
-    fillModal({ password: 'hunter2' })
+    fillModal({ password: 'hunter2', reason: 'Initial evidence intake' })
     fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
 
     await waitFor(() => {
       expect(endpoints.postChainSeal).toHaveBeenCalledWith({
         password: 'hunter2',
+        reason: 'Initial evidence intake',
+        idempotency_key: expect.any(String),
         file_specs: [{ path: 'evidence/pcap.raw', source: 'USB drive #1', description: 'PCAP capture' }],
       })
     })
@@ -119,10 +121,34 @@ describe('Seal manifest flow', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Seal Manifest/i }))
     const modal = await screen.findByRole('dialog')
-    fillModal({ password: 'hunter2' })
+    fillModal({ password: 'hunter2', reason: 'Retry initial evidence intake' })
     fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
 
     expect(await within(modal).findByText('Seal endpoint unavailable')).toBeInTheDocument()
+  })
+
+  it('retains one idempotency key across retry and rotates it for a new modal intent', async () => {
+    endpoints.postChainSeal.mockRejectedValue(new Error('temporary network loss'))
+    render(<EvidenceTab />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /Seal Manifest/i }))
+    let modal = await screen.findByRole('dialog')
+    fillModal({ password: 'hunter2', reason: 'Initial intake' })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
+    await within(modal).findByText('temporary network loss')
+    const firstKey = endpoints.postChainSeal.mock.calls[0][0].idempotency_key
+
+    fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => expect(endpoints.postChainSeal).toHaveBeenCalledTimes(2))
+    expect(endpoints.postChainSeal.mock.calls[1][0].idempotency_key).toBe(firstKey)
+
+    fireEvent.click(within(modal).getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Seal Manifest/i }))
+    modal = await screen.findByRole('dialog')
+    fillModal({ password: 'hunter2', reason: 'Initial intake' })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => expect(endpoints.postChainSeal).toHaveBeenCalledTimes(3))
+    expect(endpoints.postChainSeal.mock.calls[2][0].idempotency_key).not.toBe(firstKey)
   })
 })
 

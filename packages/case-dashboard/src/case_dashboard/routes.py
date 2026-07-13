@@ -629,7 +629,13 @@ def _detect_write_block(evidence_dir: Path) -> dict:
     return {"write_protected": False, "warning": _WRITE_BLOCK_WARNING}
 
 
-def _record_reauth_event(request: Request, examiner: str, action: str) -> str | None:
+def _record_reauth_event(
+    request: Request,
+    examiner: str,
+    action: str,
+    *,
+    binding: dict[str, Any] | None = None,
+) -> str | None:
     """Record a successful re-auth as an audit event and return its id.
 
     Used by the C1 seal/ignore/retire RPCs which reject a transition without a
@@ -644,13 +650,18 @@ def _record_reauth_event(request: Request, examiner: str, action: str) -> str | 
     if not callable(recorder):
         return None
     try:
-        eid = recorder(
+        kwargs = dict(
             case_id=_active_case_id(),
             actor=_request_principal(request),
             examiner=examiner,
             action=action,
         )
+        if binding is not None:
+            kwargs["binding"] = binding
+        eid = recorder(**kwargs)
     except Exception as exc:
+        if getattr(exc, "reason", None) == "idempotency_key_reused":
+            raise
         logger.warning("re-auth audit event record failed: %s", exc)
         return None
     if eid:
@@ -1038,10 +1049,10 @@ async def post_evidence_chain_rescan(request: Request) -> JSONResponse:
 
 
 async def post_evidence_chain_seal(request: Request) -> JSONResponse:
-    """Seal a new evidence manifest version with HMAC confirmation.
+    """Run the durable operator Add/Seal custody operation.
 
-    Body: {challenge_id, response, file_specs: [{path, source?, description?}]}
-    Requires: session examiner + role examiner + must_reset_password=false + HMAC.
+    Body: {password, reason, idempotency_key, file_specs: [{path, source?, description?}]}
+    Requires: session examiner, role examiner, fresh scoped Supabase re-authentication.
     """
     role_err = _require_examiner_role(request)
     if role_err:
@@ -1060,10 +1071,21 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
+    allowed_fields = {"password", "file_specs", "reason", "idempotency_key"}
+    if not isinstance(body, dict) or set(body) - allowed_fields:
+        return JSONResponse({"error": "Unknown seal request field"}, status_code=400)
     file_specs = body.get("file_specs", [])
+    reason = str(body.get("reason") or "").strip()
+    idempotency_key = str(body.get("idempotency_key") or "").strip()
 
     if not isinstance(file_specs, list):
         return JSONResponse({"error": "file_specs must be a list"}, status_code=400)
+    if not file_specs or len(file_specs) > 1000:
+        return JSONResponse({"error": "file_specs must contain 1 to 1000 items"}, status_code=400)
+    if not reason or len(reason) > 1000:
+        return JSONResponse({"error": "reason is required (max 1000 characters)"}, status_code=400)
+    if not idempotency_key or len(idempotency_key) > 128:
+        return JSONResponse({"error": "idempotency_key is required (max 128 characters)"}, status_code=400)
 
     # CL3a: re-verify the operator's password against Supabase (fail closed).
     reauth_err = await _supabase_reverify(request, body)
@@ -1072,8 +1094,18 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
 
     # Validate file_specs entries
     for spec in file_specs:
-        if not isinstance(spec, dict) or "path" not in spec:
+        if (
+            not isinstance(spec, dict)
+            or "path" not in spec
+            or set(spec) - {"path", "source", "description"}
+        ):
             return JSONResponse({"error": "Each file_spec must have a 'path' key"}, status_code=400)
+        path = str(spec.get("path") or "")
+        parts = Path(path).parts
+        if len(parts) != 2 or parts[0] != "evidence" or parts[1] in ("", ".", ".."):
+            return JSONResponse({"error": "Invalid evidence path"}, status_code=400)
+        if len(str(spec.get("source") or "")) > 500 or len(str(spec.get("description") or "")) > 1000:
+            return JSONResponse({"error": "Evidence metadata is too long"}, status_code=400)
 
     # DB custody authority only (C1): the seal RPC requires a reauth audit event
     # id. The broker resolves the relative display paths to mounted bytes and
@@ -1083,7 +1115,19 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     if not callable(sealer):
         return _no_case_response()
 
-    reauth_id = _record_reauth_event(request, examiner, "evidence_seal")
+    try:
+        reauth_id = _record_reauth_event(
+            request,
+            examiner,
+            "evidence_seal",
+            binding={
+                "idempotency_key": idempotency_key,
+                "reason": reason,
+                "targets": sorted(str(spec.get("path") or "") for spec in file_specs),
+            },
+        )
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
     if not reauth_id:
         return JSONResponse(
             {"error": "Re-auth audit event required for seal"},
@@ -1093,6 +1137,8 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
         head = sealer(
             case_id=_active_case_id(),
             file_specs=file_specs,
+            reason=reason,
+            idempotency_key=idempotency_key,
             reauth_audit_event_id=reauth_id,
             actor=_request_principal(request),
             examiner=examiner,

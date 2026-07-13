@@ -166,6 +166,35 @@ Any interrupted phase → FAILED_RECOVERABLE (gate remains blocked)
 - Final database commit atomically records Evidence Version, Manifest Version, custody event, signature/checkpoint, and the transition to `OPEN`.
 - Restart resumes or exposes an exact recovery action. Retry cannot duplicate versions, manifests, or events.
 
+#### P4.23.2 frozen implementation seams
+
+The Add/Seal foundation is implemented through four typed, operator-only seams. Later custody
+packets consume these interfaces rather than adding another transaction or filesystem path:
+
+- `SealCommand` binds the case, sorted relative target set, actor, reason, scoped re-authentication
+  receipt, and idempotency key. Its request digest is stable for an equivalent target set.
+- `CustodyOperationRepository` exposes only `begin_or_resume`, compare-and-swap `advance`,
+  `commit_verified_seal`, `fail`, and `get_incomplete`. Postgres records both `REQUESTED` and
+  `GATE_BLOCKED` before returning from begin. A nonterminal operation is unique per case.
+- `LocalImmutablePostureAdapter` uses a prepare/apply/verify batch. Prepare opens every direct
+  evidence entry with `O_NOFOLLOW`, rejects unsafe types/link counts/ownership/mode, and hashes
+  pinned descriptors before any inode changes. Prepared facts are persisted while the gate is
+  blocked; apply and verify use the same descriptors and never clear protection from siblings.
+- The existing Portal custody-status read includes a path-free `incomplete_operation` summary.
+  Recovery reuses the exact operation identity and remains blocked until final commit.
+
+`app.custody_operation_commit_verified_seal` locks the operation and case head, derives the
+manifest version inside the transaction, preserves existing active sibling version identities,
+creates one new version per newly sealed object, and records the immutable manifest, canonical
+events, `LEDGER_COMMITTED`, `COMPLETED`, and `OPEN` atomically. `canonical_event_v1` includes the
+operation/action/case, object and version facts, manifest identity, actor, reason, re-authentication
+receipt, before/after state, digests, prior hash, sequence, and database UTC timestamp. It is the
+versioned event material consumed by P4.23.6 signing; filesystem paths remain relative display data.
+
+The browser creates one CSPRNG idempotency key when the Seal modal opens, retains it across retries,
+and rotates it only for a new modal intent. Passwords are re-verified but never persisted in the
+operation, event, request digest, or retry state.
+
 ### Re-authentication
 
 - Automatic detection/blocking, Rescan Inventory, Verify Ledger, and Full Verify Evidence do not require password re-authentication. Full Verify may accept an optional note.

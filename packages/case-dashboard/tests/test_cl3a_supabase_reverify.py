@@ -48,7 +48,7 @@ class FakeEvidenceDB:
         self.reauth_calls: list = []
         self.seal_calls: list = []
 
-    def record_reauth_event(self, *, case_id, actor, examiner, action):
+    def record_reauth_event(self, *, case_id, actor, examiner, action, binding=None):
         self.reauth_calls.append((examiner, action))
         return "audit-evt-cl3a"
 
@@ -59,7 +59,7 @@ class FakeEvidenceDB:
     def list_evidence(self, case_id):
         return []
 
-    def seal(self, *, case_id, file_specs, reauth_audit_event_id, actor, examiner):
+    def seal(self, *, case_id, file_specs, reason, idempotency_key, reauth_audit_event_id, actor, examiner):
         self.seal_calls.append(reauth_audit_event_id)
         return {"manifest_version": 1, "seal_status": "sealed"}
 
@@ -75,7 +75,9 @@ def _build(*, fake_auth, evidence_db):
 
 def _seal(client, password):
     return client.post("/api/evidence/chain/seal",
-                       json={"password": password, "file_specs": []})
+                       json={"password": password, "reason": "intake",
+                             "idempotency_key": "cl3a-seal",
+                             "file_specs": [{"path": "evidence/disk.raw"}]})
 
 
 class TestReverifyHappyPath:

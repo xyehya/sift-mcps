@@ -67,7 +67,7 @@ class FakeEvidenceDB:
         self.reacquire_calls: list = []
         self.unseal_calls: list = []
 
-    def record_reauth_event(self, *, case_id, actor, examiner, action):
+    def record_reauth_event(self, *, case_id, actor, examiner, action, binding=None):
         self.reauth_calls.append((case_id, examiner, action))
         return "audit-evt-001"
 
@@ -84,7 +84,7 @@ class FakeEvidenceDB:
     def list_evidence(self, case_id):
         return list(self._objects)
 
-    def seal(self, *, case_id, file_specs, reauth_audit_event_id, actor, examiner):
+    def seal(self, *, case_id, file_specs, reason, idempotency_key, reauth_audit_event_id, actor, examiner):
         assert reauth_audit_event_id, "seal must receive a re-auth audit event id"
         self.seal_calls.append((case_id, file_specs, reauth_audit_event_id))
         self.seal_status = "sealed"
@@ -367,25 +367,36 @@ class TestEvidenceChainSeal:
         resp = authed_client.post("/api/evidence/chain/seal", json={"file_specs": []})
         assert resp.status_code == 400
 
-    def test_seal_empty_manifest(self, authed_client, evidence_db):
-        """Sealing an empty file_specs reaches the DB seal RPC and returns version 1."""
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"password": GOOD_PASSWORD, "idempotency_key": "key", "file_specs": [{"path": "evidence/disk.raw"}]},
+            {"password": GOOD_PASSWORD, "reason": "intake", "file_specs": [{"path": "evidence/disk.raw"}]},
+            {"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "key", "file_specs": [{"path": "../disk.raw"}]},
+            {"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "key", "file_specs": [{"path": "evidence/disk.raw", "unknown": True}]},
+            {"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "key", "file_specs": [{"path": "evidence/disk.raw"}], "unknown": True},
+        ],
+    )
+    def test_seal_rejects_unbound_or_unknown_input(self, authed_client, evidence_db, body):
+        resp = authed_client.post("/api/evidence/chain/seal", json=body)
+        assert resp.status_code == 400
+        assert not evidence_db.seal_calls
+
+    def test_seal_empty_manifest_is_rejected(self, authed_client, evidence_db):
         resp = authed_client.post(
             "/api/evidence/chain/seal",
-            json={"password": GOOD_PASSWORD, "file_specs": []},
+            json={"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "seal-empty", "file_specs": []},
         )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["sealed"] is True
-        assert data["authority"] == "db"
-        assert data["manifest_version"] == 1
-        assert data["files_added"] == []
-        assert evidence_db.seal_calls and evidence_db.seal_calls[0][2] == "audit-evt-001"
+        assert resp.status_code == 400
+        assert not evidence_db.seal_calls
 
     def test_seal_registers_evidence_file(self, authed_client, evidence_db):
         resp = authed_client.post(
             "/api/evidence/chain/seal",
             json={
                 "password": GOOD_PASSWORD,
+                "reason": "Initial intake",
+                "idempotency_key": "seal-001",
                 "file_specs": [
                     {"path": "evidence/disk.raw", "source": "USB-001", "description": "Host disk image"}
                 ],
@@ -399,7 +410,7 @@ class TestEvidenceChainSeal:
     def test_seal_wrong_password_returns_401(self, authed_client, evidence_db):
         resp = authed_client.post(
             "/api/evidence/chain/seal",
-            json={"password": "wrong-password", "file_specs": []},
+            json={"password": "wrong-password", "reason": "intake", "idempotency_key": "seal-002", "file_specs": [{"path": "evidence/disk.raw"}]},
         )
         assert resp.status_code == 401
         assert not evidence_db.seal_calls
@@ -409,7 +420,7 @@ class TestEvidenceChainSeal:
         fake_auth.control_plane_down = True
         resp = authed_client.post(
             "/api/evidence/chain/seal",
-            json={"password": GOOD_PASSWORD, "file_specs": []},
+            json={"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "seal-003", "file_specs": [{"path": "evidence/disk.raw"}]},
         )
         assert resp.status_code == 503
         assert not evidence_db.seal_calls
@@ -419,7 +430,7 @@ class TestEvidenceChainSeal:
         c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
         resp = c.post(
             "/api/evidence/chain/seal",
-            json={"password": GOOD_PASSWORD, "file_specs": []},
+            json={"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "seal-004", "file_specs": [{"path": "evidence/disk.raw"}]},
         )
         assert resp.status_code == 404
         assert "active case" in resp.json()["error"].lower()
@@ -441,7 +452,7 @@ class TestEvidenceChainSeal:
 
         r = c.post(
             "/api/evidence/chain/seal",
-            json={"password": GOOD_PASSWORD, "file_specs": []},
+            json={"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "seal-005", "file_specs": [{"path": "evidence/disk.raw"}]},
         )
         assert r.status_code == 200
         # FakeActiveCases exposes no artifact_path, so the resolved case dir str is
@@ -465,7 +476,7 @@ class TestEvidenceChainSeal:
         set_operator_session(c, _SECRET)
         resp = c.post(
             "/api/evidence/chain/seal",
-            json={"password": GOOD_PASSWORD, "file_specs": []},
+            json={"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "seal-006", "file_specs": [{"path": "evidence/disk.raw"}]},
         )
         assert resp.status_code == 403
 
