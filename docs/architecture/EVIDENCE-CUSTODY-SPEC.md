@@ -209,9 +209,10 @@ and idempotency key; it contains no password, raw path, browser receipt, or stor
 This seam provides begin/resume authorization and durable gate blocking only. Every action still
 requires its own database-authoritative finalizer and filesystem orchestration in its owning packet;
 the Add/Seal finalizer rejects every non-`ADD_SEAL` operation before replay or mutation. Custody
-transactions acquire locks in one order: per-case advisory transaction lock first, then operation,
-Evidence Object, version, manifest, and case-head row locks. The action seam adds no Portal route,
-MCP tool, filesystem mutation path, or `anon`/`authenticated` database authority.
+transactions acquire the per-case advisory transaction lock before every custody row lock. Each
+action-specific finalizer owns, documents, and tests its internal row order; the shared seam does not
+impose a false universal order among those rows. The action seam adds no Portal route, MCP tool,
+filesystem mutation path, or `anon`/`authenticated` database authority.
 
 ### Re-authentication
 

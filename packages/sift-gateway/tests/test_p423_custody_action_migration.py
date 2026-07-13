@@ -10,6 +10,12 @@ BASE_MIGRATION = (
     Path(__file__).parents[3]
     / "supabase/migrations/202607132100_custody_operations.sql"
 ).read_text(encoding="utf-8")
+SPEC = (
+    Path(__file__).parents[3] / "docs/architecture/EVIDENCE-CUSTODY-SPEC.md"
+).read_text(encoding="utf-8")
+ADR = (Path(__file__).parents[3] / ".codebase-memory/adr.md").read_text(
+    encoding="utf-8"
+)
 
 
 def test_action_vocabulary_is_closed_and_add_seal_rpc_remains_compatible():
@@ -46,7 +52,7 @@ def test_server_derives_action_reauth_and_exact_object_binding():
     assert "where key not in ('schema_version','action','evidence_object_id')" in MIGRATION
 
 
-def test_begin_and_finalizer_freeze_case_first_lock_order():
+def test_case_advisory_precedes_every_shared_custody_row_lock():
     begin = MIGRATION.split(
         "create or replace function app.custody_operation_begin_or_resume(", 1
     )[1].split("alter function app.custody_operation_commit_verified_seal", 1)[0]
@@ -59,6 +65,10 @@ def test_begin_and_finalizer_freeze_case_first_lock_order():
         "create or replace function app.custody_operation_commit_verified_seal(", 1
     )[1].split("revoke execute", 1)[0]
     assert finalizer.index("pg_advisory_xact_lock") < finalizer.index("for update")
+    assert "case, operation, then" not in MIGRATION
+    assert "lock first, then audit" not in MIGRATION
+    assert "before every custody row lock" in SPEC
+    assert "precedes every custody row lock" in ADR
 
 
 def test_add_seal_finalizer_rejects_every_other_action_before_inner_mutation():

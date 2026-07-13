@@ -73,8 +73,8 @@ begin
       using errcode='invalid_parameter_value';
   end if;
 
-  -- Global custody lock order: case advisory lock first, then audit,
-  -- operation, Evidence Object, version, manifest, and head row locks.
+  -- Global invariant: acquire the per-case advisory transaction lock before
+  -- any custody row lock. Each action owns and documents its internal row order.
   perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
 
   if p_action='ADD_SEAL' then
@@ -274,8 +274,8 @@ begin
   if not found then
     raise exception 'custody_operation_missing' using errcode='no_data_found';
   end if;
-  -- Finalizers use the same frozen lock order as begin: case, operation, then
-  -- action-specific object/version/manifest/head rows in the inner finalizer.
+  -- Finalizers share only the case-first invariant. The Add/Seal inner
+  -- finalizer owns and documents its action-specific row order.
   perform pg_advisory_xact_lock(hashtextextended(v_case_id::text,0));
   select * into v_op from app.custody_operations
     where id=p_operation_id for update;
