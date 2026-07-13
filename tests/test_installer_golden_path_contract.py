@@ -179,6 +179,15 @@ def test_secure_os_hardening_is_default_and_service_scoped() -> None:
     )
     assert "AmbientCapabilities=CAP_LINUX_IMMUTABLE" in gateway_unit
     assert "SIFT_DROP_BACKEND_CAPABILITIES=1" in gateway_unit
+    job_worker_unit = units[1].read_text(encoding="utf-8")
+    # The durable run_command lane reaches the root-owned, argv-validating
+    # scope helper through a narrow sudoers rule.  These are the minimum caps
+    # sudo needs for that transition; they are never ambient capabilities.
+    assert (
+        "CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_AUDIT_WRITE"
+        in job_worker_unit
+    )
+    assert "AmbientCapabilities=" in job_worker_unit
     for unit in units[1:]:
         assert "AmbientCapabilities=CAP_LINUX_IMMUTABLE" not in unit.read_text(
             encoding="utf-8"

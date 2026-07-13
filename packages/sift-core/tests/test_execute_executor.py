@@ -7,8 +7,12 @@ from pathlib import Path
 import pytest
 from sift_core.execute import worker
 from sift_core.execute.catalog import clear_catalog_cache
-from sift_core.execute.exceptions import DeniedBinaryError, ExecutionTimeoutError
-from sift_core.execute.executor import execute
+from sift_core.execute.exceptions import (
+    DeniedBinaryError,
+    ExecutionError,
+    ExecutionTimeoutError,
+)
+from sift_core.execute.executor import _run_isolated_worker, execute
 from sift_core.execute.security_policy import SECURITY_POLICY_ENV, policy_to_env_json
 from sift_core.execute.tools import generic
 from sift_core.execute.tools.discovery import get_tool_help
@@ -341,6 +345,28 @@ def test_run_command_passes_memory_limit_to_worker(monkeypatch):
     _run_isolated_worker(["/usr/bin/date"], timeout=5, cwd=None, max_output_bytes=1024, memory_limit_bytes=50_000_000)
 
     assert payloads[0]["memory_limit_bytes"] == 50_000_000
+
+
+def test_isolated_worker_missing_exit_code_is_a_safe_execution_error(monkeypatch):
+    """A malformed child result must not escape as a durable-job KeyError."""
+    import json
+    import subprocess
+
+    class FakeCompletedProcess:
+        returncode = 0
+        stdout = json.dumps({"status": "incomplete"})
+        stderr = "worker bootstrap failed"
+
+    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: FakeCompletedProcess())
+
+    with pytest.raises(ExecutionError, match="invalid result"):
+        _run_isolated_worker(
+            ["/usr/bin/date"],
+            timeout=5,
+            cwd=None,
+            max_output_bytes=1024,
+            memory_limit_bytes=0,
+        )
 
 
 def test_run_command_passes_seccomp_kill_mode_to_worker(monkeypatch):

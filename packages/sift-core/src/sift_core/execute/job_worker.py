@@ -320,6 +320,11 @@ class JobWorker:
             self._fail(job, _sanitize(str(exc)))
             return
         except Exception as exc:  # defensive: unexpected handler crash
+            # Keep full diagnostics in the service journal for operators while
+            # preserving the deliberately path-safe, agent-visible summary
+            # below.  Without this, a live worker failure is reduced to only
+            # its exception class and cannot be repaired from evidence.
+            logger.exception("Unhandled job handler error (job_type=%s)", job.job_type)
             self._fail(job, _sanitize(f"unhandled worker error: {type(exc).__name__}"))
             return
         if not isinstance(result, JobResult):

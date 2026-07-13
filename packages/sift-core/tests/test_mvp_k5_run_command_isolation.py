@@ -619,6 +619,13 @@ def test_b_mvp_027_evidence_ref_command_reaches_exec_via_worker_loop(db, sealed_
                 "command": "cat evidence/disk.txt",
                 "purpose": "read sealed evidence via durable lane",
                 "evidence_refs": ["disk.txt"],
+                # Match the durable tool's explicit low-context path: no
+                # output artifact and no inline preview.  This is the live
+                # async shape that must still reach the isolated executor.
+                "timeout": 10,
+                "save_output": False,
+                "preview_lines": 0,
+                "skip_enrichment": True,
             },
             spec_internal={
                 "case_dir": str(sealed_case),

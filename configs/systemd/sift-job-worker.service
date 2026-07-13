@@ -77,10 +77,13 @@ RestrictRealtime=true
 LockPersonality=true
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-# This lane never seals or unseals evidence. The root-owned, argv-validating
-# scope helper is reached only through its narrow sudoers rule, so the
-# long-lived worker needs no ambient or bounded capability.
-CapabilityBoundingSet=
+# This lane never seals or unseals evidence.  The scope helper is the only
+# approved root transition: its sudoers rule permits only that root-owned,
+# argv-validating helper, and AmbientCapabilities stays empty.  Sudo itself
+# needs these caps inside the unit's bounding set to change uid/gid and write
+# its audit record; without them every durable run_command fails before the
+# isolated worker starts.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_AUDIT_WRITE
 AmbientCapabilities=
 # === end RUN-3 B-AA hardening ===============================================
 

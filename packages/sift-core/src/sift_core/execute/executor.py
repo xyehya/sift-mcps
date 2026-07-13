@@ -293,6 +293,14 @@ def _run_isolated_worker(
         stderr = _truncate(proc.stderr or "", 2000)
         raise ExecutionError(f"Executor worker returned invalid JSON: {stderr}") from exc
 
+    if not isinstance(result, dict):
+        logger.error(
+            "Executor worker returned a non-object result (returncode=%s, stderr_bytes=%s)",
+            proc.returncode,
+            len(proc.stderr or ""),
+        )
+        raise ExecutionError("Executor worker returned an invalid result")
+
     error_type = result.get("error_type")
     if error_type == "timeout":
         raise ExecutionTimeoutError(
@@ -306,6 +314,19 @@ def _run_isolated_worker(
         raise PermissionError(msg)
     if error_type:
         raise OSError(result.get("message") or f"executor worker error: {error_type}")
+    if "exit_code" not in result:
+        # The worker protocol is fail-closed: a successful child process must
+        # still return an execution result.  Avoid indexing an absent key here
+        # because that turns a sandbox/bootstrap fault into an opaque KeyError
+        # at the durable-job boundary.  Keep only structural diagnostics in the
+        # service log; child stdout may be forensic data and is never logged.
+        logger.error(
+            "Executor worker returned no exit_code (returncode=%s, keys=%s, stderr_bytes=%s)",
+            proc.returncode,
+            sorted(str(key) for key in result),
+            len(proc.stderr or ""),
+        )
+        raise ExecutionError("Executor worker returned an invalid result")
 
     # SEC-11: surface the ACTUAL applied isolation posture. The worker reports
     # the per-tool launcher/seccomp/landlock/runtime-user facts (it builds the
