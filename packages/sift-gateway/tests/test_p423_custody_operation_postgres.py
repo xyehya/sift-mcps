@@ -249,6 +249,48 @@ def test_final_commit_rollback_replay_sibling_preservation_and_grants():
                 assert cur.fetchone()[0] == 1
 
 
+@pytest.mark.parametrize("phase", ["REQUESTED", "LEDGER_COMMITTED"])
+def test_resume_rejects_nonresumable_phase_without_consuming_receipt_or_state_change(phase):
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as conn:
+        intent = _setup_intent(conn)
+        with conn.cursor() as cur:
+            operation_id, _ = _begin(cur, intent, "original-runner")
+            cur.execute(
+                "update app.custody_operations set phase=%s where id=%s",
+                (phase, operation_id),
+            )
+            conn.commit()
+            resume_id = _resume_audit(cur, intent, operation_id)
+            conn.commit()
+            cur.execute(
+                """select phase,runner_instance_id,
+                          (select count(*) from app.custody_operation_history
+                           where resume_reauth_audit_event_id=%s)
+                   from app.custody_operations where id=%s""",
+                (resume_id, operation_id),
+            )
+            assert cur.fetchone() == (phase, "original-runner", 0)
+
+            with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+                _begin(
+                    cur,
+                    intent,
+                    "resume-runner",
+                    resume_audit_id=resume_id,
+                )
+            conn.rollback()
+
+            cur.execute(
+                """select phase,runner_instance_id,
+                          (select count(*) from app.custody_operation_history
+                           where resume_reauth_audit_event_id=%s)
+                   from app.custody_operations where id=%s""",
+                (resume_id, operation_id),
+            )
+            assert cur.fetchone() == (phase, "original-runner", 0)
+
+
 def test_violation_reauth_scope_and_restart_instance_recovery_fail_closed():
     from psycopg.types.json import Jsonb
 

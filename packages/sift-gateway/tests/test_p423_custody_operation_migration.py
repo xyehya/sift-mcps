@@ -98,8 +98,13 @@ def test_reauth_violation_and_verified_items_are_db_authority_checks():
         "resume_reauth_reused",
         "when unique_violation then",
         "resume_reauth_required",
+        "custody_operation_not_resumable",
     ):
         assert fragment in MIGRATION
+    resume_branch = MIGRATION.split("if found then", 1)[1].split("return v_op;", 1)[0]
+    assert resume_branch.index("custody_operation_not_resumable") < resume_branch.index(
+        "select * into v_resume"
+    )
 
 
 def test_failure_is_expected_phase_cas_and_never_downgrades_violation():

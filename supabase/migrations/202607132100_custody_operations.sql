@@ -170,6 +170,10 @@ begin
     if v_op.retired_runner_instance_ids ? p_runner_instance_id then
       raise exception 'custody_operation_retired_runner' using errcode='P4232';
     end if;
+    if p_resume_reauth_audit_event_id is not null
+       and v_op.phase not in ('GATE_BLOCKED','FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED','FAILED_RECOVERABLE') then
+      raise exception 'custody_operation_not_resumable' using errcode='invalid_authorization_specification';
+    end if;
     if v_op.runner_instance_id<>p_runner_instance_id
        and v_op.phase in ('GATE_BLOCKED','FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED','FAILED_RECOVERABLE')
        and p_resume_reauth_audit_event_id is null then

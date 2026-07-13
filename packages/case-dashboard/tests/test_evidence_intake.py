@@ -435,6 +435,31 @@ class TestEvidenceChainSeal:
         assert resp.status_code == 400
         assert not evidence_db.resume_calls
 
+    @pytest.mark.parametrize("phase", ["REQUESTED", "LEDGER_COMMITTED"])
+    def test_resume_nonresumable_phase_rejects_before_filesystem_orchestration(
+        self, phase, authed_client, evidence_db, monkeypatch
+    ):
+        class NotResumableError(Exception):
+            reason = "custody_operation_not_resumable"
+            http_status = 404
+
+        def reject_resume(**_kwargs):
+            raise NotResumableError(phase)
+
+        monkeypatch.setattr(evidence_db, "resume_seal", reject_resume)
+        resp = authed_client.post(
+            "/api/evidence/chain/seal/resume",
+            json={
+                "password": GOOD_PASSWORD,
+                "operation_id": "33333333-3333-3333-3333-333333333333",
+            },
+        )
+
+        assert resp.status_code == 404
+        assert resp.json() == {"error": "custody_operation_not_resumable"}
+        assert not evidence_db.resume_calls
+        assert not evidence_db.seal_calls
+
     def test_seal_wrong_password_returns_401(self, authed_client, evidence_db):
         resp = authed_client.post(
             "/api/evidence/chain/seal",

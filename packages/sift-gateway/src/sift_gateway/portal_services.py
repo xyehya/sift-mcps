@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from sift_gateway.custody_operations import (
+    RESUMABLE_SEAL_PHASES,
     CustodyOperationError,
     CustodyOperationRepository,
     CustodyOperationRepositoryProtocol,
@@ -827,7 +828,6 @@ class EvidenceAuthorityService(_BasePortalDbService):
         case_id: str,
         actor: Any,
         examiner: str,
-        resume_reauth_audit_event_id: str | None = None,
         action: str,
         binding: dict[str, Any] | None = None,
     ) -> str | None:
@@ -994,8 +994,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
                               actor_user_id::text,actor_service_identity_id::text
                        from app.custody_operations
                        where id=%s and case_id=%s and action='ADD_SEAL'
-                         and phase<>'COMPLETED'""",
-                    (operation_id, case_id),
+                         and phase=any(%s)""",
+                    (
+                        operation_id,
+                        case_id,
+                        [phase.value for phase in RESUMABLE_SEAL_PHASES],
+                    ),
                 )
                 row = cur.fetchone()
         if not row:

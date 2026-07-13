@@ -21,6 +21,7 @@ from sift_gateway.portal_services import EvidenceAuthorityService, PortalService
 
 CASE_ID = "11111111-1111-1111-1111-111111111111"
 REAUTH_ID = "22222222-2222-2222-2222-222222222222"
+ACTOR_ID = "55555555-5555-5555-5555-555555555555"
 
 
 class FakeRepository:
@@ -170,9 +171,50 @@ def _seal(service: EvidenceAuthorityService):
         reason="Initial evidence intake",
         idempotency_key="seal-001",
         reauth_audit_event_id=REAUTH_ID,
-        actor={"principal_type": "operator", "principal_id": "55555555-5555-5555-5555-555555555555"},
+        actor={"principal_type": "operator", "principal_id": ACTOR_ID},
         examiner="examiner",
     )
+
+
+class _ResumeLookupCursor:
+    def __init__(self, phase: CustodyOperationPhase) -> None:
+        self.phase = phase
+        self.allowed: list[str] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def execute(self, _sql, params) -> None:
+        self.allowed = list(params[2])
+
+    def fetchone(self):
+        if self.phase.value not in self.allowed:
+            return None
+        return (
+            {"action": "ADD_SEAL", "files": [{"path": "evidence/disk.raw"}]},
+            "Initial evidence intake",
+            "seal-001",
+            REAUTH_ID,
+            ACTOR_ID,
+            None,
+        )
+
+
+class _ResumeLookupConnection:
+    def __init__(self, phase: CustodyOperationPhase) -> None:
+        self.cursor_instance = _ResumeLookupCursor(phase)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def cursor(self):
+        return self.cursor_instance
 
 
 def test_seal_blocks_then_applies_verifies_and_commits(seal_service):
@@ -250,6 +292,41 @@ def test_exact_retry_returns_completed_result_without_filesystem_replay(seal_ser
 def test_public_operation_marks_only_server_resumable_phases(phase, recoverable, seal_service):
     _service, repo, _posture = seal_service
     assert public_operation(replace(repo.record, phase=phase))["recoverable"] is recoverable
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [CustodyOperationPhase.REQUESTED, CustodyOperationPhase.LEDGER_COMMITTED],
+)
+def test_resume_service_rejects_nonresumable_phase_before_orchestration(
+    phase, seal_service, monkeypatch
+):
+    service, repo, posture = seal_service
+    lookup = _ResumeLookupConnection(phase)
+    monkeypatch.setattr(service, "_connect", lambda: lookup)
+    scan_calls: list[str] = []
+    monkeypatch.setattr(service, "_scan_evidence", scan_calls.append)
+
+    with pytest.raises(PortalServiceError) as exc:
+        service.resume_seal(
+            case_id=CASE_ID,
+            operation_id=repo.record.operation_id,
+            actor={"principal_type": "operator", "principal_id": ACTOR_ID},
+            examiner="examiner",
+            resume_reauth_audit_event_id="66666666-6666-6666-6666-666666666666",
+        )
+
+    assert exc.value.reason == "custody_operation_not_resumable"
+    assert exc.value.http_status == 404
+    assert lookup.cursor_instance.allowed == [
+        CustodyOperationPhase.GATE_BLOCKED.value,
+        CustodyOperationPhase.FILESYSTEM_APPLYING.value,
+        CustodyOperationPhase.FILESYSTEM_VERIFIED.value,
+        CustodyOperationPhase.FAILED_RECOVERABLE.value,
+    ]
+    assert repo.calls == []
+    assert posture.calls == []
+    assert scan_calls == []
 
 
 def test_seal_requires_reason_idempotency_and_reauth(seal_service):

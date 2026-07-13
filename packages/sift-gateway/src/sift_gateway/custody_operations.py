@@ -39,6 +39,14 @@ class CustodyOperationPhase(StrEnum):
     FAILED_RECOVERABLE = "FAILED_RECOVERABLE"
 
 
+RESUMABLE_SEAL_PHASES = (
+    CustodyOperationPhase.GATE_BLOCKED,
+    CustodyOperationPhase.FILESYSTEM_APPLYING,
+    CustodyOperationPhase.FILESYSTEM_VERIFIED,
+    CustodyOperationPhase.FAILED_RECOVERABLE,
+)
+
+
 @dataclass(frozen=True)
 class SealCommand:
     case_id: str
@@ -559,10 +567,6 @@ def public_operation(record: CustodyOperationRecord | None) -> dict[str, Any] | 
             record.failed_from_phase.value if record.failed_from_phase else None
         ),
         "failure_code": record.failure_code,
-        "recoverable": record.action == "ADD_SEAL" and record.phase in {
-            CustodyOperationPhase.GATE_BLOCKED,
-            CustodyOperationPhase.FILESYSTEM_APPLYING,
-            CustodyOperationPhase.FILESYSTEM_VERIFIED,
-            CustodyOperationPhase.FAILED_RECOVERABLE,
-        },
+        "recoverable": record.action == "ADD_SEAL"
+        and record.phase in RESUMABLE_SEAL_PHASES,
     }
