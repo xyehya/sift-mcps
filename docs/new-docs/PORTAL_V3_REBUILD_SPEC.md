@@ -43,7 +43,7 @@
   3. **Monolith components** — EvidenceTab 1691, FindingsTab 1380, ReportsTab 1121, BackendsTab 808 lines. v3 decomposes.
   4. Cramped 13px base, no real type scale, weak elevation, dark-only.
 - **Working plumbing to PRESERVE-BY-CONTRACT (port, keep external shape):** `src/store/useStore.js`, `src/api/{client,endpoints,crypto}.js`, `src/hooks/{usePolling,useDataPolling}.js`, auth flow (`getMe`, login, case activate/create challenge), session-envelope cookie + Supabase JWT (backend `session_jwt.py`, `auth.py`).
-- Tests (vitest): `CommandPalette`, `SessionChanges`, `useStore.interface`, `EvidenceUnseal`, `BackendsTab`. v3 rewrites these against new components; `useStore.interface` semantics preserved.
+- Tests (vitest): `CommandPalette`, `SessionChanges`, `useStore.interface`, `EvidenceRecovery`, `BackendsTab`. Current custody recovery semantics supersede the removed standalone Unseal flow; `useStore.interface` semantics remain preserved.
 
 ---
 
@@ -167,7 +167,7 @@ SideNav: grouped, labels+icons, active state, badges (pending findings, open tod
 
 Rebuild-everything applies to UI/state, but the auth + crypto layer is security-critical and tested. Treat as a **behavior-preserving port**:
 - Preserve external contracts: session-envelope cookie name(s), Supabase JWT handling (`session_jwt.py` server side), `getMe`/login/logout flows, case-activate challenge protocol (DB-authority `{required:false}` vs file-backed re-auth — see old `Header.jsx`), RBAC (examiner vs readonly).
-- Preserve `api/crypto.js` scheme and `EvidenceUnseal` semantics exactly (covered by a regression test that must stay green).
+- Preserve `api/crypto.js` and durable `EvidenceRecovery` semantics exactly (covered by regression tests that must stay green).
 - Any change to auth/crypto/RBAC requires operator + security-agent sign-off before merge.
 
 ---
@@ -195,7 +195,7 @@ Single foundation track (1 agent or orchestrator-directed), because parallelizin
 ### Phase 1 — FEATURE TABS (parallel, each own worktree off Phase-0 HEAD)
 | Agent | Owns | Notes / risk |
 |---|---|---|
-| **AGENT-EVID** | Evidence, Backends | Heaviest. Evidence = crypto unseal + chain status + seal; preserve `EvidenceUnseal` semantics. Backends = health/manifest. Decompose the 1691/808-line monoliths. |
+| **AGENT-EVID** | Evidence, Backends | Heaviest. Evidence = durable Replace/Reacquire, exact Restore, chain status, and seal; preserve `EvidenceRecovery` semantics. Backends = health/manifest. Decompose the 1691/808-line monoliths. |
 | **AGENT-ENTITY** | Timeline, IOCs, Hosts, Accounts | Data-table + chart heavy. Shared table/filter primitives. |
 | **AGENT-REPORT** | Reports, TODOs, Settings | Reports = generation + render (sanitize). Settings = theme/account/RBAC-aware. |
 
@@ -208,7 +208,7 @@ Each agent: build assigned tab(s) using frozen tokens + shared primitives + moti
 - `/verify` + `/run` the app; screenshots both themes; responsive pass.
 
 ### Phase 3 — SECURITY REVIEW (dedicated security agent → LAST VERDICT)
-- **AGENT-SECURITY** loads `codeguard-security` + runs `security-review` skill. Scope: auth flow, `session_jwt`/RBAC, `crypto.js` + EvidenceUnseal, CSP correctness, case activate/create, evidence seal/unseal, new dependency supply chain, secrets-in-bundle scan, XSS/CSRF surface, no inline-style/`unsafe-inline` regressions.
+- **AGENT-SECURITY** loads `codeguard-security` + runs `security-review` skill. Scope: auth flow, `session_jwt`/RBAC, durable EvidenceRecovery, CSP correctness, case activate/create, evidence seal/recovery, new dependency supply chain, secrets-in-bundle scan, XSS/CSRF surface, no inline-style/`unsafe-inline` regressions.
 - Output: **verdict (PASS / PASS-WITH-FIXES / FAIL)** + itemized findings + severity. This is the gate. **Operator + orchestrator decide together** on the verdict; remediation loops back to relevant agent.
 
 ### Phase 4 — CLOSEOUT

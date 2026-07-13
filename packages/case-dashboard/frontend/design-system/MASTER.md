@@ -40,8 +40,8 @@ implementation, which wins over prose.
 5. **Lucide icons only** (no emoji as icons). **focus-visible** on every
    interactive element. **aria-label** on icon-only controls. **AA contrast in
    both themes.** `prefers-reduced-motion` honoured.
-6. **Never** edit `src/test/useStore.interface.test.js` or
-   `src/test/EvidenceUnseal.test.jsx`, and never add/remove top-level
+6. **Never** edit `src/test/useStore.interface.test.js`, and keep
+   `src/test/EvidenceRecovery.test.jsx` green; never add/remove top-level
    `useStore` keys, without operator + orchestrator sign-off.
 
 ---
@@ -276,8 +276,8 @@ components/ui/             # vendored shadcn primitives (do not restyle ad hoc)
 - No raw hex; no inline styles except data-driven token-var numerics.
 - Lucide icons only; no external origins (chips don't link out — CSP stays
   `'self'`). External links, if ever needed, require `rel="noopener noreferrer"`.
-- No secrets/tokens/DSNs in client code or bundle. Auth/crypto/EvidenceUnseal are
-  a behavior-preserving PORT (spec §6) — changes need operator + security sign-off.
+- No secrets/tokens/DSNs in client code or bundle. Auth/crypto and durable
+  evidence recovery changes need operator + security sign-off.
 - `aria-live` for async/toast/error regions; error messages state cause + fix.
 
 ---
@@ -304,8 +304,8 @@ components/ui/             # vendored shadcn primitives (do not restyle ad hoc)
   `useStore.setState({...})`, shim `window.matchMedia` (framer `useReducedMotion`),
   and `vi.mock('../api/endpoints', …)` for network. Reference:
   `test/OverviewTab.test.jsx`, `test/FindingsTab.test.jsx`.
-- Baseline suites MUST stay green; `useStore.interface` + `EvidenceUnseal` stay
-  byte-identical.
+- Baseline suites MUST stay green; `useStore.interface` stays byte-identical and
+  `EvidenceRecovery` protects the current custody contract.
 
 ---
 

@@ -59,13 +59,13 @@ Timestamp-ordered, idempotent, covering the `app` schema with 31 `FORCE ROW LEVE
 | `202606081600` | Investigation authority: `investigation_findings`, `investigation_timeline_events`, `investigation_iocs`, `investigation_todos` |
 | `202606081601` | Host identity decisions: `host_identity_decisions` |
 | `202606081602` | Investigation IOCs content hash |
-| `202606101000` | Evidence reacquire |
+| `202606101000` | Historical one-shot evidence reacquire (runtime grant revoked by P4.23.3) |
 | `202606101100` | RAG search filters |
 | `202606111200` | RAG knowledge-only enforcement (DB trigger blocks `kind='derived'`) |
 | `202606131000` | **FORCE RLS on all 31 app.* tables** |
 | `202606141200` | Approval ledger: `approval_commit_events`, `approval_commit_heads` |
 | `202606141400` | Harden append-only chains: F3 BEFORE TRUNCATE triggers, F4 SECURITY DEFINER PUBLIC revoke sweep |
-| `202606160100` | Evidence unseal support |
+| `202606160100` | Historical evidence unseal support (public route removed by P4.23.3) |
 | `202606150900` | OpenSearch worker status |
 | `202606232000` | Audit details GIN index (`jsonb_ops` on `app.audit_events(details)`) |
 | `202606242100` | Audit writer role: `sift_audit_writer` WITH LOGIN |
@@ -80,7 +80,8 @@ Timestamp-ordered, idempotent, covering the `app` schema with 31 `FORCE ROW LEVE
 - **API**: 106 endpoint bindings in `api/endpoints.js`
 - **Design**: Dark-first, 3-layer color tokens (primitives → shadcn → forensic), severity = High/Med/Low only
 - **Fonts**: Inter (body), JetBrains Mono (code), Space Grotesk (headings)
-- **Frozen contracts**: `EvidenceUnseal.test.jsx`, `useStore.interface.test.js` — do not edit without operator approval
+- **Custody contracts**: `EvidenceRecovery.test.jsx` protects durable recovery;
+  `useStore.interface.test.js` remains the frozen store surface.
 
 ### 3 systemd Services
 
@@ -503,7 +504,7 @@ flowchart TD
 | IOCs | `GET /api/iocs` | 1 |
 | Summary | `GET /api/summary` | 1 |
 | Commit | `POST /api/commit` | 1 |
-| Evidence Chain | `GET /api/evidence/chain/status`, `POST /api/evidence/chain/rescan`, `POST /api/evidence/chain/seal`, `POST /api/evidence/chain/ignore`, `POST /api/evidence/chain/delete`, `POST /api/evidence/chain/retire`, `POST /api/evidence/chain/reacquire`, `POST /api/evidence/chain/unseal`, `POST /api/evidence/chain/verify-hmac`, `POST /api/evidence/chain/anchor`, `POST /api/evidence/chain/proof-export` | 11 |
+| Evidence Chain | `GET /api/evidence/chain/status`, `POST /api/evidence/chain/rescan`, `POST /api/evidence/chain/seal`, `POST /api/evidence/chain/seal/resume`, `POST /api/evidence/chain/ignore`, `POST /api/evidence/chain/delete`, `POST /api/evidence/chain/retire`, `POST /api/evidence/chain/replace/begin`, `POST /api/evidence/chain/restore/begin`, `POST /api/evidence/chain/recovery/complete`, `POST /api/evidence/chain/verify-hmac`, `POST /api/evidence/chain/anchor`, `POST /api/evidence/chain/proof-export` | 13 |
 | Response Guard | `GET /api/response-guard/status`, `POST /api/response-guard/override`, `POST /api/response-guard/override/cancel` | 3 |
 | Auth | `GET /api/auth/setup-required`, `POST /api/auth/login`, `POST /api/auth/forced-reset`, `POST /api/auth/logout`, `POST /api/auth/refresh`, `GET /api/auth/me` | 6 |
 | Principals | `GET /api/auth/principals`, `POST /api/auth/principals`, `DELETE /api/auth/principals/{type}/{id}` | 3 |

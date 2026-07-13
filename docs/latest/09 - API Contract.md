@@ -252,8 +252,10 @@ cookie (`sift_session_envelope`) or gateway Bearer token (limited set).
 | POST | `/api/evidence/chain/ignore` | `post_evidence_chain_ignore` | Ignore unregistered file | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/delete` | `post_evidence_chain_delete` | Delete non-sealed evidence | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/retire` | `post_evidence_chain_retire` | Retire registered evidence | Session (examiner) + step-up |
-| POST | `/api/evidence/chain/reacquire` | `post_evidence_chain_reacquire` | Re-seal replaced evidence bytes | Session (examiner) + step-up |
-| POST | `/api/evidence/chain/unseal` | `post_evidence_chain_unseal` | Unseal for byte replacement | Session (examiner) + step-up |
+| POST | `/api/evidence/chain/replace/begin` | `post_evidence_replace_begin` | Persist Replace/Reacquire intent and block gate before protection changes | Session (examiner) + step-up |
+| POST | `/api/evidence/chain/restore/begin` | `post_evidence_restore_begin` | Persist exact Restore intent and block gate | Session (examiner) + step-up |
+| POST | `/api/evidence/chain/recovery/complete` | `post_evidence_recovery_complete` | Fresh operation-bound re-auth, verify and finalize recovery | Session (examiner) + step-up |
+| GET | `/api/evidence/objects/{object_id}/history` | `get_evidence_history` | Case-scoped path-free object history | Session |
 | POST | `/api/evidence/chain/verify-hmac` | `post_evidence_chain_verify_hmac` | Re-verify sealed evidence | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/anchor` | `post_evidence_chain_anchor` | Anchor manifest on Solana | Session (examiner) |
 | POST | `/api/evidence/chain/proof-export` | `post_evidence_chain_proof_export` | Generate DB-derived proof export | Session (examiner) |

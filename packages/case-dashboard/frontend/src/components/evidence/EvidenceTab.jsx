@@ -23,7 +23,7 @@ import { IncompleteCustodyOperation } from '@/components/evidence/IncompleteCust
 // framer-motion, shadcn primitives, ≤400-line decomposed files.
 //
 // FROZEN CONTRACTS (must remain green):
-//   EvidenceUnseal.test.jsx now covers Replace/Reacquire, exact Restore,
+//   EvidenceRecovery.test.jsx covers Replace/Reacquire, exact Restore,
 //   recovery completion, and version history; standalone Unseal is obsolete.
 //   useStore.interface.test.js — store public surface frozen; this tab reads
 //     chain/evidence via useStoreSlice only (no new top-level keys).

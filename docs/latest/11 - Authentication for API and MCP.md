@@ -243,7 +243,8 @@ No-op when Supabase is not the active authority (`request.state.supabase_enabled
 
 - Register backend (`POST /api/v1/backends`)
 - Mint join code (`POST /api/v1/setup/join-code`)
-- Evidence seal, ignore, delete, retire, reacquire, unseal, verify-hmac
+- Evidence seal/resume, ignore, delete, retire, Replace/Reacquire begin,
+  exact Restore begin, recovery completion, and verify-hmac
 - Commit review delta (`POST /api/commit`)
 - Case activation
 - Response guard override

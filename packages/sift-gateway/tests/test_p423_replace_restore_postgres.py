@@ -57,15 +57,9 @@ def _begin(cur, setup, action: str):
     return cur.fetchone()[0]
 
 
-def _complete(conn, setup, operation_id: str, action: str, sha: str):
-    from psycopg.types.json import Jsonb
-
+def _recovery_facts(setup, sha: str):
     case_id, actor_id, object_id, version_id, _audit_id, _key, _reason, _command, old_sha = setup
-    completion_id = uuid.uuid4()
-    completion_event = (
-        "reauth.evidence_replace_complete"
-        if action == "REPLACE_REACQUIRE" else "reauth.evidence_restore_complete"
-    )
+    del case_id, actor_id
     prepared = {
         "item": {
             "evidence_object_id": str(object_id), "display_path": "evidence/disk.raw",
@@ -78,6 +72,19 @@ def _complete(conn, setup, operation_id: str, action: str, sha: str):
         "owner": "sift-service", "mode": "0644", "immutable": True,
         "st_dev": 1, "st_ino": 2, "st_nlink": 1, "st_mtime_ns": 3, "st_ctime_ns": 4,
     }
+    return prepared, item
+
+
+def _complete(conn, setup, operation_id: str, action: str, sha: str):
+    from psycopg.types.json import Jsonb
+
+    case_id, actor_id, _object_id, _version_id, _audit_id, _key, _reason, _command, _old_sha = setup
+    completion_id = uuid.uuid4()
+    completion_event = (
+        "reauth.evidence_replace_complete"
+        if action == "REPLACE_REACQUIRE" else "reauth.evidence_restore_complete"
+    )
+    prepared, item = _recovery_facts(setup, sha)
     with conn.cursor() as cur:
         cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'recovery-runner')", (operation_id, Jsonb(prepared)))
         cur.execute("""insert into app.audit_events(id,case_id,event_type,actor_type,actor_user_id,source,status,details)
@@ -129,3 +136,107 @@ def test_replace_appends_one_version_and_manifest_and_replays_exactly_once():
             cur.execute("select result from app.custody_operation_commit_verified_recovery(%s,%s,'examiner','recovery-runner')", (operation_id, Jsonb({})))
             assert cur.fetchone()[0] == result
         assert result["reacquired"] is True
+
+
+@pytest.mark.parametrize(
+    "failed_from", ["FILESYSTEM_APPLYING", "FILESYSTEM_VERIFIED"]
+)
+def test_fresh_receipt_recovers_interrupted_completion_exactly_once(failed_from):
+    psycopg = pytest.importorskip("psycopg")
+    from psycopg.types.json import Jsonb
+
+    with psycopg.connect(_dsn()) as conn:
+        setup = _setup(conn, "REPLACE_REACQUIRE")
+        case_id, actor_id = setup[0], setup[1]
+        prepared, item = _recovery_facts(setup, "sha256:" + "d" * 64)
+        receipt_one, receipt_two, wrong_receipt = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        with conn.cursor() as cur:
+            operation_id = _begin(cur, setup, "REPLACE_REACQUIRE")
+            cur.execute(
+                "select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'runner-before-restart')",
+                (operation_id, Jsonb(prepared)),
+            )
+            for receipt, binding in (
+                (receipt_one, {"operation_id": operation_id}),
+                (receipt_two, {"operation_id": operation_id}),
+                (wrong_receipt, {"operation_id": str(uuid.uuid4())}),
+            ):
+                cur.execute(
+                    """insert into app.audit_events(id,case_id,event_type,actor_type,actor_user_id,source,status,details)
+                       values(%s,%s,'reauth.evidence_replace_complete','user',%s,'portal_reauth','success',%s)""",
+                    (receipt, case_id, actor_id, Jsonb({"binding": binding})),
+                )
+            cur.execute(
+                "select phase from app.custody_operation_authorize_recovery_completion(%s,%s,%s,'runner-before-restart')",
+                (operation_id, actor_id, receipt_one),
+            )
+            if failed_from == "FILESYSTEM_VERIFIED":
+                cur.execute(
+                    "select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-before-restart')",
+                    (operation_id, Jsonb({"item": item})),
+                )
+            cur.execute(
+                "select phase from app.custody_operation_fail(%s,%s,'injected_restart','runner-before-restart')",
+                (operation_id, failed_from),
+            )
+            cur.execute(
+                "select phase,retired_runner_instance_ids from app.custody_operation_authorize_recovery_completion(%s,%s,%s,'runner-after-restart')",
+                (operation_id, actor_id, receipt_two),
+            )
+            phase, retired = cur.fetchone()
+            assert phase == "FILESYSTEM_APPLYING"
+            assert "runner-before-restart" in retired
+        conn.commit()
+
+        for denied_receipt in (receipt_one, wrong_receipt):
+            with pytest.raises(psycopg.Error):
+                with conn.transaction():
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "select app.custody_operation_authorize_recovery_completion(%s,%s,%s,'runner-third')",
+                            (operation_id, actor_id, denied_receipt),
+                        )
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-after-restart')",
+                (operation_id, Jsonb({"item": item})),
+            )
+            cur.execute(
+                "select result from app.custody_operation_commit_verified_recovery(%s,%s,'examiner','runner-after-restart')",
+                (operation_id, Jsonb(item)),
+            )
+            result = cur.fetchone()[0]
+            cur.execute(
+                "select count(*) from app.custody_operation_completion_reauth_history where operation_id=%s",
+                (operation_id,),
+            )
+            assert cur.fetchone()[0] == 2
+            cur.execute("select count(*) from app.evidence_versions where case_id=%s", (case_id,))
+            assert cur.fetchone()[0] == 2
+            cur.execute("select count(*) from app.evidence_manifests where case_id=%s", (case_id,))
+            assert cur.fetchone()[0] == 1
+            cur.execute("select count(*) from app.evidence_custody_events where custody_operation_id=%s", (operation_id,))
+            assert cur.fetchone()[0] == 1
+            cur.execute(
+                "select relrowsecurity,relforcerowsecurity from pg_class where oid='app.custody_operation_completion_reauth_history'::regclass"
+            )
+            assert cur.fetchone() == (True, True)
+            cur.execute(
+                """select count(*) from pg_trigger
+                   where tgrelid='app.custody_operation_completion_reauth_history'::regclass
+                     and not tgisinternal and tgname in (
+                       'custody_operation_completion_reauth_history_no_update_delete',
+                       'custody_operation_completion_reauth_history_no_truncate')"""
+            )
+            assert cur.fetchone()[0] == 2
+        assert result["reacquired"] is True
+        conn.commit()
+
+        with pytest.raises(psycopg.Error, match="append-only"):
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "update app.custody_operation_completion_reauth_history set runner_instance_id='tampered' where operation_id=%s",
+                        (operation_id,),
+                    )

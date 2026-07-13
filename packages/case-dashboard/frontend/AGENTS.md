@@ -102,7 +102,7 @@ fixing anything. Known-resolved since that audit:
 - **Store contract stays frozen:** keep `src/test/useStore.interface.test.js`
   byte-identical and green; do not add or remove top-level `useStore` keys.
 - **P4.23.3 superseded the obsolete Unseal test freeze:**
-  `src/test/EvidenceUnseal.test.jsx` now protects durable gate-first
+  `src/test/EvidenceRecovery.test.jsx` protects durable gate-first
   Replace/Reacquire, exact Restore completion, and version-history behavior.
   Do not restore a standalone Unseal action or its old route contract.
 - **Frozen public contracts:** do not add/remove top-level `useStore` keys; store

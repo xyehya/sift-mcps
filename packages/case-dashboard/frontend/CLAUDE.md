@@ -99,8 +99,9 @@ fixing anything. Known-resolved since that audit:
 ## 11. Guardrails — never break (security + frozen contracts)
 - **No `dangerouslySetInnerHTML` on untrusted data.** All finding/report text
   renders as escaped React text nodes.
-- **Frozen tests stay byte-identical and green:** `src/test/EvidenceUnseal.test.jsx`
-  and `src/test/useStore.interface.test.js`. Do not edit them.
+- **Custody recovery stays green:** `src/test/EvidenceRecovery.test.jsx` protects
+  durable Replace/Reacquire and exact Restore. The store contract
+  `src/test/useStore.interface.test.js` stays byte-identical.
 - **Frozen public contracts:** do not add/remove top-level `useStore` keys; store
   / api / hooks module paths are stable (legacy feature components must keep
   resolving). Auth / JWT / crypto = behavior-preserving **port**, not a rewrite.

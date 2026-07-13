@@ -5,6 +5,27 @@ alter table app.custody_operations
   add column if not exists completion_reauth_audit_event_id uuid null
     unique references app.audit_events(id);
 
+-- Completion receipts are consumed append-only. The operation row points at
+-- the currently authorized receipt, while this table permanently prevents an
+-- earlier receipt from being reused after a recoverable failure rotates it.
+create table if not exists app.custody_operation_completion_reauth_history (
+  reauth_audit_event_id uuid primary key references app.audit_events(id),
+  operation_id uuid not null references app.custody_operations(id),
+  actor_user_id uuid not null references app.operator_profiles(id),
+  runner_instance_id text not null check (length(btrim(runner_instance_id)) > 0),
+  authorized_at timestamptz not null default now()
+);
+alter table app.custody_operation_completion_reauth_history enable row level security;
+alter table app.custody_operation_completion_reauth_history force row level security;
+create trigger custody_operation_completion_reauth_history_no_update_delete
+  before update or delete on app.custody_operation_completion_reauth_history
+  for each row execute function app.evidence_block_mutation();
+create trigger custody_operation_completion_reauth_history_no_truncate
+  before truncate on app.custody_operation_completion_reauth_history
+  execute function app.evidence_block_truncate();
+revoke all on table app.custody_operation_completion_reauth_history
+  from public,anon,authenticated;
+
 -- Owner-only implementation helpers are invoked by SECURITY DEFINER wrappers;
 -- they are not independently privileged boundaries.
 alter function app.custody_operation_commit_verified_add_seal_v1(uuid,jsonb,text,text)
@@ -80,6 +101,7 @@ create function app.custody_operation_authorize_recovery_completion(
 ) returns app.custody_operations
 language plpgsql security definer set search_path=pg_catalog,app as $$
 declare v_case_id uuid; v_op app.custody_operations; v_reauth app.audit_events;
+  v_rotating boolean; v_previous_receipt uuid; v_previous_runner text;
 begin
   select case_id into v_case_id from app.custody_operations where id=p_operation_id;
   if not found then raise exception 'custody_operation_missing' using errcode='no_data_found'; end if;
@@ -89,7 +111,10 @@ begin
     raise exception 'custody_operation_finalizer_action_mismatch'
       using errcode='invalid_parameter_value';
   end if;
-  if v_op.phase='COMPLETED' then return v_op; end if;
+  if v_op.phase='COMPLETED' then
+    raise exception 'recovery_completion_already_completed'
+      using errcode='invalid_authorization_specification';
+  end if;
   if v_op.phase not in ('FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED','FAILED_RECOVERABLE')
      or v_op.actor_user_id is distinct from p_actor_user_id
      or v_op.actor_service_identity_id is not null
@@ -113,29 +138,46 @@ begin
     raise exception 'recovery_completion_reauth_scope_mismatch'
       using errcode='invalid_authorization_specification';
   end if;
-  if v_op.completion_reauth_audit_event_id is not null
-     and v_op.completion_reauth_audit_event_id is distinct from
-       p_completion_reauth_audit_event_id then
+  v_rotating := v_op.phase='FAILED_RECOVERABLE'
+    and v_op.failed_from_phase in ('FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED')
+    and v_op.completion_reauth_audit_event_id is not null
+    and v_op.completion_reauth_audit_event_id is distinct from
+      p_completion_reauth_audit_event_id;
+  if v_op.completion_reauth_audit_event_id is not null and not v_rotating then
     raise exception 'recovery_completion_already_authorized'
+      using errcode='invalid_authorization_specification';
+  end if;
+  if exists(select 1 from app.custody_operation_completion_reauth_history
+      where reauth_audit_event_id=p_completion_reauth_audit_event_id) then
+    raise exception 'recovery_completion_receipt_already_used'
       using errcode='invalid_authorization_specification';
   end if;
   if v_op.retired_runner_instance_ids ? p_runner_instance_id then
     raise exception 'custody_operation_retired_runner' using errcode='P4232';
   end if;
+  v_previous_receipt:=v_op.completion_reauth_audit_event_id;
+  v_previous_runner:=v_op.runner_instance_id;
+  insert into app.custody_operation_completion_reauth_history(
+    reauth_audit_event_id,operation_id,actor_user_id,runner_instance_id)
+  values(p_completion_reauth_audit_event_id,v_op.id,v_op.actor_user_id,
+    p_runner_instance_id);
   update app.custody_operations set
     phase='FILESYSTEM_APPLYING',
-    failed_from_phase=failed_from_phase,
+    failed_from_phase=null,
     failure_code=null,
     completion_reauth_audit_event_id=p_completion_reauth_audit_event_id,
-    retired_runner_instance_ids=case when runner_instance_id=p_runner_instance_id
+    retired_runner_instance_ids=case
+      when runner_instance_id is null or runner_instance_id=p_runner_instance_id
       then retired_runner_instance_ids
       else retired_runner_instance_ids||jsonb_build_array(runner_instance_id) end,
     runner_instance_id=p_runner_instance_id,updated_at=now()
   where id=v_op.id returning * into v_op;
   insert into app.custody_operation_history(operation_id,phase,facts)
     values(v_op.id,'FILESYSTEM_APPLYING',jsonb_build_object(
-      'completion_authorized',true,
-      'completion_reauth_audit_event_id',p_completion_reauth_audit_event_id));
+      'completion_authorized',true,'receipt_rotated',v_rotating,
+      'completion_reauth_audit_event_id',p_completion_reauth_audit_event_id,
+      'previous_completion_reauth_audit_event_id',v_previous_receipt,
+      'previous_runner_instance_id',v_previous_runner));
   return v_op;
 end $$;
 
@@ -322,6 +364,8 @@ revoke execute on function app.custody_operation_commit_verified_recovery(
 ) from public,anon,authenticated;
 
 do $$ begin if exists(select 1 from pg_roles where rolname='service_role') then
+  revoke all on table app.custody_operation_completion_reauth_history
+    from service_role;
   revoke execute on function app.evidence_unseal(uuid,text,uuid,uuid,uuid)
     from service_role;
   revoke execute on function app.evidence_reacquire(

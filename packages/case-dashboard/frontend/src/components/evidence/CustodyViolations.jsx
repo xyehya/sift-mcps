@@ -6,7 +6,7 @@ import { violationPath } from './evidence-utils'
 // ─────────────────────────────────────────────────────────────────────────
 // CustodyViolations — chain-of-custody violation panel (legacy IA parity §4).
 // Renders only when there are missing or modified files. Missing → Retire.
-// Modified (hash mismatch) → Re-seal (reacquire) / Retire, with the custody
+// Modified (hash mismatch) → Replace/Reacquire / Retire, with the custody
 // copy preserved: the prior sealed hash is superseded, not deleted; both record
 // an append-only, re-authenticated custody event.
 // ─────────────────────────────────────────────────────────────────────────

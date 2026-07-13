@@ -231,6 +231,10 @@ It reopens only the server-resolved relative object path with `O_NOFOLLOW`, perf
 requires service ownership, mode `0644`, one link, restores immutable posture, and verifies the same
 descriptor before the database finalizer can run. A restart may claim an interrupted recovery only
 with this fresh completion authority; it continues completion without rerunning begin.
+If completion fails after authorization while applying or after verification, retry requires another
+fresh receipt. Postgres rotates authority only from those recorded recoverable phases, permanently
+consumes every receipt in a FORCE-RLS append-only history, and retires a replaced runner instance.
+Wrong-scope, previously consumed, and post-completion receipts are denied.
 
 The finalizer independently rechecks action, receipt, case/object, current-version identity,
 original digest, verified facts, phase, and runner. Exact Restore requires the original digest and
@@ -308,7 +312,9 @@ The following are known current-state facts, not accepted target behavior:
   and one-shot Reacquire are no longer publicly reachable after P4.23.3.
 - Add/Seal now uses the P4.23.2 durable custody-operation state machine: Postgres blocks the gate before filesystem work, binds scoped re-authentication and one restart-instance owner, persists prepared/verified facts, and commits the manifest, versions, and canonical events atomically. A different systemd invocation claims even a `GATE_BLOCKED` operation before returning; every later mutation compares both phase and runner. `GATE_BLOCKED`, `FILESYSTEM_APPLYING`, `FILESYSTEM_VERIFIED`, and `FAILED_RECOVERABLE` are exposed as path-free resumable states; `REQUESTED` and `LEDGER_COMMITTED` are not. A page-reloaded Portal submits only password plus operation id. Gateway verifies the original actor/case/strict stored command, while Postgres independently validates a fresh `reauth.evidence_seal_resume` receipt bound exactly to that operation and records the receipt in append-only operation history before ownership changes. The original Seal authorization and request digest remain immutable. Direct authenticated-role table access remains denied. Remaining recovery workflows adopt this seam in later packets.
 - Portal recovery UI uses only operator HTTP workflows; no fictitious MCP custody mutation action is shown.
-- “Verify HMAC,” file manifest/JSONL authority tests, and standalone Unseal terminology remain in tests and documentation even though active custody authority is Postgres.
+- “Verify HMAC” and file manifest/JSONL authority terminology remains in older
+  compatibility coverage; current Portal recovery documentation and tests use
+  durable Replace/Reacquire and exact Restore with Postgres authority.
 - Some Rescan tests pass when no reconciliation callback occurs, and the unused watcher/cache no-op does not provide continuous protection.
 
 P4.23.1 resolved the former admission drift: every aggregate MCP dispatch now performs read-only

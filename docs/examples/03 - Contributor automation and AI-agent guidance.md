@@ -75,7 +75,8 @@ The frontend contract also carries the practical rules that shape package-level 
 - The session starter explicitly says to read `AGENTS.md`, `DESIGN-SYSTEM.md`, and src/styles/tokens.css before writing code.
 - The UI must use `@/` imports, not relative imports.
 - `useStoreSlice()` is the only approved store access path.
-- Frozen tests stay byte-identical and green: src/test/EvidenceUnseal.test.jsx and src/test/useStore.interface.test.js.
+- Keep `src/test/EvidenceRecovery.test.jsx` green; only
+  `src/test/useStore.interface.test.js` remains byte-identical.
 - Security-sensitive UI changes are reviewed once, after the feature lands and works, not on every partial unit.
 - The HITL model says the agent is autonomous in the MCP sandbox, blocked tool-calls are read-only awareness, and the step-up password gates are `Approve` and `Commit-to-record`.
 

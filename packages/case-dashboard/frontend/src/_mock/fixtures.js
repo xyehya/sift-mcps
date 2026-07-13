@@ -470,7 +470,7 @@ const CASES = [
 // Evidence registry — representative DFIR artifacts for the Evidence tab pilot.
 // MOCK DATA ONLY — no real case data; sha256 hashes are fabricated.
 // Hosts: WS-FINANCE-03, DC-01, FS-01, WS-07. Types: disk/memory/network.
-// Custody: mix of Sealed/Unsealed/Pending to exercise all badge states.
+// Custody: mix of sealed, gate-blocked violation, and pending states.
 // ─────────────────────────────────────────────────────────────────────────
 export const EVIDENCE_ITEMS = [
   {
@@ -1009,7 +1009,7 @@ export function selectReport(id) {
 // === REPORT fixtures === TODOs (store-seeded) — varied priority + status so the
 // TODOs tab renders POPULATED with filterable rows and CRUD-able entries.
 const TODOS = [
-  { todo_id: 'T-001', description: 'Unseal EV-014 and re-hash WS-FINANCE-03 memory image', priority: 'high', status: 'open', examiner: 'e.varga', created_by: 'agent', related_findings: ['F-001'], created_at: iso(6 * H) },
+  { todo_id: 'T-001', description: 'Replace/Reacquire EV-014 and verify WS-FINANCE-03 memory image', priority: 'high', status: 'open', examiner: 'e.varga', created_by: 'agent', related_findings: ['F-001'], created_at: iso(6 * H) },
   { todo_id: 'T-002', description: 'Confirm beacon C2 for UpdateSync scheduled task', priority: 'medium', status: 'open', examiner: 'e.varga', related_findings: ['F-002'], created_at: iso(20 * H) },
   { todo_id: 'T-003', description: 'Export firewall flow logs for 02:00-03:00 UTC window', priority: 'low', status: 'open', examiner: 'm.reyes', related_findings: [], created_at: iso(28 * H) },
   { todo_id: 'T-004', description: 'Document custody chain for FS-01 disk image', priority: 'medium', status: 'completed', examiner: 'e.varga', related_findings: ['F-004'], created_at: iso(2 * D) },

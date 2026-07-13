@@ -337,15 +337,15 @@ export function Showcase() {
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Unseal evidence?</AlertDialogTitle>
+                  <AlertDialogTitle>Begin Replace/Reacquire?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This breaks the seal and is audit-logged. Confirm to proceed.
+                    This durably blocks the custody gate before protection changes.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction onClick={() => toast.warning("Evidence unsealed")}>
-                    Unseal
+                  <AlertDialogAction onClick={() => toast.warning("Replace/Reacquire authorized")}>
+                    Begin recovery
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>

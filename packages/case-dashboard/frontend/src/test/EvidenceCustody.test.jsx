@@ -6,12 +6,12 @@ import * as endpoints from '@/api/endpoints'
 import { EvidenceTab } from '@/components/evidence/EvidenceTab'
 
 // ─────────────────────────────────────────────────────────────────────────
-// EvidenceCustody.test.jsx — interaction coverage for the custody flows that
-// the frozen EvidenceUnseal.test.jsx does NOT cover (seal · ignore · delete ·
-// retire · reacquire · verify-hmac · per-item verify · anchor · proof-export).
+// EvidenceCustody.test.jsx — interaction coverage for custody flows outside
+// EvidenceRecovery.test.jsx (seal · ignore · delete · retire · verify-hmac ·
+// per-item verify · anchor · proof-export).
 // Locks functionality without a backend.
 //
-// Mocking mirrors EvidenceUnseal.test.jsx: mock @/api/endpoints, seed the store
+// Mocking mirrors EvidenceRecovery.test.jsx: mock @/api/endpoints, seed the store
 // so panels render.
 //
 // SUBMIT GATING: every required field carries the HTML `required` attribute, so
@@ -174,6 +174,23 @@ describe('Seal manifest flow', () => {
     expect(within(notice).getByText('Interrupted from: FILESYSTEM_APPLYING')).toBeInTheDocument()
     expect(within(notice).getByText(/Retry Add & Seal with the same intent/i)).toBeInTheDocument()
     expect(notice).not.toHaveTextContent('evidence/')
+  })
+
+  it('labels interrupted Restore completion without teaching Add & Seal retry', async () => {
+    seed({
+      status: 'violated', unregistered: [],
+      incomplete_operation: {
+        operation_id: 'op-restore', action: 'RESTORE_EXACT',
+        phase: 'FAILED_RECOVERABLE', failed_from_phase: 'FILESYSTEM_VERIFIED',
+        recoverable: true,
+      },
+    })
+    render(<EvidenceTab />)
+
+    const notice = await screen.findByRole('region', { name: 'Incomplete custody operation' })
+    expect(within(notice).getByText('Exact Restore is incomplete')).toBeInTheDocument()
+    expect(within(notice).getByText(/Retry Exact Restore completion with fresh re-authentication/i)).toBeInTheDocument()
+    expect(notice).not.toHaveTextContent('Retry Add & Seal')
   })
 
   it.each(['GATE_BLOCKED', 'FILESYSTEM_APPLYING', 'FILESYSTEM_VERIFIED', 'FAILED_RECOVERABLE'])(

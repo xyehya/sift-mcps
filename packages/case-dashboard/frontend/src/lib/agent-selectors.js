@@ -130,7 +130,7 @@ export function policyGates(portalState, activeCase, chainStatus) {
       id: 'gate-evidence',
       kind: 'evidence',
       title: 'Evidence custody not fully sealed',
-      detail: `${unsealed} of ${ev.total} evidence item${unsealed === 1 ? '' : 's'} unsealed — re-seal or authorize custody to proceed.`,
+      detail: `${unsealed} of ${ev.total} evidence item${unsealed === 1 ? '' : 's'} gate-blocked — complete the operator custody workflow to proceed.`,
       tab: 'evidence',
     })
   }

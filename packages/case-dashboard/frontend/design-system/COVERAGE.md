@@ -14,7 +14,7 @@ regresses the frozen store/api/test surfaces.
 | COMMAND | Overview | **Built → Mission Control** | RUN-4b hero + auth queue + tiles + RUN-3 analytics |
 | INVESTIGATION | Findings | **Built** | RUN-3 + RUN-4b MITRE chips / confidence ring / a·s·r |
 | INVESTIGATION | Timeline | Placeholder | routes; Phase-1 (EVID-adjacent) |
-| INVESTIGATION | Evidence | Placeholder | routes; EvidenceUnseal contract preserved |
+| INVESTIGATION | Evidence | Built | durable Replace/Reacquire, exact Restore, object history |
 | INVESTIGATION | Hosts | Placeholder | routes; Phase-1 (ENTITY) |
 | INVESTIGATION | Accounts | Placeholder | routes; Phase-1 (ENTITY) |
 | OPERATIONS | IOCs | Placeholder | routes; mission tile deep-links here |
@@ -39,7 +39,7 @@ resolve them. `AppShell.TabContent` renders Overview + Findings; the rest fall t
 | Inline field edit (delta diff) | `findings/EditableField` | unchanged |
 | Commit staged delta (password + 3s hold) | `layout/CommitDrawer` | unchanged security contract; `stage` action gets violet meta |
 | `/api/delta` POST-replaces-whole-document | `findings-utils` builders | unchanged |
-| Evidence chain seal / **unseal** crypto | `api/endpoints` + `EvidenceUnseal.test` | **byte-identical**, green |
+| Evidence recovery | `api/endpoints` + `EvidenceRecovery.test` | gate-first Replace/Reacquire and exact Restore |
 | Command palette ⌘K | `layout/CommandPalette` + `useHotkey` | unchanged |
 | URL-hash deep-linking `#/<tab>` | `hooks/useHashRoute` | store↔tab contract unchanged; RUN-4c adds backward-compatible `?sev=` query support (filtered Findings deep-link) |
 | RBAC examiner vs readonly (actions hidden) | `FindingsTab`/`FindingDetail` + `SideNav` footer | unchanged |
@@ -105,8 +105,8 @@ pill. Status filter stays in the store. See MASTER §6 + §13.
 `<style>`, no mock-fixture leakage) · `npm run lint` authored-clean (legacy
 feature-file debt only) · `npm test` 163 passing (15 files), incl. new
 `agentState` (HITL taxonomy + synopsis) / `hashFilters` (deep-link) / `confidence`
-filter / `mitreByTactic` suites, with `EvidenceUnseal` + `useStore.interface`
-byte-identical · screenshots in `design/r4c-screens/`.
+filter / `mitreByTactic` suites, with `EvidenceRecovery` green and
+`useStore.interface` byte-identical · screenshots in `design/r4c-screens/`.
 
 ## 7. Conscious deferrals
 

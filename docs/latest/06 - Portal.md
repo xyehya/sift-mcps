@@ -78,8 +78,10 @@ Backend: `packages/case-dashboard/src/case_dashboard/routes.py` (5730 lines).
 | POST | `/portal/api/evidence/chain/ignore` | Mark ignored |
 | POST | `/portal/api/evidence/chain/delete` | Delete file |
 | POST | `/portal/api/evidence/chain/retire` | Retire file |
-| POST | `/portal/api/evidence/chain/reacquire` | Re-seal |
-| POST | `/portal/api/evidence/chain/unseal` | Clear immutability |
+| POST | `/portal/api/evidence/chain/replace/begin` | Authorize durable Replace/Reacquire and block the gate |
+| POST | `/portal/api/evidence/chain/restore/begin` | Authorize exact Restore and block the gate |
+| POST | `/portal/api/evidence/chain/recovery/complete` | Fresh re-auth, verify bytes/posture, and atomically finalize recovery |
+| GET | `/portal/api/evidence/objects/{object_id}/history` | Path-free object version/event history |
 | POST | `/portal/api/evidence/chain/verify-hmac` | Re-verify HMAC |
 | POST | `/portal/api/evidence/chain/anchor` | Anchor on Solana |
 | GET | `/portal/api/evidence/{path}/verify` | Single file verify |
@@ -167,7 +169,9 @@ Operations: get list, register (with validate step), unregister, toggle enabled,
 
 File: `packages/case-dashboard/src/case_dashboard/file_io.py` (67 lines).
 
-Evidence file CRUD operations supporting seal, ignore, delete, retire, reacquire, unseal, verify operations through the portal.
+Evidence helpers support Portal seal, disposition, verification, and durable
+Replace/Reacquire or exact Restore. Standalone Unseal and one-shot Reacquire
+routes are removed; filesystem mutation occurs only inside a durable operation.
 
 ### `static/` — Frontend Build Output
 
@@ -204,7 +208,7 @@ lib/            11 modules: agent-derivations, agent-selectors, agent-state,
                 theme.jsx, utils
 store/          useStore.js (single Zustand store with 5 slices)
 styles/         tokens.css + globals.css (Tailwind @theme)
-test/           EvidenceUnseal.test.jsx + useStore.interface.test.js (frozen)
+test/           EvidenceRecovery.test.jsx + useStore.interface.test.js
 utils/          Utility modules
 App.jsx         Main app shell
 main.jsx        Entry point
@@ -231,9 +235,9 @@ Components must use `useStoreSlice()` with `useShallow` — never `useStore()` d
 - `var(--token)` or Tailwind token utilities only — no raw hex.
 - God component limit: 400 lines/file.
 
-**Frozen test contracts** (do not edit without operator approval):
-- `src/test/EvidenceUnseal.test.jsx` (96 lines)
-- `src/test/useStore.interface.test.js` (75 lines) — locks 27 state keys + 27 action keys in `useStore`
+**Test contracts:**
+- `src/test/EvidenceRecovery.test.jsx` — durable recovery and history behavior
+- `src/test/useStore.interface.test.js` — frozen top-level store keys
 
 ## Invariants
 
@@ -261,7 +265,8 @@ Components must use `useStoreSlice()` with `useShallow` — never `useStore()` d
 
 > [!note] The frontend uses a single Zustand store with 5 slices. Components must use `useStoreSlice()` with `useShallow` — never `useStore()` directly (`frontend/AGENTS.md §3`; `useStore.js:1-2`).
 
-> [!warning] Frozen test files `EvidenceUnseal.test.jsx` and `useStore.interface.test.js` must not be edited without explicit operator approval (`frontend/AGENTS.md §11`; `useStore.js:7-9`).
+> [!warning] `useStore.interface.test.js` remains byte-identical without explicit
+> operator approval. `EvidenceRecovery.test.jsx` must remain green for all custody changes.
 
 ## Related
 
