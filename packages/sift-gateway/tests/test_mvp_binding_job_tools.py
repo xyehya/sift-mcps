@@ -78,6 +78,9 @@ class _EvidenceService:
             "path": self.case_dir / "evidence" / "disk.E01",
         }
 
+    def reconcile_for_admission(self, case_id):
+        self.reconciled_case_id = case_id
+
     def list_evidence(self, case_id):
         return [
             {
@@ -257,7 +260,8 @@ async def test_gateway_mcp_registers_local_binding_tools(tmp_path):
 
 async def test_gateway_mcp_run_command_job_invokes_gateway_bound_handler(tmp_path):
     case_dir = tmp_path / "case"
-    case_dir.mkdir()
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
     gateway = _Gateway(case_dir)
     with patch(
         "sift_gateway.policy_middleware.check_evidence_gate_db",

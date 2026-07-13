@@ -14,8 +14,10 @@ Proves the four K5 guarantees on top of the I1 sandbox:
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+from pathlib import Path
 
 import pytest
 from sift_core.evidence_chain import init_evidence_chain, seal_manifest
@@ -315,9 +317,15 @@ def _enqueue_run_command(db, case_dir, *, command, purpose, evidence_refs=None,
             resolved_refs.append(
                 {
                     "ref": str(ref),
-                    "evidence_id": "",
+                    "evidence_id": f"ev-{len(resolved_refs) + 1}",
+                    "version_id": f"ver-{len(resolved_refs) + 1}",
                     "display_path": display_path,
                     "path": str(candidate),
+                    "sha256": "sha256:" + hashlib.sha256(candidate.read_bytes()).hexdigest(),
+                    "bytes": candidate.stat().st_size,
+                    "st_dev": candidate.stat().st_dev,
+                    "st_ino": candidate.stat().st_ino,
+                    "st_mtime_ns": candidate.stat().st_mtime_ns,
                 }
             )
             public_refs.append(display_path)
@@ -356,7 +364,7 @@ def test_allowed_run_command_persists_receipt_and_no_paths(db, sealed_case):
     # Hash-linked, path-free receipt fields.
     assert receipt["job_id"] == job.id
     assert receipt["command_plan_sha256"]  # sha256 of the command plan
-    assert receipt["evidence_refs"] == ["evidence/disk.txt"]
+    assert receipt["evidence_refs"] == ["ev-1"]
     assert len(receipt["input_sha256s"]) == 1
     assert receipt["audit_id"]
     assert receipt["success"] is True
@@ -631,13 +639,19 @@ def test_b_mvp_027_evidence_ref_command_reaches_exec_via_worker_loop(db, sealed_
                 "case_dir": str(sealed_case),
                 "case_key": "K5-001",
                 "examiner": "analyst",
-                "resolved_evidence_refs": [
-                    {
-                        "ref": "disk.txt",
-                        "evidence_id": "",
-                        "display_path": "evidence/disk.txt",
-                        "path": ev_path,
-                    }
+                    "resolved_evidence_refs": [
+                        {
+                            "ref": "disk.txt",
+                            "evidence_id": "ev-1",
+                            "version_id": "ver-1",
+                            "display_path": "evidence/disk.txt",
+                            "path": ev_path,
+                            "sha256": "sha256:" + hashlib.sha256(Path(ev_path).read_bytes()).hexdigest(),
+                            "bytes": Path(ev_path).stat().st_size,
+                            "st_dev": Path(ev_path).stat().st_dev,
+                            "st_ino": Path(ev_path).stat().st_ino,
+                            "st_mtime_ns": Path(ev_path).stat().st_mtime_ns,
+                        }
                 ],
             },
         )
@@ -650,6 +664,6 @@ def test_b_mvp_027_evidence_ref_command_reaches_exec_via_worker_loop(db, sealed_
     assert "unhandled worker error" not in (stored.error_summary or "")
     receipt = stored.result_public["receipt"]
     assert receipt["success"] is True
-    # Public refs come from the trusted-internal display_path contract.
-    assert receipt["evidence_refs"] == ["evidence/disk.txt"]
+    # Public refs use the opaque DB Evidence Object identity.
+    assert receipt["evidence_refs"] == ["ev-1"]
     assert len(receipt["input_sha256s"]) == 1

@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from pathlib import Path
 from typing import Any
 
 from mcp.types import TextContent
@@ -109,9 +108,19 @@ async def handle_run_command_job(
         if not arguments.get("command") or not arguments.get("purpose"):
             raise GatewayJobToolError("command_and_purpose_required")
         job_service = _job_service(gateway)
-        resolved_evidence = _resolve_evidence_refs(
-            gateway, case, arguments.get("evidence_refs")
+        from sift_gateway.evidence_admission import (
+            current_admitted_refs,
+            current_inventory_token,
+            serialize_resolved_ref,
         )
+
+        resolved_evidence = [
+            serialize_resolved_ref(item) for item in current_admitted_refs()
+        ]
+        if not resolved_evidence and arguments.get("evidence_refs"):
+            resolved_evidence = _resolve_evidence_refs(
+                gateway, case, arguments.get("evidence_refs")
+            )
         spec_public = _drop_none(
             {
                 "command": str(arguments.get("command")),
@@ -133,6 +142,7 @@ async def handle_run_command_job(
             "case_dir": str(case.artifact_path or ""),
             "case_key": case.case_key,
             "examiner": examiner or getattr(identity, "principal", None) or "agent",
+            "evidence_inventory_token": current_inventory_token(),
         }
         if resolved_evidence:
             spec_internal["resolved_evidence_refs"] = resolved_evidence
@@ -211,15 +221,11 @@ def _resolve_evidence(gateway: Any, case: Any, ref: str) -> dict[str, Any]:
     service = getattr(gateway, "evidence_service", None)
     resolver = getattr(service, "resolve_evidence_reference", None)
     if callable(resolver):
-        return resolver(case.case_id, ref)
-    display_path = _relative_display_path(ref)
-    if not getattr(case, "artifact_path", None):
-        raise GatewayJobToolError("case_artifact_path_unavailable", http_status=404)
-    case_dir = Path(str(case.artifact_path or "")).resolve()
-    candidate = (case_dir / display_path).resolve()
-    if not candidate.is_relative_to(case_dir) or not candidate.is_file():
-        raise GatewayJobToolError("evidence_file_unavailable", http_status=404)
-    return {"evidence_id": None, "display_path": display_path, "path": candidate}
+        item = resolver(case.case_id, ref)
+        if isinstance(item, dict):
+            return item
+        raise GatewayJobToolError("evidence_authority_invalid", http_status=503)
+    raise GatewayJobToolError("evidence_authority_unavailable", http_status=503)
 
 
 def _resolve_evidence_refs(gateway: Any, case: Any, value: Any) -> list[dict[str, str]]:
@@ -228,14 +234,18 @@ def _resolve_evidence_refs(gateway: Any, case: Any, value: Any) -> list[dict[str
     for ref in refs:
         item = _resolve_evidence(gateway, case, ref)
         resolved.append(
-            {
+            _serialize_evidence_binding({
                 "ref": ref,
-                "evidence_id": str(item.get("evidence_id") or ""),
-                "display_path": str(item.get("display_path") or ref),
-                "path": str(item.get("path") or ""),
-            }
+                **item,
+            })
         )
     return resolved
+
+
+def _serialize_evidence_binding(item: dict[str, Any]) -> dict[str, Any]:
+    from sift_gateway.evidence_admission import serialize_resolved_ref
+
+    return serialize_resolved_ref(item)
 
 
 def _relative_display_path(value: str) -> str:

@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import sys
+from types import SimpleNamespace
+
+import pytest
+from sift_core.execute.job_worker import ClaimedJob, FatalJobError
+from sift_core.execute.run_command_job import _inventory_token, build_custody_validator
+
+
+class _Cursor:
+    def __init__(self):
+        self.calls = []
+        self._one = None
+        self._all = []
+
+    def execute(self, sql, params):
+        normalized = " ".join(sql.split())
+        self.calls.append((normalized, params))
+        if "from app.evidence_objects where case_id" in normalized:
+            self._all = []
+        elif "app.evidence_detect" in normalized:
+            self._one = ("detected-object",)
+        elif "app.evidence_gate_status" in normalized:
+            self._one = ("sealed",)
+        elif "join app.evidence_versions" in normalized:
+            self._one = (1,)
+        else:
+            self._one = (None,)
+
+    def fetchone(self):
+        return self._one
+
+    def fetchall(self):
+        return self._all
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+
+class _Connection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def cursor(self):
+        return self._cursor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+
+def _job(case_dir, token):
+    return ClaimedJob(
+        job_id="job-1",
+        job_type="run_command",
+        case_id="11111111-1111-1111-1111-111111111111",
+        evidence_id=None,
+        spec_public={"command": "date", "purpose": "test"},
+        spec_internal={
+            "case_dir": str(case_dir),
+            "evidence_inventory_token": token,
+            "resolved_evidence_refs": [],
+        },
+        attempts=1,
+        max_attempts=1,
+        worker_id="worker-1",
+    )
+
+
+def test_durable_revalidation_records_force_added_sibling_before_denial(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    token = _inventory_token(str(case_dir))
+    (evidence / "force-added.raw").write_bytes(b"new")
+    cursor = _Cursor()
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda _dsn: _Connection(cursor)),
+    )
+
+    with pytest.raises(FatalJobError, match="custody_admission_denied"):
+        build_custody_validator("postgresql://unused")(_job(case_dir, token), "claim")
+
+    detects = [call for call in cursor.calls if "app.evidence_detect" in call[0]]
+    assert len(detects) == 1
+    assert detects[0][1][1] == "evidence/force-added.raw"
+    assert not any("app.evidence_gate_status" in call[0] for call in cursor.calls)
+
+
+def test_durable_revalidation_checks_gate_at_both_phases(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    (case_dir / "evidence").mkdir(parents=True)
+    token = _inventory_token(str(case_dir))
+    cursor = _Cursor()
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda _dsn: _Connection(cursor)),
+    )
+    validator = build_custody_validator("postgresql://unused")
+    job = _job(case_dir, token)
+
+    validator(job, "claim")
+    validator(job, "execution")
+
+    assert sum("app.evidence_gate_status" in call[0] for call in cursor.calls) == 2

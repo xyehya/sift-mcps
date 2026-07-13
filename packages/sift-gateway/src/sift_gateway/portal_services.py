@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import stat
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -476,6 +477,124 @@ class contextlib_suppress_oserror:
 class EvidenceAuthorityService(_BasePortalDbService):
     """DB evidence/custody adapter over the C1 RPCs."""
 
+    def reconcile_for_admission(self, case_id: str) -> dict[str, Any]:
+        """Observe the mounted inventory and persist custody state, fail closed.
+
+        This method performs no filesystem mutation.  Every direct entry is
+        observed, including unsafe or unreadable entries; unknown regular files
+        become DETECTED and therefore block the aggregate gate.  Sealed entries
+        use cheap identity/size/ctime checks here; each referenced version is
+        descriptor-pinned and fully hashed by ``resolve_evidence_reference``.
+        """
+        case_dir = self._case_artifact_path(case_id)
+        if case_dir is None:
+            raise PortalServiceError("evidence_authority_unavailable", http_status=503)
+        evidence_dir = case_dir / "evidence"
+
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select id::text, display_path, current_sha256, current_bytes,
+                           sealed_at
+                    from app.evidence_objects
+                    where case_id = %s and status = 'sealed' and seal_status = 'sealed'
+                    """,
+                    (case_id,),
+                )
+                sealed = {
+                    str(row[1]): {
+                        "id": str(row[0]),
+                        "sha256": str(row[2] or ""),
+                        "bytes": row[3],
+                        "sealed_at": row[4],
+                    }
+                    for row in cur.fetchall()
+                }
+                live: set[str] = set()
+                unsafe: list[str] = []
+                if not evidence_dir.is_dir():
+                    unsafe.append("evidence_storage_unavailable")
+                else:
+                    try:
+                        entries = sorted(os.scandir(evidence_dir), key=lambda item: item.name)
+                    except OSError:
+                        entries = []
+                        unsafe.append("evidence_inventory_unavailable")
+                    for entry in entries:
+                        rel = f"evidence/{entry.name}"
+                        live.add(rel)
+                        try:
+                            st = entry.stat(follow_symlinks=False)
+                            regular = entry.is_file(follow_symlinks=False)
+                        except OSError:
+                            st = None
+                            regular = False
+                        if not regular or st is None or st.st_nlink != 1:
+                            obj_id = self._record_detected_observation(
+                                cur, case_id, rel, entry.name, st.st_size if st else None
+                            )
+                            self._record_admission_violation(
+                                cur, case_id, obj_id, "unsafe_evidence_inventory_entry"
+                            )
+                            unsafe.append("unsafe_evidence_inventory_entry")
+                            continue
+                        known = sealed.get(rel)
+                        if known is None:
+                            self._record_detected_observation(
+                                cur, case_id, rel, entry.name, st.st_size
+                            )
+                            continue
+                        sealed_at = known["sealed_at"]
+                        sealed_ns = (
+                            int(sealed_at.timestamp() * 1_000_000_000)
+                            if isinstance(sealed_at, datetime)
+                            else 0
+                        )
+                        if (
+                            known["bytes"] is not None
+                            and st.st_size != int(known["bytes"])
+                        ) or (sealed_ns and st.st_ctime_ns > sealed_ns):
+                            self._record_admission_violation(
+                                cur, case_id, known["id"], "sealed_evidence_changed"
+                            )
+                            unsafe.append("sealed_evidence_changed")
+
+                for rel, known in sealed.items():
+                    if rel not in live:
+                        self._record_admission_violation(
+                            cur, case_id, known["id"], "sealed_evidence_missing"
+                        )
+                        unsafe.append("sealed_evidence_missing")
+            conn.commit()
+        return {"observed": len(live), "issues": sorted(set(unsafe))}
+
+    @staticmethod
+    def _record_detected_observation(
+        cur: Any,
+        case_id: str,
+        display_path: str,
+        display_name: str,
+        size: int | None,
+    ) -> str:
+        cur.execute(
+            "select app.evidence_detect(%s, %s, %s, %s, null, null)",
+            (case_id, display_path, display_name, size),
+        )
+        row = cur.fetchone()
+        if not row or not row[0]:
+            raise PortalServiceError("evidence_observation_failed", http_status=503)
+        return str(row[0])
+
+    @staticmethod
+    def _record_admission_violation(
+        cur: Any, case_id: str, evidence_id: str, reason: str
+    ) -> None:
+        cur.execute(
+            "select app.evidence_mark_violation(%s, %s, %s, %s, null, null)",
+            (case_id, evidence_id, reason, _jsonb([reason])),
+        )
+
     def gate_status(self, case_id: str) -> dict[str, Any]:
         self._scan_evidence(case_id)
         with self._connect() as conn:
@@ -588,7 +707,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
         that serialize this result must use ``display_path``/``evidence_id`` and
         never the ``path`` field.
         """
-        self._scan_evidence(case_id)
+        self.reconcile_for_admission(case_id)
         display_path = None
         try:
             display_path = _relative_display_path(ref)
@@ -598,20 +717,44 @@ class EvidenceAuthorityService(_BasePortalDbService):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    select id::text, display_path, status, seal_status
-                    from app.evidence_objects
-                    where case_id = %s
-                      and (id::text = %s or display_path = %s)
+                    select o.id::text, o.display_path, o.status, o.seal_status,
+                           v.id::text, v.sha256, v.bytes, v.entry_status,
+                           h.seal_status
+                    from app.evidence_objects o
+                    join app.evidence_versions v on v.id = o.current_version_id
+                    join app.evidence_chain_heads h on h.case_id = o.case_id
+                    where o.case_id = %s
+                      and (o.id::text = %s or o.display_path = %s)
                     """,
                     (case_id, ref, display_path),
                 )
                 row = cur.fetchone()
         if not row:
             raise PortalServiceError("evidence_object_not_found", http_status=404)
-        if row[2] != "sealed" or row[3] != "sealed":
+        if (
+            row[2] != "sealed"
+            or row[3] != "sealed"
+            or row[7] != "ACTIVE"
+            or row[8] != "sealed"
+        ):
             raise PortalServiceError("evidence_object_not_sealed", http_status=403)
         path = self._resolve_evidence_path(case_id, str(row[1]))
-        return {"evidence_id": str(row[0]), "display_path": str(row[1]), "path": path}
+        digest, size, st = _hash_admission_file(path)
+        if f"sha256:{digest}" != str(row[5] or "") or (
+            row[6] is not None and size != int(row[6])
+        ):
+            raise PortalServiceError("evidence_version_changed", http_status=403)
+        return {
+            "evidence_id": str(row[0]),
+            "version_id": str(row[4]),
+            "display_path": str(row[1]),
+            "path": path,
+            "sha256": str(row[5]),
+            "bytes": size,
+            "st_dev": st.st_dev,
+            "st_ino": st.st_ino,
+            "st_mtime_ns": st.st_mtime_ns,
+        }
 
     def record_reauth_event(
         self, *, case_id: str, actor: Any, examiner: str, action: str
@@ -2147,6 +2290,36 @@ def _hash_file(path: Path) -> tuple[str, int]:
             size += len(chunk)
             h.update(chunk)
     return h.hexdigest(), size
+
+
+def _hash_admission_file(path: Path) -> tuple[str, int, os.stat_result]:
+    """Hash one descriptor-pinned regular file without following symlinks."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise OSError("unsafe evidence file")
+        h = hashlib.sha256()
+        size = 0
+        with os.fdopen(os.dup(fd), "rb", closefd=True) as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                h.update(chunk)
+        after = os.fstat(fd)
+        def identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+            return (
+                value.st_dev,
+                value.st_ino,
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+            )
+        if identity(before) != identity(after):
+            raise OSError("evidence changed during admission")
+        return h.hexdigest(), size, after
+    finally:
+        os.close(fd)
 
 
 def _manifest_hash(case_id: str, version: int, items: list[dict[str, Any]]) -> str:

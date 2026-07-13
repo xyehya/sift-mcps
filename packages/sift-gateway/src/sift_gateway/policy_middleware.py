@@ -22,6 +22,7 @@ from sift_core.active_case_context import (
     use_active_case_context,
 )
 from sift_core.agent_tools import core_tool_names
+from sift_core.evidence_chain import ChainStatus
 
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
 from sift_gateway.audit_helpers import (
@@ -31,6 +32,12 @@ from sift_gateway.audit_helpers import (
 )
 from sift_gateway.audit_helpers import (
     _summarize_result as _summarize_audit_result,
+)
+from sift_gateway.evidence_admission import (
+    bind_admitted_refs,
+    command_evidence_references,
+    inventory_token,
+    reset_admitted_refs,
 )
 from sift_gateway.evidence_gate import (
     build_block_response,
@@ -80,6 +87,7 @@ class GatewayProtocol(Protocol):
     active_case_service: Any | None
     control_plane_dsn: str | None
     db_audit: DbAuditWriterProtocol | None
+    evidence_service: Any | None
     job_service: JobServiceProtocol | None
 
     def addon_authority_for_tool(self, tool_name: str) -> Mapping[str, Any] | None: ...
@@ -578,7 +586,7 @@ class ControlPlaneRequiredMiddleware(Middleware):
 
 
 class EvidenceGateMiddleware(Middleware):
-    """Block all MCP tool calls when the active evidence chain is not OK."""
+    """Reconcile custody and bind active sealed versions before dispatch."""
 
     def __init__(self, gateway: GatewayProtocol) -> None:
         self.gateway = gateway
@@ -586,20 +594,82 @@ class EvidenceGateMiddleware(Middleware):
     async def on_call_tool(self, context, call_next):
         name = _tool_name(context)
         case = _current_gateway_active_case()
-        # BU3 (XYE-21): the evidence gate is DB-authority only. There is no
-        # file-backed gate: a gateway with no control-plane DSN refuses to serve
-        # DFIR tools (serve-entry refusal + ControlPlaneRequiredMiddleware
-        # backstop), so by the time a tool reaches this gate the control plane is
-        # present. With no active case bound, case-lifecycle / no-case tools pass
-        # through (there is nothing to seal yet); a bound case is gated against
-        # app.evidence_gate_status.
         if case is None:
             return await call_next(context)
-        gate = check_evidence_gate_db(
-            case.case_id, getattr(self.gateway, "control_plane_dsn", None)
-        )
+        service = getattr(self.gateway, "evidence_service", None)
+        reconcile = getattr(service, "reconcile_for_admission", None)
+        if not callable(reconcile):
+            gate = {
+                "blocked": True,
+                "status": ChainStatus.LEDGER_ERROR,
+                "issues": ["Evidence authority unavailable"],
+                "manifest_version": 0,
+            }
+        else:
+            try:
+                await asyncio.to_thread(reconcile, case.case_id)
+            except Exception:
+                logger.exception("evidence_admission: inventory reconciliation failed")
+                gate = {
+                    "blocked": True,
+                    "status": ChainStatus.LEDGER_ERROR,
+                    "issues": ["Evidence inventory reconciliation unavailable"],
+                    "manifest_version": 0,
+                }
+            else:
+                gate = check_evidence_gate_db(
+                    case.case_id, getattr(self.gateway, "control_plane_dsn", None)
+                )
         if not gate["blocked"]:
-            return await call_next(context)
+            refs: list[str] = []
+            args = _tool_args(context)
+            if name in {"run_command", "run_command_job"}:
+                declared = args.get("evidence_refs")
+                if isinstance(declared, str):
+                    refs.append(declared)
+                elif isinstance(declared, (list, tuple)):
+                    refs.extend(str(item) for item in declared if str(item).strip())
+                refs.extend(
+                    command_evidence_references(
+                        args.get("command"),
+                        case_dir=str(case.artifact_path or ""),
+                        working_dir=args.get("working_dir"),
+                    )
+                )
+            admitted: list[dict[str, Any]] = []
+            resolver = getattr(service, "resolve_evidence_reference", None)
+            try:
+                for ref in dict.fromkeys(refs):
+                    if not callable(resolver):
+                        raise RuntimeError("evidence resolver unavailable")
+                    item = resolver(case.case_id, ref)
+                    if not isinstance(item, dict):
+                        raise RuntimeError("evidence resolver returned invalid data")
+                    admitted.append({"ref": ref, **item})
+            except Exception:
+                logger.info("evidence_admission: sealed-version authorization denied")
+                gate = {
+                    "blocked": True,
+                    "status": ChainStatus.UNSEALED,
+                    "issues": ["Evidence input is not an active sealed version"],
+                    "manifest_version": gate["manifest_version"],
+                }
+            else:
+                try:
+                    mounted_token = inventory_token(str(case.artifact_path or ""))
+                except OSError:
+                    gate = {
+                        "blocked": True,
+                        "status": ChainStatus.LEDGER_ERROR,
+                        "issues": ["Evidence inventory reconciliation unavailable"],
+                        "manifest_version": gate["manifest_version"],
+                    }
+                else:
+                    token = bind_admitted_refs(admitted, inventory_token=mounted_token)
+                    try:
+                        return await call_next(context)
+                    finally:
+                        reset_admitted_refs(token)
 
         req_ctx = _request_context()
         identity = req_ctx["identity"]

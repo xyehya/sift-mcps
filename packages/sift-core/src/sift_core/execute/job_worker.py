@@ -184,6 +184,7 @@ class JobResult:
 
 # A handler resolves IDs to local work internally and returns a JobResult.
 JobHandler = Callable[[ClaimedJob, "JobContext"], JobResult]
+CustodyValidator = Callable[[ClaimedJob, str], None]
 
 
 class JobContext:
@@ -238,6 +239,7 @@ class JobWorker:
         poll_interval: float = 1.0,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        custody_validator: CustodyValidator | None = None,
     ) -> None:
         unknown = set(handlers) - JOB_TYPES
         if unknown:
@@ -250,6 +252,7 @@ class JobWorker:
         self._clock = clock
         self._sleep = sleep
         self._stop = False
+        self._custody_validator = custody_validator
 
     # -- public loop --------------------------------------------------------
 
@@ -300,6 +303,13 @@ class JobWorker:
         job = ClaimedJob.from_row(_unwrap_single(row), self.worker_id)
         if job is not None:
             self._mark_busy(job.job_id)
+            if self._custody_validator is not None and job.job_type == "run_command":
+                try:
+                    self._custody_validator(job, "claim")
+                except Exception:
+                    logger.warning("Custody revalidation denied job at claim", exc_info=True)
+                    self._fail(job, "custody_admission_denied", force_terminal=True)
+                    return None
         return job
 
     def run_job(self, job: ClaimedJob) -> None:
@@ -310,6 +320,13 @@ class JobWorker:
         if not self._start(job):
             # Lost the lease before we could start; let expiry/retry handle it.
             return
+        if self._custody_validator is not None and job.job_type == "run_command":
+            try:
+                self._custody_validator(job, "execution")
+            except Exception:
+                logger.warning("Custody revalidation denied job before execution", exc_info=True)
+                self._fail(job, "custody_admission_denied", force_terminal=True)
+                return
         ctx = JobContext(self, job)
         try:
             result = handler(job, ctx)

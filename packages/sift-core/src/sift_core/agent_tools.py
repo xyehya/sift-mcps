@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import os
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -520,6 +521,45 @@ def _trusted_internal_evidence_refs(
         path = Path(path_text).resolve()
         if not path.is_relative_to(case_resolved) or not path.is_file():
             raise ValueError("internal evidence ref is unavailable")
+        evidence_id = str(item.get("evidence_id") or "")
+        version_id = str(item.get("version_id") or "")
+        expected_sha256 = str(item.get("sha256") or "")
+        if not evidence_id or not version_id or not expected_sha256.startswith("sha256:"):
+            raise ValueError("internal evidence ref is not version-bound")
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                raise ValueError("internal evidence ref has unsafe file identity")
+            expected_identity = (
+                int(item.get("st_dev", -1)),
+                int(item.get("st_ino", -1)),
+                int(item.get("bytes", -1)),
+                int(item.get("st_mtime_ns", -1)),
+            )
+            actual_identity = (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+            )
+            if expected_identity != actual_identity:
+                raise ValueError("internal evidence ref changed after admission")
+            digest = hashlib.sha256()
+            with os.fdopen(os.dup(fd), "rb", closefd=True) as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            after = os.fstat(fd)
+            if actual_identity != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            ) or f"sha256:{digest.hexdigest()}" != expected_sha256:
+                raise ValueError("internal evidence ref changed after admission")
+        finally:
+            os.close(fd)
         paths.append(str(path))
         public_refs.append(
             str(
@@ -809,6 +849,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         case_root = str(get_case_dir())
     except Exception:
         case_root = os.environ.get("SIFT_CASE_DIR", "") or cwd
+    case_root = str(case_root or "")
 
     # Parse command using our split/parse state machines to extract binary and detect inputs
     from sift_core.execute.security import (

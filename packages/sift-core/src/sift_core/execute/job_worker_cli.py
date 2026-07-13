@@ -9,7 +9,10 @@ import os
 logger = logging.getLogger(__name__)
 
 from sift_core.execute.job_worker import JobWorker, psycopg_connection_factory
-from sift_core.execute.run_command_job import run_command_job_handler
+from sift_core.execute.run_command_job import (
+    build_custody_validator,
+    run_command_job_handler,
+)
 
 
 def build_handlers(dsn: str, *, job_types: list[str] | None = None):
@@ -120,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         worker_id=args.worker_id or None,
         lease_seconds=args.lease_seconds,
         poll_interval=args.poll_interval,
+        custody_validator=build_custody_validator(args.dsn),
     )
     if args.once:
         return 0 if worker.run_once(job_types=job_types) is not None else 2

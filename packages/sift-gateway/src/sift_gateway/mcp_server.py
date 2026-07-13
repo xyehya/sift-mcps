@@ -7,7 +7,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from fastmcp import FastMCP
 from fastmcp.client import Client
@@ -163,10 +163,10 @@ def _apply_db_evidence_listing(gateway: Any, obj: dict[str, Any], case_id: str) 
     lister = getattr(service, "list_evidence", None)
     if not callable(lister):
         raise _OrientationAuthorityError("DB evidence service is unavailable")
-    rows = lister(case_id)
+    rows = cast(list[Any], lister(case_id) or [])
     sealed: list[dict[str, Any]] = []
     unregistered: list[str] = []
-    for row in rows or []:
+    for row in rows:
         if not isinstance(row, dict):
             continue
         status = str(row.get("status") or "")
@@ -200,10 +200,26 @@ def _apply_db_evidence_listing(gateway: Any, obj: dict[str, Any], case_id: str) 
 
 def _prepare_core_tool_arguments(gateway: Any, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Strip private fields from client args and inject Gateway-resolved refs."""
+    from sift_gateway.evidence_admission import (
+        current_admitted_refs,
+        serialize_resolved_ref,
+    )
+
     prepared = dict(arguments or {})
     prepared.pop(_INTERNAL_RESOLVED_EVIDENCE_REFS, None)
     prepared.pop(_INTERNAL_EVIDENCE_REF_ERROR, None)
-    if tool_name != "run_command" or not prepared.get("evidence_refs"):
+    if tool_name != "run_command":
+        return prepared
+    admitted = current_admitted_refs()
+    if admitted:
+        normalized = [serialize_resolved_ref(item) for item in admitted]
+        prepared["evidence_refs"] = [
+            str(item.get("evidence_id") or item.get("display_path") or item.get("ref"))
+            for item in normalized
+        ]
+        prepared[_INTERNAL_RESOLVED_EVIDENCE_REFS] = normalized
+        return prepared
+    if not prepared.get("evidence_refs"):
         return prepared
     try:
         resolved = _resolve_db_evidence_refs(gateway, prepared.get("evidence_refs"))
@@ -235,6 +251,8 @@ def _resolve_db_evidence_refs(gateway: Any, evidence_refs: Any) -> list[dict[str
     resolved: list[dict[str, str]] = []
     for ref in refs:
         item = resolver(case.case_id, ref)
+        if not isinstance(item, dict):
+            raise _OrientationAuthorityError("DB evidence resolver returned invalid data")
         resolved.append(
             {
                 "ref": ref,

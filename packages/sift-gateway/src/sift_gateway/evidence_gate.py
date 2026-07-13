@@ -103,7 +103,7 @@ def check_evidence_gate_db(case_id: str | None, dsn: str | None) -> dict:
         return {
             "blocked": True,
             "status": ChainStatus.LEDGER_ERROR,
-            "issues": [f"Internal error resolving evidence authority: {exc}"],
+            "issues": ["Evidence authority unavailable"],
             "manifest_version": 0,
         }
 

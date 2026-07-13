@@ -368,6 +368,43 @@ def test_run_once_returns_none_when_empty(db):
     assert w.run_once() is None
 
 
+def test_run_command_custody_revalidated_at_claim_and_execution(db):
+    db.enqueue(_Job("run_command", case_id="case-1"))
+    phases = []
+    executed = []
+
+    def validator(job, phase):
+        phases.append((job.job_id, phase))
+
+    worker = _worker(
+        db,
+        {"run_command": lambda job, ctx: executed.append(job.job_id) or JobResult()},
+        custody_validator=validator,
+    )
+    worker.run_once()
+
+    assert [phase for _job_id, phase in phases] == ["claim", "execution"]
+    assert len(executed) == 1
+
+
+def test_run_command_custody_denial_at_claim_never_executes(db):
+    job = db.enqueue(_Job("run_command", case_id="case-1"))
+    executed = []
+
+    def deny(_job, _phase):
+        raise RuntimeError("raw database detail must not surface")
+
+    worker = _worker(
+        db,
+        {"run_command": lambda claimed, ctx: executed.append(claimed.job_id) or JobResult()},
+        custody_validator=deny,
+    )
+    assert worker.run_once() is None
+    assert executed == []
+    assert job.status == "failed"
+    assert job.error_summary == "custody_admission_denied"
+
+
 def test_unknown_job_type_in_handlers_rejected(db):
     with pytest.raises(ValueError):
         _worker(db, {"bogus": lambda j, c: JobResult()})

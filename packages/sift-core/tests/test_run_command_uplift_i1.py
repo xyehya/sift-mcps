@@ -9,6 +9,7 @@ Covers the four I1 deliverables:
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -327,8 +328,14 @@ def test_run_command_accepts_gateway_resolved_db_evidence_ref_without_manifest(
                 "_resolved_evidence_refs": [
                     {
                         "evidence_id": "ev-1",
+                        "version_id": "ver-1",
                         "display_path": "evidence/db.txt",
                         "path": str(ev),
+                        "sha256": "sha256:" + hashlib.sha256(ev.read_bytes()).hexdigest(),
+                        "bytes": ev.stat().st_size,
+                        "st_dev": ev.stat().st_dev,
+                        "st_ino": ev.stat().st_ino,
+                        "st_mtime_ns": ev.stat().st_mtime_ns,
                     }
                 ],
             },
