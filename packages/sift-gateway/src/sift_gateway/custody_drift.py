@@ -211,7 +211,15 @@ def classify_inventory(snapshot: InventorySnapshot) -> InventoryClassification:
             if snapshot.availability is StorageAvailability.SCAN_FAILED
             else DriftCode.STORAGE_UNAVAILABLE
         )
-        return _result((_finding(code, CustodyGateState.BLOCKED_UNAVAILABLE),))
+        return _result(
+            (
+                _finding(
+                    code,
+                    CustodyGateState.BLOCKED_UNAVAILABLE,
+                    RecoveryRequirement.INVESTIGATE_AVAILABILITY,
+                ),
+            )
+        )
     if not snapshot.ledger_valid:
         return _result(
             (

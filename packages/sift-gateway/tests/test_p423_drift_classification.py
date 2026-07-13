@@ -66,6 +66,10 @@ def test_unavailable_storage_is_not_misclassified_as_missing_evidence() -> None:
     assert result.gate_state is CustodyGateState.BLOCKED_UNAVAILABLE
     assert [finding.code for finding in result.findings] == ["STORAGE_UNAVAILABLE"]
     assert result.findings[0].evidence_object_id is None
+    assert (
+        result.findings[0].recovery
+        is RecoveryRequirement.INVESTIGATE_AVAILABILITY
+    )
 
 
 def test_scan_failure_is_unavailable_not_a_tamper_accusation() -> None:
@@ -78,6 +82,10 @@ def test_scan_failure_is_unavailable_not_a_tamper_accusation() -> None:
 
     assert result.gate_state is CustodyGateState.BLOCKED_UNAVAILABLE
     assert result.findings[0].code is DriftCode.INVENTORY_SCAN_FAILED
+    assert (
+        result.findings[0].recovery
+        is RecoveryRequirement.INVESTIGATE_AVAILABILITY
+    )
 
 
 def test_new_and_structurally_unsafe_items_remain_pending_not_violations() -> None:
