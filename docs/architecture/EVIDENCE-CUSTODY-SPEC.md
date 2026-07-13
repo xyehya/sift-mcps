@@ -216,6 +216,29 @@ shared seam does not impose a universal order among those rows. The operation-lo
 case-first contract. The action seam adds no Portal route, MCP tool, filesystem mutation path, or
 `anon`/`authenticated` database authority.
 
+#### P4.23.3 Replace/Reacquire and exact Restore implementation
+
+The public standalone Unseal and legacy one-shot Reacquire routes are removed. Their database RPCs
+remain only as inert accumulated-migration definitions with execution revoked from every runtime
+role. The Portal now exposes fixed server-selected begin routes for `REPLACE_REACQUIRE` and
+`RESTORE_EXACT`, plus one operation-ID-only completion route. Begin binds the Postgres-resolved
+Evidence Object and its current Evidence Version, records scoped authorization, blocks the gate, and
+only then clears Local Immutable posture when mounted bytes are present. Missing or already changed
+bytes are valid recovery observations; they do not prevent a durable gate-first intent.
+
+Completion requires a second fresh, single-use, actor/case/action/operation-bound re-authentication.
+It reopens only the server-resolved relative object path with `O_NOFOLLOW`, performs full SHA-256,
+requires service ownership, mode `0644`, one link, restores immutable posture, and verifies the same
+descriptor before the database finalizer can run. A restart may claim an interrupted recovery only
+with this fresh completion authority; it continues completion without rerunning begin.
+
+The finalizer independently rechecks action, receipt, case/object, current-version identity,
+original digest, verified facts, phase, and runner. Exact Restore requires the original digest and
+byte count, appends a canonical restoration event, and preserves Evidence Version and Manifest
+Version identity and row counts. Replace/Reacquire requires a different digest, appends exactly one
+Evidence Version and Manifest Version, preserves the prior version and immutable siblings, and opens
+the gate atomically. Portal history is path-free and keyed by opaque Evidence Object ID.
+
 ### Re-authentication
 
 - Automatic detection/blocking, Rescan Inventory, Verify Ledger, and Full Verify Evidence do not require password re-authentication. Full Verify may accept an optional note.
@@ -281,9 +304,10 @@ Tests should exercise the highest existing public seam and assert externally obs
 
 The following are known current-state facts, not accepted target behavior:
 
-- Standalone Unseal currently clears immutable protection before the durable gate transition; Reacquire can commit sealed DB state before immutable protection succeeds; Delete can unlink before durable disposition.
+- Delete can still unlink before durable disposition; Ticket 4 replaces that path. Standalone Unseal
+  and one-shot Reacquire are no longer publicly reachable after P4.23.3.
 - Add/Seal now uses the P4.23.2 durable custody-operation state machine: Postgres blocks the gate before filesystem work, binds scoped re-authentication and one restart-instance owner, persists prepared/verified facts, and commits the manifest, versions, and canonical events atomically. A different systemd invocation claims even a `GATE_BLOCKED` operation before returning; every later mutation compares both phase and runner. `GATE_BLOCKED`, `FILESYSTEM_APPLYING`, `FILESYSTEM_VERIFIED`, and `FAILED_RECOVERABLE` are exposed as path-free resumable states; `REQUESTED` and `LEDGER_COMMITTED` are not. A page-reloaded Portal submits only password plus operation id. Gateway verifies the original actor/case/strict stored command, while Postgres independently validates a fresh `reauth.evidence_seal_resume` receipt bound exactly to that operation and records the receipt in append-only operation history before ownership changes. The original Seal authorization and request digest remain immutable. Direct authenticated-role table access remains denied. Remaining recovery workflows adopt this seam in later packets.
-- UI/demo data contains a fictitious `mcp:evidence.unseal` action.
+- Portal recovery UI uses only operator HTTP workflows; no fictitious MCP custody mutation action is shown.
 - “Verify HMAC,” file manifest/JSONL authority tests, and standalone Unseal terminology remain in tests and documentation even though active custody authority is Postgres.
 - Some Rescan tests pass when no reconciliation callback occurs, and the unused watcher/cache no-op does not provide continuous protection.
 
@@ -304,6 +328,9 @@ Version, one `EVIDENCE_REGISTERED`, and one `MANIFEST_SEALED` event. The new 5 G
 pre-resume digest, inode, ownership, mode, link count, and xattrs while gaining immutable posture;
 the existing immutable sibling retained its digest and all observed metadata. Authenticated MCP
 `case_info` and `evidence_info` succeeded only after the custody gate returned to sealed v6.
+
+P4.23.3 implements durable Replace/Reacquire and exact Restore locally. Consolidated live proof is
+deferred by design to VM Gate C after Tickets 3–5 integrate.
 
 These items must be replaced in dependency order. Tests that describe obsolete behavior are removed only after stronger public-seam replacements land.
 

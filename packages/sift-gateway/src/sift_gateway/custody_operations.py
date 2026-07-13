@@ -262,6 +262,22 @@ class CustodyOperationRepositoryProtocol(Protocol):
         examiner: str,
     ) -> CustodyOperationRecord: ...
 
+    def authorize_recovery_completion(
+        self,
+        operation_id: str,
+        *,
+        actor_user_id: str,
+        completion_reauth_audit_event_id: str,
+    ) -> CustodyOperationRecord: ...
+
+    def commit_verified_recovery(
+        self,
+        operation_id: str,
+        *,
+        item: dict[str, Any],
+        examiner: str,
+    ) -> CustodyOperationRecord: ...
+
     def get_incomplete(self, case_id: str) -> CustodyOperationRecord | None: ...
 
 
@@ -435,6 +451,51 @@ class CustodyOperationRepository:
                     f"""select {_OP_COLUMNS}
                          from app.custody_operation_commit_verified_seal(%s, %s, %s, %s)""",
                     (operation_id, _jsonb(items), examiner, _RUNNER_INSTANCE_ID),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return _record(row)
+
+    def authorize_recovery_completion(
+        self,
+        operation_id: str,
+        *,
+        actor_user_id: str,
+        completion_reauth_audit_event_id: str,
+    ) -> CustodyOperationRecord:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""select {_OP_COLUMNS}
+                         from app.custody_operation_authorize_recovery_completion(
+                           %s, %s, %s, %s
+                         )""",
+                    (
+                        operation_id,
+                        actor_user_id,
+                        completion_reauth_audit_event_id,
+                        _RUNNER_INSTANCE_ID,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return _record(row)
+
+    def commit_verified_recovery(
+        self,
+        operation_id: str,
+        *,
+        item: dict[str, Any],
+        examiner: str,
+    ) -> CustodyOperationRecord:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""select {_OP_COLUMNS}
+                         from app.custody_operation_commit_verified_recovery(
+                           %s, %s, %s, %s
+                         )""",
+                    (operation_id, _jsonb(item), examiner, _RUNNER_INSTANCE_ID),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -709,6 +770,288 @@ class SealCustodyOperation:
                 self._posture.close(batch)
 
 
+class RecoveryCustodyOperation:
+    """Durable gate-first Replace/Reacquire and exact Restore orchestration.
+
+    Begin and complete are deliberately separate operator ceremonies.  Begin
+    commits ``GATE_BLOCKED`` and the prepared original-version facts before it
+    clears Local Immutable protection.  Complete reopens the server-resolved
+    object, hashes all bytes, restores protection, verifies the same descriptor,
+    and only then invokes the action-specific Postgres finalizer.
+    """
+
+    def __init__(
+        self,
+        repository: CustodyOperationRepositoryProtocol,
+        case_dir: Callable[[str], Path | None],
+        object_for_id: Callable[[str, str], dict[str, Any]],
+        *,
+        service_user: str | None = None,
+    ) -> None:
+        self._repository = repository
+        self._case_dir = case_dir
+        self._object_for_id = object_for_id
+        self._service_user = service_user or os.environ.get(
+            "SIFT_GATEWAY_SERVICE_USER", "sift-service"
+        )
+
+    @staticmethod
+    def _validate_relative_path(value: str) -> tuple[str, str]:
+        parts = Path(value).parts
+        if len(parts) != 2 or parts[0] != "evidence" or parts[1] in ("", ".", ".."):
+            raise CustodyOperationError("invalid_evidence_path", http_status=409)
+        return parts[0], parts[1]
+
+    def _open_object(self, case_id: str, display_path: str) -> tuple[int, int]:
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
+            raise CustodyOperationError("o_nofollow_required", http_status=500)
+        _prefix, name = self._validate_relative_path(display_path)
+        case_dir = self._case_dir(case_id)
+        if case_dir is None:
+            raise CustodyOperationError("case_artifact_path_unavailable", http_status=404)
+        root_fd = os.open(
+            case_dir / "evidence",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | nofollow,
+        )
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_CLOEXEC | nofollow, dir_fd=root_fd)
+        except Exception:
+            os.close(root_fd)
+            raise
+        return root_fd, fd
+
+    def _verified_descriptor_facts(
+        self, case_id: str, evidence_object_id: str
+    ) -> tuple[dict[str, Any], int, int]:
+        from sift_core.evidence_chain import get_immutable_flag_fd
+
+        obj = self._object_for_id(case_id, evidence_object_id)
+        display_path = str(obj.get("display_path") or "")
+        root_fd, fd = self._open_object(case_id, display_path)
+        try:
+            st = os.fstat(fd)
+            expected_uid = pwd.getpwnam(self._service_user).pw_uid
+            if (
+                not stat.S_ISREG(st.st_mode)
+                or st.st_nlink != 1
+                or st.st_uid != expected_uid
+                or stat.S_IMODE(st.st_mode) != 0o644
+            ):
+                raise CustodyOperationError(
+                    "evidence_recovery_posture_invalid", http_status=409
+                )
+            sha256, size = LocalImmutablePostureAdapter._hash_fd(fd)
+            return (
+                {
+                    "evidence_object_id": evidence_object_id,
+                    "display_path": display_path,
+                    "path": display_path,
+                    "sha256": sha256,
+                    "bytes": size,
+                    "owner": self._service_user,
+                    "mode": "0644",
+                    "immutable": get_immutable_flag_fd(fd),
+                    "st_dev": st.st_dev,
+                    "st_ino": st.st_ino,
+                    "st_nlink": st.st_nlink,
+                    "st_mtime_ns": st.st_mtime_ns,
+                    "st_ctime_ns": st.st_ctime_ns,
+                },
+                root_fd,
+                fd,
+            )
+        except Exception:
+            os.close(fd)
+            os.close(root_fd)
+            raise
+
+    def begin(self, command: ObjectCustodyCommand, *, examiner: str) -> dict[str, Any]:
+        del examiner
+        if command.action not in (
+            CustodyAction.REPLACE_REACQUIRE,
+            CustodyAction.RESTORE_EXACT,
+        ):
+            raise CustodyOperationError("recovery_action_required", http_status=400)
+        operation = self._repository.begin_or_resume(command)
+        if operation.phase == CustodyOperationPhase.COMPLETED:
+            return dict(operation.result or {})
+        if operation.phase != CustodyOperationPhase.GATE_BLOCKED:
+            raise CustodyOperationError("custody_operation_not_resumable", http_status=409)
+        current = CustodyOperationPhase.GATE_BLOCKED
+        root_fd: int | None = None
+        fd: int | None = None
+        try:
+            obj = self._object_for_id(command.case_id, command.evidence_object_id)
+            if str(obj.get("status")) not in ("sealed", "violated"):
+                raise CustodyOperationError("recovery_object_not_admitted", http_status=409)
+            expected_sha256 = str(obj.get("current_sha256") or "")
+            current_version_id = str(obj.get("current_version_id") or "")
+            if not expected_sha256.startswith("sha256:") or not current_version_id:
+                raise CustodyOperationError("recovery_original_version_missing", http_status=409)
+            # Recovery may start after bytes are missing, changed, or already
+            # have posture drift.  DB original-version facts authorize the
+            # object; mounted bytes are only an observation at this phase.
+            display_path = str(obj.get("display_path") or "")
+            observed: dict[str, Any]
+            try:
+                from sift_core.evidence_chain import get_immutable_flag_fd
+
+                root_fd, fd = self._open_object(command.case_id, display_path)
+                st = os.fstat(fd)
+                if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                    raise CustodyOperationError(
+                        "evidence_regular_single_link_required", http_status=409
+                    )
+                observed_sha256, observed_bytes = LocalImmutablePostureAdapter._hash_fd(fd)
+                observed = {
+                    "present": True,
+                    "sha256": observed_sha256,
+                    "bytes": observed_bytes,
+                    "st_dev": st.st_dev,
+                    "st_ino": st.st_ino,
+                    "st_nlink": st.st_nlink,
+                    "uid": st.st_uid,
+                    "mode": f"{stat.S_IMODE(st.st_mode):04o}",
+                    "immutable": get_immutable_flag_fd(fd),
+                }
+            except FileNotFoundError:
+                observed = {"present": False}
+                root_fd = None
+                fd = None
+            prepared = {
+                "evidence_object_id": command.evidence_object_id,
+                "display_path": display_path,
+                "path": display_path,
+                "original_sha256": expected_sha256,
+                "original_bytes": obj.get("current_bytes"),
+                "original_version_id": current_version_id,
+                "observed_at_begin": observed,
+            }
+            operation = self._repository.advance(
+                operation.operation_id,
+                CustodyOperationPhase.GATE_BLOCKED,
+                CustodyOperationPhase.FILESYSTEM_APPLYING,
+                facts={"item": prepared},
+            )
+            current = operation.phase
+            from sift_core.evidence_chain import (
+                get_immutable_flag_fd,
+                set_immutable_flag_fd,
+            )
+
+            if fd is not None:
+                if get_immutable_flag_fd(fd) is True and not set_immutable_flag_fd(fd, False):
+                    raise CustodyOperationError("evidence_unprotect_failed", http_status=500)
+                if get_immutable_flag_fd(fd) is not False:
+                    raise CustodyOperationError("evidence_unprotect_verification_failed", http_status=409)
+            return {
+                "operation_id": operation.operation_id,
+                "operation_phase": operation.phase.value,
+                "action": command.action.value,
+                "evidence_object_id": command.evidence_object_id,
+                "ready_for_replacement": True,
+            }
+        except Exception as exc:
+            failure = exc.reason if isinstance(exc, CustodyOperationError) else type(exc).__name__
+            try:
+                self._repository.fail(operation.operation_id, current, failure)
+            except Exception:
+                logger.warning("recovery begin failure persistence failed", exc_info=True)
+            if isinstance(exc, CustodyOperationError):
+                raise
+            raise CustodyOperationError("recovery_begin_failed", http_status=500) from exc
+        finally:
+            if fd is not None:
+                os.close(fd)
+            if root_fd is not None:
+                os.close(root_fd)
+
+    def complete(
+        self,
+        operation_id: str,
+        *,
+        actor_user_id: str,
+        completion_reauth_audit_event_id: str,
+        examiner: str,
+    ) -> dict[str, Any]:
+        operation = self._repository.authorize_recovery_completion(
+            operation_id,
+            actor_user_id=actor_user_id,
+            completion_reauth_audit_event_id=completion_reauth_audit_event_id,
+        )
+        if operation.phase == CustodyOperationPhase.COMPLETED:
+            return dict(operation.result or {})
+        prepared = operation.prepared_facts or {}
+        item_before = prepared.get("item") if isinstance(prepared, dict) else None
+        if not isinstance(item_before, dict):
+            raise CustodyOperationError("recovery_prepared_facts_missing", http_status=409)
+        evidence_object_id = str(item_before.get("evidence_object_id") or "")
+        root_fd: int | None = None
+        fd: int | None = None
+        try:
+            item, root_fd, fd = self._verified_descriptor_facts(
+                operation.case_id, evidence_object_id
+            )
+            original_sha256 = str(item_before.get("original_sha256") or "")
+            if operation.action == CustodyAction.RESTORE_EXACT.value:
+                if item["sha256"] != original_sha256:
+                    raise CustodyOperationError("restore_hash_mismatch", http_status=409)
+            elif operation.action == CustodyAction.REPLACE_REACQUIRE.value:
+                if item["sha256"] == original_sha256:
+                    raise CustodyOperationError(
+                        "replace_requires_changed_bytes_use_restore", http_status=409
+                    )
+            else:
+                raise CustodyOperationError("recovery_action_required", http_status=409)
+
+            from sift_core.evidence_chain import (
+                get_immutable_flag_fd,
+                set_immutable_flag_fd,
+            )
+
+            if get_immutable_flag_fd(fd) is not True and not set_immutable_flag_fd(fd, True):
+                raise CustodyOperationError("evidence_immutability_failed", http_status=500)
+            if get_immutable_flag_fd(fd) is not True:
+                raise CustodyOperationError("evidence_posture_verification_failed", http_status=409)
+            st = os.fstat(fd)
+            verified = {
+                **item,
+                "immutable": True,
+                "st_mtime_ns": st.st_mtime_ns,
+                "st_ctime_ns": st.st_ctime_ns,
+                "original_sha256": original_sha256,
+                "original_bytes": item_before.get("original_bytes"),
+                "original_version_id": item_before.get("original_version_id"),
+            }
+            operation = self._repository.advance(
+                operation.operation_id,
+                CustodyOperationPhase.FILESYSTEM_APPLYING,
+                CustodyOperationPhase.FILESYSTEM_VERIFIED,
+                facts={"item": verified},
+            )
+            operation = self._repository.commit_verified_recovery(
+                operation.operation_id, item=verified, examiner=examiner
+            )
+            return dict(operation.result or {})
+        except Exception as exc:
+            failure = exc.reason if isinstance(exc, CustodyOperationError) else type(exc).__name__
+            try:
+                self._repository.fail(
+                    operation.operation_id, operation.phase, failure
+                )
+            except Exception:
+                logger.warning("recovery completion failure persistence failed", exc_info=True)
+            if isinstance(exc, CustodyOperationError):
+                raise
+            raise CustodyOperationError("recovery_complete_failed", http_status=500) from exc
+        finally:
+            if fd is not None:
+                os.close(fd)
+            if root_fd is not None:
+                os.close(root_fd)
+
+
 def public_operation(record: CustodyOperationRecord | None) -> dict[str, Any] | None:
     """Return path-free, authorization-free state safe for the human Portal."""
     if record is None:
@@ -721,6 +1064,7 @@ def public_operation(record: CustodyOperationRecord | None) -> dict[str, Any] | 
             record.failed_from_phase.value if record.failed_from_phase else None
         ),
         "failure_code": record.failure_code,
-        "recoverable": record.action == "ADD_SEAL"
-        and record.phase in RESUMABLE_SEAL_PHASES,
+        "recoverable": record.action in {
+            "ADD_SEAL", "REPLACE_REACQUIRE", "RESTORE_EXACT"
+        } and record.phase in RESUMABLE_SEAL_PHASES,
     }

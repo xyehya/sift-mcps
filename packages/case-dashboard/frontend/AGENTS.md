@@ -101,11 +101,10 @@ fixing anything. Known-resolved since that audit:
   renders as escaped React text nodes.
 - **Store contract stays frozen:** keep `src/test/useStore.interface.test.js`
   byte-identical and green; do not add or remove top-level `useStore` keys.
-- **P4.23.3 supersedes the obsolete Unseal test freeze:** the approved
-  Replace/Reacquire and exact-Restore packet may replace
-  `src/test/EvidenceUnseal.test.jsx` when its stronger public-seam behavior lands.
-  Until then, keep the existing Unseal behavior and test intact; this seam change
-  alone does not authorize removing them.
+- **P4.23.3 superseded the obsolete Unseal test freeze:**
+  `src/test/EvidenceUnseal.test.jsx` now protects durable gate-first
+  Replace/Reacquire, exact Restore completion, and version-history behavior.
+  Do not restore a standalone Unseal action or its old route contract.
 - **Frozen public contracts:** do not add/remove top-level `useStore` keys; store
   / api / hooks module paths are stable (legacy feature components must keep
   resolving). Auth / JWT / crypto = behavior-preserving **port**, not a rewrite.

@@ -5,12 +5,8 @@ import { useMotionVariants } from '@/lib/motion'
 import { EvidenceSealModal } from '@/components/evidence/EvidenceSealModal'
 
 // ─────────────────────────────────────────────────────────────────────────
-// EvidenceModals — the 7 chain-of-custody action modals (legacy IA parity §7):
-// verify_hmac · seal · ignore · delete · retire · reacquire · unseal. Each has
-// an examiner password field; ignore/delete/retire/reacquire/unseal also carry
-// a justification reason field. All preserve the legacy explanatory copy and
-// error / loading / result states. data-testid="unseal-submit" is preserved on
-// the unseal confirm button (frozen EvidenceUnseal.test.jsx).
+// EvidenceModals — custody actions for seal, disposition, durable recovery,
+// and verification. Every mutation has explicit authorization and result states.
 //
 // Confirm-button tone uses STATIC literal token classes (no interpolation) so
 // the Tailwind JIT emits them — never a template-built class name (AGENTS §3/§5).
@@ -278,63 +274,50 @@ function RetireModal({ path, password, onPasswordChange, reason, onReasonChange,
 }
 
 // ── Re-acquire (Re-seal) ───────────────────────────────────────────────────
-function ReacquireModal({ path, password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
+function RecoveryBeginModal({ kind, path, password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
+  const restore = kind === 'restore'
   return (
-    <ModalShell title="Re-acquire & Re-seal Evidence" titleTone="jade">
+    <ModalShell title={restore ? 'Begin Exact Restore' : 'Begin Replace/Reacquire'} titleTone={restore ? 'amber' : 'jade'}>
       <PathDisplay path={path} />
       <p className="text-xs text-muted-foreground">
-        Use this when the file&apos;s bytes legitimately changed (e.g. a corrupted acquisition was
-        re-imaged). The replacement on disk is re-hashed in full and a new manifest version is sealed;
-        the <strong className="text-foreground">previous sealed hash is superseded, not deleted</strong> — the
-        old hash, new hash, and your justification are recorded in the append-only custody ledger. This
-        clears the chain-of-custody violation. Requires examiner justification and credentials.
+        {restore
+          ? 'Use this only to restore the original exact bytes. Completion rejects any hash or size mismatch and does not create a new evidence or manifest version.'
+          : 'Use this for a legitimate re-image of the same real-world Evidence Object. Completion requires changed bytes and creates a new Evidence Version while preserving every prior version.'}
+        {' '}The custody gate is durably blocked before write protection changes and remains blocked until a separately re-authenticated completion.
       </p>
       <p className="text-[11px] text-status-pending">
         Large disk/memory images are hashed in full — this can take several minutes. Keep this window
         open until it completes.
       </p>
-      <form id="modal-reacquire" onSubmit={onSubmit} className="space-y-4">
+      <form id="modal-recovery-begin" onSubmit={onSubmit} className="space-y-4">
         <ReasonField value={reason} onChange={onReasonChange} disabled={loading} placeholder="e.g. Original acquisition corrupted; re-imaged from source drive" />
         <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
         <ModalError error={error} />
-        {loading && <ModalLoading message="Re-hashing replacement and sealing new manifest version…" />}
-        {result && <ModalSuccess message="Evidence re-acquired and re-sealed." />}
+        {loading && <ModalLoading message="Blocking custody gate and recording recovery intent…" />}
+        {result && <ModalSuccess message="Recovery intent recorded. Replace or restore the bytes, then use Complete Recovery." />}
         <div className="flex justify-end gap-2">
           <CancelButton onClose={onClose} />
-          <ConfirmButton formId="modal-reacquire" label="Re-seal" tone="jade" disabled={loading} />
+          <ConfirmButton formId="modal-recovery-begin" label={restore ? 'Begin Exact Restore' : 'Begin Replace/Reacquire'} tone={restore ? 'amber' : 'jade'} disabled={loading} />
         </div>
       </form>
     </ModalShell>
   )
 }
 
-// ── Unseal (B-MVP-048) ─────────────────────────────────────────────────────
-function UnsealModal({ path, password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
+function RecoveryCompleteModal({ path, password, onPasswordChange, loading, error, result, onClose, onSubmit }) {
   return (
-    <ModalShell title="Unseal Evidence" titleTone="amber">
-      <PathDisplay path={path} />
+    <ModalShell title="Complete Recovery" titleTone="jade">
       <p className="text-xs text-muted-foreground">
-        Unsealing <strong className="text-status-pending">clears the immutable (write-protection) flag</strong> on
-        this evidence so you can replace, re-image, or add evidence. The case becomes{' '}
-        <strong className="text-foreground">non-sealed</strong> and{' '}
-        <strong className="text-status-pending">all agent tools are blocked until you re-seal</strong>. This action
-        is recorded in the append-only custody log and requires examiner justification and credentials.
-        Re-seal as soon as your changes are complete.
+        Re-authenticate to hash all mounted bytes, restore immutable posture, and atomically finalize operation <span className="mono">{path}</span>. The custody gate remains blocked on any mismatch or interruption.
       </p>
-      <form id="modal-unseal" onSubmit={onSubmit} className="space-y-4">
-        <ReasonField
-          value={reason}
-          onChange={onReasonChange}
-          disabled={loading}
-          placeholder="e.g. Replacing corrupted image / adding newly acquired evidence"
-        />
+      <form id="modal-recovery-complete" onSubmit={onSubmit} className="space-y-4">
         <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
         <ModalError error={error} />
-        {loading && <ModalLoading message="Submitting unseal request…" />}
-        {result && <ModalSuccess message="Evidence unsealed. Re-seal before agent tools can run." />}
+        {loading && <ModalLoading message="Hashing, restoring protection, and committing custody history…" />}
+        {result && <ModalSuccess message="Recovery completed and custody gate reopened." />}
         <div className="flex justify-end gap-2">
           <CancelButton onClose={onClose} />
-          <ConfirmButton formId="modal-unseal" label="Unseal" tone="amber" disabled={loading} testId="unseal-submit" />
+          <ConfirmButton formId="modal-recovery-complete" label="Complete Recovery" tone="jade" disabled={loading} testId="recovery-complete-submit" />
         </div>
       </form>
     </ModalShell>
@@ -368,10 +351,13 @@ export function EvidenceModals({ activeModal, pendingPath, password, reason, loa
       {activeModal === 'ignore' && <IgnoreModal key="ignore" {...common} onSubmit={handlers.onIgnore} />}
       {activeModal === 'delete' && <DeleteModal key="delete" {...common} onSubmit={handlers.onDelete} />}
       {activeModal === 'retire' && <RetireModal key="retire" {...common} onSubmit={handlers.onRetire} />}
-      {activeModal === 'reacquire' && (
-        <ReacquireModal key="reacquire" {...common} onSubmit={handlers.onReacquire} />
+      {activeModal === 'replace' && (
+        <RecoveryBeginModal key="replace" kind="replace" {...common} onSubmit={handlers.onReplaceBegin} />
       )}
-      {activeModal === 'unseal' && <UnsealModal key="unseal" {...common} onSubmit={handlers.onUnseal} />}
+      {activeModal === 'restore' && (
+        <RecoveryBeginModal key="restore" kind="restore" {...common} onSubmit={handlers.onRestoreBegin} />
+      )}
+      {activeModal === 'complete_recovery' && <RecoveryCompleteModal key="complete_recovery" {...common} onSubmit={handlers.onRecoveryComplete} />}
     </AnimatePresence>
   )
 }

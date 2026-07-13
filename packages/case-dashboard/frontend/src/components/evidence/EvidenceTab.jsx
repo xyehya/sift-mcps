@@ -22,10 +22,9 @@ import { IncompleteCustodyOperation } from '@/components/evidence/IncompleteCust
 // registered-evidence table → modals. Reskinned to orange tokens, lucide icons,
 // framer-motion, shadcn primitives, ≤400-line decomposed files.
 //
-// FROZEN CONTRACTS (must remain byte-identical / green):
-//   EvidenceUnseal.test.jsx — data-testid="unseal-btn-{ev.path}" (gated on
-//     chainStatus.ok membership) in RegisteredEvidenceTable;
-//     data-testid="unseal-submit" in the unseal modal (EvidenceModals).
+// FROZEN CONTRACTS (must remain green):
+//   EvidenceUnseal.test.jsx now covers Replace/Reacquire, exact Restore,
+//   recovery completion, and version history; standalone Unseal is obsolete.
 //   useStore.interface.test.js — store public surface frozen; this tab reads
 //     chain/evidence via useStoreSlice only (no new top-level keys).
 //
@@ -50,7 +49,7 @@ export function EvidenceTab() {
   const [sortCol, setSortCol] = useState('path')
   const [sortAsc, setSortAsc] = useState(true)
 
-  // Modal state — activeModal ∈ verify_hmac|seal|ignore|delete|retire|reacquire|unseal|null
+  // Modal state includes durable replace/restore begin and recovery completion.
   const [activeModal, setActiveModal] = useState(null)
   const [pendingPath, setPendingPath] = useState(null)
   const [modalPassword, setModalPassword] = useState('')
@@ -67,7 +66,7 @@ export function EvidenceTab() {
     setModalReason('')
     setModalError('')
     setModalResult(null)
-    setSealIntentId(name === 'seal' ? crypto.randomUUID() : null)
+    setSealIntentId(['seal', 'replace', 'restore'].includes(name) ? crypto.randomUUID() : null)
   }
 
   function closeModal() {
@@ -127,7 +126,10 @@ export function EvidenceTab() {
       >
         <EvidenceHeader chainStatus={chainStatus} onRescan={custody.handleRescan} />
 
-        <IncompleteCustodyOperation operation={chainStatus?.incomplete_operation} onResume={() => openModal('resume_seal')} />
+        <IncompleteCustodyOperation operation={chainStatus?.incomplete_operation} onResume={(operation) => openModal(
+          operation.action === 'ADD_SEAL' ? 'resume_seal' : 'complete_recovery',
+          operation.operation_id,
+        )} />
 
         <HmacBar chainStatus={chainStatus} onVerifyClick={() => openModal('verify_hmac')} />
 
@@ -140,7 +142,8 @@ export function EvidenceTab() {
         <CustodyViolations
           chainStatus={chainStatus}
           onRetire={(path) => openModal('retire', path)}
-          onReacquire={(path) => openModal('reacquire', path)}
+          onReplace={(path) => openModal('replace', path)}
+          onRestore={(path) => openModal('restore', path)}
         />
 
         <UnregisteredFiles
@@ -166,7 +169,7 @@ export function EvidenceTab() {
           sortCol={sortCol}
           sortAsc={sortAsc}
           onSort={handleSort}
-          onUnseal={(path) => openModal('unseal', path)}
+          onReplace={(path) => openModal('replace', path)}
           onVerify={custody.handleVerifyEvidence}
           onRescan={custody.handleRescan}
           onNavigateFinding={(rid) => {
@@ -195,8 +198,9 @@ export function EvidenceTab() {
           onIgnore: custody.handleIgnoreEvidence,
           onDelete: custody.handleDeleteEvidence,
           onRetire: custody.handleRetireEvidence,
-          onReacquire: custody.handleReacquireEvidence,
-          onUnseal: custody.handleUnsealEvidence,
+          onReplaceBegin: custody.handleReplaceBegin,
+          onRestoreBegin: custody.handleRestoreBegin,
+          onRecoveryComplete: custody.handleRecoveryComplete,
         }}
       />
     </div>

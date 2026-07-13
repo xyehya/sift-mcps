@@ -135,6 +135,14 @@ workflows may copy, repair, protect, replace, disposition, or seal evidence. Do 
 helper or any equivalent filesystem/custody mutation path as an MCP tool. The canonical vocabulary,
 state model, workflows, and test contract are in `docs/architecture/EVIDENCE-CUSTODY-SPEC.md`.
 
+Replace/Reacquire and exact Restore are two-ceremony durable Portal workflows. Begin durably blocks
+the Postgres custody gate and binds an opaque Evidence Object/current Evidence Version before any
+immutable flag is cleared. Completion requires a new single-use operation-bound re-authentication,
+full-hashes server-resolved bytes, restores and verifies Local Immutable posture, and invokes a
+closed action-specific database finalizer. Exact Restore preserves Evidence and Manifest Version
+identity; changed-byte Replace/Reacquire appends exactly one of each while retaining prior versions
+and siblings. Legacy standalone Unseal and one-shot Reacquire routes and runtime RPC grants are absent.
+
 **P4.23.1 status (2026-07-13; source and VM Gate A live-proven):** aggregate MCP admission reconciles
 the mounted inventory before reading the Postgres gate and independently requires every declared or
 raw command evidence operand to resolve to an active sealed Evidence Version. Local immutable

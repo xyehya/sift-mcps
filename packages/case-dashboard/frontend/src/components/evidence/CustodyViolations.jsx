@@ -11,7 +11,7 @@ import { violationPath } from './evidence-utils'
 // an append-only, re-authenticated custody event.
 // ─────────────────────────────────────────────────────────────────────────
 
-export function CustodyViolations({ chainStatus, onRetire, onReacquire }) {
+export function CustodyViolations({ chainStatus, onRetire, onReplace, onRestore }) {
   const missing = chainStatus?.missing ?? []
   const modified = chainStatus?.modified ?? []
   if (!missing.length && !modified.length) return null
@@ -32,15 +32,14 @@ export function CustodyViolations({ chainStatus, onRetire, onReacquire }) {
                 <li key={path} className="mono">
                   <div className="flex items-center justify-between">
                     <span className="break-all">{path}</span>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      onClick={() => onRetire(path)}
-                      className="mono ml-4 shrink-0 text-[10px] text-destructive border-destructive/40 hover:bg-destructive/10"
-                    >
-                      Retire File
-                    </Button>
+                    <div className="ml-4 flex shrink-0 gap-2">
+                      <Button type="button" variant="outline" size="xs" onClick={() => onRestore(path)} className="mono text-[10px] text-status-pending border-status-pending/40 hover:bg-status-pending/10">
+                        Exact Restore
+                      </Button>
+                      <Button type="button" variant="outline" size="xs" onClick={() => onRetire(path)} className="mono text-[10px] text-destructive border-destructive/40 hover:bg-destructive/10">
+                        Retire File
+                      </Button>
+                    </div>
                   </div>
                 </li>
               )
@@ -54,7 +53,8 @@ export function CustodyViolations({ chainStatus, onRetire, onReacquire }) {
           <strong className="mb-1 block">Modified Files (Hash Mismatch):</strong>
           <p className="mb-2 text-[11px] opacity-80">
             The sealed bytes changed on disk. If this is a legitimate re-acquisition (e.g. a corrupted
-            image was re-imaged), <strong>Re-seal</strong> to supersede the old hash with the new one.
+            image was re-imaged), <strong>Replace/Reacquire</strong> to supersede the old hash with the new one.
+            If you can restore the original exact bytes, choose <strong>Exact Restore</strong> instead.
             If the file no longer belongs in the case, <strong>Retire</strong> it. Both record an
             append-only, re-authenticated custody event — the prior sealed hash is never deleted.
           </p>
@@ -70,10 +70,19 @@ export function CustodyViolations({ chainStatus, onRetire, onReacquire }) {
                         type="button"
                         variant="outline"
                         size="xs"
-                        onClick={() => onReacquire(path)}
+                        onClick={() => onReplace(path)}
                         className="mono text-[10px] text-status-approved border-status-approved/40 hover:bg-status-approved/10"
                       >
-                        Re-seal
+                        Replace/Reacquire
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        onClick={() => onRestore(path)}
+                        className="mono text-[10px] text-status-pending border-status-pending/40 hover:bg-status-pending/10"
+                      >
+                        Exact Restore
                       </Button>
                       <Button
                         type="button"

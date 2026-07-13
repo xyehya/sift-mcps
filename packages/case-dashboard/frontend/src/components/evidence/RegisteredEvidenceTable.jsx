@@ -1,5 +1,7 @@
 import { Archive, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { useState } from 'react'
 
+import { getEvidenceHistory } from '@/api/endpoints'
 import { SkeletonBlock } from '@/components/common/Skeleton'
 import { Button } from '@/components/ui/button'
 import { formatTime, shortHash } from './evidence-utils'
@@ -8,10 +10,8 @@ import { formatTime, shortHash } from './evidence-utils'
 // RegisteredEvidenceTable — the sealed/registered evidence registry (legacy IA
 // parity §6). Sortable columns (Path · SHA-256 · Description · Registered At ·
 // Registered By · Referenced By · Action). Referenced-by chips deep-link to
-// Findings. Action cell: per-item Unseal (gated on chainStatus.ok membership —
-// the frozen EvidenceUnseal.test.jsx keys off ok[], not the aggregate seal
-// status) carrying data-testid="unseal-btn-{path}", plus a Verify control with
-// checking / verified / failed / error states.
+// Findings. Action cell exposes durable per-item Replace/Reacquire, verification,
+// and path-free append-only Evidence Version history.
 // ─────────────────────────────────────────────────────────────────────────
 
 const COLUMNS = [
@@ -59,6 +59,47 @@ function VerifyCell({ status, onVerify, path }) {
   )
 }
 
+function EvidenceHistory({ objectId }) {
+  const [history, setHistory] = useState(null)
+  const [error, setError] = useState('')
+  async function load() {
+    if (history) {
+      setHistory(null)
+      return
+    }
+    try {
+      setError('')
+      setHistory(await getEvidenceHistory(objectId))
+    } catch (err) {
+      setError(err.message || 'History unavailable')
+    }
+  }
+  return (
+    <div className="mt-1">
+      <button type="button" onClick={load} className="mono text-[10px] text-muted-foreground underline-offset-2 hover:underline">
+        {history ? 'Hide history' : 'Version history'}
+      </button>
+      {error && <div className="text-[10px] text-destructive">{error}</div>}
+      {history && (
+        <div data-testid={`evidence-history-${objectId}`} className="mt-1 min-w-72 rounded border border-border-soft bg-bg-raised p-2 text-left">
+          <div className="mono text-[10px] font-semibold">Evidence Versions</div>
+          {(history.versions || []).map((version) => (
+            <div key={version.evidence_version_id} className="mono mt-1 text-[10px] text-muted-foreground">
+              v{version.manifest_version} · {shortHash(version.sha256, 12)} · {version.bytes} bytes
+            </div>
+          ))}
+          <div className="mono mt-2 text-[10px] font-semibold">Custody Events</div>
+          {(history.events || []).map((event) => (
+            <div key={event.event_id} className="mono mt-1 text-[10px] text-muted-foreground">
+              #{event.seq} · {event.event_type}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function RegisteredEvidenceTable({
   evidence,
   evidenceLoading,
@@ -68,7 +109,7 @@ export function RegisteredEvidenceTable({
   sortCol,
   sortAsc,
   onSort,
-  onUnseal,
+  onReplace,
   onVerify,
   onNavigateFinding,
   onRescan,
@@ -152,15 +193,16 @@ export function RegisteredEvidenceTable({
                     {sealedPaths.includes(ev.path) && (
                       <button
                         type="button"
-                        data-testid={`unseal-btn-${ev.path}`}
-                        onClick={() => onUnseal(ev.path)}
+                        data-testid={`replace-btn-${ev.path}`}
+                        onClick={() => onReplace(ev.path)}
                         className="mono mr-2 rounded border border-border-hard px-2 py-1 text-[10px] font-semibold text-muted-foreground transition-colors hover:border-status-pending hover:text-status-pending focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        title="Unseal: clear the immutable flag so this evidence can be replaced/re-imaged; blocks agent tools until re-sealed"
+                        title="Begin a durable Replace/Reacquire operation; the custody gate blocks before protection changes"
                       >
-                        Unseal
+                        Replace/Reacquire
                       </button>
                     )}
                     <VerifyCell status={verifyStatus[ev.path]} onVerify={onVerify} path={ev.path} />
+                    {ev.evidence_id && <EvidenceHistory objectId={ev.evidence_id} />}
                   </td>
                 </tr>
               ))}

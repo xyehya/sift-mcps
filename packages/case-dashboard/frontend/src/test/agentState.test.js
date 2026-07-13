@@ -15,7 +15,7 @@ const PORTAL = {
   agent: { state: 'awaiting-authorization', metrics: { records_parsed: 1284402, findings_proposed: 47, sources_fused: 3 } },
   gated_actions: [
     { id: 'a', title: 'Acquire memory', tool: 'mcp:acquire.memory', icon: 'cpu', risk: 'irreversible' },
-    { id: 'b', title: 'Unseal', tool: 'mcp:evidence.unseal', icon: 'lock-open', risk: 'reauth' },
+    { id: 'b', title: 'Evidence write denied', tool: 'run_command', icon: 'lock-open', risk: 'reauth' },
   ],
   backends: { up: 7, total: 8, degraded: ['yara'] },
   evidence: { sealed: 12, total: 14 },

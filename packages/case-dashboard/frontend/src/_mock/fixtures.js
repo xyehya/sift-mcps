@@ -261,12 +261,12 @@ const PORTAL_STATE = {
   blocked_actions: [
     {
       id: 'ba-1',
-      title: 'Unseal EV-014 for memory re-hash',
-      tool: 'mcp:evidence.unseal',
-      guard: 'Integrity guard',
+      title: 'Attempt evidence write during analysis',
+      tool: 'run_command',
+      guard: 'Evidence mutation guard',
       target: 'EV-014 · WS-FINANCE-03-mem.img',
       timestamp: _fmtTs(4 * 60000),
-      detail: 'The policy sandbox blocks direct evidence unsealing — integrity guard prevents modification of sealed artifacts.',
+      detail: 'The policy and OS sandbox deny evidence-folder mutation. Recovery remains an operator-only Portal workflow.',
     },
     {
       id: 'ba-2',
@@ -668,7 +668,7 @@ export const EVIDENCE_ITEMS = [
     custody_events: [
       { at: iso(1.2 * D), by: 'e.varga', action: 'acquired', note: 'VSS shadow extracted for baseline comparison.' },
       { at: iso(1.1 * D), by: 'e.varga', action: 'sealed', note: 'Sealed in manifest v2.' },
-      { at: iso(0.5 * D), by: 'e.varga', action: 'unsealed', note: 'Unsealed for re-acquisition from newer shadow copy.' },
+      { at: iso(0.5 * D), by: 'e.varga', action: 'replace_started', note: 'Durable Replace/Reacquire begun for a newer shadow copy.' },
     ],
     finding_refs: ['F-003'],
   },
@@ -952,7 +952,7 @@ const REPORT_CONTENT = {
       { path: 'evidence/WS-FINANCE-03-disk.E01', size_bytes: 512000000000, sha256: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6', status: 'sealed' },
     ],
     todos: [
-      { title: 'Re-image WS-FINANCE-03 memory', priority: 'high', examiner: 'e.varga', description: 'Volatile capture blocked by integrity guard; operator unseal required.' },
+      { title: 'Re-image WS-FINANCE-03 memory', priority: 'high', examiner: 'e.varga', description: 'Volatile capture blocked by custody gate; operator Replace/Reacquire required.' },
     ],
   },
   sections: [

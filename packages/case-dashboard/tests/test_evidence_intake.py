@@ -67,6 +67,8 @@ class FakeEvidenceDB:
         self.delete_calls: list = []
         self.reacquire_calls: list = []
         self.unseal_calls: list = []
+        self.recovery_begin_calls: list = []
+        self.recovery_complete_calls: list = []
 
     def record_reauth_event(self, *, case_id, actor, examiner, action, binding=None):
         self.reauth_calls.append((case_id, examiner, action, binding))
@@ -125,6 +127,36 @@ class FakeEvidenceDB:
             "status": "registered",
             "seal_status": "unsealed",
             "immutable": False,
+        }
+
+    def recovery_object_id(self, *, case_id, display_path):
+        return "22222222-2222-4222-8222-222222222222"
+
+    def begin_recovery(self, **kwargs):
+        self.recovery_begin_calls.append(kwargs)
+        return {
+            "operation_id": "33333333-3333-4333-8333-333333333333",
+            "operation_phase": "FILESYSTEM_APPLYING",
+            "action": str(kwargs["action"]),
+            "ready_for_replacement": True,
+        }
+
+    def recovery_operation_action(self, *, case_id, operation_id):
+        return "REPLACE_REACQUIRE"
+
+    def complete_recovery(self, **kwargs):
+        self.recovery_complete_calls.append(kwargs)
+        return {
+            "reacquired": True, "manifest_version": 2,
+            "evidence_version_id": "44444444-4444-4444-8444-444444444444",
+            "seal_status": "sealed",
+        }
+
+    def evidence_history(self, case_id, evidence_object_id):
+        return {
+            "evidence_object_id": evidence_object_id,
+            "versions": [{"evidence_version_id": "v1", "manifest_version": 1}],
+            "events": [{"event_id": "e1", "seq": 1, "event_type": "MANIFEST_SEALED"}],
         }
 
     def delete_object(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
@@ -743,154 +775,84 @@ class TestEvidenceChainRetire:
 
 
 # ---------------------------------------------------------------------------
-# reacquire (re-seal a legitimately changed evidence item) endpoint
+# durable Replace/Reacquire and exact Restore endpoints
 # ---------------------------------------------------------------------------
 
 
-class TestEvidenceChainReacquire:
-    def test_no_auth_returns_403(self, client):
-        resp = client.post("/api/evidence/chain/reacquire", json={})
-        assert resp.status_code == 403
+class TestEvidenceRecovery:
+    def test_legacy_unseal_and_reacquire_routes_are_absent(self, authed_client):
+        assert authed_client.post("/api/evidence/chain/unseal", json={}).status_code == 404
+        assert authed_client.post("/api/evidence/chain/reacquire", json={}).status_code == 404
 
-    def test_missing_password_returns_400(self, authed_client):
-        resp = authed_client.post(
-            "/api/evidence/chain/reacquire", json={"path": "evidence/x", "reason": "r"}
+    def test_replace_begin_records_bound_intent(self, authed_client, evidence_db):
+        response = authed_client.post(
+            "/api/evidence/chain/replace/begin",
+            json={
+                "password": GOOD_PASSWORD, "path": "evidence/disk.raw",
+                "reason": "re-image from the same source device",
+                "idempotency_key": "replace-intent-1",
+            },
         )
-        assert resp.status_code == 400
-
-    def test_missing_path_returns_400(self, authed_client):
-        resp = authed_client.post(
-            "/api/evidence/chain/reacquire",
-            json={"password": GOOD_PASSWORD, "reason": "r"},
+        assert response.status_code == 200, response.text
+        assert response.json()["ready_for_replacement"] is True
+        assert evidence_db.reauth_calls[-1][2:] == (
+            "evidence_replace_begin",
+            {
+                "action": "REPLACE_REACQUIRE",
+                "evidence_object_id": "22222222-2222-4222-8222-222222222222",
+                "idempotency_key": "replace-intent-1",
+                "reason": "re-image from the same source device",
+            },
         )
-        assert resp.status_code == 400
+        assert evidence_db.recovery_begin_calls[-1]["action"] == "REPLACE_REACQUIRE"
 
-    def test_missing_reason_returns_400(self, authed_client):
-        resp = authed_client.post(
-            "/api/evidence/chain/reacquire",
-            json={"password": GOOD_PASSWORD, "path": "evidence/x"},
+    def test_exact_restore_begin_is_a_distinct_server_selected_action(
+        self, authed_client, evidence_db
+    ):
+        response = authed_client.post(
+            "/api/evidence/chain/restore/begin",
+            json={
+                "password": GOOD_PASSWORD, "path": "evidence/disk.raw",
+                "reason": "restore original exact acquisition",
+                "idempotency_key": "restore-intent-1",
+            },
         )
-        assert resp.status_code == 400
+        assert response.status_code == 200, response.text
+        assert evidence_db.recovery_begin_calls[-1]["action"] == "RESTORE_EXACT"
+        assert evidence_db.reauth_calls[-1][2] == "evidence_restore"
 
-    def test_control_plane_down_fails_closed(self, authed_client, evidence_db, fake_auth):
-        fake_auth.control_plane_down = True
-        resp = authed_client.post(
-            "/api/evidence/chain/reacquire",
-            json={"password": GOOD_PASSWORD,
-                  "path": "evidence/x.bin", "reason": "re-image"},
+    def test_complete_uses_db_action_and_operation_bound_fresh_reauth(
+        self, authed_client, evidence_db
+    ):
+        operation_id = "33333333-3333-4333-8333-333333333333"
+        response = authed_client.post(
+            "/api/evidence/chain/recovery/complete",
+            json={"password": GOOD_PASSWORD, "operation_id": operation_id},
         )
-        assert resp.status_code == 503
-        assert not evidence_db.reacquire_calls
-
-    def test_reacquire_succeeds(self, authed_client, evidence_db):
-        resp = authed_client.post(
-            "/api/evidence/chain/reacquire",
-            json={"password": GOOD_PASSWORD,
-                  "path": "evidence/Rocba-Memory.raw",
-                  "reason": "corrupt acquisition re-imaged"},
+        assert response.status_code == 200, response.text
+        assert response.json()["reacquired"] is True
+        assert evidence_db.reauth_calls[-1][2:] == (
+            "evidence_replace_complete", {"operation_id": operation_id}
         )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()
-        assert data["reacquired"] is True
-        assert data["authority"] == "db"
-        assert data["path"] == "evidence/Rocba-Memory.raw"
-        assert data["seal_status"] == "sealed"
-        assert evidence_db.reacquire_calls
-        assert evidence_db.reacquire_calls[0] == (
-            "evidence/Rocba-Memory.raw", "corrupt acquisition re-imaged", "audit-evt-001",
+        assert evidence_db.recovery_complete_calls[-1][
+            "completion_reauth_audit_event_id"
+        ] == "audit-evt-001"
+
+    def test_wrong_password_never_begins_recovery(self, authed_client, evidence_db):
+        response = authed_client.post(
+            "/api/evidence/chain/replace/begin",
+            json={
+                "password": "wrong-password", "path": "evidence/disk.raw",
+                "reason": "re-image", "idempotency_key": "replace-intent-2",
+            },
         )
+        assert response.status_code == 401
+        assert not evidence_db.recovery_begin_calls
 
-    def test_reacquire_wrong_password_returns_401(self, authed_client, evidence_db):
-        resp = authed_client.post(
-            "/api/evidence/chain/reacquire",
-            json={"password": "wrong-password",
-                  "path": "evidence/x.bin", "reason": "re-image"},
-        )
-        assert resp.status_code == 401
-        assert not evidence_db.reacquire_calls
-
-    def test_reacquire_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
-        c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
-        resp = c.post(
-            "/api/evidence/chain/reacquire",
-            json={"password": GOOD_PASSWORD, "path": "evidence/x.bin", "reason": "r"},
-        )
-        assert resp.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# unseal (clear immutable flag so bytes can be replaced/re-imaged) endpoint
-# ---------------------------------------------------------------------------
-
-
-class TestEvidenceChainUnseal:
-    def test_no_auth_returns_403(self, client):
-        resp = client.post("/api/evidence/chain/unseal", json={})
-        assert resp.status_code == 403
-
-    def test_missing_password_returns_400(self, authed_client):
-        resp = authed_client.post(
-            "/api/evidence/chain/unseal", json={"path": "evidence/x", "reason": "r"}
-        )
-        assert resp.status_code == 400
-
-    def test_missing_path_returns_400(self, authed_client):
-        resp = authed_client.post(
-            "/api/evidence/chain/unseal",
-            json={"password": GOOD_PASSWORD, "reason": "r"},
-        )
-        assert resp.status_code == 400
-
-    def test_missing_reason_returns_400(self, authed_client):
-        resp = authed_client.post(
-            "/api/evidence/chain/unseal",
-            json={"password": GOOD_PASSWORD, "path": "evidence/x"},
-        )
-        assert resp.status_code == 400
-
-    def test_control_plane_down_fails_closed(self, authed_client, evidence_db, fake_auth):
-        fake_auth.control_plane_down = True
-        resp = authed_client.post(
-            "/api/evidence/chain/unseal",
-            json={"password": GOOD_PASSWORD,
-                  "path": "evidence/x.bin", "reason": "re-image"},
-        )
-        assert resp.status_code == 503
-        assert not evidence_db.unseal_calls
-
-    def test_unseal_succeeds(self, authed_client, evidence_db):
-        resp = authed_client.post(
-            "/api/evidence/chain/unseal",
-            json={"password": GOOD_PASSWORD,
-                  "path": "evidence/Rocba-Memory.raw",
-                  "reason": "re-image corrupt acquisition"},
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()
-        assert data["unsealed"] is True
-        assert data["authority"] == "db"
-        assert data["path"] == "evidence/Rocba-Memory.raw"
-        assert data["display_path"] == "evidence/Rocba-Memory.raw"
-        assert data["evidence_id"] == "ev-unsealed"
-        assert data["seal_status"] == "unsealed"
-        assert evidence_db.unseal_calls
-        assert evidence_db.unseal_calls[0] == (
-            "evidence/Rocba-Memory.raw", "re-image corrupt acquisition", "audit-evt-001",
-        )
-
-    def test_unseal_wrong_password_returns_401(self, authed_client, evidence_db):
-        resp = authed_client.post(
-            "/api/evidence/chain/unseal",
-            json={"password": "wrong-password",
-                  "path": "evidence/x.bin", "reason": "re-image"},
-        )
-        assert resp.status_code == 401
-        assert not evidence_db.unseal_calls
-
-    def test_unseal_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
-        c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
-        resp = c.post(
-            "/api/evidence/chain/unseal",
-            json={"password": GOOD_PASSWORD, "path": "evidence/x.bin", "reason": "r"},
-        )
-        assert resp.status_code == 404
+    def test_object_history_is_path_free_and_uuid_scoped(self, authed_client):
+        object_id = "22222222-2222-4222-8222-222222222222"
+        response = authed_client.get(f"/api/evidence/objects/{object_id}/history")
+        assert response.status_code == 200
+        assert response.json()["evidence_object_id"] == object_id
+        assert "path" not in response.text
+        assert authed_client.get("/api/evidence/objects/not-a-uuid/history").status_code == 400

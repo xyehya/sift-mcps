@@ -59,6 +59,7 @@ export function useEvidenceActions({
     addToast,
     modalPassword,
     modalReason,
+    sealIntentId,
     pendingPath,
     setModalLoading,
     setModalError,

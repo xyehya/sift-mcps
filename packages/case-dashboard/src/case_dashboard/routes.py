@@ -1491,177 +1491,134 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
     })
 
 
-async def post_evidence_chain_reacquire(request: Request) -> JSONResponse:
-    """Re-acquire (re-seal) a sealed/violated evidence file at its new bytes.
-
-    Operator-authorized remediation for a legitimately re-imaged evidence item
-    whose bytes changed (the corrupted/old acquisition is replaced). Hashes the
-    mounted replacement, records an append-only supersession (old sha -> new sha
-    + reason) in the custody ledger, clears the violation, and advances the
-    manifest version. A missing file cannot be re-acquired — retire it instead
-    (the service returns ``evidence_file_missing_cannot_reacquire``).
-
-    Body: {challenge_id, response, path, reason}
-    Requires: session examiner + role examiner + must_reset_password=false + HMAC.
-    """
-    role_err = _require_examiner_role(request)
-    if role_err:
+async def _post_evidence_recovery_begin(
+    request: Request, *, action: str, reauth_action: str
+) -> JSONResponse:
+    """Begin a fixed server-selected recovery action before any FS mutation."""
+    if (role_err := _require_examiner_role(request)) is not None:
         return role_err
-
+    if (err := _must_reset_check(request)) is not None:
+        return err
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
-
-    err = _must_reset_check(request)
-    if err:
-        return err
-
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
-    rel_path = str(body.get("path", "")).strip()
-    reason = str(body.get("reason", "")).strip()
-
-    if not rel_path:
-        return JSONResponse({"error": "Missing path"}, status_code=400)
-    if not reason:
-        return JSONResponse({"error": "Missing reason"}, status_code=400)
-
-    # CL3a: re-verify the operator's password against Supabase (fail closed).
-    reauth_err = await _supabase_reverify(request, body)
-    if reauth_err:
+    if not isinstance(body, dict) or set(body) - {
+        "password", "path", "reason", "idempotency_key"
+    }:
+        return JSONResponse({"error": "Unknown recovery request field"}, status_code=400)
+    path = str(body.get("path") or "").strip()
+    reason = " ".join(str(body.get("reason") or "").split())
+    idempotency_key = str(body.get("idempotency_key") or "").strip()
+    if not path or not reason or len(reason) > 1000:
+        return JSONResponse({"error": "Path and reason are required"}, status_code=400)
+    if not idempotency_key or len(idempotency_key) > 128:
+        return JSONResponse({"error": "idempotency_key is required"}, status_code=400)
+    if (reauth_err := await _supabase_reverify(request, body)) is not None:
         return reauth_err
-
-    # DB custody authority only (C1). No file-backed fallback; degrade gracefully.
-    reacquirer = (
-        getattr(_EVIDENCE_DB, "reacquire", None) if _EVIDENCE_DB is not None else None
-    )
-    if not callable(reacquirer):
+    service = _EVIDENCE_DB
+    resolver = getattr(service, "recovery_object_id", None)
+    beginner = getattr(service, "begin_recovery", None)
+    if not callable(resolver) or not callable(beginner):
         return _no_case_response()
-
-    reauth_id = _record_reauth_event(request, examiner, "evidence_reacquire")
-    if not reauth_id:
-        return JSONResponse(
-            {"error": "Re-auth audit event required for re-acquire"},
-            status_code=403,
-        )
     try:
-        head = reacquirer(
-            case_id=_active_case_id(),
-            display_path=rel_path,
-            reason=reason,
-            reauth_audit_event_id=reauth_id,
-            actor=_request_principal(request),
+        object_id = resolver(case_id=_active_case_id(), display_path=path)
+        reauth_id = _record_reauth_event(
+            request, examiner, reauth_action,
+            binding={
+                "action": action,
+                "evidence_object_id": object_id,
+                "idempotency_key": idempotency_key,
+                "reason": reason,
+            },
+        )
+        if not reauth_id:
+            return JSONResponse({"error": "Recovery re-auth audit required"}, status_code=403)
+        result = beginner(
+            case_id=_active_case_id(), display_path=path, action=action,
+            reason=reason, idempotency_key=idempotency_key,
+            reauth_audit_event_id=reauth_id, actor=_request_principal(request),
             examiner=examiner,
         )
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
-    head = head if isinstance(head, dict) else {}
-
-    case_dir_str = _active_case_dir_str()
-    if _ON_CHAIN_MUTATION and case_dir_str:
-        try:
-            _ON_CHAIN_MUTATION(case_dir_str)
-        except Exception as exc:
-            logger.warning("evidence reacquire: cache invalidation failed: %s", exc)
-
+    result = result if isinstance(result, dict) else {}
     return JSONResponse({
-        "reacquired": True,
-        "authority": "db",
-        "path": rel_path,
-        "manifest_version": head.get("manifest_version"),
-        "seal_status": head.get("seal_status", "sealed"),
-        "sha256": head.get("sha256"),
-        "reauth_method": _MVP_REAUTH_METHOD,
+        "authority": "db", "operation_id": result.get("operation_id"),
+        "operation_phase": result.get("operation_phase"),
+        "action": result.get("action", action),
+        "ready_for_replacement": result.get("ready_for_replacement", False),
     })
 
 
-async def post_evidence_chain_unseal(request: Request) -> JSONResponse:
-    """Unseal a sealed evidence file so its bytes can be replaced/re-imaged.
+async def post_evidence_replace_begin(request: Request) -> JSONResponse:
+    return await _post_evidence_recovery_begin(
+        request, action="REPLACE_REACQUIRE", reauth_action="evidence_replace_begin"
+    )
 
-    Operator-authorized remediation (B-MVP-048). Clears the evidence immutable
-    flag so the mounted bytes can be replaced or re-imaged; the operator then
-    re-seals (or re-acquires) the item. Records the action in the custody ledger
-    under a re-auth audit event. Mirrors the re-acquire endpoint exactly: same
-    role/examiner/must-reset gating, same Supabase re-auth, same DB-authority
-    degradation.
 
-    Body: {path, reason, password}
-    Requires: session examiner + role examiner + must_reset_password=false + re-auth.
-    """
-    role_err = _require_examiner_role(request)
-    if role_err:
+async def post_evidence_restore_begin(request: Request) -> JSONResponse:
+    return await _post_evidence_recovery_begin(
+        request, action="RESTORE_EXACT", reauth_action="evidence_restore"
+    )
+
+
+async def post_evidence_recovery_complete(request: Request) -> JSONResponse:
+    """Freshly re-authenticate, full-hash, re-protect, and finalize recovery."""
+    if (role_err := _require_examiner_role(request)) is not None:
         return role_err
-
+    if (err := _must_reset_check(request)) is not None:
+        return err
     examiner = _resolve_examiner(request)
     if not examiner:
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
-
-    err = _must_reset_check(request)
-    if err:
-        return err
-
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
-    rel_path = str(body.get("path", "")).strip()
-    reason = str(body.get("reason", "")).strip()
-
-    if not rel_path:
-        return JSONResponse({"error": "Missing path"}, status_code=400)
-    if not reason:
-        return JSONResponse({"error": "Missing reason"}, status_code=400)
-
-    # CL3a: re-verify the operator's password against Supabase (fail closed).
-    reauth_err = await _supabase_reverify(request, body)
-    if reauth_err:
-        return reauth_err
-
-    # DB custody authority only (C1). No file-backed fallback; degrade gracefully.
-    unsealer = (
-        getattr(_EVIDENCE_DB, "unseal", None) if _EVIDENCE_DB is not None else None
-    )
-    if not callable(unsealer):
-        return _no_case_response()
-
-    reauth_id = _record_reauth_event(request, examiner, "evidence_unseal")
-    if not reauth_id:
-        return JSONResponse(
-            {"error": "Re-auth audit event required for unseal"},
-            status_code=403,
-        )
+    if not isinstance(body, dict) or set(body) - {"password", "operation_id"}:
+        return JSONResponse({"error": "Unknown completion request field"}, status_code=400)
     try:
-        head = unsealer(
-            case_id=_active_case_id(),
-            display_path=rel_path,
-            reason=reason,
-            reauth_audit_event_id=reauth_id,
-            actor=_request_principal(request),
-            examiner=examiner,
+        operation_id = str(uuid.UUID(str(body.get("operation_id") or "")))
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "operation_id is required"}, status_code=400)
+    if (reauth_err := await _supabase_reverify(request, body)) is not None:
+        return reauth_err
+    service = _EVIDENCE_DB
+    action_reader = getattr(service, "recovery_operation_action", None)
+    completer = getattr(service, "complete_recovery", None)
+    if not callable(action_reader) or not callable(completer):
+        return _no_case_response()
+    try:
+        action = action_reader(case_id=_active_case_id(), operation_id=operation_id)
+        reauth_action = (
+            "evidence_replace_complete"
+            if action == "REPLACE_REACQUIRE"
+            else "evidence_restore_complete"
+        )
+        reauth_id = _record_reauth_event(
+            request, examiner, reauth_action, binding={"operation_id": operation_id}
+        )
+        if not reauth_id:
+            return JSONResponse({"error": "Completion re-auth audit required"}, status_code=403)
+        result = completer(
+            case_id=_active_case_id(), operation_id=operation_id,
+            completion_reauth_audit_event_id=reauth_id,
+            actor=_request_principal(request), examiner=examiner,
         )
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
-    head = head if isinstance(head, dict) else {}
-
-    case_dir_str = _active_case_dir_str()
-    if _ON_CHAIN_MUTATION and case_dir_str:
-        try:
-            _ON_CHAIN_MUTATION(case_dir_str)
-        except Exception as exc:
-            logger.warning("evidence unseal: cache invalidation failed: %s", exc)
-
+    result = result if isinstance(result, dict) else {}
     return JSONResponse({
-        "unsealed": True,
-        "authority": "db",
-        "path": rel_path,
-        "evidence_id": head.get("evidence_id"),
-        "display_path": head.get("display_path", rel_path),
-        "seal_status": head.get("seal_status", "unsealed"),
-        "reauth_method": _MVP_REAUTH_METHOD,
+        "authority": "db", "completed": True, "operation_id": operation_id,
+        "reacquired": bool(result.get("reacquired")),
+        "restored_exact": bool(result.get("restored_exact")),
+        "manifest_version": result.get("manifest_version"),
+        "evidence_version_id": result.get("evidence_version_id"),
+        "seal_status": result.get("seal_status"),
     })
 
 
@@ -2621,6 +2578,25 @@ async def get_evidence(request: Request) -> JSONResponse:
     # (fresh install) the evidence list degrades gracefully to empty — never a
     # file read, never 404/500.
     return JSONResponse([])
+
+
+async def get_evidence_history(request: Request) -> JSONResponse:
+    if not _resolve_examiner(request):
+        return JSONResponse({"error": "Authentication required"}, status_code=401)
+    if (role_err := _require_portal_role(request)) is not None:
+        return role_err
+    try:
+        evidence_object_id = str(uuid.UUID(str(request.path_params.get("object_id") or "")))
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "Invalid evidence object ID"}, status_code=400)
+    reader = getattr(_EVIDENCE_DB, "evidence_history", None) if _EVIDENCE_DB else None
+    if not callable(reader):
+        return _no_case_response()
+    try:
+        result = reader(_active_case_id(), evidence_object_id)
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
+    return JSONResponse(result if isinstance(result, dict) else {})
 
 
 def _query_int_clamped(request: Request, name: str, default: int, *, min_value: int, max_value: int) -> int:
@@ -5648,6 +5624,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/findings/{id}", get_finding_by_id, methods=["GET"]),
         Route("/api/timeline", get_timeline, methods=["GET"]),
         Route("/api/evidence", get_evidence, methods=["GET"]),
+        Route("/api/evidence/objects/{object_id}/history", get_evidence_history, methods=["GET"]),
         Route("/api/agent/activity", get_agent_activity, methods=["GET"]),
         Route("/api/audit/{finding_id}", get_audit_for_finding, methods=["GET"]),
         Route("/api/delta", get_delta, methods=["GET"]),
@@ -5671,8 +5648,9 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/chain/ignore", post_evidence_chain_ignore, methods=["POST"]),
         Route("/api/evidence/chain/delete", post_evidence_chain_delete, methods=["POST"]),
         Route("/api/evidence/chain/retire", post_evidence_chain_retire, methods=["POST"]),
-        Route("/api/evidence/chain/reacquire", post_evidence_chain_reacquire, methods=["POST"]),
-        Route("/api/evidence/chain/unseal", post_evidence_chain_unseal, methods=["POST"]),
+        Route("/api/evidence/chain/replace/begin", post_evidence_replace_begin, methods=["POST"]),
+        Route("/api/evidence/chain/restore/begin", post_evidence_restore_begin, methods=["POST"]),
+        Route("/api/evidence/chain/recovery/complete", post_evidence_recovery_complete, methods=["POST"]),
         Route("/api/evidence/chain/verify-hmac", post_evidence_chain_verify_hmac, methods=["POST"]),
         Route("/api/evidence/chain/anchor", post_evidence_chain_anchor, methods=["POST"]),
         Route("/api/evidence/chain/proof-export", post_evidence_chain_proof_export, methods=["POST"]),

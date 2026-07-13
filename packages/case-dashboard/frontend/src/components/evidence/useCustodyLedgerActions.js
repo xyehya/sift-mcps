@@ -2,15 +2,16 @@ import {
   postChainIgnore,
   postChainDelete,
   postChainRetire,
-  postChainReacquire,
-  unsealEvidence,
+  postReplaceBegin,
+  postRestoreBegin,
+  postRecoveryComplete,
 } from '@/api/endpoints'
 
 import { runGuard } from '@/components/evidence/custody-guard'
 
 // ─────────────────────────────────────────────────────────────────────────
 // useCustodyLedgerActions — the password + reason-guarded LEDGERED custody
-// mutations: ignore · delete · retire · reacquire · unseal. Each re-auths with
+// mutations: ignore · delete · retire · replace/restore begin and completion. Each re-auths with
 // runGuard (reason required), then on success records via afterSuccess(
 // refreshData). Mock/real split is at the API adapter layer (AGENTS §3).
 // ─────────────────────────────────────────────────────────────────────────
@@ -20,6 +21,7 @@ export function useCustodyLedgerActions({
   addToast,
   modalPassword,
   modalReason,
+  sealIntentId,
   pendingPath,
   setModalLoading,
   setModalError,
@@ -86,40 +88,47 @@ export function useCustodyLedgerActions({
     }
   }
 
-  async function handleReacquireEvidence(e) {
+  async function beginRecovery(e, endpoint, label) {
     e.preventDefault()
     if (!guard(true)) return
     try {
-      const res = await postChainReacquire({ password: modalPassword, path: pendingPath, reason: modalReason })
-      if (res.reacquired) {
-        addToast(`Evidence re-acquired and re-sealed (manifest v${res.manifest_version}).`, 'success')
+      const res = await endpoint({
+        password: modalPassword,
+        path: pendingPath,
+        reason: modalReason,
+        idempotency_key: sealIntentId,
+      })
+      if (res.ready_for_replacement && res.operation_id) {
+        addToast(`${label} authorized. Custody gate is blocked until completion.`, 'success')
         setModalResult({ success: true })
         afterSuccess(refreshData)
       } else {
-        throw new Error(res.error || 'Re-acquire failed')
+        throw new Error(res.error || `${label} begin failed`)
       }
     } catch (err) {
-      setModalError(err.message || 'Re-acquire failed')
+      setModalError(err.message || `${label} begin failed`)
     } finally {
       setModalLoading(false)
     }
   }
 
-  async function handleUnsealEvidence(e) {
+  const handleReplaceBegin = (e) => beginRecovery(e, postReplaceBegin, 'Replace/Reacquire')
+  const handleRestoreBegin = (e) => beginRecovery(e, postRestoreBegin, 'Exact Restore')
+
+  async function handleRecoveryComplete(e) {
     e.preventDefault()
-    if (!guard(true)) return
+    if (!guard(false)) return
     try {
-      // CL3a (B-MVP-017): password re-verified against Supabase server-side.
-      const res = await unsealEvidence(pendingPath, modalReason, modalPassword)
-      if (res.unsealed) {
-        addToast('Evidence unsealed — immutability cleared. Re-seal before agent tools can run.', 'success')
+      const res = await postRecoveryComplete({ password: modalPassword, operation_id: pendingPath })
+      if (res.completed && (res.reacquired || res.restored_exact)) {
+        addToast(res.restored_exact ? 'Original evidence bytes restored exactly.' : 'Replacement sealed as a new evidence version.', 'success')
         setModalResult({ success: true })
         afterSuccess(refreshData)
       } else {
-        throw new Error(res.error || 'Unseal failed')
+        throw new Error(res.error || 'Recovery completion failed')
       }
     } catch (err) {
-      setModalError(err.message || 'Unseal failed')
+      setModalError(err.message || 'Recovery completion failed')
     } finally {
       setModalLoading(false)
     }
@@ -129,7 +138,8 @@ export function useCustodyLedgerActions({
     handleIgnoreEvidence,
     handleDeleteEvidence,
     handleRetireEvidence,
-    handleReacquireEvidence,
-    handleUnsealEvidence,
+    handleReplaceBegin,
+    handleRestoreBegin,
+    handleRecoveryComplete,
   }
 }

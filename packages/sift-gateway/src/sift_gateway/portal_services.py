@@ -22,11 +22,14 @@ from typing import Any
 
 from sift_gateway.custody_operations import (
     RESUMABLE_SEAL_PHASES,
+    CustodyAction,
     CustodyOperationError,
     CustodyOperationRepository,
     CustodyOperationRepositoryProtocol,
     LocalImmutablePostureAdapter,
     LocalImmutablePostureProtocol,
+    ObjectCustodyCommand,
+    RecoveryCustodyOperation,
     SealCommand,
     SealCustodyOperation,
     public_operation,
@@ -763,6 +766,57 @@ class EvidenceAuthorityService(_BasePortalDbService):
             for r in rows
         ]
 
+    def evidence_history(self, case_id: str, evidence_object_id: str) -> dict[str, Any]:
+        """Return path-free append-only version/event history for one object."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select id::text from app.evidence_objects
+                       where id=%s and case_id=%s""",
+                    (evidence_object_id, case_id),
+                )
+                if not cur.fetchone():
+                    raise PortalServiceError("evidence_object_not_found", http_status=404)
+                cur.execute(
+                    """select id::text,manifest_version,sha256,bytes,entry_status,
+                              manifest_hash,created_at,custody_operation_id::text
+                       from app.evidence_versions
+                       where evidence_object_id=%s and case_id=%s
+                       order by manifest_version,id""",
+                    (evidence_object_id, case_id),
+                )
+                versions = cur.fetchall()
+                cur.execute(
+                    """select id::text,seq,event_type,manifest_version,event_hash,
+                              created_at,custody_operation_id::text
+                       from app.evidence_custody_events
+                       where evidence_object_id=%s and case_id=%s
+                       order by seq""",
+                    (evidence_object_id, case_id),
+                )
+                events = cur.fetchall()
+        return {
+            "evidence_object_id": evidence_object_id,
+            "versions": [
+                {
+                    "evidence_version_id": str(r[0]), "manifest_version": r[1],
+                    "sha256": r[2], "bytes": r[3], "entry_status": r[4],
+                    "manifest_hash": r[5], "created_at": _iso(r[6]),
+                    "custody_operation_id": str(r[7]) if r[7] else None,
+                }
+                for r in versions
+            ],
+            "events": [
+                {
+                    "event_id": str(r[0]), "seq": r[1], "event_type": r[2],
+                    "manifest_version": r[3], "event_hash": r[4],
+                    "created_at": _iso(r[5]),
+                    "custody_operation_id": str(r[6]) if r[6] else None,
+                }
+                for r in events
+            ],
+        }
+
     def resolve_evidence_reference(self, case_id: str, ref: str) -> dict[str, Any]:
         """Resolve an opaque evidence id or relative display path for worker use.
 
@@ -1065,185 +1119,139 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 "evidence_immutability_failed", http_status=500
             ) from exc
 
-    def reacquire(
-        self,
-        *,
-        case_id: str,
-        display_path: str,
-        reason: str,
-        reauth_audit_event_id: str,
-        actor: Any,
-        examiner: str,
+    def _recovery_object_for_id(
+        self, case_id: str, evidence_object_id: str
     ) -> dict[str, Any]:
-        """Re-acquire (re-seal) a sealed/violated evidence item at its new bytes.
-
-        Used when an operator legitimately re-images an evidence item whose bytes
-        changed (e.g. a corrupted acquisition is re-acquired). We hash the mounted
-        replacement, record an append-only supersession (old sha -> new sha +
-        operator reason) through ``app.evidence_reacquire``, flip the item back to
-        ``sealed``, and clear the case violation. The item must already exist and
-        be present on disk — a missing item cannot be re-acquired (retire it
-        instead). DB is the authority; no file manifest/ledger is consulted.
-        """
-        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
-        del actor_type
-        rel = _relative_display_path(display_path)
-        evidence_id = self._evidence_id_for_path(case_id, rel)
-        if not evidence_id:
-            raise PortalServiceError("evidence_object_not_found", http_status=404)
-        try:
-            path = self._resolve_evidence_path(case_id, rel)
-        except PortalServiceError as exc:
-            # A re-acquisition needs mounted bytes to hash. A missing file is a
-            # retire, not a re-acquire — tell the operator which path to take.
-            raise PortalServiceError(
-                "evidence_file_missing_cannot_reacquire", http_status=409
-            ) from exc
-        sha256, size = _hash_file(path)
-        items = [
-            {
-                "evidence_object_id": evidence_id,
-                "sha256": f"sha256:{sha256}",
-                "bytes": size,
-                "registered_by": examiner,
-            }
-        ]
-        manifest_version = self._next_manifest_version(case_id)
-        manifest_hash = _manifest_hash(case_id, manifest_version, items)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    select case_id::text, manifest_version, head_seq, head_hash,
-                           manifest_hash, seal_status, active_count, issues,
-                           last_event_type, last_verified_at
-                    from app.evidence_reacquire(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        evidence_id,
-                        case_id,
-                        f"sha256:{sha256}",
-                        size,
-                        manifest_version,
-                        manifest_hash,
-                        reason,
-                        reauth_audit_event_id,
-                        actor_user,
-                        actor_service,
-                    ),
+                    """select id::text,display_path,status,current_version_id::text,
+                              current_sha256,current_bytes
+                       from app.evidence_objects
+                       where id=%s and case_id=%s""",
+                    (evidence_object_id, case_id),
                 )
                 row = cur.fetchone()
-            conn.commit()
-        # B-MVP-048: a re-acquired item is sealed again, so re-apply the
-        # service-owned + immutable FS posture to its new bytes (the operator
-        # re-imaged with a mutable, operator-owned file). Fail CLOSED with the
-        # same mapping used by _harden_sealed_files so a reacquire never leaves
-        # the DB sealed while the bytes stay mutable.
-        self._harden_sealed_files(case_id, [{"path": rel}])
-        result = _chain_head_dict(row)
-        result["display_path"] = rel
-        result["sha256"] = f"sha256:{sha256}"
-        result["bytes"] = size
-        return result
+        if not row:
+            raise PortalServiceError("evidence_object_not_found", http_status=404)
+        return {
+            "evidence_object_id": str(row[0]),
+            "display_path": str(row[1]),
+            "status": str(row[2]),
+            "current_version_id": str(row[3]) if row[3] else None,
+            "current_sha256": str(row[4]) if row[4] else None,
+            "current_bytes": int(row[5]) if row[5] is not None else None,
+        }
 
-    def unseal(
+    def recovery_object_id(self, *, case_id: str, display_path: str) -> str:
+        """Resolve a Portal display path to the server-authoritative object ID."""
+        evidence_object_id = self._evidence_id_for_path(
+            case_id, _relative_display_path(display_path)
+        )
+        if not evidence_object_id:
+            raise PortalServiceError("evidence_object_not_found", http_status=404)
+        return evidence_object_id
+
+    def recovery_operation_action(self, *, case_id: str, operation_id: str) -> str:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select action from app.custody_operations
+                       where id=%s and case_id=%s
+                         and action in ('REPLACE_REACQUIRE','RESTORE_EXACT')""",
+                    (operation_id, case_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise PortalServiceError("custody_operation_not_found", http_status=404)
+        return str(row[0])
+
+    def begin_recovery(
         self,
         *,
         case_id: str,
         display_path: str,
+        action: CustodyAction | str,
         reason: str,
+        idempotency_key: str,
         reauth_audit_event_id: str,
         actor: Any,
         examiner: str,
     ) -> dict[str, Any]:
-        """Operator unlock of a sealed evidence item so its bytes can be replaced.
-
-        The deliberate inverse of seal: clears the on-disk immutable (+i) flag via
-        ``sift_core.evidence_chain.unharden_sealed_evidence`` and records the
-        logical transition through ``app.evidence_unseal`` (object -> status
-        ``registered``, seal_status ``unsealed``). The recompute drops the case
-        aggregate seal status to ``unsealed`` so the fail-closed agent evidence
-        gate BLOCKS every agent MCP tool until the operator re-seals — that gate
-        block is the intended control while bytes are being swapped/re-imaged.
-
-        Re-auth gated: ``reauth_audit_event_id`` must be non-empty. The item must
-        already exist and be present on disk (a missing item is a retire, not an
-        unseal). DB is the authority; no file manifest/ledger is consulted.
-        """
-        del examiner
-        if not str(reauth_audit_event_id or "").strip():
-            raise PortalServiceError("unseal_requires_reauth", http_status=403)
-        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
-        del actor_type
+        """Begin one durable Replace/Reacquire or exact Restore operation."""
+        try:
+            action = CustodyAction(action)
+        except (TypeError, ValueError) as exc:
+            raise PortalServiceError("recovery_action_required", http_status=400) from exc
+        if action not in (CustodyAction.REPLACE_REACQUIRE, CustodyAction.RESTORE_EXACT):
+            raise PortalServiceError("recovery_action_required", http_status=400)
+        normalized_reason = " ".join(reason.split())
+        if not 1 <= len(normalized_reason) <= 1000:
+            raise PortalServiceError("recovery_reason_required", http_status=400)
+        if not 1 <= len(idempotency_key.strip()) <= 128:
+            raise PortalServiceError("recovery_idempotency_key_required", http_status=400)
         rel = _relative_display_path(display_path)
-        evidence_id = self._evidence_id_for_path(case_id, rel)
-        if not evidence_id:
+        evidence_object_id = self._evidence_id_for_path(case_id, rel)
+        if not evidence_object_id:
             raise PortalServiceError("evidence_object_not_found", http_status=404)
-        # The bytes must be present to unlock them (otherwise there is nothing to
-        # clear +i on — a missing item is a retire, not an unseal).
-        self._resolve_evidence_path(case_id, rel)
-        # Clear the immutable flag BEFORE the DB write: if the FS posture cannot
-        # be relaxed we must not record an unsealed transition (which would tell
-        # the operator the bytes are now editable when they are not).
-        self._unharden_sealed_files(case_id, [rel])
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        if actor_type != "user" or not actor_user or actor_service:
+            raise PortalServiceError("recovery_actor_required", http_status=403)
+        command = ObjectCustodyCommand(
+            action=action,
+            case_id=case_id,
+            evidence_object_id=evidence_object_id,
+            actor_user_id=actor_user,
+            actor_service_identity_id=None,
+            reason=normalized_reason,
+            reauth_audit_event_id=reauth_audit_event_id,
+            idempotency_key=idempotency_key.strip(),
+        )
+        try:
+            return RecoveryCustodyOperation(
+                self._custody_repository,
+                self._case_artifact_path,
+                self._recovery_object_for_id,
+            ).begin(command, examiner=examiner)
+        except CustodyOperationError as exc:
+            raise PortalServiceError(exc.reason, http_status=exc.http_status) from exc
+
+    def complete_recovery(
+        self,
+        *,
+        case_id: str,
+        operation_id: str,
+        completion_reauth_audit_event_id: str,
+        actor: Any,
+        examiner: str,
+    ) -> dict[str, Any]:
+        """Hash, re-protect, and atomically finalize one blocked recovery."""
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        if actor_type != "user" or not actor_user or actor_service:
+            raise PortalServiceError("recovery_actor_required", http_status=403)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    select seal_status
-                    from app.evidence_unseal(%s, %s, %s, %s, %s)
-                    """,
-                    (
-                        evidence_id,
-                        reason,
-                        reauth_audit_event_id,
-                        actor_user,
-                        actor_service,
-                    ),
+                    """select 1 from app.custody_operations
+                       where id=%s and case_id=%s
+                         and action in ('REPLACE_REACQUIRE','RESTORE_EXACT')""",
+                    (operation_id, case_id),
                 )
-                cur.fetchone()
-                # Read back the item's resulting per-object status for the
-                # contract return (the RPC returns the case chain head).
-                cur.execute(
-                    "select status, seal_status from app.evidence_objects where id = %s",
-                    (evidence_id,),
-                )
-                obj = cur.fetchone()
-            conn.commit()
-        status = str(obj[0]) if obj else "registered"
-        seal_status = str(obj[1]) if obj else "unsealed"
-        return {
-            "evidence_id": evidence_id,
-            "display_path": rel,
-            "status": status,
-            "seal_status": seal_status,
-            "immutable": False,
-        }
-
-    def _unharden_sealed_files(self, case_id: str, rel_paths: list[str]) -> None:
-        """Clear the immutable flag on the given sealed evidence files.
-
-        Mirrors ``_harden_sealed_files`` but in reverse: resolves the case dir,
-        re-validates each case-relative path inside ``evidence/`` (delegated to
-        ``sift_core.evidence_chain.unharden_sealed_evidence``), and maps any
-        failure to a fail-closed unseal error so an unseal is never recorded for
-        bytes that are still immutable.
-        """
-        from sift_core.evidence_chain import (
-            EvidenceHardeningError,
-            unharden_sealed_evidence,
-        )
-
-        case_dir = self._case_artifact_path(case_id)
-        if case_dir is None:
-            raise PortalServiceError("case_artifact_path_unavailable", http_status=404)
+                if not cur.fetchone():
+                    raise PortalServiceError("custody_operation_not_found", http_status=404)
         try:
-            unharden_sealed_evidence(case_dir, rel_paths)
-        except EvidenceHardeningError as exc:
-            logger.error("evidence unseal unhardening failed for case %s: %s", case_id, exc)
-            raise PortalServiceError(
-                "evidence_unseal_failed", http_status=500
-            ) from exc
+            return RecoveryCustodyOperation(
+                self._custody_repository,
+                self._case_artifact_path,
+                self._recovery_object_for_id,
+            ).complete(
+                operation_id,
+                actor_user_id=actor_user,
+                completion_reauth_audit_event_id=completion_reauth_audit_event_id,
+                examiner=examiner,
+            )
+        except CustodyOperationError as exc:
+            raise PortalServiceError(exc.reason, http_status=exc.http_status) from exc
 
     def ignore(
         self,
@@ -1801,8 +1809,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 # ignored/retired) keeps its existing registration — re-registering
                 # it would raise and (pre-fix) crash the whole seal path. Skip the
                 # register call in that case and reuse the existing id; the
-                # re-acquisition path (app.evidence_reacquire) handles re-sealing a
-                # changed item.
+                # durable Replace/Reacquire operation handles changed sealed bytes.
                 cur.execute(
                     "select status from app.evidence_objects where id = %s",
                     (evidence_id,),

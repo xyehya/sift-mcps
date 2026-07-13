@@ -35,7 +35,10 @@ vi.mock('@/api/endpoints', async (importOriginal) => {
     postChainIgnore: vi.fn(),
     postChainDelete: vi.fn(),
     postChainRetire: vi.fn(),
-    postChainReacquire: vi.fn(),
+    postReplaceBegin: vi.fn(),
+    postRestoreBegin: vi.fn(),
+    postRecoveryComplete: vi.fn(),
+    getEvidenceHistory: vi.fn(),
     postChainVerifyHmac: vi.fn(),
     postVerifyEvidence: vi.fn(),
     postChainAnchor: vi.fn(),
@@ -300,33 +303,31 @@ describe('Retire missing file flow', () => {
   })
 })
 
-// ── 5. Reacquire / Re-seal (custody violation: modified) ─────────────────────
-describe('Reacquire (re-seal) modified file flow', () => {
+// ── 5. Exact Restore (custody violation: modified) ────────────────────────────
+describe('Exact Restore modified file flow', () => {
   beforeEach(() => seed({ status: 'violated', modified: ['evidence/changed.img'], write_protected: true }))
 
-  it('opens reacquire modal from a modified-file violation and calls postChainReacquire', async () => {
-    endpoints.postChainReacquire.mockResolvedValue({ reacquired: true, manifest_version: 6 })
+  it('opens exact Restore and records a durable begin intent', async () => {
+    endpoints.postRestoreBegin.mockResolvedValue({ ready_for_replacement: true, operation_id: 'op-1' })
     render(<EvidenceTab />)
 
-    // "Re-seal" appears as a violation action and as the modal confirm button.
-    fireEvent.click(await screen.findByRole('button', { name: 'Re-seal' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Exact Restore' }))
     const modal = await screen.findByRole('dialog')
-    expect(within(modal).getByText('Re-acquire & Re-seal Evidence')).toBeInTheDocument()
+    expect(within(modal).getByRole('heading', { name: 'Begin Exact Restore' })).toBeInTheDocument()
 
     // Gate: empty required fields → endpoint NOT called.
-    fireEvent.click(within(modal).getByRole('button', { name: 'Re-seal' }))
-    expect(endpoints.postChainReacquire).not.toHaveBeenCalled()
+    fireEvent.click(within(modal).getByRole('button', { name: 'Begin Exact Restore' }))
+    expect(endpoints.postRestoreBegin).not.toHaveBeenCalled()
 
     fillModal({ reason: 'corrupted; re-imaged', password: 'pw' })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Re-seal' }))
+    fireEvent.click(within(modal).getByRole('button', { name: 'Begin Exact Restore' }))
     await waitFor(() => {
-      expect(endpoints.postChainReacquire).toHaveBeenCalledWith({
+      expect(endpoints.postRestoreBegin).toHaveBeenCalledWith(expect.objectContaining({
         password: 'pw',
         path: 'evidence/changed.img',
         reason: 'corrupted; re-imaged',
-      })
+      }))
     })
-    expect(await within(modal).findByText(/re-acquired and re-sealed/i)).toBeInTheDocument()
   })
 })
 
