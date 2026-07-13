@@ -1019,7 +1019,7 @@ class SupabaseAuthCallbacks:
         self._audit = audit
         self._issuance = agent_issuance
 
-    # -- audit helper -----------------------------------------------------
+    # -- best-effort portal-auth audit mirror ----------------------------
 
     def _audit_log(self, *, tool: str, summary: str, extra: dict[str, Any]) -> None:
         if self._audit is None:
