@@ -30,8 +30,12 @@ _SCANNED_FILES = tuple(
 _INGEST_CLI = "opensearch-mcp/src/opensearch_mcp/ingest_cli.py"
 _SERVER = "opensearch-mcp/src/opensearch_mcp/server.py"
 _CLIENT_FACTORY = "opensearch-mcp/src/opensearch_mcp/client.py"
+_CASE_ID_BACKFILL = "opensearch-mcp/src/opensearch_mcp/case_id_backfill.py"
 _ALLOWED_GET_CLIENT_FILES = {_INGEST_CLI}
-_ALLOWED_GET_CLIENT_CALLS = {(_SERVER, "_get_os")}
+# ``case_id_backfill.main`` is an operator-only derived-index maintenance CLI,
+# deliberately outside the MCP surface.  Keep this function-level exception
+# narrow so any future client creation in that module remains reviewable.
+_ALLOWED_GET_CLIENT_CALLS = {(_SERVER, "_get_os"), (_CASE_ID_BACKFILL, "main")}
 _ALLOWED_OPEN_SEARCH_CONSTRUCTORS = {(_CLIENT_FACTORY, "get_client")}
 
 

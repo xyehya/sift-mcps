@@ -218,9 +218,10 @@ class TestInstallComponentTemplate:
         result = install_component_templates(client)
 
         assert result["installed"] == []
-        assert len(result["failed"]) == 1
-        assert result["failed"][0]["template"] == "sift-json-type-stability"
-        assert "cluster 503" in result["failed"][0]["error"]
+        assert result["failed"] == [
+            {"template": "sift-case-metadata", "error": "cluster 503"},
+            {"template": "sift-json-type-stability", "error": "cluster 503"},
+        ]
 
 
 # ---------------------------------------------------------------------------
