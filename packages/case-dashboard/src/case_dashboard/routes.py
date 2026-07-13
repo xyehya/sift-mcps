@@ -816,6 +816,31 @@ def _empty_evidence_chain_status() -> dict:
         "write_block_mount_point": None,
         "write_block_warning": None,
         "requires_examiner_action": False,
+        "incomplete_operation": None,
+    }
+
+
+def _public_incomplete_operation(value: object) -> dict | None:
+    """Allowlist the path-free custody-operation summary for Portal recovery."""
+    if not isinstance(value, dict):
+        return None
+    operation_id = value.get("operation_id")
+    action = value.get("action")
+    phase = value.get("phase")
+    if not all(isinstance(item, str) and item for item in (operation_id, action, phase)):
+        return None
+
+    failed_from_phase = value.get("failed_from_phase")
+    failure_code = value.get("failure_code")
+    return {
+        "operation_id": operation_id,
+        "action": action,
+        "phase": phase,
+        "failed_from_phase": (
+            failed_from_phase if isinstance(failed_from_phase, str) else None
+        ),
+        "failure_code": failure_code if isinstance(failure_code, str) else None,
+        "recoverable": value.get("recoverable") is True,
     }
 
 
@@ -841,6 +866,9 @@ def _db_evidence_chain_status() -> dict | None:
     except Exception as exc:
         logger.warning("DB evidence gate_status failed: %s", exc)
         return None
+    if not isinstance(status, dict):
+        logger.warning("DB evidence gate_status returned a non-object payload")
+        return None
 
     seal_status = status.get("seal_status", "unsealed")
     payload = {
@@ -856,6 +884,9 @@ def _db_evidence_chain_status() -> dict | None:
         # the gate/reauth metadata carries it, else None.
         "hmac_last_verified_by": status.get("last_verified_by"),
         "hmac_verify_needed": status.get("last_verified_at") is None,
+        "incomplete_operation": _public_incomplete_operation(
+            status.get("incomplete_operation")
+        ),
     }
 
     # Detected-vs-sealed object lists for the frontend (Seal Manifest specs,

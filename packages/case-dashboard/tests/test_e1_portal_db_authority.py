@@ -50,8 +50,9 @@ class FakeActiveCases:
 
 
 class FakeEvidenceDB:
-    def __init__(self, *, seal_status="unsealed"):
+    def __init__(self, *, seal_status="unsealed", incomplete_operation=None):
         self.seal_status = seal_status
+        self.incomplete_operation = incomplete_operation
         self.reauth_calls = []
         self.seal_calls = []
         self.ignore_calls = []
@@ -70,6 +71,7 @@ class FakeEvidenceDB:
             "issues": [],
             "head_hash": "sha256:abc",
             "last_verified_at": None,
+            "incomplete_operation": self.incomplete_operation,
         }
 
     def list_evidence(self, case_id):
@@ -223,6 +225,35 @@ class TestEvidenceDBAuthority:
         assert body["authority"] == "db"
         assert body["seal_status"] == "sealed"
         assert body["manifest_version"] == 2
+
+    def test_chain_status_surfaces_only_public_incomplete_operation(self):
+        incomplete = {
+            "operation_id": "25c6c6f1-1111-4111-8111-111111111111",
+            "action": "ADD_SEAL",
+            "phase": "GATE_BLOCKED",
+            "failed_from_phase": None,
+            "failure_code": None,
+            "recoverable": True,
+            "absolute_path": "/private/evidence/disk.E01",
+            "reauth_receipt": "must-not-surface",
+        }
+        ev = FakeEvidenceDB(
+            seal_status="unsealed",
+            incomplete_operation=incomplete,
+        )
+        c = _examiner(_make_client(evidence_service=ev))
+
+        resp = c.get("/api/evidence/chain/status")
+
+        assert resp.status_code == 200
+        assert resp.json()["incomplete_operation"] == {
+            "operation_id": "25c6c6f1-1111-4111-8111-111111111111",
+            "action": "ADD_SEAL",
+            "phase": "GATE_BLOCKED",
+            "failed_from_phase": None,
+            "failure_code": None,
+            "recoverable": True,
+        }
 
     def test_evidence_list_from_db_uses_relative_paths(self):
         ev = FakeEvidenceDB()
