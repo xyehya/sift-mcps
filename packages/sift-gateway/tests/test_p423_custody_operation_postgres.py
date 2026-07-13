@@ -226,7 +226,14 @@ def test_final_commit_rollback_replay_sibling_preservation_and_grants():
             assert cur.fetchone()[0] is False
             cur.execute("select has_schema_privilege('authenticated','app','USAGE'),has_table_privilege('authenticated','app.custody_operations','SELECT'),has_table_privilege('authenticated','app.custody_operations','INSERT')")
             assert cur.fetchone() == (False, False, False)
-            cur.execute("select id from auth.users order by created_at limit 1")
+            cur.execute(
+                """select u.id from auth.users u
+                   where not exists (
+                     select 1 from app.operator_profiles p
+                     where p.auth_user_id=u.id
+                   )
+                   order by u.created_at limit 1"""
+            )
             auth_row = cur.fetchone()
             if auth_row:
                 cur.execute("update app.operator_profiles set auth_user_id=%s where id=%s", (auth_row[0], intent[1]))
