@@ -231,15 +231,19 @@ Tests should exercise the highest existing public seam and assert externally obs
 
 The following are known current-state facts, not accepted target behavior:
 
-- MCP admission reads the persisted DB gate without pre-dispatch filesystem reconciliation.
-- Active-case containment permits reading an unregistered evidence path; optional `evidence_refs` are not universal authorization.
-- Durable `run_command_job` has a filesystem fallback when the evidence service is absent.
-- Reconciliation exists in the Portal evidence authority service but is not composed into every MCP dispatch.
 - Standalone Unseal currently clears immutable protection before the durable gate transition; Reacquire can commit sealed DB state before immutable protection succeeds; Delete can unlink before durable disposition.
 - There is no durable custody-operation state machine or recovery worker.
+- Current Seal is not atomic across registration, hashing, version creation, immutable posture, and manifest commit. Gate A reproduced a failed pre-hash Seal that appended `EVIDENCE_REGISTERED`; the successful retry appended a second registration event while creating exactly one version. P4.23.2 must replace this with gate-first durable phases and exactly-once retry/recovery.
 - UI/demo data contains a fictitious `mcp:evidence.unseal` action.
 - “Verify HMAC,” file manifest/JSONL authority tests, and standalone Unseal terminology remain in tests and documentation even though active custody authority is Postgres.
 - Some Rescan tests pass when no reconciliation callback occurs, and the unused watcher/cache no-op does not provide continuous protection.
+
+P4.23.1 resolved the former admission drift: every aggregate MCP dispatch now performs read-only
+inventory reconciliation before the DB gate; raw and declared evidence operands require active
+sealed versions; durable execution has no evidence-service fallback; and the final launcher validates
+and passes pinned descriptors rather than reopening authorized raw paths. Exact-source VM Gate A
+proved force-add denial, zero process/enqueue, metadata invariance under mutation attempts, Portal
+Seal recovery, sealed-reference success, and ignored-sibling denial on 2026-07-13.
 
 These items must be replaced in dependency order. Tests that describe obsolete behavior are removed only after stronger public-seam replacements land.
 

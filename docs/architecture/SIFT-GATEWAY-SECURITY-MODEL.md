@@ -135,13 +135,19 @@ workflows may copy, repair, protect, replace, disposition, or seal evidence. Do 
 helper or any equivalent filesystem/custody mutation path as an MCP tool. The canonical vocabulary,
 state model, workflows, and test contract are in `docs/architecture/EVIDENCE-CUSTODY-SPEC.md`.
 
-**P4.23.1 source status (2026-07-13; live proof pending):** aggregate MCP admission now reconciles
+**P4.23.1 status (2026-07-13; source and VM Gate A live-proven):** aggregate MCP admission reconciles
 the mounted inventory before reading the Postgres gate and independently requires every declared or
 raw command evidence operand to resolve to an active sealed Evidence Version. Local immutable
 evidence uses a cheap descriptor fingerprint rather than a per-call full hash, then is reopened,
 revalidated, and passed to the final tool as a pinned inherited file descriptor so pathname
 replacement cannot redirect the read. Durable commands repeat custody validation at claim and
-immediately before execution. Gate A remains the authority for confirming the deployed revision.
+immediately before execution. On the exact deployed `55e7f4f` revision, a force-added file blocked
+authenticated synchronous and durable reads before process start or enqueue, ten representative
+mutation attempts left all observed filesystem state unchanged, and Portal recovery made only the
+newly sealed active version readable through a pinned descriptor. An ignored sibling remained
+denied. The fixed operator `stage-evidence.sh --prepare` helper was required before Seal because the
+deliberately root-owned `0640` force-add was unreadable to the service; that helper preserved bytes
+and inode while changing only eligible ownership/mode, and Portal Seal then applied immutable `+i`.
 
 ## VP-5 — The `run_command` jail (ceiling + floor, both deny-default)
 `run_command(command: str)` runs `shell=False`, multi-stage argv (supports `| && || ; > >> < 2>&1`)
