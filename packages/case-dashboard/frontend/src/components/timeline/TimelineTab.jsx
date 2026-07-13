@@ -10,6 +10,7 @@ import {
 import { EntityShell, EntityEmptyState } from '@/components/common/EntityShell'
 import { SearchInput, SelectFilter, ToggleChip, ResultCount } from '@/components/common/FilterBar'
 import { Clock } from 'lucide-react'
+import { extractIsoDate } from '@/lib/timestamp-utils'
 import { TimelineEvent } from './TimelineEvent'
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -123,7 +124,7 @@ export function TimelineTab() {
             const prev = filtered[i - 1]
             const showDateSep =
               i === 0 ||
-              new Date(ev.timestamp).toDateString() !== new Date(filtered[i - 1].timestamp).toDateString()
+              extractIsoDate(ev.timestamp) !== extractIsoDate(filtered[i - 1].timestamp)
             return (
               <TimelineEvent
                 key={ev.id}
