@@ -10,7 +10,6 @@ import hashlib
 import json
 import logging
 import os
-import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -487,7 +486,7 @@ def _coerce_run_command(command: Any) -> tuple[str | None, str | None]:
 
 def _trusted_internal_evidence_refs(
     refs: Any, *, case_root: str
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[dict[str, Any]]]:
     """Return internal evidence paths + public refs injected by the Gateway.
 
     This path closes the DB/file-manifest mismatch for Gateway calls while
@@ -497,7 +496,7 @@ def _trusted_internal_evidence_refs(
     in depth.
     """
     if not refs:
-        return [], []
+        return [], [], []
     try:
         from sift_core.active_case_context import current_active_case
 
@@ -512,6 +511,9 @@ def _trusted_internal_evidence_refs(
     case_resolved = Path(case_root).resolve()
     paths: list[str] = []
     public_refs: list[str] = []
+    bindings: list[dict[str, Any]] = []
+    from sift_core.execute.evidence_binding import validate_binding_fd
+
     for item in refs:
         if not isinstance(item, dict):
             raise ValueError("internal evidence ref entries must be objects")
@@ -526,41 +528,14 @@ def _trusted_internal_evidence_refs(
         expected_sha256 = str(item.get("sha256") or "")
         if not evidence_id or not version_id or not expected_sha256.startswith("sha256:"):
             raise ValueError("internal evidence ref is not version-bound")
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         fd = os.open(path, flags)
         try:
-            before = os.fstat(fd)
-            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-                raise ValueError("internal evidence ref has unsafe file identity")
-            expected_identity = (
-                int(item.get("st_dev", -1)),
-                int(item.get("st_ino", -1)),
-                int(item.get("bytes", -1)),
-                int(item.get("st_mtime_ns", -1)),
-            )
-            actual_identity = (
-                before.st_dev,
-                before.st_ino,
-                before.st_size,
-                before.st_mtime_ns,
-            )
-            if expected_identity != actual_identity:
-                raise ValueError("internal evidence ref changed after admission")
-            digest = hashlib.sha256()
-            with os.fdopen(os.dup(fd), "rb", closefd=True) as handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    digest.update(chunk)
-            after = os.fstat(fd)
-            if actual_identity != (
-                after.st_dev,
-                after.st_ino,
-                after.st_size,
-                after.st_mtime_ns,
-            ) or f"sha256:{digest.hexdigest()}" != expected_sha256:
-                raise ValueError("internal evidence ref changed after admission")
+            validate_binding_fd(fd, item)
         finally:
             os.close(fd)
         paths.append(str(path))
+        bindings.append(dict(item))
         public_refs.append(
             str(
                 item.get("evidence_id")
@@ -569,7 +544,7 @@ def _trusted_internal_evidence_refs(
                 or ""
             )
         )
-    return paths, [ref for ref in public_refs if ref]
+    return paths, [ref for ref in public_refs if ref], bindings
 
 
 # platform_capabilities is built declaration-driven in
@@ -879,6 +854,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
         )
     resolved_evidence_paths: list[str] = []
     public_evidence_refs: list[str] = []
+    execution_evidence_bindings: list[dict[str, Any]] = []
     if evidence_refs:
         if not isinstance(evidence_refs, list):
             return build_response(
@@ -890,7 +866,11 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
                 examiner=examiner,
             )
         try:
-            resolved_evidence_paths, public_evidence_refs = _trusted_internal_evidence_refs(
+            (
+                resolved_evidence_paths,
+                public_evidence_refs,
+                execution_evidence_bindings,
+            ) = _trusted_internal_evidence_refs(
                 args.get(_INTERNAL_RESOLVED_EVIDENCE_REFS), case_root=case_root
             )
         except ValueError as exc:
@@ -1037,6 +1017,7 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             save_dir=save_dir,
             cwd=cwd,
             preview_lines=preview_lines,
+            evidence_bindings=execution_evidence_bindings,
         )
         elapsed = time.monotonic() - start
         # Capture internal bookkeeping fields BEFORE stripping them from the

@@ -80,6 +80,8 @@ def serialize_resolved_ref(item: dict[str, Any]) -> dict[str, Any]:
         "st_dev",
         "st_ino",
         "st_mtime_ns",
+        "st_ctime_ns",
+        "immutable_required",
     )
     return {
         key: str(item[key]) if key == "path" else item[key]

@@ -135,11 +135,13 @@ workflows may copy, repair, protect, replace, disposition, or seal evidence. Do 
 helper or any equivalent filesystem/custody mutation path as an MCP tool. The canonical vocabulary,
 state model, workflows, and test contract are in `docs/architecture/EVIDENCE-CUSTODY-SPEC.md`.
 
-**Known current drift (2026-07-13):** the installed MCP evidence gate reads the persisted Postgres
-head without first reconciling the mounted inventory, and active-case containment can authorize an
-unregistered evidence path. P4.23 demonstrated a successful read of post-seal unregistered bytes.
-Until the spec's pre-dispatch reconciliation and sealed-version authorization both land, the design
-contract above is not fully enforced by code.
+**P4.23.1 source status (2026-07-13; live proof pending):** aggregate MCP admission now reconciles
+the mounted inventory before reading the Postgres gate and independently requires every declared or
+raw command evidence operand to resolve to an active sealed Evidence Version. Local immutable
+evidence uses a cheap descriptor fingerprint rather than a per-call full hash, then is reopened,
+revalidated, and passed to the final tool as a pinned inherited file descriptor so pathname
+replacement cannot redirect the read. Durable commands repeat custody validation at claim and
+immediately before execution. Gate A remains the authority for confirming the deployed revision.
 
 ## VP-5 — The `run_command` jail (ceiling + floor, both deny-default)
 `run_command(command: str)` runs `shell=False`, multi-stage argv (supports `| && || ; > >> < 2>&1`)

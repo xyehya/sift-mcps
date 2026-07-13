@@ -107,6 +107,29 @@ async def handle_run_command_job(
         case, identity = _active_case(gateway)
         if not arguments.get("command") or not arguments.get("purpose"):
             raise GatewayJobToolError("command_and_purpose_required")
+        from sift_core.active_case_context import (
+            ActiveCaseContext,
+            use_active_case_context,
+        )
+        from sift_core.case_io import resolve_case_path
+        from sift_core.execute.security import validate_shell_command
+
+        authority = ActiveCaseContext(
+            case_id=str(case.case_id),
+            case_key=str(case.case_key),
+            artifact_path=str(case.artifact_path or ""),
+            db_active=True,
+        )
+        with use_active_case_context(authority):
+            working_dir = str(arguments.get("working_dir") or "")
+            cwd = (
+                str(resolve_case_path(working_dir, default_subdir=""))
+                if working_dir
+                else str(case.artifact_path or "")
+            )
+            # Durable execution must clear the identical command/path policy
+            # before any row is enqueued. The worker repeats it at execution.
+            validate_shell_command(str(arguments.get("command")), cwd=cwd)
         job_service = _job_service(gateway)
         from sift_gateway.evidence_admission import (
             current_admitted_refs,

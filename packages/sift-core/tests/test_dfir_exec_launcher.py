@@ -308,3 +308,54 @@ def test_prepare_exec_sequence_and_scrubbed_env(monkeypatch):
     # A fixed launcher-owned .NET value is safe; untrusted DOTNET_* input still
     # cannot survive build_sandbox_env.
     assert captured["env"]["DOTNET_EnableDiagnostics"] == "0"
+
+
+def test_launcher_pins_admitted_inode_before_landlock_and_exec(tmp_path, monkeypatch):
+    target = tmp_path / "sealed.raw"
+    target.write_bytes(b"admitted")
+    replacement = tmp_path / "replacement.raw"
+    replacement.write_bytes(b"replacement")
+    st = target.stat()
+    binding = {
+        "path": str(target),
+        "bytes": st.st_size,
+        "st_dev": st.st_dev,
+        "st_ino": st.st_ino,
+        "st_mtime_ns": st.st_mtime_ns,
+        "st_ctime_ns": st.st_ctime_ns,
+        "immutable_required": False,
+    }
+    captured = {}
+
+    class ExecCalled(Exception):
+        pass
+
+    monkeypatch.setattr(launcher, "_close_inherited_fds", lambda: None)
+    monkeypatch.setattr(launcher, "_set_limits", lambda _policy: None)
+    monkeypatch.setattr(launcher, "_assert_runtime_identity", lambda _policy: None)
+    monkeypatch.setattr(launcher, "_set_no_new_privs", lambda: None)
+    monkeypatch.setattr(launcher, "_install_seccomp", lambda _policy: None)
+
+    def replace_after_pin(_policy):
+        target.unlink()
+        replacement.rename(target)
+
+    monkeypatch.setattr(launcher, "_install_landlock", replace_after_pin)
+
+    def fake_execvpe(_file, argv, _env):
+        captured["argv"] = argv
+        with open(argv[1], "rb") as handle:
+            captured["bytes"] = handle.read()
+        raise ExecCalled
+
+    monkeypatch.setattr(launcher.os, "execvpe", fake_execvpe)
+
+    with pytest.raises(ExecCalled):
+        launcher._prepare_and_exec(
+            {"cwd": str(tmp_path), "evidence_bindings": [binding]},
+            ["/bin/cat", str(target)],
+        )
+
+    assert captured["bytes"] == b"admitted"
+    assert target.read_bytes() == b"replacement"
+    assert captured["argv"][1].startswith(("/proc/self/fd/", "/dev/fd/"))

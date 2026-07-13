@@ -764,6 +764,16 @@ def get_immutable_flag(path: Path) -> bool | None:
         return None
 
 
+def get_immutable_flag_fd(fd: int) -> bool | None:
+    """Return the immutable posture of an already pinned descriptor."""
+    try:
+        flags_val = ctypes.c_int(0)
+        fcntl.ioctl(fd, _FS_IOC_GETFLAGS, flags_val)
+        return bool(flags_val.value & _FS_IMMUTABLE_FL)
+    except (OSError, AttributeError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Sealed-evidence filesystem hardening (B-MVP-048)
 # ---------------------------------------------------------------------------

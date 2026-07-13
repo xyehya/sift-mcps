@@ -6,6 +6,7 @@ import logging
 import os
 import shlex
 from pathlib import Path
+from typing import Any
 
 from sift_core.execute.catalog import get_tool_def
 from sift_core.execute.config import get_config
@@ -92,6 +93,7 @@ def run_command(
     save_dir: str | None = None,
     cwd: str | None = None,
     preview_lines: int = 0,
+    evidence_bindings: list[dict[str, Any]] | None = None,
 ) -> dict:
     """Execute a validated forensic command securely.
 
@@ -230,6 +232,7 @@ def run_command(
                 cwd=cwd,
                 save_output=save_output,
                 save_dir=save_dir,
+                evidence_bindings=evidence_bindings,
             )
             if pipeline_result["exit_code"] != 0 and _is_permission_error(pipeline_result["exit_code"], pipeline_result.get("stderr", "")):
                 raise PermissionError(f"Direct execution failed with permission error: {pipeline_result.get('stderr')}")
@@ -272,6 +275,7 @@ def run_command(
                 cwd=cwd,
                 save_output=save_output,
                 save_dir=save_dir,
+                evidence_bindings=evidence_bindings,
             )
 
             success = (pipeline_result["exit_code"] == 0)

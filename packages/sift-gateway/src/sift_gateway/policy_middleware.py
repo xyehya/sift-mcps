@@ -185,8 +185,12 @@ def _case_text(case: ActiveCase, tool_name: str | None = None) -> TextContent:
     return TextContent(type="text", text=json.dumps(payload, indent=2))
 
 
-_READ_ONLY_NONCORE_TOOLS = frozenset({"capability_guide", "get_tool_help", "running_commands_status"})
-_CASE_CONTEXT_RESPONSE_TOOLS = frozenset({"case_info", "evidence_info", "capability_guide"})
+_READ_ONLY_NONCORE_TOOLS = frozenset(
+    {"capability_guide", "get_tool_help", "running_commands_status"}
+)
+_CASE_CONTEXT_RESPONSE_TOOLS = frozenset(
+    {"case_info", "evidence_info", "capability_guide"}
+)
 
 
 def _tool_read_only(gateway: GatewayProtocol, name: str) -> bool:
@@ -607,7 +611,7 @@ class EvidenceGateMiddleware(Middleware):
             }
         else:
             try:
-                await asyncio.to_thread(reconcile, case.case_id)
+                reconciliation = await asyncio.to_thread(reconcile, case.case_id)
             except Exception:
                 logger.exception("evidence_admission: inventory reconciliation failed")
                 gate = {
@@ -617,9 +621,29 @@ class EvidenceGateMiddleware(Middleware):
                     "manifest_version": 0,
                 }
             else:
-                gate = check_evidence_gate_db(
-                    case.case_id, getattr(self.gateway, "control_plane_dsn", None)
-                )
+                if (
+                    not isinstance(reconciliation, dict)
+                    or reconciliation.get("state", "available") != "available"
+                ):
+                    unavailable_issues = (
+                        reconciliation.get("issues")
+                        if isinstance(reconciliation, dict)
+                        else None
+                    )
+                    gate = {
+                        "blocked": True,
+                        "status": ChainStatus.LEDGER_ERROR,
+                        "issues": (
+                            [str(item) for item in unavailable_issues]
+                            if isinstance(unavailable_issues, list)
+                            else ["Evidence inventory reconciliation unavailable"]
+                        ),
+                        "manifest_version": 0,
+                    }
+                else:
+                    gate = check_evidence_gate_db(
+                        case.case_id, getattr(self.gateway, "control_plane_dsn", None)
+                    )
         if not gate["blocked"]:
             refs: list[str] = []
             args = _tool_args(context)
@@ -726,7 +750,11 @@ class ResponseGuardMiddleware(Middleware):
         result = await call_next(context)
         name = _tool_name(context)
         case = _current_gateway_active_case()
-        case_dir_str = case.artifact_path if case is not None else os.environ.get("SIFT_CASE_DIR", "")
+        case_dir_str = (
+            case.artifact_path
+            if case is not None
+            else os.environ.get("SIFT_CASE_DIR", "")
+        )
         override_key = case.case_id if case is not None else ""
         if not case_dir_str:
             case_dir_str = None
@@ -769,9 +797,9 @@ class ResponseGuardMiddleware(Middleware):
                         "redact_override_active": override,
                         **(
                             {
-                                "override_by": get_override_status(override_key or (case_dir_str or "")).get(
-                                    "enabled_by"
-                                )
+                                "override_by": get_override_status(
+                                    override_key or (case_dir_str or "")
+                                ).get("enabled_by")
                             }
                             if override
                             else {}
@@ -793,7 +821,11 @@ class ResponseGuardMiddleware(Middleware):
                         f"output_cap: {len(cap_events)} response(s) capped at {cap} bytes"
                     ),
                     source="gateway_output_cap",
-                    extra={"examiner": examiner, "cap_events": cap_events, **_case_extra(case)},
+                    extra={
+                        "examiner": examiner,
+                        "cap_events": cap_events,
+                        **_case_extra(case),
+                    },
                 )
             except Exception as exc:
                 logger.warning("output_cap: audit write failed: %s", exc)
@@ -805,7 +837,11 @@ class ResponseGuardMiddleware(Middleware):
                     "returned_bytes": ev["returned_bytes"],
                     "cap_bytes": ev["cap_bytes"],
                     **(
-                        {"output_file": _display_spill_path(ev["output_file"], case_dir_str)}
+                        {
+                            "output_file": _display_spill_path(
+                                ev["output_file"], case_dir_str
+                            )
+                        }
                         if "output_file" in ev
                         else {}
                     ),
@@ -815,7 +851,9 @@ class ResponseGuardMiddleware(Middleware):
 
         if sift_context and result.content:
             result.content.append(
-                TextContent(type="text", text=json.dumps({"_sift_context": sift_context}))
+                TextContent(
+                    type="text", text=json.dumps({"_sift_context": sift_context})
+                )
             )
             result.meta = dict(result.meta or {})
             result.meta["_sift_context"] = sift_context
@@ -857,7 +895,8 @@ class CaseContextMiddleware(Middleware):
                 membership_role=case.membership_role,
                 principal=getattr(identity, "principal", None),
                 principal_type=getattr(identity, "principal_type", None),
-                tool_scopes=getattr(identity, "tool_scopes", frozenset()) or frozenset(),
+                tool_scopes=getattr(identity, "tool_scopes", frozenset())
+                or frozenset(),
                 request_id=uuid.uuid4().hex,
                 db_active=service is not None,
             )
@@ -1185,12 +1224,16 @@ class AuditEnvelopeMiddleware(Middleware):
                         # For core tools: preserve any existing audit_id (don't overwrite).
                         # For proxied tools: always stamp the canonical so the agent
                         # sees the gateway-owned envelope uuid, not the backend's id.
-                        if isinstance(parsed, dict) and (not is_core or "audit_id" not in parsed):
+                        if isinstance(parsed, dict) and (
+                            not is_core or "audit_id" not in parsed
+                        ):
                             # copy-before-mutate: don't alias the decoded dict
                             stamped = {**parsed, "audit_id": canonical}
                             result.content = [
                                 content_list[0].model_copy(
-                                    update={"text": json.dumps(stamped, ensure_ascii=False)}
+                                    update={
+                                        "text": json.dumps(stamped, ensure_ascii=False)
+                                    }
                                 )
                             ] + list(content_list[1:])
                     except (json.JSONDecodeError, TypeError):
@@ -1257,6 +1300,7 @@ class AuditEnvelopeMiddleware(Middleware):
                     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
                 )
                 import re as _re  # already in stdlib; local import avoids hoisting
+
                 def _keep_native(nid: str) -> bool:
                     if is_core:
                         return True
@@ -1264,6 +1308,7 @@ class AuditEnvelopeMiddleware(Middleware):
                     if nid == envelope_event_id:
                         return True
                     return not bool(_re.match(_uuid_pat, nid, _re.IGNORECASE))
+
                 all_native = native_ids if result is not None else []
                 raw_aliases: list[str] = list(
                     dict.fromkeys(
@@ -1310,7 +1355,9 @@ class AuditEnvelopeMiddleware(Middleware):
                     )
                 except Exception as exc:
                     logger.warning(
-                        "mcp_envelope: result DB audit write failed for %s: %s", name, exc
+                        "mcp_envelope: result DB audit write failed for %s: %s",
+                        name,
+                        exc,
                     )
             # Legacy/export JSONL mirror (never authority).
             extra_fields = _stamp_identity_extra(
@@ -1340,7 +1387,9 @@ class AuditEnvelopeMiddleware(Middleware):
                     examiner_override=effective_principal,
                 )
             except Exception as exc:
-                logger.warning("gateway envelope audit write failed for %s: %s", name, exc)
+                logger.warning(
+                    "gateway envelope audit write failed for %s: %s", name, exc
+                )
 
     def _request_id(self) -> str:
         ctx = current_active_case()
@@ -1373,7 +1422,9 @@ class AuditEnvelopeMiddleware(Middleware):
 # registered as add-on backends (so _tool_map misses them) but belong to sift-core.
 _CORE_DURABLE_LANE_TOOLS = frozenset({"run_command_job", "running_commands_status"})
 
-_OPENSEARCH_JOB_DISPATCH_TOOLS = frozenset({"opensearch_ingest", "opensearch_enrich_intel"})
+_OPENSEARCH_JOB_DISPATCH_TOOLS = frozenset(
+    {"opensearch_ingest", "opensearch_enrich_intel"}
+)
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -1446,9 +1497,7 @@ class OpenSearchIngestStatusAugmentMiddleware(Middleware):
         if result.is_error:
             return result
         try:
-            return await asyncio.to_thread(
-                self._augment, result, job_service, case
-            )
+            return await asyncio.to_thread(self._augment, result, job_service, case)
         except Exception as exc:  # fail-closed: never let augmentation break the call
             logger.warning(
                 "opensearch_ingest_status augment failed (degrading to backend result): %s",
@@ -1456,9 +1505,7 @@ class OpenSearchIngestStatusAugmentMiddleware(Middleware):
             )
             return result
 
-    def _augment(
-        self, result: ToolResult, job_service: Any, case: Any
-    ) -> ToolResult:
+    def _augment(self, result: ToolResult, job_service: Any, case: Any) -> ToolResult:
         """Synchronous augmentation: fetch durable rows from DB and merge into ingests[].
 
         Runs in a thread (asyncio.to_thread) so the blocking DB call doesn't stall
@@ -1508,7 +1555,9 @@ class OpenSearchIngestStatusAugmentMiddleware(Middleware):
                     "bulk_failed": 0,
                     "hosts_complete": int(result_pub.get("hosts_complete") or 0),
                     "hosts_total": int(result_pub.get("hosts_total") or 0),
-                    "artifacts_complete": int(result_pub.get("artifacts_complete") or 0),
+                    "artifacts_complete": int(
+                        result_pub.get("artifacts_complete") or 0
+                    ),
                     "artifacts_total": int(result_pub.get("artifacts_total") or 0),
                     "log_file": "",
                     "checklist": [],
@@ -1542,20 +1591,17 @@ class OpenSearchIngestStatusAugmentMiddleware(Middleware):
         payload["ingests"] = ingest_runs
         # Update the summary message to reflect whether rows were found.
         n = len(ingest_runs)
-        payload["message"] = (
-            "Durable job authority is active. "
-            + (
-                f"{n} ingest/enrich job(s) found for this case. "
-                "For per-job realtime detail poll "
-                "running_commands_status(job_id=<job_id from details>)."
-                if ingest_runs
-                else (
-                    "No active or recent ingest/enrich jobs found for this case. "
-                    "If your opensearch_ingest returned a job_id (status='queued'), "
-                    "poll running_commands_status(job_id=<that job_id>) directly. "
-                    "Confirm a completed ingest with opensearch_count / "
-                    "opensearch_case_summary on the target indices."
-                )
+        payload["message"] = "Durable job authority is active. " + (
+            f"{n} ingest/enrich job(s) found for this case. "
+            "For per-job realtime detail poll "
+            "running_commands_status(job_id=<job_id from details>)."
+            if ingest_runs
+            else (
+                "No active or recent ingest/enrich jobs found for this case. "
+                "If your opensearch_ingest returned a job_id (status='queued'), "
+                "poll running_commands_status(job_id=<that job_id>) directly. "
+                "Confirm a completed ingest with opensearch_count / "
+                "opensearch_case_summary on the target indices."
             )
         )
         new_text = json.dumps(payload)
@@ -1567,9 +1613,15 @@ class OpenSearchIngestStatusAugmentMiddleware(Middleware):
         # Mutate from the backend's existing structured_content (a dict) so any extra
         # envelope fields the backend set (last_completed, next_step, job_id, …) are
         # preserved alongside our augmented ingests[]/message.
-        base_sc = result.structured_content if isinstance(result.structured_content, dict) else {}
+        base_sc = (
+            result.structured_content
+            if isinstance(result.structured_content, dict)
+            else {}
+        )
         new_sc = {**base_sc, **payload}
-        return ToolResult(content=new_content, structured_content=new_sc, is_error=False)
+        return ToolResult(
+            content=new_content, structured_content=new_sc, is_error=False
+        )
 
 
 class OpenSearchJobDispatchMiddleware(Middleware):

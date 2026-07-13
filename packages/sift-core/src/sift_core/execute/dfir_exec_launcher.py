@@ -22,6 +22,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from sift_core.execute.evidence_binding import (
+    open_bound_evidence,
+    rewrite_bound_operands,
+)
 from sift_core.execute.runtime_acl import build_sandbox_env
 
 
@@ -170,7 +174,9 @@ def _syscall(name: str, *args: object) -> int:
     return int(result)
 
 
-def _prctl(option: int, arg2: int = 0, arg3: int = 0, arg4: int = 0, arg5: int = 0) -> None:
+def _prctl(
+    option: int, arg2: int = 0, arg3: int = 0, arg4: int = 0, arg5: int = 0
+) -> None:
     result = _LIBC.prctl(
         ctypes.c_int(option),
         ctypes.c_ulong(arg2),
@@ -334,21 +340,21 @@ def _existing_paths(paths: list[str]) -> list[str]:
 # any root absent on a given install, so greenfield SIFT that lacks a tool is
 # unaffected.
 FORENSIC_TOOL_RX_ROOTS: tuple[str, ...] = (
-    "/opt/pyhindsight",   # hindsight.py        — #!/opt/pyhindsight/bin/python3
-    "/opt/analyzemft",    # analyzemft          — #!/opt/analyzemft/bin/python3
-    "/opt/usnparser",     # usnparser           — #!/opt/usnparser/bin/python3
-    "/opt/indxparse",     # INDXParse.py        — #!/opt/indxparse/bin/python3
-    "/opt/sqlite-carver", # sqlite-carver       — #!/opt/sqlite-carver/bin/python3
-    "/opt/page-brute",    # page-brute          — #!/opt/page-brute/bin/python3
-    "/opt/packerid",      # packerid.py         — #!/opt/packerid/bin/python3
-    "/opt/mvt",           # mvt-ios, mvt-android — #!/opt/mvt/bin/python3
-    "/opt/mac-apt",       # mac_apt.py          — #!/opt/mac-apt/bin/python3
-    "/opt/python-evtx",   # evtx_dump.py        — #!/opt/python-evtx/bin/python3
+    "/opt/pyhindsight",  # hindsight.py        — #!/opt/pyhindsight/bin/python3
+    "/opt/analyzemft",  # analyzemft          — #!/opt/analyzemft/bin/python3
+    "/opt/usnparser",  # usnparser           — #!/opt/usnparser/bin/python3
+    "/opt/indxparse",  # INDXParse.py        — #!/opt/indxparse/bin/python3
+    "/opt/sqlite-carver",  # sqlite-carver       — #!/opt/sqlite-carver/bin/python3
+    "/opt/page-brute",  # page-brute          — #!/opt/page-brute/bin/python3
+    "/opt/packerid",  # packerid.py         — #!/opt/packerid/bin/python3
+    "/opt/mvt",  # mvt-ios, mvt-android — #!/opt/mvt/bin/python3
+    "/opt/mac-apt",  # mac_apt.py          — #!/opt/mac-apt/bin/python3
+    "/opt/python-evtx",  # evtx_dump.py        — #!/opt/python-evtx/bin/python3
     # pdfid.py / pdf-parser.py use the system interpreter
     # (#!/usr/bin/env python3, already covered by /usr), but the wrappers in
     # /usr/local/bin are SYMLINKS into /opt/pdf-tools/bin and the kernel must
     # read+execute the real script file there to honor the shebang.
-    "/opt/pdf-tools",     # pdfid.py, pdf-parser.py (symlinked scripts live here)
+    "/opt/pdf-tools",  # pdfid.py, pdf-parser.py (symlinked scripts live here)
 )
 
 
@@ -357,7 +363,9 @@ def _install_landlock(policy: dict[str, Any]) -> int:
     abi = _landlock_abi()
     if abi <= 0:
         if require_landlock:
-            raise LauncherError("Landlock unavailable while fail-closed mode is required")
+            raise LauncherError(
+                "Landlock unavailable while fail-closed mode is required"
+            )
         return 0
 
     handled_fs = _fs_handled_access(abi)
@@ -426,14 +434,18 @@ def _install_landlock(policy: dict[str, Any]) -> int:
         case_dir = str(policy.get("case_dir") or "").strip()
         if case_dir:
             for rel in ("evidence", "mounts_ro"):
-                _add_path_rule(ruleset_fd, str(Path(case_dir) / rel), FS_READ & handled_fs)
+                _add_path_rule(
+                    ruleset_fd, str(Path(case_dir) / rel), FS_READ & handled_fs
+                )
             rw_access = (FS_READ | FS_WRITE) & handled_fs
             for rel in ("agent", "extractions", "tmp"):
                 _add_path_rule(ruleset_fd, str(Path(case_dir) / rel), rw_access)
 
         vol_symbols_dir = str(policy.get("vol_symbols_dir") or "").strip()
         if vol_symbols_dir:
-            access = (FS_READ | FS_WRITE) if os.access(vol_symbols_dir, os.W_OK) else FS_READ
+            access = (
+                (FS_READ | FS_WRITE) if os.access(vol_symbols_dir, os.W_OK) else FS_READ
+            )
             _add_path_rule(ruleset_fd, vol_symbols_dir, access & handled_fs)
 
         for dev_path, access in (
@@ -504,8 +516,14 @@ _X86_64_DENY_SYSCALLS = {
 
 
 def _seccomp_action(policy: dict[str, Any]) -> int:
-    mode = str(policy.get("seccomp_mode") or os.environ.get("SIFT_EXECUTE_SECCOMP_MODE") or "log")
-    return SECCOMP_RET_KILL_PROCESS if mode.strip().lower() == "kill" else SECCOMP_RET_LOG
+    mode = str(
+        policy.get("seccomp_mode")
+        or os.environ.get("SIFT_EXECUTE_SECCOMP_MODE")
+        or "log"
+    )
+    return (
+        SECCOMP_RET_KILL_PROCESS if mode.strip().lower() == "kill" else SECCOMP_RET_LOG
+    )
 
 
 def _build_seccomp_filters(action: int) -> list[_SockFilter]:
@@ -554,6 +572,11 @@ def _prepare_and_exec(policy: dict[str, Any], real_argv: list[str]) -> None:
     if cwd:
         os.chdir(cwd)
 
+    evidence_bindings = list(policy.get("evidence_bindings") or [])
+    if evidence_bindings:
+        opened = open_bound_evidence(evidence_bindings)
+        real_argv, _ = rewrite_bound_operands(real_argv, [], opened, cwd=cwd or None)
+
     _set_limits(policy)
     _assert_runtime_identity(policy)
     _set_no_new_privs()
@@ -596,7 +619,11 @@ def main(argv: list[str] | None = None) -> int:
         real_argv = real_argv[1:]
 
     try:
-        policy = decode_policy(ns.policy) if ns.policy else _read_policy_from_fd(ns.policy_fd)
+        policy = (
+            decode_policy(ns.policy)
+            if ns.policy
+            else _read_policy_from_fd(ns.policy_fd)
+        )
         _prepare_and_exec(policy, real_argv)
     except Exception as exc:
         sys.stderr.write(f"dfir-exec-launcher: {exc}\n")

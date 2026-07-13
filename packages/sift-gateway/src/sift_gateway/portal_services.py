@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import stat
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,7 +71,14 @@ def _first_text(*values: Any) -> str:
         if value is None:
             continue
         if isinstance(value, dict):
-            for key in ("message", "error", "detail", "title", "finding_id", "description"):
+            for key in (
+                "message",
+                "error",
+                "detail",
+                "title",
+                "finding_id",
+                "description",
+            ):
                 found = _first_text(value.get(key))
                 if found:
                     return found
@@ -104,12 +112,16 @@ def _activity_args(row: dict[str, Any]) -> dict[str, Any]:
 
 def _activity_tool(row: dict[str, Any]) -> str:
     details = _event_details(row)
-    return _compact_label(details.get("tool") or row.get("event_type") or "activity", limit=64)
+    return _compact_label(
+        details.get("tool") or row.get("event_type") or "activity", limit=64
+    )
 
 
 def _activity_backend(row: dict[str, Any]) -> str:
     details = _event_details(row)
-    return _compact_label(details.get("backend") or row.get("source") or "unknown", limit=64)
+    return _compact_label(
+        details.get("backend") or row.get("source") or "unknown", limit=64
+    )
 
 
 def _activity_kind(tool: str, status: str) -> str:
@@ -119,10 +131,7 @@ def _activity_kind(tool: str, status: str) -> str:
         return "discovery"
     if tool in {"record_timeline_event", "manage_todo"}:
         return "io"
-    if (
-        tool == "run_command"
-        or tool.startswith("opensearch_")
-    ):
+    if tool == "run_command" or tool.startswith("opensearch_"):
         return "analysis"
     return "info"
 
@@ -138,31 +147,44 @@ def _activity_label(row: dict[str, Any]) -> str:
 
     if status == "failure":
         reason = _first_text(result, detail, summary)
-        return _compact_label(f"{tool} failed - {reason}" if reason else f"{tool} failed")
+        return _compact_label(
+            f"{tool} failed - {reason}" if reason else f"{tool} failed"
+        )
 
     if tool == "record_finding":
         title = _first_text(args.get("title"), result)
         confidence = _first_text(args.get("confidence"))
         suffix = f" ({confidence})" if confidence else ""
-        return _compact_label(f"Recorded finding - {title}{suffix}" if title else "Recorded finding")
+        return _compact_label(
+            f"Recorded finding - {title}{suffix}" if title else "Recorded finding"
+        )
 
     if tool == "record_timeline_event":
         desc = _first_text(args.get("description"), args.get("title"), result)
-        return _compact_label(f"Timeline event added - {desc}" if desc else "Timeline event added")
+        return _compact_label(
+            f"Timeline event added - {desc}" if desc else "Timeline event added"
+        )
 
     if tool == "manage_todo":
         action = _first_text(args.get("action"), args.get("operation"))
         return _compact_label(f"TODO {action}" if action else "TODO updated")
 
     if tool == "run_command":
-        command = _first_text(args.get("command"), detail.get("command") if isinstance(detail, dict) else None)
+        command = _first_text(
+            args.get("command"),
+            detail.get("command") if isinstance(detail, dict) else None,
+        )
         exit_code = None
         if isinstance(result, dict):
             exit_code = result.get("exit_code")
         if exit_code is None and isinstance(detail, dict):
             exit_code = detail.get("exit_code")
         exit_part = f" (exit {exit_code})" if exit_code is not None else ""
-        return _compact_label(f"Ran command - {command}{exit_part}" if command else f"Ran command{exit_part}")
+        return _compact_label(
+            f"Ran command - {command}{exit_part}"
+            if command
+            else f"Ran command{exit_part}"
+        )
 
     if tool.startswith("opensearch_"):
         op = tool.removeprefix("opensearch_").replace("_", " ")
@@ -184,7 +206,9 @@ def _activity_label(row: dict[str, Any]) -> str:
     return summary or _compact_label(tool)
 
 
-def _collapse_activity_rows(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+def _collapse_activity_rows(
+    rows: list[dict[str, Any]], limit: int
+) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for row in rows:
@@ -258,7 +282,9 @@ class _BasePortalDbService:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as e:
             if path.exists():
-                logger.warning("Failed to read %s for case %s: %s", filename, case_id, e)
+                logger.warning(
+                    "Failed to read %s for case %s: %s", filename, case_id, e
+                )
             return []
         if isinstance(data, list):
             return [row for row in data if isinstance(row, dict)]
@@ -267,7 +293,9 @@ class _BasePortalDbService:
             return [row for row in rows if isinstance(row, dict)]
         return []
 
-    def _write_json_list(self, case_id: str, filename: str, rows: list[dict[str, Any]]) -> None:
+    def _write_json_list(
+        self, case_id: str, filename: str, rows: list[dict[str, Any]]
+    ) -> None:
         case_dir = self._case_artifact_path(case_id)
         if case_dir is None:
             return
@@ -434,7 +462,11 @@ class _BasePortalDbService:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 for idx, payload in enumerate(rows, start=1):
-                    todo_id = str(payload.get("todo_id") or payload.get("id") or f"TODO-sync-{idx:03d}")
+                    todo_id = str(
+                        payload.get("todo_id")
+                        or payload.get("id")
+                        or f"TODO-sync-{idx:03d}"
+                    )
                     cur.execute(
                         """
                         insert into app.investigation_todos
@@ -484,7 +516,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
         observed, including unsafe or unreadable entries; unknown regular files
         become DETECTED and therefore block the aggregate gate.  Sealed entries
         use cheap identity/size/ctime checks here; each referenced version is
-        descriptor-pinned and fully hashed by ``resolve_evidence_reference``.
+        descriptor-pinned and posture-checked by ``resolve_evidence_reference``.
         """
         case_dir = self._case_artifact_path(case_id)
         if case_dir is None:
@@ -513,13 +545,18 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 }
                 live: set[str] = set()
                 unsafe: list[str] = []
+                storage_available = True
                 if not evidence_dir.is_dir():
+                    storage_available = False
                     unsafe.append("evidence_storage_unavailable")
                 else:
                     try:
-                        entries = sorted(os.scandir(evidence_dir), key=lambda item: item.name)
+                        entries = sorted(
+                            os.scandir(evidence_dir), key=lambda item: item.name
+                        )
                     except OSError:
                         entries = []
+                        storage_available = False
                         unsafe.append("evidence_inventory_unavailable")
                     for entry in entries:
                         rel = f"evidence/{entry.name}"
@@ -532,7 +569,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
                             regular = False
                         if not regular or st is None or st.st_nlink != 1:
                             obj_id = self._record_detected_observation(
-                                cur, case_id, rel, entry.name, st.st_size if st else None
+                                cur,
+                                case_id,
+                                rel,
+                                entry.name,
+                                st.st_size if st else None,
                             )
                             self._record_admission_violation(
                                 cur, case_id, obj_id, "unsafe_evidence_inventory_entry"
@@ -560,14 +601,19 @@ class EvidenceAuthorityService(_BasePortalDbService):
                             )
                             unsafe.append("sealed_evidence_changed")
 
-                for rel, known in sealed.items():
-                    if rel not in live:
-                        self._record_admission_violation(
-                            cur, case_id, known["id"], "sealed_evidence_missing"
-                        )
-                        unsafe.append("sealed_evidence_missing")
+                if storage_available:
+                    for rel, known in sealed.items():
+                        if rel not in live:
+                            self._record_admission_violation(
+                                cur, case_id, known["id"], "sealed_evidence_missing"
+                            )
+                            unsafe.append("sealed_evidence_missing")
             conn.commit()
-        return {"observed": len(live), "issues": sorted(set(unsafe))}
+        return {
+            "state": "available" if storage_available else "unavailable",
+            "observed": len(live),
+            "issues": sorted(set(unsafe)),
+        }
 
     @staticmethod
     def _record_detected_observation(
@@ -739,21 +785,24 @@ class EvidenceAuthorityService(_BasePortalDbService):
         ):
             raise PortalServiceError("evidence_object_not_sealed", http_status=403)
         path = self._resolve_evidence_path(case_id, str(row[1]))
-        digest, size, st = _hash_admission_file(path)
-        if f"sha256:{digest}" != str(row[5] or "") or (
-            row[6] is not None and size != int(row[6])
-        ):
+        st, immutable = _admission_fingerprint(path)
+        if row[6] is not None and st.st_size != int(row[6]):
             raise PortalServiceError("evidence_version_changed", http_status=403)
+        immutable_required = sys.platform.startswith("linux")
+        if immutable_required and immutable is not True:
+            raise PortalServiceError("evidence_posture_changed", http_status=403)
         return {
             "evidence_id": str(row[0]),
             "version_id": str(row[4]),
             "display_path": str(row[1]),
             "path": path,
             "sha256": str(row[5]),
-            "bytes": size,
+            "bytes": st.st_size,
             "st_dev": st.st_dev,
             "st_ino": st.st_ino,
             "st_mtime_ns": st.st_mtime_ns,
+            "st_ctime_ns": st.st_ctime_ns,
+            "immutable_required": immutable_required,
         }
 
     def record_reauth_event(
@@ -1059,10 +1108,10 @@ class EvidenceAuthorityService(_BasePortalDbService):
         try:
             unharden_sealed_evidence(case_dir, rel_paths)
         except EvidenceHardeningError as exc:
-            logger.error("evidence unseal unhardening failed for case %s: %s", case_id, exc)
-            raise PortalServiceError(
-                "evidence_unseal_failed", http_status=500
-            ) from exc
+            logger.error(
+                "evidence unseal unhardening failed for case %s: %s", case_id, exc
+            )
+            raise PortalServiceError("evidence_unseal_failed", http_status=500) from exc
 
     def ignore(
         self,
@@ -1084,11 +1133,21 @@ class EvidenceAuthorityService(_BasePortalDbService):
             with conn.cursor() as cur:
                 cur.execute(
                     "select id::text, display_path, status from app.evidence_ignore(%s, %s, %s, %s, %s)",
-                    (evidence_id, reason, reauth_audit_event_id, actor_user, actor_service),
+                    (
+                        evidence_id,
+                        reason,
+                        reauth_audit_event_id,
+                        actor_user,
+                        actor_service,
+                    ),
                 )
                 row = cur.fetchone()
             conn.commit()
-        return {"evidence_id": row[0], "display_path": row[1], "status": row[2]} if row else {}
+        return (
+            {"evidence_id": row[0], "display_path": row[1], "status": row[2]}
+            if row
+            else {}
+        )
 
     def retire(
         self,
@@ -1111,11 +1170,21 @@ class EvidenceAuthorityService(_BasePortalDbService):
             with conn.cursor() as cur:
                 cur.execute(
                     "select id::text, display_path, status from app.evidence_retire(%s, %s, %s, %s, %s)",
-                    (evidence_id, reason, reauth_audit_event_id, actor_user, actor_service),
+                    (
+                        evidence_id,
+                        reason,
+                        reauth_audit_event_id,
+                        actor_user,
+                        actor_service,
+                    ),
                 )
                 row = cur.fetchone()
             conn.commit()
-        return {"evidence_id": row[0], "display_path": row[1], "status": row[2]} if row else {}
+        return (
+            {"evidence_id": row[0], "display_path": row[1], "status": row[2]}
+            if row
+            else {}
+        )
 
     def delete_object(
         self,
@@ -1156,7 +1225,10 @@ class EvidenceAuthorityService(_BasePortalDbService):
         if not row:
             raise PortalServiceError("evidence_object_not_found", http_status=404)
         evidence_id, status, seal_status = str(row[0]), row[1], row[2]
-        if status not in ("detected", "registered", "ignored") or seal_status != "unsealed":
+        if (
+            status not in ("detected", "registered", "ignored")
+            or seal_status != "unsealed"
+        ):
             # Sealed/violated evidence is custody-protected and must not be deleted.
             raise PortalServiceError("cannot_delete_sealed_evidence", http_status=409)
 
@@ -1192,7 +1264,13 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 cur.execute(
                     "select id::text, display_path, status "
                     "from app.evidence_ignore(%s, %s, %s, %s, %s)",
-                    (evidence_id, full_reason, reauth_audit_event_id, actor_user, actor_service),
+                    (
+                        evidence_id,
+                        full_reason,
+                        reauth_audit_event_id,
+                        actor_user,
+                        actor_service,
+                    ),
                 )
                 disp = cur.fetchone()
             conn.commit()
@@ -1384,7 +1462,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 issues.append(f"Missing: {rel}")
                 continue
             actual_sha, actual_bytes = _hash_file(path)
-            if sealed_bytes is not None and actual_bytes != int(sealed_bytes) or sealed_sha and f"sha256:{actual_sha}" != str(sealed_sha):
+            if (
+                sealed_bytes is not None
+                and actual_bytes != int(sealed_bytes)
+                or sealed_sha
+                and f"sha256:{actual_sha}" != str(sealed_sha)
+            ):
                 issues.append(f"Modified: {rel}")
         return (not issues, issues, manifest_version)
 
@@ -1473,11 +1556,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "verified": verified,
             "issues": issues,
         }
-        proof_hash = "sha256:" + hashlib.sha256(
-            json.dumps(proof_material, sort_keys=True, separators=(",", ":"), default=str).encode(
-                "utf-8"
-            )
-        ).hexdigest()
+        proof_hash = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    proof_material, sort_keys=True, separators=(",", ":"), default=str
+                ).encode("utf-8")
+            ).hexdigest()
+        )
         metadata: dict[str, Any] = {
             "proof_hash": proof_hash,
             "object_count": len(objects),
@@ -1752,9 +1838,7 @@ class InvestigationService(_BasePortalDbService):
         """Approved findings/timeline/IOCs for report generation (DB authority)."""
         return self._store().report_inputs(case_id)
 
-    def audit_events(
-        self, case_id: str, audit_ids: list[str]
-    ) -> list[dict[str, Any]]:
+    def audit_events(self, case_id: str, audit_ids: list[str]) -> list[dict[str, Any]]:
         """Return ``app.audit_events`` rows for this case matching ``audit_ids``.
 
         BATCH-K6: the portal audit view sources audit entries from Postgres
@@ -1901,7 +1985,8 @@ class InvestigationService(_BasePortalDbService):
             matched = [
                 # SIM109's tuple-membership suggestion would silently drop the
                 # aliases/envelope_eid/row_req_id/detail_audit_id fallbacks below.
-                aid for aid in ids
+                aid
+                for aid in ids
                 if (
                     aid == row_uuid
                     or aid == bid
@@ -1963,7 +2048,9 @@ class InvestigationService(_BasePortalDbService):
         for row in _collapse_activity_rows(rows, safe_limit):
             details = _event_details(row)
             tool = _activity_tool(row)
-            status = str(row.get("status") or details.get("status") or "requested").lower()
+            status = str(
+                row.get("status") or details.get("status") or "requested"
+            ).lower()
             events.append(
                 {
                     "id": str(row.get("id") or ""),
@@ -2024,7 +2111,13 @@ class InvestigationService(_BasePortalDbService):
         todo = next((row for row in rows if row.get("todo_id") == todo_id), None)
         if todo is None:
             return None
-        for key in ("description", "priority", "status", "assignee", "related_findings"):
+        for key in (
+            "description",
+            "priority",
+            "status",
+            "assignee",
+            "related_findings",
+        ):
             if key in patch:
                 todo[key] = patch[key]
         if patch.get("note"):
@@ -2036,14 +2129,18 @@ class InvestigationService(_BasePortalDbService):
                 }
             )
         if todo.get("status") == "completed":
-            todo["completed_at"] = todo.get("completed_at") or datetime.now(timezone.utc).isoformat()
+            todo["completed_at"] = (
+                todo.get("completed_at") or datetime.now(timezone.utc).isoformat()
+            )
         else:
             todo["completed_at"] = None
         self._upsert_todo(case_id, todo_id, todo, source="portal")
         self._mirror_todos(case_id)
         return todo
 
-    def delete_todo(self, *, case_id: str, todo_id: str, examiner: str, actor: Any) -> bool:
+    def delete_todo(
+        self, *, case_id: str, todo_id: str, examiner: str, actor: Any
+    ) -> bool:
         del examiner, actor
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -2083,12 +2180,14 @@ class InvestigationService(_BasePortalDbService):
             tid = str(row.get("todo_id") or "")
             if tid.startswith(prefix):
                 try:
-                    max_seq = max(max_seq, int(tid[len(prefix):]))
+                    max_seq = max(max_seq, int(tid[len(prefix) :]))
                 except ValueError:
                     pass
         return max_seq + 1
 
-    def _upsert_todo(self, case_id: str, todo_id: str, payload: dict[str, Any], *, source: str) -> None:
+    def _upsert_todo(
+        self, case_id: str, todo_id: str, payload: dict[str, Any], *, source: str
+    ) -> None:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -2292,32 +2391,17 @@ def _hash_file(path: Path) -> tuple[str, int]:
     return h.hexdigest(), size
 
 
-def _hash_admission_file(path: Path) -> tuple[str, int, os.stat_result]:
-    """Hash one descriptor-pinned regular file without following symlinks."""
+def _admission_fingerprint(path: Path) -> tuple[os.stat_result, bool | None]:
+    """Read one cheap descriptor-pinned identity and immutable posture."""
+    from sift_core.evidence_chain import get_immutable_flag_fd
+
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags)
     try:
-        before = os.fstat(fd)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        current = os.fstat(fd)
+        if not stat.S_ISREG(current.st_mode) or current.st_nlink != 1:
             raise OSError("unsafe evidence file")
-        h = hashlib.sha256()
-        size = 0
-        with os.fdopen(os.dup(fd), "rb", closefd=True) as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                size += len(chunk)
-                h.update(chunk)
-        after = os.fstat(fd)
-        def identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
-            return (
-                value.st_dev,
-                value.st_ino,
-                value.st_size,
-                value.st_mtime_ns,
-                value.st_ctime_ns,
-            )
-        if identity(before) != identity(after):
-            raise OSError("evidence changed during admission")
-        return h.hexdigest(), size, after
+        return current, get_immutable_flag_fd(fd)
     finally:
         os.close(fd)
 

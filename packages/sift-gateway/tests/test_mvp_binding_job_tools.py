@@ -80,6 +80,7 @@ class _EvidenceService:
 
     def reconcile_for_admission(self, case_id):
         self.reconciled_case_id = case_id
+        return {"state": "available", "observed": 1, "issues": []}
 
     def list_evidence(self, case_id):
         return [
@@ -151,14 +152,15 @@ def test_ingest_job_tool_is_fully_retired():
 
 def test_run_command_job_enqueues_public_args_and_internal_case_dir(tmp_path):
     case_dir = tmp_path / "case"
-    case_dir.mkdir()
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
     gateway = _Gateway(case_dir)
 
     result = asyncio.run(
         handle_run_command_job(
             gateway,
             {
-                "command": "fls evidence/disk.E01",
+                "command": "cat evidence/disk.E01",
                 "purpose": "list filesystem",
                 "evidence_refs": ["evidence/disk.E01"],
                 "output_ref": "fls",

@@ -135,6 +135,7 @@ stateDiagram-v2
 
 - Reconciliation compares directory membership and a cheap fingerprint: file identity, size, relevant timestamps, storage profile, mount identity, and protection posture.
 - Each MCP dispatch performs the cheap check or validates an equivalent fresh authoritative token. It does not hash multi-gigabyte evidence in full on every call.
+- For local immutable evidence, admission binds the active Postgres Evidence Version and its stored SHA identity to a descriptor fingerprint (device, inode, size, mtime, ctime, link count, and immutable posture). The final execution boundary reopens and validates that identity, rewrites the admitted operand to an inherited `/proc/self/fd` reference (`/dev/fd` on platforms without procfs), and keeps the descriptor pinned through `exec`. A raw pathname is never reopened by the forensic tool after authorization.
 - Full SHA-256 is mandatory at Seal, Replace/Reacquire completion, exact restoration, Full Verify Evidence, Proof Export, and external remount/reconnect recovery.
 - A same-size change cannot be considered safe merely because a cheap fingerprint matches. The implementation must use a trustworthy change token/fingerprint strategy for the selected storage profile or block for full verification.
 - New entries produce `BLOCKED_PENDING`; sealed-object loss/change or ledger/signature failure produces `BLOCKED_VIOLATION`; whole-storage loss or required signing-authority outage produces `BLOCKED_UNAVAILABLE`.

@@ -335,7 +335,8 @@ def test_run_command_accepts_gateway_resolved_db_evidence_ref_without_manifest(
                         "bytes": ev.stat().st_size,
                         "st_dev": ev.stat().st_dev,
                         "st_ino": ev.stat().st_ino,
-                        "st_mtime_ns": ev.stat().st_mtime_ns,
+                            "st_mtime_ns": ev.stat().st_mtime_ns,
+                            "st_ctime_ns": ev.stat().st_ctime_ns,
                     }
                 ],
             },

@@ -21,6 +21,11 @@ from typing import Any
 from sift_core.execute.dfir_exec_launcher import (
     encode_policy as _encode_launcher_policy,
 )
+from sift_core.execute.evidence_binding import (
+    close_bound_evidence,
+    open_bound_evidence,
+    rewrite_bound_operands,
+)
 from sift_core.execute.runtime_acl import (
     assert_no_authority_write_target as _assert_no_authority_write_target,
 )
@@ -201,6 +206,8 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
     # seccomp/landlock are not installed, so the surfaced posture must say "off"
     # rather than imply a filter that was never applied.
     launcher_applied = False
+    evidence_bindings = list(payload.get("evidence_bindings") or [])
+    worker_opened_evidence: dict[str, int] = {}
 
     try:
         for _i, stage in enumerate(stages):
@@ -227,9 +234,27 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 service_uid=service_uid,
                 service_gid=service_gid,
                 vol_symbols_dir=vol_symbols_dir,
+                evidence_bindings=evidence_bindings,
             )
+            if evidence_bindings and not worker_opened_evidence:
+                worker_opened_evidence = open_bound_evidence(evidence_bindings)
             if launch_argv is not original_argv:
                 launcher_applied = True
+                _, stage["redirects"] = rewrite_bound_operands(
+                    [original_argv[0]],
+                    list(stage["redirects"]),
+                    worker_opened_evidence,
+                    cwd=cwd,
+                )
+            else:
+                if worker_opened_evidence:
+                    original_argv, stage["redirects"] = rewrite_bound_operands(
+                        original_argv,
+                        list(stage["redirects"]),
+                        worker_opened_evidence,
+                        cwd=cwd,
+                    )
+                    launch_argv = original_argv
             argv = _argv_for_runtime_user(
                 launch_argv,
                 "" if stage_user_already_applied else stage_runtime_user,
@@ -316,6 +341,7 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 start_new_session=(os.name == "posix"),
                 preexec_fn=preexec_fn,
                 env=stage_env,
+                pass_fds=tuple(worker_opened_evidence.values()),
             )
             processes.append((proc, opened_files, original_argv))
             
@@ -327,7 +353,10 @@ def _execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
             else:
                 prev_stdout = None
                 
+        close_bound_evidence(worker_opened_evidence)
+        worker_opened_evidence = {}
     except Exception as exc:
+        close_bound_evidence(worker_opened_evidence)
         for proc, opened_files, _ in processes:
             try:
                 _kill_process_tree(proc)
@@ -530,6 +559,7 @@ def _argv_for_launcher(
     service_uid: int | None,
     service_gid: int | None,
     vol_symbols_dir: str,
+    evidence_bindings: list[dict[str, Any]],
     file_size_limit_bytes: int = 0,
 ) -> list[str]:
     if not launcher_enabled:
@@ -553,6 +583,7 @@ def _argv_for_launcher(
         "require_landlock": require_landlock,
         "seccomp_mode": seccomp_mode,
         "vol_symbols_dir": vol_symbols_dir,
+        "evidence_bindings": evidence_bindings,
     }
     return [
         *_launcher_invocation(),

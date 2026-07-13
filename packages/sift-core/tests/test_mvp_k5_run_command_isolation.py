@@ -326,6 +326,7 @@ def _enqueue_run_command(db, case_dir, *, command, purpose, evidence_refs=None,
                     "st_dev": candidate.stat().st_dev,
                     "st_ino": candidate.stat().st_ino,
                     "st_mtime_ns": candidate.stat().st_mtime_ns,
+                    "st_ctime_ns": candidate.stat().st_ctime_ns,
                 }
             )
             public_refs.append(display_path)
@@ -650,7 +651,8 @@ def test_b_mvp_027_evidence_ref_command_reaches_exec_via_worker_loop(db, sealed_
                             "bytes": Path(ev_path).stat().st_size,
                             "st_dev": Path(ev_path).stat().st_dev,
                             "st_ino": Path(ev_path).stat().st_ino,
-                            "st_mtime_ns": Path(ev_path).stat().st_mtime_ns,
+                                "st_mtime_ns": Path(ev_path).stat().st_mtime_ns,
+                                "st_ctime_ns": Path(ev_path).stat().st_ctime_ns,
                         }
                 ],
             },

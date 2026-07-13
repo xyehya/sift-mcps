@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -55,6 +56,17 @@ class _Connection:
         return None
 
 
+class _TransactionalConnection(_Connection):
+    def __init__(self, cursor):
+        super().__init__(cursor)
+        self.committed = []
+
+    def __exit__(self, exc_type, *_):
+        if exc_type is None:
+            self.committed.extend(self._cursor.calls)
+        return None
+
+
 def _job(case_dir, token):
     return ClaimedJob(
         job_id="job-1",
@@ -80,10 +92,11 @@ def test_durable_revalidation_records_force_added_sibling_before_denial(tmp_path
     token = _inventory_token(str(case_dir))
     (evidence / "force-added.raw").write_bytes(b"new")
     cursor = _Cursor()
+    connection = _TransactionalConnection(cursor)
     monkeypatch.setitem(
         sys.modules,
         "psycopg",
-        SimpleNamespace(connect=lambda _dsn: _Connection(cursor)),
+        SimpleNamespace(connect=lambda _dsn: connection),
     )
 
     with pytest.raises(FatalJobError, match="custody_admission_denied"):
@@ -92,6 +105,7 @@ def test_durable_revalidation_records_force_added_sibling_before_denial(tmp_path
     detects = [call for call in cursor.calls if "app.evidence_detect" in call[0]]
     assert len(detects) == 1
     assert detects[0][1][1] == "evidence/force-added.raw"
+    assert any("app.evidence_detect" in call[0] for call in connection.committed)
     assert not any("app.evidence_gate_status" in call[0] for call in cursor.calls)
 
 
@@ -112,3 +126,45 @@ def test_durable_revalidation_checks_gate_at_both_phases(tmp_path, monkeypatch):
     validator(job, "execution")
 
     assert sum("app.evidence_gate_status" in call[0] for call in cursor.calls) == 2
+
+
+def test_durable_revalidation_classifies_changed_sealed_identity(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    target = evidence / "sealed.raw"
+    target.write_bytes(b"sealed")
+    token = _inventory_token(str(case_dir))
+    target.chmod(0o600)
+    cursor = _Cursor()
+    cursor._all = []
+    original_execute = cursor.execute
+
+    def execute(sql, params):
+        original_execute(sql, params)
+        if "from app.evidence_objects where case_id" in " ".join(sql.split()):
+            cursor._all = [
+                (
+                    "sealed-object",
+                    "evidence/sealed.raw",
+                    "sealed",
+                    "sealed",
+                    target.stat().st_size,
+                    datetime.now(timezone.utc) - timedelta(seconds=5),
+                )
+            ]
+
+    cursor.execute = execute
+    connection = _TransactionalConnection(cursor)
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        SimpleNamespace(connect=lambda _dsn: connection),
+    )
+
+    with pytest.raises(FatalJobError, match="custody_admission_denied"):
+        build_custody_validator("postgresql://unused")(_job(case_dir, token), "claim")
+
+    violations = [call for call in connection.committed if "evidence_mark_violation" in call[0]]
+    assert violations
+    assert violations[0][1][1:3] == ("sealed-object", "sealed_evidence_changed")

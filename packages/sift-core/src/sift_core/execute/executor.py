@@ -231,6 +231,7 @@ def _run_isolated_worker(
     sudo_path: str = "",
     cache_dir: str = "",
     file_size_limit_bytes: int = 0,
+    evidence_bindings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     case_dir = _active_or_env_case_dir()
     payload = {
@@ -250,6 +251,7 @@ def _run_isolated_worker(
         "seccomp_mode": _seccomp_mode(),
         "service_uid": os.getuid() if hasattr(os, "getuid") else None,
         "service_gid": os.getgid() if hasattr(os, "getgid") else None,
+        "evidence_bindings": evidence_bindings or [],
     }
     if cmd_list and isinstance(cmd_list[0], dict):
         payload["stages"] = cmd_list
@@ -393,6 +395,7 @@ def execute(
     cwd: str | None = None,
     save_output: bool = False,
     save_dir: str | None = None,
+    evidence_bindings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Execute a command as a subprocess (shell=False).
 
@@ -430,6 +433,7 @@ def execute(
             sudo_path=sudo_path,
             cache_dir=cache_dir,
             file_size_limit_bytes=config.execute_file_size_limit_bytes,
+            evidence_bindings=evidence_bindings,
         )
         elapsed = time.monotonic() - start
 

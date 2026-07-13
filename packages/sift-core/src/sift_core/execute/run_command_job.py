@@ -28,6 +28,7 @@ def build_custody_validator(dsn: str):
         del phase
         if not job.case_id:
             raise FatalJobError("custody_admission_denied")
+        deny_after_commit = False
         try:
             import psycopg
 
@@ -37,53 +38,59 @@ def build_custody_validator(dsn: str):
                         job.spec_internal.get("evidence_inventory_token") or ""
                     )
                     case_dir = str(job.spec_internal.get("case_dir") or "")
+                    current_inventory = ""
                     try:
                         current_inventory = _inventory_token(case_dir)
-                    except OSError as exc:
+                    except OSError:
+                        # P4.23.1 has no persisted UNAVAILABLE enum yet. Do not
+                        # misclassify an infrastructure outage as tampering.
+                        deny_after_commit = True
+                    if (
+                        not expected_inventory
+                        or current_inventory != expected_inventory
+                    ):
+                        if not deny_after_commit:
+                            _record_inventory_change(cur, job, case_dir)
+                        deny_after_commit = True
+                    if not deny_after_commit:
                         cur.execute(
-                            "select app.evidence_mark_violation(%s, null, %s, %s::jsonb, null, null)",
-                            (
-                                job.case_id,
-                                "evidence_inventory_unavailable",
-                                json.dumps(["evidence_inventory_unavailable"]),
-                            ),
+                            "select seal_status from app.evidence_gate_status(%s)",
+                            (job.case_id,),
                         )
-                        raise FatalJobError("custody_admission_denied") from exc
-                    if not expected_inventory or current_inventory != expected_inventory:
-                        _record_inventory_change(cur, job, case_dir)
-                        raise FatalJobError("custody_admission_denied")
-                    cur.execute(
-                        "select seal_status from app.evidence_gate_status(%s)",
-                        (job.case_id,),
-                    )
-                    gate = cur.fetchone()
-                    if not gate or gate[0] != "sealed":
-                        raise FatalJobError("custody_admission_denied")
-                    for item in job.spec_internal.get("resolved_evidence_refs") or []:
-                        if not isinstance(item, dict):
+                        gate = cur.fetchone()
+                        if not gate or gate[0] != "sealed":
                             raise FatalJobError("custody_admission_denied")
-                        cur.execute(
-                            """
-                            select 1
-                            from app.evidence_objects o
-                            join app.evidence_versions v on v.id = o.current_version_id
-                            where o.case_id = %s and o.id = %s and v.id = %s
-                              and o.status = 'sealed' and o.seal_status = 'sealed'
-                              and v.entry_status = 'ACTIVE' and v.sha256 = %s
-                            """,
-                            (
-                                job.case_id,
-                                item.get("evidence_id"),
-                                item.get("version_id"),
-                                item.get("sha256"),
-                            ),
-                        )
-                        if not cur.fetchone():
-                            raise FatalJobError("custody_admission_denied")
+                        for item in (
+                            job.spec_internal.get("resolved_evidence_refs") or []
+                        ):
+                            if not isinstance(item, dict):
+                                raise FatalJobError("custody_admission_denied")
+                            cur.execute(
+                                """
+                                select 1
+                                from app.evidence_objects o
+                                join app.evidence_versions v on v.id = o.current_version_id
+                                where o.case_id = %s and o.id = %s and v.id = %s
+                                  and o.status = 'sealed' and o.seal_status = 'sealed'
+                                  and v.entry_status = 'ACTIVE' and v.sha256 = %s
+                                """,
+                                (
+                                    job.case_id,
+                                    item.get("evidence_id"),
+                                    item.get("version_id"),
+                                    item.get("sha256"),
+                                ),
+                            )
+                            if not cur.fetchone():
+                                raise FatalJobError("custody_admission_denied")
         except FatalJobError:
             raise
         except Exception as exc:
             raise FatalJobError("custody_admission_denied") from exc
+        if deny_after_commit:
+            # Raise only after psycopg's context has exited normally and
+            # committed any DETECTED/VIOLATION custody observations.
+            raise FatalJobError("custody_admission_denied")
 
     return validate
 
@@ -115,7 +122,8 @@ def _record_inventory_change(cur: Any, job: ClaimedJob, case_dir: str) -> None:
     """Persist read-only worker observations before denying a stale durable job."""
     evidence_dir = Path(case_dir).resolve() / "evidence"
     cur.execute(
-        "select id::text, display_path, status, seal_status from app.evidence_objects where case_id = %s",
+        """select id::text, display_path, status, seal_status, current_bytes, sealed_at
+           from app.evidence_objects where case_id = %s""",
         (job.case_id,),
     )
     known = {str(row[1]): row for row in cur.fetchall()}
@@ -146,6 +154,31 @@ def _record_inventory_change(cur: Any, job: ClaimedJob, case_dir: str) -> None:
                             json.dumps(["unsafe_evidence_inventory_entry"]),
                         ),
                     )
+            else:
+                row = known[rel]
+                if row[2] == "sealed" and row[3] == "sealed":
+                    sealed_at = row[5]
+                    sealed_ns = (
+                        int(sealed_at.timestamp() * 1_000_000_000)
+                        if hasattr(sealed_at, "timestamp")
+                        else 0
+                    )
+                    changed = (
+                        not safe
+                        or st is None
+                        or (row[4] is not None and st.st_size != int(row[4]))
+                        or (sealed_ns and st.st_ctime_ns > sealed_ns)
+                    )
+                    if changed:
+                        cur.execute(
+                            "select app.evidence_mark_violation(%s, %s, %s, %s::jsonb, null, null)",
+                            (
+                                job.case_id,
+                                row[0],
+                                "sealed_evidence_changed",
+                                json.dumps(["sealed_evidence_changed"]),
+                            ),
+                        )
     for rel, row in known.items():
         if row[2] == "sealed" and row[3] == "sealed" and rel not in live:
             cur.execute(
@@ -175,7 +208,11 @@ def run_command_job_handler(job: ClaimedJob, ctx: JobContext) -> JobResult:
     """
     if not job.case_id:
         raise FatalJobError("run_command job missing case_id")
-    case_dir = str(job.spec_internal.get("case_dir") or job.spec_internal.get("artifact_path") or "")
+    case_dir = str(
+        job.spec_internal.get("case_dir")
+        or job.spec_internal.get("artifact_path")
+        or ""
+    )
     case_key = str(job.spec_internal.get("case_key") or "")
     if not case_dir:
         raise FatalJobError("run_command job missing worker case path")
@@ -212,7 +249,9 @@ def run_command_job_handler(job: ClaimedJob, ctx: JobContext) -> JobResult:
     return JobResult(result_public=result_public, provenance_id=None)
 
 
-def _build_receipt(job: ClaimedJob, args: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+def _build_receipt(
+    job: ClaimedJob, args: dict[str, Any], result: dict[str, Any]
+) -> dict[str, Any]:
     """Assemble a path-free, hash-linked command receipt for Postgres.
 
     Every value here is either an opaque id, a hash, a case-relative ref, or a
@@ -221,7 +260,9 @@ def _build_receipt(job: ClaimedJob, args: dict[str, Any], result: dict[str, Any]
     is safe to persist.
     """
     raw_provenance = result.get("provenance")
-    provenance: dict[str, Any] = raw_provenance if isinstance(raw_provenance, dict) else {}
+    provenance: dict[str, Any] = (
+        raw_provenance if isinstance(raw_provenance, dict) else {}
+    )
     command = str(args.get("command") or "")
     plan_hash = hashlib.sha256(command.encode("utf-8")).hexdigest() if command else ""
 
