@@ -731,6 +731,10 @@ def test_admitted_sparse_19gib_reference_never_reads_file_content(tmp_path, monk
     monkeypatch.setattr(service, "_connect", lambda: _ResolveConnection(row))
     monkeypatch.setattr(service, "_resolve_evidence_path", lambda *_args: image)
     monkeypatch.setattr(
+        "sift_gateway.portal_services._admission_fingerprint",
+        lambda _path: (image.stat(), True),
+    )
+    monkeypatch.setattr(
         os,
         "fdopen",
         lambda *_args, **_kwargs: pytest.fail("admission must not stream evidence bytes"),
