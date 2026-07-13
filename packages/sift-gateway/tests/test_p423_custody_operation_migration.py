@@ -87,6 +87,19 @@ def test_reauth_violation_and_verified_items_are_db_authority_checks():
     assert "p_items is distinct from v_op.verified_facts->'items'" in MIGRATION
     assert "v_obj.display_path is distinct from v_item->>'path'" in MIGRATION
     assert "issues='[]'" not in MIGRATION
+    for fragment in (
+        "p_resume_reauth_audit_event_id uuid",
+        "v_resume.event_type<>'reauth.evidence_seal_resume'",
+        "v_resume.source<>'portal_reauth'",
+        "v_resume.status<>'success'",
+        "v_resume.actor_user_id is distinct from v_op.actor_user_id",
+        "jsonb_build_object('operation_id',v_op.id::text)",
+        "resume_reauth_audit_event_id uuid null unique",
+        "resume_reauth_reused",
+        "when unique_violation then",
+        "resume_reauth_required",
+    ):
+        assert fragment in MIGRATION
 
 
 def test_failure_is_expected_phase_cas_and_never_downgrades_violation():

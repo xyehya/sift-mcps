@@ -15,6 +15,7 @@ from sift_gateway.custody_operations import (
     PinnedEvidenceFile,
     PostureBatch,
     SealCommand,
+    public_operation,
 )
 from sift_gateway.portal_services import EvidenceAuthorityService, PortalServiceError
 
@@ -233,6 +234,22 @@ def test_exact_retry_returns_completed_result_without_filesystem_replay(seal_ser
     assert second == first
     assert posture.calls == []
     assert [call[0] for call in repo.calls] == ["begin_or_resume"]
+
+
+@pytest.mark.parametrize(
+    ("phase", "recoverable"),
+    [
+        (CustodyOperationPhase.REQUESTED, False),
+        (CustodyOperationPhase.GATE_BLOCKED, True),
+        (CustodyOperationPhase.FILESYSTEM_APPLYING, True),
+        (CustodyOperationPhase.FILESYSTEM_VERIFIED, True),
+        (CustodyOperationPhase.FAILED_RECOVERABLE, True),
+        (CustodyOperationPhase.LEDGER_COMMITTED, False),
+    ],
+)
+def test_public_operation_marks_only_server_resumable_phases(phase, recoverable, seal_service):
+    _service, repo, _posture = seal_service
+    assert public_operation(replace(repo.record, phase=phase))["recoverable"] is recoverable
 
 
 def test_seal_requires_reason_idempotency_and_reauth(seal_service):

@@ -69,14 +69,14 @@ def _setup_intent(
     return case_id, actor_id, audit_id, object_id, key, path, command
 
 
-def _begin(cur, intent, runner: str, *, digest: str = "sha256:" + "1" * 64):
+def _begin(cur, intent, runner: str, *, digest: str = "sha256:" + "1" * 64, resume_audit_id=None):
     from psycopg.types.json import Jsonb
 
     case_id, actor_id, audit_id, _object_id, key, _path, command = intent
     cur.execute(
         """select id,phase from app.custody_operation_begin_or_resume(
-           %s,'ADD_SEAL',%s,%s,'database contract test',%s,%s,%s,null,%s)""",
-        (case_id, Jsonb(command), digest, audit_id, key, actor_id, runner),
+           %s,'ADD_SEAL',%s,%s,'database contract test',%s,%s,%s,null,%s,%s)""",
+        (case_id, Jsonb(command), digest, audit_id, key, actor_id, runner, resume_audit_id),
     )
     return cur.fetchone()
 
@@ -93,6 +93,26 @@ def _facts(intent):
     }
     prepared = {"items": [{k: v for k, v in item.items() if k not in {"owner", "mode", "immutable", "st_mtime_ns", "st_ctime_ns"}}]}
     return prepared, {"items": [item]}, item
+
+
+def _resume_audit(cur, intent, operation_id, **overrides):
+    from psycopg.types.json import Jsonb
+
+    audit_id = uuid.uuid4()
+    values = {
+        "case_id": intent[0], "actor_id": intent[1],
+        "event_type": "reauth.evidence_seal_resume", "source": "portal_reauth",
+        "status": "success", "binding": {"operation_id": str(operation_id)},
+    }
+    values.update(overrides)
+    cur.execute(
+        """insert into app.audit_events
+           (id,case_id,event_type,actor_type,actor_user_id,source,status,details)
+           values(%s,%s,%s,'user',%s,%s,%s,%s)""",
+        (audit_id, values["case_id"], values["event_type"], values["actor_id"],
+         values["source"], values["status"], Jsonb({"binding": values["binding"]})),
+    )
+    return audit_id
 
 
 def test_accumulated_migrations_reuse_triggers_and_lock_cases_independently():
@@ -194,9 +214,9 @@ def test_final_commit_rollback_replay_sibling_preservation_and_grants():
             cur.execute("select result from app.custody_operation_commit_verified_seal(%s,%s,'test','runner-final')", (op_id, Jsonb(verified["items"])))
             assert cur.fetchone()[0] == first_result  # response-loss replay
             cur.execute("select count(*) from app.evidence_manifests where operation_id=%s", (op_id,))
-            assert cur.fetchone()[0] == 2
-            cur.execute("select count(*) from app.evidence_versions where custody_operation_id=%s", (op_id,))
             assert cur.fetchone()[0] == 1
+            cur.execute("select count(*) from app.evidence_versions where custody_operation_id=%s", (op_id,))
+            assert cur.fetchone()[0] == 2
             cur.execute("select item_facts from app.evidence_manifests where operation_id=%s", (op_id,))
             facts = cur.fetchone()[0]
             assert any(x.get("evidence_object_id") == str(sibling_id) and x.get("preserved_sibling") for x in facts)
@@ -273,13 +293,36 @@ def test_violation_reauth_scope_and_restart_instance_recovery_fail_closed():
         with conn.cursor() as cur:
             op_id, _ = _begin(cur, intent, "invocation-1")
             conn.commit()  # hard interruption at durable GATE_BLOCKED
-            assert _begin(cur, intent, "invocation-2")[1] == "GATE_BLOCKED"
+            with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+                _begin(cur, intent, "invocation-missing")
+            conn.rollback()
+            other = _setup_intent(conn)
+            for overrides in (
+                {"case_id": other[0]},
+                {"actor_id": other[1]},
+                {"event_type": "reauth.evidence_seal"},
+                {"binding": {}},
+            ):
+                bad_resume = _resume_audit(cur, intent, op_id, **overrides)
+                with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+                    _begin(cur, intent, "invocation-invalid", resume_audit_id=bad_resume)
+                conn.rollback()
+            resume2 = _resume_audit(cur, intent, op_id)
+            assert _begin(cur, intent, "invocation-2", resume_audit_id=resume2)[1] == "GATE_BLOCKED"
             cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'invocation-2')", (op_id, Jsonb(prepared)))
             conn.commit()
             with pytest.raises(psycopg.Error) as same:
                 _begin(cur, intent, "invocation-2")
             assert same.value.sqlstate == "P4232"
             conn.rollback()
+            with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+                _begin(cur, intent, "invocation-reused", resume_audit_id=resume2)
+            conn.rollback()
+            cur.execute(
+                "select phase,runner_instance_id from app.custody_operations where id=%s",
+                (op_id,),
+            )
+            assert cur.fetchone() == ("FILESYSTEM_APPLYING", "invocation-2")
             with pytest.raises(psycopg.Error) as stale_begin:
                 _begin(cur, intent, "invocation-1")
             assert stale_begin.value.sqlstate == "P4232"
@@ -294,11 +337,13 @@ def test_violation_reauth_scope_and_restart_instance_recovery_fail_closed():
                 conn.rollback()
             cur.execute("select phase,runner_instance_id from app.custody_operations where id=%s", (op_id,))
             assert cur.fetchone() == ("FILESYSTEM_APPLYING", "invocation-2")
-            assert _begin(cur, intent, "invocation-3")[1] == "GATE_BLOCKED"
+            resume3 = _resume_audit(cur, intent, op_id)
+            assert _begin(cur, intent, "invocation-3", resume_audit_id=resume3)[1] == "GATE_BLOCKED"
             cur.execute("select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'invocation-3')", (op_id, Jsonb(prepared)))
             cur.execute("select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'invocation-3')", (op_id, Jsonb(verified)))
             conn.commit()  # hard interruption after durable FILESYSTEM_VERIFIED
-            assert _begin(cur, intent, "invocation-4")[1] == "GATE_BLOCKED"
+            resume4 = _resume_audit(cur, intent, op_id)
+            assert _begin(cur, intent, "invocation-4", resume_audit_id=resume4)[1] == "GATE_BLOCKED"
             changed_verified = {
                 "items": [{**verified["items"][0], "st_ctime_ns": 999}]
             }

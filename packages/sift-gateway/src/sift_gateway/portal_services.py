@@ -827,6 +827,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
         case_id: str,
         actor: Any,
         examiner: str,
+        resume_reauth_audit_event_id: str | None = None,
         action: str,
         binding: dict[str, Any] | None = None,
     ) -> str | None:
@@ -916,6 +917,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
         reauth_audit_event_id: str,
         actor: Any,
         examiner: str,
+        resume_reauth_audit_event_id: str | None = None,
     ) -> dict[str, Any]:
         """Validate the Portal command, then delegate the durable operation."""
         reason = " ".join(reason.split())
@@ -965,6 +967,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
             reason=reason,
             reauth_audit_event_id=reauth_audit_event_id,
             idempotency_key=idempotency_key,
+            resume_reauth_audit_event_id=resume_reauth_audit_event_id,
         )
         try:
             return SealCustodyOperation(
@@ -977,7 +980,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
             raise PortalServiceError(exc.reason, http_status=exc.http_status) from exc
 
     def resume_seal(
-        self, *, case_id: str, operation_id: str, actor: Any, examiner: str
+        self, *, case_id: str, operation_id: str, actor: Any, examiner: str,
+        resume_reauth_audit_event_id: str,
     ) -> dict[str, Any]:
         """Resume one path-free incomplete Add/Seal operation after fresh Portal re-auth."""
         actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
@@ -1010,6 +1014,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
             reauth_audit_event_id=str(row[3] or ""),
             actor=actor,
             examiner=examiner,
+            resume_reauth_audit_event_id=resume_reauth_audit_event_id,
         )
 
     def _seal_object_for_path(self, case_id: str, display_path: str) -> dict[str, Any]:

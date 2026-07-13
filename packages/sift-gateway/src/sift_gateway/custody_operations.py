@@ -49,6 +49,7 @@ class SealCommand:
     reauth_audit_event_id: str
     idempotency_key: str
     runner_instance_id: str = _RUNNER_INSTANCE_ID
+    resume_reauth_audit_event_id: str | None = None
 
     @property
     def action(self) -> str:
@@ -202,7 +203,7 @@ class CustodyOperationRepository:
                     f"""
                     select {_OP_COLUMNS}
                     from app.custody_operation_begin_or_resume(
-                      %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                      %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     """,
                     (
@@ -216,6 +217,7 @@ class CustodyOperationRepository:
                         command.actor_user_id,
                         command.actor_service_identity_id,
                         command.runner_instance_id,
+                        command.resume_reauth_audit_event_id,
                     ),
                 )
                 row = cur.fetchone()
@@ -557,5 +559,10 @@ def public_operation(record: CustodyOperationRecord | None) -> dict[str, Any] | 
             record.failed_from_phase.value if record.failed_from_phase else None
         ),
         "failure_code": record.failure_code,
-        "recoverable": record.phase == CustodyOperationPhase.FAILED_RECOVERABLE,
+        "recoverable": record.action == "ADD_SEAL" and record.phase in {
+            CustodyOperationPhase.GATE_BLOCKED,
+            CustodyOperationPhase.FILESYSTEM_APPLYING,
+            CustodyOperationPhase.FILESYSTEM_VERIFIED,
+            CustodyOperationPhase.FAILED_RECOVERABLE,
+        },
     }

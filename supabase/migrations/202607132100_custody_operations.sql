@@ -49,6 +49,7 @@ create table app.custody_operation_history (
   operation_id uuid not null references app.custody_operations(id) on delete cascade,
   phase text not null,
   facts jsonb not null default '{}'::jsonb,
+  resume_reauth_audit_event_id uuid null unique references app.audit_events(id),
   created_at timestamptz not null default now(),
   constraint custody_operation_history_phase_check check (phase in (
     'REQUESTED','GATE_BLOCKED','FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',
@@ -129,10 +130,11 @@ create trigger evidence_manifests_no_truncate before truncate on app.evidence_ma
 create or replace function app.custody_operation_begin_or_resume(
   p_case_id uuid, p_action text, p_command jsonb, p_request_digest text,
   p_reason text, p_reauth_audit_event_id uuid, p_idempotency_key text,
-  p_actor_user_id uuid, p_actor_service_identity_id uuid, p_runner_instance_id text
+  p_actor_user_id uuid, p_actor_service_identity_id uuid, p_runner_instance_id text,
+  p_resume_reauth_audit_event_id uuid
 ) returns app.custody_operations
 language plpgsql security definer set search_path=pg_catalog,app as $$
-declare v_op app.custody_operations; v_reauth app.audit_events; v_binding jsonb;
+declare v_op app.custody_operations; v_reauth app.audit_events; v_resume app.audit_events; v_binding jsonb;
 begin
   if p_action <> 'ADD_SEAL' or length(btrim(coalesce(p_reason,'')))=0
      or length(p_idempotency_key) not between 1 and 128
@@ -168,6 +170,35 @@ begin
     if v_op.retired_runner_instance_ids ? p_runner_instance_id then
       raise exception 'custody_operation_retired_runner' using errcode='P4232';
     end if;
+    if v_op.runner_instance_id<>p_runner_instance_id
+       and v_op.phase in ('GATE_BLOCKED','FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED','FAILED_RECOVERABLE')
+       and p_resume_reauth_audit_event_id is null then
+      raise exception 'resume_reauth_required' using errcode='invalid_authorization_specification';
+    end if;
+    if p_resume_reauth_audit_event_id is not null then
+      select * into v_resume from app.audit_events where id=p_resume_reauth_audit_event_id for share;
+      if not found or v_resume.case_id is distinct from v_op.case_id
+         or v_resume.event_type<>'reauth.evidence_seal_resume'
+         or v_resume.source<>'portal_reauth' or v_resume.status<>'success'
+         or v_resume.actor_type<>'user'
+         or v_resume.actor_user_id is distinct from v_op.actor_user_id
+         or v_resume.actor_service_identity_id is not null
+         or v_resume.details->'binding' is distinct from jsonb_build_object('operation_id',v_op.id::text) then
+        raise exception 'resume_reauth_scope_mismatch' using errcode='invalid_authorization_specification';
+      end if;
+      if exists(select 1 from app.custody_operation_history h
+                where h.resume_reauth_audit_event_id=p_resume_reauth_audit_event_id) then
+        raise exception 'resume_reauth_reused' using errcode='invalid_authorization_specification';
+      end if;
+      begin
+        insert into app.custody_operation_history(
+          operation_id,phase,facts,resume_reauth_audit_event_id)
+        values(v_op.id,v_op.phase,jsonb_build_object('resume_authorized',true),p_resume_reauth_audit_event_id);
+      exception
+        when unique_violation then
+          raise exception 'resume_reauth_reused' using errcode='invalid_authorization_specification';
+      end;
+    end if;
     if v_op.phase='GATE_BLOCKED' and v_op.runner_instance_id<>p_runner_instance_id then
       update app.custody_operations set runner_instance_id=p_runner_instance_id,
         retired_runner_instance_ids=retired_runner_instance_ids||jsonb_build_array(v_op.runner_instance_id),updated_at=now()
@@ -199,6 +230,9 @@ begin
           'resumed_from',v_op.failed_from_phase));
     end if;
     return v_op;
+  end if;
+  if p_resume_reauth_audit_event_id is not null then
+    raise exception 'resume_operation_not_found' using errcode='invalid_authorization_specification';
   end if;
   insert into app.custody_operations(case_id,action,phase,idempotency_key,request_digest,
     command,reason,reauth_audit_event_id,actor_user_id,actor_service_identity_id,runner_instance_id)
@@ -394,14 +428,14 @@ begin
 end $$;
 
 revoke all on app.custody_operations,app.custody_operation_history,app.evidence_manifests from public,anon,authenticated;
-revoke execute on function app.custody_operation_begin_or_resume(uuid,text,jsonb,text,text,uuid,text,uuid,uuid,text) from public,anon,authenticated;
+revoke execute on function app.custody_operation_begin_or_resume(uuid,text,jsonb,text,text,uuid,text,uuid,uuid,text,uuid) from public,anon,authenticated;
 revoke execute on function app.custody_operation_advance(uuid,text,text,jsonb,text) from public,anon,authenticated;
 revoke execute on function app.custody_operation_fail(uuid,text,text,text) from public,anon,authenticated;
 revoke execute on function app.evidence_append_canonical_event_v1(uuid,uuid,text,integer,text,jsonb,jsonb,jsonb) from public,anon,authenticated;
 revoke execute on function app.custody_operation_commit_verified_seal(uuid,jsonb,text,text) from public,anon,authenticated;
 do $$ begin if exists(select 1 from pg_roles where rolname='service_role') then
   grant select on app.custody_operations,app.custody_operation_history,app.evidence_manifests to service_role;
-  grant execute on function app.custody_operation_begin_or_resume(uuid,text,jsonb,text,text,uuid,text,uuid,uuid,text) to service_role;
+  grant execute on function app.custody_operation_begin_or_resume(uuid,text,jsonb,text,text,uuid,text,uuid,uuid,text,uuid) to service_role;
   grant execute on function app.custody_operation_advance(uuid,text,text,jsonb,text) to service_role;
   grant execute on function app.custody_operation_fail(uuid,text,text,text) to service_role;
   grant execute on function app.custody_operation_commit_verified_seal(uuid,jsonb,text,text) to service_role;

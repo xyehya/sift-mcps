@@ -69,7 +69,7 @@ class FakeEvidenceDB:
         self.unseal_calls: list = []
 
     def record_reauth_event(self, *, case_id, actor, examiner, action, binding=None):
-        self.reauth_calls.append((case_id, examiner, action))
+        self.reauth_calls.append((case_id, examiner, action, binding))
         return "audit-evt-001"
 
     def gate_status(self, case_id):
@@ -91,8 +91,8 @@ class FakeEvidenceDB:
         self.seal_status = "sealed"
         return {"seal_status": "sealed", "manifest_version": 1}
 
-    def resume_seal(self, *, case_id, operation_id, actor, examiner):
-        self.resume_calls.append((case_id, operation_id, examiner))
+    def resume_seal(self, *, case_id, operation_id, actor, examiner, resume_reauth_audit_event_id):
+        self.resume_calls.append((case_id, operation_id, examiner, resume_reauth_audit_event_id))
         return {"seal_status": "sealed", "manifest_version": 2, "operation_id": operation_id}
 
     def ignore(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
@@ -420,9 +420,20 @@ class TestEvidenceChainSeal:
         assert resp.status_code == 200
         assert resp.json()["manifest_version"] == 2
         assert evidence_db.resume_calls == [
-            (_CASE_ID, "33333333-3333-3333-3333-333333333333", "alice")
+            (_CASE_ID, "33333333-3333-3333-3333-333333333333", "alice", "audit-evt-001")
         ]
         assert evidence_db.reauth_calls[-1][2] == "evidence_seal_resume"
+        assert evidence_db.reauth_calls[-1][3] == {
+            "operation_id": "33333333-3333-3333-3333-333333333333"
+        }
+
+    def test_resume_rejects_malformed_operation_id_before_service(self, authed_client, evidence_db):
+        resp = authed_client.post(
+            "/api/evidence/chain/seal/resume",
+            json={"password": GOOD_PASSWORD, "operation_id": "not-a-uuid"},
+        )
+        assert resp.status_code == 400
+        assert not evidence_db.resume_calls
 
     def test_seal_wrong_password_returns_401(self, authed_client, evidence_db):
         resp = authed_client.post(

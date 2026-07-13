@@ -1191,19 +1191,26 @@ async def post_evidence_chain_seal_resume(request: Request) -> JSONResponse:
     if not isinstance(body, dict) or set(body) - {"password", "operation_id"}:
         return JSONResponse({"error": "Unknown resume request field"}, status_code=400)
     operation_id = str(body.get("operation_id") or "").strip()
-    if not operation_id or len(operation_id) > 64:
+    try:
+        operation_id = str(uuid.UUID(operation_id))
+    except (ValueError, AttributeError):
         return JSONResponse({"error": "operation_id is required"}, status_code=400)
     if (reauth_err := await _supabase_reverify(request, body)) is not None:
         return reauth_err
     resumer = getattr(_EVIDENCE_DB, "resume_seal", None) if _EVIDENCE_DB is not None else None
     if not callable(resumer):
         return _no_case_response()
-    if not _record_reauth_event(request, examiner, "evidence_seal_resume"):
+    resume_reauth_id = _record_reauth_event(
+        request, examiner, "evidence_seal_resume",
+        binding={"operation_id": operation_id},
+    )
+    if not resume_reauth_id:
         return JSONResponse({"error": "Re-auth audit event required for resume"}, status_code=403)
     try:
         result = resumer(
             case_id=_active_case_id(), operation_id=operation_id,
             actor=_request_principal(request), examiner=examiner,
+            resume_reauth_audit_event_id=resume_reauth_id,
         )
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
