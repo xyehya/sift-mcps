@@ -12,6 +12,7 @@ import { CustodyViolations } from '@/components/evidence/CustodyViolations'
 import { UnregisteredFiles } from '@/components/evidence/UnregisteredFiles'
 import { RegisteredEvidenceTable } from '@/components/evidence/RegisteredEvidenceTable'
 import { EvidenceModals } from '@/components/evidence/EvidenceModals'
+import { IncompleteCustodyOperation } from '@/components/evidence/IncompleteCustodyOperation'
 
 // ─────────────────────────────────────────────────────────────────────────
 // EvidenceTab — chain-of-custody dashboard (Mission Control reskin of the
@@ -125,6 +126,8 @@ export function EvidenceTab() {
         className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-5"
       >
         <EvidenceHeader chainStatus={chainStatus} onRescan={custody.handleRescan} />
+
+        <IncompleteCustodyOperation operation={chainStatus?.incomplete_operation} />
 
         <HmacBar chainStatus={chainStatus} onVerifyClick={() => openModal('verify_hmac')} />
 

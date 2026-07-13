@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 
 import { cn } from '@/lib/utils'
 import { useMotionVariants } from '@/lib/motion'
+import { EvidenceSealModal } from '@/components/evidence/EvidenceSealModal'
 
 // ─────────────────────────────────────────────────────────────────────────
 // EvidenceModals — the 7 chain-of-custody action modals (legacy IA parity §7):
@@ -198,40 +199,6 @@ function VerifyHmacModal({ password, onPasswordChange, loading, error, result, o
   )
 }
 
-// ── Seal Manifest ──────────────────────────────────────────────────────────
-function SealModal({ password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
-  return (
-    <ModalShell title="Seal Evidence Manifest">
-      <p className="text-xs text-muted-foreground">
-        Enter password to sign and register all unregistered evidence files into the tamper-evident
-        manifest.
-      </p>
-      <p className="text-[11px] text-status-pending">
-        Large disk/memory images are hashed in full — this can take several minutes. Keep this window
-        open until it completes.
-      </p>
-      <form id="modal-seal" onSubmit={onSubmit} className="space-y-4">
-        <ReasonField
-          value={reason}
-          onChange={onReasonChange}
-          disabled={loading}
-          placeholder="e.g. Initial evidence intake from validated source"
-        />
-        <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
-        <ModalError error={error} />
-        {loading && <ModalLoading message="Generating key and signing…" />}
-        {result?.sealed && (
-          <ModalSuccess message={`Manifest version ${result.manifest_version} sealed successfully!`} />
-        )}
-        <div className="flex justify-end gap-2">
-          <CancelButton onClose={onClose} />
-          <ConfirmButton formId="modal-seal" label="Confirm" tone="jade" disabled={loading} />
-        </div>
-      </form>
-    </ModalShell>
-  )
-}
-
 // ── Ignore ─────────────────────────────────────────────────────────────────
 function IgnoreModal({ path, password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
   return (
@@ -392,7 +359,7 @@ export function EvidenceModals({ activeModal, pendingPath, password, reason, loa
       {activeModal === 'verify_hmac' && (
         <VerifyHmacModal key="verify_hmac" {...common} onSubmit={handlers.onVerifyHmac} />
       )}
-      {activeModal === 'seal' && <SealModal key="seal" {...common} onSubmit={handlers.onSeal} />}
+      {activeModal === 'seal' && <EvidenceSealModal key="seal" {...common} onSubmit={handlers.onSeal} />}
       {activeModal === 'ignore' && <IgnoreModal key="ignore" {...common} onSubmit={handlers.onIgnore} />}
       {activeModal === 'delete' && <DeleteModal key="delete" {...common} onSubmit={handlers.onDelete} />}
       {activeModal === 'retire' && <RetireModal key="retire" {...common} onSubmit={handlers.onRetire} />}

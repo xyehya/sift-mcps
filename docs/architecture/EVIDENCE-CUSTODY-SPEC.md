@@ -261,8 +261,7 @@ Tests should exercise the highest existing public seam and assert externally obs
 The following are known current-state facts, not accepted target behavior:
 
 - Standalone Unseal currently clears immutable protection before the durable gate transition; Reacquire can commit sealed DB state before immutable protection succeeds; Delete can unlink before durable disposition.
-- There is no durable custody-operation state machine or recovery worker.
-- Current Seal is not atomic across registration, hashing, version creation, immutable posture, and manifest commit. Gate A reproduced a failed pre-hash Seal that appended `EVIDENCE_REGISTERED`; the successful retry appended a second registration event while creating exactly one version. P4.23.2 must replace this with gate-first durable phases and exactly-once retry/recovery.
+- Add/Seal now uses the P4.23.2 durable custody-operation state machine: Postgres blocks the gate before filesystem work, binds scoped re-authentication and one restart-instance owner, persists prepared/verified facts, and commits the manifest, versions, and canonical events atomically. A different systemd invocation recovers an interrupted filesystem phase in the same retry; a duplicate from the active invocation conflicts. Remaining recovery workflows adopt this seam in later packets.
 - UI/demo data contains a fictitious `mcp:evidence.unseal` action.
 - “Verify HMAC,” file manifest/JSONL authority tests, and standalone Unseal terminology remain in tests and documentation even though active custody authority is Postgres.
 - Some Rescan tests pass when no reconciliation callback occurs, and the unused watcher/cache no-op does not provide continuous protection.

@@ -1075,7 +1075,7 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     if not isinstance(body, dict) or set(body) - allowed_fields:
         return JSONResponse({"error": "Unknown seal request field"}, status_code=400)
     file_specs = body.get("file_specs", [])
-    reason = str(body.get("reason") or "").strip()
+    reason = " ".join(str(body.get("reason") or "").split())
     idempotency_key = str(body.get("idempotency_key") or "").strip()
 
     if not isinstance(file_specs, list):

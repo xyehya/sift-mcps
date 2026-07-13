@@ -150,6 +150,27 @@ describe('Seal manifest flow', () => {
     await waitFor(() => expect(endpoints.postChainSeal).toHaveBeenCalledTimes(3))
     expect(endpoints.postChainSeal.mock.calls[2][0].idempotency_key).not.toBe(firstKey)
   })
+
+  it('renders a path-free recoverable operation state and exact next action', async () => {
+    seed({
+      status: 'unsealed',
+      unregistered: [],
+      incomplete_operation: {
+        operation_id: 'op-1',
+        action: 'ADD_SEAL',
+        phase: 'FAILED_RECOVERABLE',
+        failed_from_phase: 'FILESYSTEM_APPLYING',
+        recoverable: true,
+      },
+    })
+    render(<EvidenceTab />)
+
+    const notice = await screen.findByRole('region', { name: 'Incomplete custody operation' })
+    expect(within(notice).getByText('State: FAILED_RECOVERABLE')).toBeInTheDocument()
+    expect(within(notice).getByText('Interrupted from: FILESYSTEM_APPLYING')).toBeInTheDocument()
+    expect(within(notice).getByText(/Retry Add & Seal with the same intent/i)).toBeInTheDocument()
+    expect(notice).not.toHaveTextContent('evidence/')
+  })
 })
 
 // ── 2. Ignore ────────────────────────────────────────────────────────────────

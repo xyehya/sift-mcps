@@ -15,6 +15,8 @@ create table app.custody_operations (
   actor_service_identity_id uuid null references app.service_identities(id) on delete set null,
   failed_from_phase text null,
   failure_code text null,
+  runner_instance_id text not null,
+  prepared_facts jsonb not null default '{}'::jsonb,
   verified_facts jsonb not null default '{}'::jsonb,
   result jsonb null,
   created_at timestamptz not null default now(),
@@ -119,47 +121,83 @@ create trigger custody_operation_history_no_truncate before truncate on app.cust
   for each statement execute function app.evidence_block_truncate();
 create trigger evidence_manifests_no_truncate before truncate on app.evidence_manifests
   for each statement execute function app.evidence_block_truncate();
-create trigger evidence_versions_no_truncate before truncate on app.evidence_versions
-  for each statement execute function app.evidence_block_truncate();
-create trigger evidence_custody_events_no_truncate before truncate on app.evidence_custody_events
-  for each statement execute function app.evidence_block_truncate();
+-- evidence_versions/evidence_custody_events already have the canonical
+-- no-TRUNCATE guards from 202606141400_harden_append_only_chains.sql.  Reuse
+-- those accumulated-migration triggers; do not create duplicate names here.
 
 create or replace function app.custody_operation_begin_or_resume(
   p_case_id uuid, p_action text, p_command jsonb, p_request_digest text,
   p_reason text, p_reauth_audit_event_id uuid, p_idempotency_key text,
-  p_actor_user_id uuid, p_actor_service_identity_id uuid
+  p_actor_user_id uuid, p_actor_service_identity_id uuid, p_runner_instance_id text
 ) returns app.custody_operations
 language plpgsql security definer set search_path=pg_catalog,app as $$
-declare v_op app.custody_operations;
+declare v_op app.custody_operations; v_reauth app.audit_events; v_binding jsonb;
 begin
   if p_action <> 'ADD_SEAL' or length(btrim(coalesce(p_reason,'')))=0
      or length(p_idempotency_key) not between 1 and 128
-     or p_reauth_audit_event_id is null then
+     or p_reauth_audit_event_id is null or p_actor_user_id is null
+     or p_actor_service_identity_id is not null
+     or length(btrim(coalesce(p_runner_instance_id,'')))=0 then
     raise exception 'invalid_custody_operation' using errcode='invalid_parameter_value';
   end if;
-  perform pg_advisory_xact_lock(hashtextextended(p_case_id::text||'|'||p_idempotency_key,0));
+  v_binding:=jsonb_build_object('idempotency_key',p_idempotency_key,'reason',btrim(p_reason),
+    'targets',(select jsonb_agg(x->>'path' order by x->>'path') from jsonb_array_elements(p_command->'files') x));
+  select * into v_reauth from app.audit_events where id=p_reauth_audit_event_id for share;
+  if not found or v_reauth.case_id is distinct from p_case_id
+     or v_reauth.event_type<>'reauth.evidence_seal' or v_reauth.source<>'portal_reauth'
+     or v_reauth.status<>'success' or v_reauth.actor_type<>'user'
+     or v_reauth.actor_user_id is distinct from p_actor_user_id
+     or v_reauth.actor_service_identity_id is distinct from p_actor_service_identity_id
+     or v_reauth.details->'binding' is distinct from v_binding then
+    raise exception 'reauth_scope_mismatch' using errcode='invalid_authorization_specification';
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
+  if exists(select 1 from app.evidence_chain_heads h where h.case_id=p_case_id
+      and (h.seal_status='violated' or coalesce(h.issues,'[]'::jsonb)<>'[]'::jsonb))
+     or exists(select 1 from app.evidence_objects o where o.case_id=p_case_id
+      and (o.status='violated' or o.seal_status='violated')) then
+    raise exception 'custody_violation_requires_recovery' using errcode='object_not_in_prerequisite_state';
+  end if;
   select * into v_op from app.custody_operations
     where case_id=p_case_id and idempotency_key=p_idempotency_key for update;
   if found then
     if v_op.request_digest <> p_request_digest then
       raise exception 'idempotency_key_reused' using errcode='P4231';
     end if;
+    if v_op.phase in ('FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED') then
+      if v_op.runner_instance_id=p_runner_instance_id then
+        raise exception 'custody_operation_same_runner_active' using errcode='P4232';
+      end if;
+      update app.custody_operations set phase='FAILED_RECOVERABLE',
+        failed_from_phase=v_op.phase,failure_code='runner_interrupted',updated_at=now()
+        where id=v_op.id and phase=v_op.phase returning * into v_op;
+      insert into app.custody_operation_history(operation_id,phase,facts)
+        values(v_op.id,'FAILED_RECOVERABLE',jsonb_build_object(
+          'failed_from',v_op.failed_from_phase,'code','runner_interrupted'));
+    end if;
     if v_op.phase='FAILED_RECOVERABLE' then
       update app.custody_operations set phase='GATE_BLOCKED', failure_code=null,
-        failed_from_phase=null, updated_at=now() where id=v_op.id returning * into v_op;
+        runner_instance_id=p_runner_instance_id,
+        verified_facts=case when failed_from_phase='FILESYSTEM_VERIFIED'
+          then '{}'::jsonb else verified_facts end,
+        updated_at=now()
+        where id=v_op.id and phase='FAILED_RECOVERABLE' returning * into v_op;
       insert into app.custody_operation_history(operation_id,phase,facts)
-        values(v_op.id,'GATE_BLOCKED',jsonb_build_object('resumed',true));
+        values(v_op.id,'GATE_BLOCKED',jsonb_build_object('resumed',true,
+          'resumed_from',v_op.failed_from_phase));
     end if;
     return v_op;
   end if;
   insert into app.custody_operations(case_id,action,phase,idempotency_key,request_digest,
-    command,reason,reauth_audit_event_id,actor_user_id,actor_service_identity_id)
+    command,reason,reauth_audit_event_id,actor_user_id,actor_service_identity_id,runner_instance_id)
   values(p_case_id,p_action,'REQUESTED',p_idempotency_key,p_request_digest,p_command,
-    btrim(p_reason),p_reauth_audit_event_id,p_actor_user_id,p_actor_service_identity_id)
+    btrim(p_reason),p_reauth_audit_event_id,p_actor_user_id,p_actor_service_identity_id,p_runner_instance_id)
   returning * into v_op;
   insert into app.custody_operation_history(operation_id,phase) values(v_op.id,'REQUESTED');
   insert into app.evidence_chain_heads(case_id,seal_status) values(p_case_id,'unsealed')
-    on conflict(case_id) do update set seal_status='unsealed',updated_at=now();
+    on conflict(case_id) do update set
+      seal_status=case when app.evidence_chain_heads.seal_status='violated'
+        then 'violated' else 'unsealed' end,updated_at=now();
   update app.custody_operations set phase='GATE_BLOCKED',updated_at=now()
     where id=v_op.id returning * into v_op;
   insert into app.custody_operation_history(operation_id,phase) values(v_op.id,'GATE_BLOCKED');
@@ -180,7 +218,16 @@ begin
           (p_expected='FILESYSTEM_APPLYING' and p_target='FILESYSTEM_VERIFIED')) then
     raise exception 'custody_operation_transition_forbidden' using errcode='invalid_parameter_value';
   end if;
+  if p_target='FILESYSTEM_APPLYING' and v_op.prepared_facts<>'{}'::jsonb
+     and v_op.prepared_facts is distinct from coalesce(p_facts,'{}') then
+    raise exception 'prepared_facts_mismatch' using errcode='data_exception';
+  end if;
+  if p_target='FILESYSTEM_VERIFIED' and v_op.verified_facts<>'{}'::jsonb
+     and v_op.verified_facts is distinct from coalesce(p_facts,'{}') then
+    raise exception 'verified_facts_mismatch' using errcode='data_exception';
+  end if;
   update app.custody_operations set phase=p_target,
+    prepared_facts=case when p_target='FILESYSTEM_APPLYING' then coalesce(p_facts,'{}') else prepared_facts end,
     verified_facts=case when p_target='FILESYSTEM_VERIFIED' then coalesce(p_facts,'{}') else verified_facts end,
     updated_at=now() where id=p_operation_id returning * into v_op;
   insert into app.custody_operation_history(operation_id,phase,facts)
@@ -189,18 +236,22 @@ begin
 end $$;
 
 create or replace function app.custody_operation_fail(
-  p_operation_id uuid,p_failed_from text,p_failure_code text
+  p_operation_id uuid,p_expected text,p_failure_code text
 ) returns app.custody_operations
 language plpgsql security definer set search_path=pg_catalog,app as $$
 declare v_op app.custody_operations;
 begin
-  update app.custody_operations set phase='FAILED_RECOVERABLE',failed_from_phase=p_failed_from,
+  update app.custody_operations set phase='FAILED_RECOVERABLE',failed_from_phase=p_expected,
     failure_code=left(regexp_replace(coalesce(p_failure_code,'failure'),'[^a-zA-Z0-9_.-]','','g'),96),
-    updated_at=now() where id=p_operation_id and phase<>'COMPLETED' returning * into v_op;
-  if not found then select * into v_op from app.custody_operations where id=p_operation_id; return v_op; end if;
-  update app.evidence_chain_heads set seal_status='unsealed',updated_at=now() where case_id=v_op.case_id;
+    updated_at=now() where id=p_operation_id and phase=p_expected returning * into v_op;
+  if not found then
+    raise exception 'custody_operation_phase_conflict' using errcode='serialization_failure';
+  end if;
+  update app.evidence_chain_heads set
+    seal_status=case when seal_status='violated' then 'violated' else 'unsealed' end,
+    updated_at=now() where case_id=v_op.case_id;
   insert into app.custody_operation_history(operation_id,phase,facts)
-    values(v_op.id,'FAILED_RECOVERABLE',jsonb_build_object('failed_from',p_failed_from,'code',v_op.failure_code));
+    values(v_op.id,'FAILED_RECOVERABLE',jsonb_build_object('failed_from',p_expected,'code',v_op.failure_code));
   return v_op;
 end $$;
 
@@ -249,7 +300,14 @@ begin
   if v_op.phase='COMPLETED' then return v_op; end if;
   if v_op.phase<>'FILESYSTEM_VERIFIED' or jsonb_typeof(p_items)<>'array' or jsonb_array_length(p_items)=0 then
     raise exception 'verified_seal_required' using errcode='invalid_parameter_value'; end if;
+  if p_items is distinct from v_op.verified_facts->'items' then
+    raise exception 'verified_facts_mismatch' using errcode='data_exception'; end if;
   select * into v_head from app.evidence_chain_heads where case_id=v_op.case_id for update;
+  if v_head.seal_status='violated' or coalesce(v_head.issues,'[]'::jsonb)<>'[]'::jsonb
+     or exists(select 1 from app.evidence_objects o where o.case_id=v_op.case_id
+       and (o.status='violated' or o.seal_status='violated')) then
+    raise exception 'custody_violation_requires_recovery' using errcode='object_not_in_prerequisite_state';
+  end if;
   v_manifest_version:=coalesce(v_head.manifest_version,0)+1;
   select jsonb_agg(x || jsonb_build_object('evidence_version_id',gen_random_uuid())
                    order by x->>'evidence_object_id') into v_new_facts
@@ -278,6 +336,9 @@ begin
       and case_id=v_op.case_id for update;
     if not found or v_obj.status not in ('detected','registered') then
       raise exception 'evidence_not_pending' using errcode='invalid_parameter_value'; end if;
+    if v_obj.display_path is distinct from v_item->>'path'
+       or v_item->>'display_path' is distinct from v_item->>'path' then
+      raise exception 'verified_item_path_mismatch' using errcode='data_exception'; end if;
     if v_obj.status='detected' then
       perform app.evidence_append_canonical_event_v1(v_op.id,v_obj.id,'EVIDENCE_REGISTERED',null,null,
         jsonb_build_object('status','detected'),jsonb_build_object('status','registered'),
@@ -306,7 +367,7 @@ begin
     jsonb_build_object('manifest_id',v_manifest_id,'items',v_facts));
   update app.evidence_chain_heads set manifest_version=v_manifest_version,manifest_hash=v_manifest_hash,
     seal_status='sealed',active_count=(select count(*) from app.evidence_objects where case_id=v_op.case_id and status='sealed'),
-    issues='[]',updated_at=now() where case_id=v_op.case_id;
+    updated_at=now() where case_id=v_op.case_id;
   update app.custody_operations set phase='LEDGER_COMMITTED',updated_at=now() where id=v_op.id;
   insert into app.custody_operation_history(operation_id,phase) values(v_op.id,'LEDGER_COMMITTED');
   v_result:=jsonb_build_object('case_id',v_op.case_id,'manifest_version',v_manifest_version,
@@ -318,14 +379,15 @@ begin
 end $$;
 
 revoke all on app.custody_operations,app.custody_operation_history,app.evidence_manifests from public,anon,authenticated;
-revoke execute on function app.custody_operation_begin_or_resume(uuid,text,jsonb,text,text,uuid,text,uuid,uuid) from public,anon,authenticated;
+grant select on app.custody_operations,app.custody_operation_history,app.evidence_manifests to authenticated;
+revoke execute on function app.custody_operation_begin_or_resume(uuid,text,jsonb,text,text,uuid,text,uuid,uuid,text) from public,anon,authenticated;
 revoke execute on function app.custody_operation_advance(uuid,text,text,jsonb) from public,anon,authenticated;
 revoke execute on function app.custody_operation_fail(uuid,text,text) from public,anon,authenticated;
 revoke execute on function app.evidence_append_canonical_event_v1(uuid,uuid,text,integer,text,jsonb,jsonb,jsonb) from public,anon,authenticated;
 revoke execute on function app.custody_operation_commit_verified_seal(uuid,jsonb,text) from public,anon,authenticated;
 do $$ begin if exists(select 1 from pg_roles where rolname='service_role') then
   grant select on app.custody_operations,app.custody_operation_history,app.evidence_manifests to service_role;
-  grant execute on function app.custody_operation_begin_or_resume(uuid,text,jsonb,text,text,uuid,text,uuid,uuid) to service_role;
+  grant execute on function app.custody_operation_begin_or_resume(uuid,text,jsonb,text,text,uuid,text,uuid,uuid,text) to service_role;
   grant execute on function app.custody_operation_advance(uuid,text,text,jsonb) to service_role;
   grant execute on function app.custody_operation_fail(uuid,text,text) to service_role;
   grant execute on function app.custody_operation_commit_verified_seal(uuid,jsonb,text) to service_role;

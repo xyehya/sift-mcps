@@ -13,6 +13,7 @@ import logging
 import os
 import pwd
 import stat
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -20,6 +21,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
+
+# systemd supplies one INVOCATION_ID to every process in a service activation and
+# rotates it on restart.  Non-systemd development gets a process-lifetime nonce:
+# it is stable for duplicate requests in this process but can never impersonate a
+# previous process after a hard interruption.
+_RUNNER_INSTANCE_ID = os.environ.get("INVOCATION_ID") or f"process:{uuid.uuid4()}"
 
 
 class CustodyOperationPhase(StrEnum):
@@ -41,6 +48,7 @@ class SealCommand:
     reason: str
     reauth_audit_event_id: str
     idempotency_key: str
+    runner_instance_id: str = _RUNNER_INSTANCE_ID
 
     @property
     def action(self) -> str:
@@ -65,6 +73,9 @@ class CustodyOperationRecord:
     failed_from_phase: CustodyOperationPhase | None
     failure_code: str | None
     result: dict[str, Any] | None
+    runner_instance_id: str | None = None
+    prepared_facts: dict[str, Any] | None = None
+    verified_facts: dict[str, Any] | None = None
 
 
 class CustodyOperationRepositoryProtocol(Protocol):
@@ -82,7 +93,7 @@ class CustodyOperationRepositoryProtocol(Protocol):
     def fail(
         self,
         operation_id: str,
-        failed_from: CustodyOperationPhase,
+        expected: CustodyOperationPhase,
         failure_code: str,
     ) -> CustodyOperationRecord: ...
 
@@ -165,12 +176,16 @@ def _record(row: Any) -> CustodyOperationRecord:
         failed_from_phase=failed_from,
         failure_code=str(row[7]) if row[7] else None,
         result=result,
+        runner_instance_id=str(row[9]) if len(row) > 9 and row[9] else None,
+        prepared_facts=row[10] if len(row) > 10 and isinstance(row[10], dict) else None,
+        verified_facts=row[11] if len(row) > 11 and isinstance(row[11], dict) else None,
     )
 
 
 _OP_COLUMNS = """
   id::text, case_id::text, action, phase, idempotency_key, request_digest,
   failed_from_phase, failure_code, result
+  , runner_instance_id, prepared_facts, verified_facts
 """
 
 
@@ -187,7 +202,7 @@ class CustodyOperationRepository:
                     f"""
                     select {_OP_COLUMNS}
                     from app.custody_operation_begin_or_resume(
-                      %s, %s, %s, %s, %s, %s, %s, %s, %s
+                      %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     """,
                     (
@@ -200,6 +215,7 @@ class CustodyOperationRepository:
                         command.idempotency_key,
                         command.actor_user_id,
                         command.actor_service_identity_id,
+                        command.runner_instance_id,
                     ),
                 )
                 row = cur.fetchone()
@@ -228,7 +244,7 @@ class CustodyOperationRepository:
     def fail(
         self,
         operation_id: str,
-        failed_from: CustodyOperationPhase,
+        expected: CustodyOperationPhase,
         failure_code: str,
     ) -> CustodyOperationRecord:
         with self._connect() as conn:
@@ -236,7 +252,7 @@ class CustodyOperationRepository:
                 cur.execute(
                     f"""select {_OP_COLUMNS}
                          from app.custody_operation_fail(%s, %s, %s)""",
-                    (operation_id, failed_from.value, failure_code[:96]),
+                    (operation_id, expected.value, failure_code[:96]),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -426,11 +442,18 @@ class SealCustodyOperation:
         try:
             operation = self._repository.begin_or_resume(command)
         except Exception as exc:
-            if getattr(exc, "sqlstate", None) == "P4231":
+            sqlstate = getattr(exc, "sqlstate", None)
+            if sqlstate == "P4231":
                 raise CustodyOperationError(
                     "idempotency_key_reused", http_status=409
                 ) from exc
-            if getattr(exc, "sqlstate", None) == "23505":
+            if sqlstate == "28000":
+                raise CustodyOperationError("seal_reauth_scope_mismatch", http_status=403) from exc
+            if sqlstate == "55000":
+                raise CustodyOperationError(
+                    "custody_violation_requires_recovery", http_status=409
+                ) from exc
+            if sqlstate in ("23505", "P4232"):
                 raise CustodyOperationError(
                     "custody_operation_active", http_status=409
                 ) from exc

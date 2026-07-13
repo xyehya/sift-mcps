@@ -65,14 +65,14 @@ class FakeRepository:
     def fail(
         self,
         operation_id: str,
-        failed_from: CustodyOperationPhase,
+        expected: CustodyOperationPhase,
         failure_code: str,
     ) -> CustodyOperationRecord:
-        self.calls.append(("fail", (failed_from, failure_code)))
+        self.calls.append(("fail", (expected, failure_code)))
         self.record = replace(
             self.record,
             phase=CustodyOperationPhase.FAILED_RECOVERABLE,
-            failed_from_phase=failed_from,
+            failed_from_phase=expected,
             failure_code=failure_code,
         )
         return self.record
