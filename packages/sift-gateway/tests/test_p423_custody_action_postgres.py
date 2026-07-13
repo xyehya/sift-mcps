@@ -120,6 +120,10 @@ def test_action_rpc_binds_object_blocks_gate_and_preserves_add_seal_authority():
                 "select has_function_privilege('service_role','app.custody_operation_begin_or_resume(uuid,text,jsonb,text,text,uuid,text,uuid,uuid,text,uuid)','EXECUTE')"
             )
             assert cur.fetchone()[0] is True
+            cur.execute(
+                "select has_function_privilege('service_role','app.custody_operation_commit_verified_add_seal_v1(uuid,jsonb,text,text)','EXECUTE')"
+            )
+            assert cur.fetchone()[0] is False
         conn.rollback()
 
 
@@ -144,3 +148,79 @@ def test_unknown_action_and_mismatched_binding_create_no_operation():
                 (unknown[0], mismatched[0]),
             )
             assert cur.fetchone()[0] == 0
+
+
+def test_non_add_operation_cannot_reach_add_seal_finalizer_or_mutate_custody():
+    from psycopg.types.json import Jsonb
+
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as conn:
+        intent = _setup_action(conn, action="RETIRE")
+        with conn.cursor() as cur:
+            operation_id, _action, _phase = _begin(cur, intent, action="RETIRE")
+            cur.execute(
+                """select phase from app.custody_operation_advance(
+                   %s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'action-runner')""",
+                (operation_id, Jsonb({"selection": "retire"})),
+            )
+            cur.execute(
+                """select phase from app.custody_operation_advance(
+                   %s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'action-runner')""",
+                (operation_id, Jsonb({"verified": True})),
+            )
+            cur.execute(
+                """select status,seal_status,current_version_id,current_sha256,current_bytes
+                   from app.evidence_objects where id=%s""",
+                (intent[3],),
+            )
+            object_before = cur.fetchone()
+            cur.execute(
+                """select manifest_version,manifest_hash,seal_status,head_seq,head_hash
+                   from app.evidence_chain_heads where case_id=%s""",
+                (intent[0],),
+            )
+            head_before = cur.fetchone()
+            cur.execute(
+                """select
+                     (select count(*) from app.evidence_manifests where operation_id=%s),
+                     (select count(*) from app.evidence_versions where custody_operation_id=%s),
+                     (select count(*) from app.evidence_custody_events where custody_operation_id=%s)""",
+                (operation_id, operation_id, operation_id),
+            )
+            counts_before = cur.fetchone()
+
+            cur.execute("savepoint wrong_finalizer")
+            with pytest.raises(psycopg.errors.InvalidParameterValue):
+                cur.execute(
+                    """select phase from app.custody_operation_commit_verified_seal(
+                       %s,%s,'test examiner','action-runner')""",
+                    (operation_id, Jsonb([])),
+                )
+            cur.execute("rollback to savepoint wrong_finalizer")
+
+            cur.execute(
+                """select status,seal_status,current_version_id,current_sha256,current_bytes
+                   from app.evidence_objects where id=%s""",
+                (intent[3],),
+            )
+            assert cur.fetchone() == object_before
+            cur.execute(
+                """select manifest_version,manifest_hash,seal_status,head_seq,head_hash
+                   from app.evidence_chain_heads where case_id=%s""",
+                (intent[0],),
+            )
+            assert cur.fetchone() == head_before
+            cur.execute(
+                """select
+                     (select count(*) from app.evidence_manifests where operation_id=%s),
+                     (select count(*) from app.evidence_versions where custody_operation_id=%s),
+                     (select count(*) from app.evidence_custody_events where custody_operation_id=%s)""",
+                (operation_id, operation_id, operation_id),
+            )
+            assert cur.fetchone() == counts_before == (0, 0, 0)
+            cur.execute(
+                "select phase from app.custody_operations where id=%s",
+                (operation_id,),
+            )
+            assert cur.fetchone()[0] == "FILESYSTEM_VERIFIED"
+        conn.rollback()

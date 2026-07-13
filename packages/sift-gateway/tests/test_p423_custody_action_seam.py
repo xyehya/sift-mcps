@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, cast, get_type_hints
 
 import pytest
 from sift_gateway.custody_operations import (
+    AuthorizedRecoveryIntent,
     CustodyAction,
     CustodyOperationCommandProtocol,
     CustodyOperationError,
@@ -152,8 +153,40 @@ def test_ticket4_recovery_seam_contains_only_opaque_object_selection():
         action=RecoveryAction.RESTORE_EXACT,
     )
 
-    assert set(vars(selection)) == {"case_id", "evidence_object_id", "action"}
-    assert not any(
-        name in RecoveryAuthorityProtocol.__dict__
-        for name in ("path", "receipt", "command")
+    intent = AuthorizedRecoveryIntent(
+        selection=selection,
+        actor_user_id="55555555-5555-5555-5555-555555555555",
+        reason="  exact-byte recovery  ",
+        reauth_audit_event_id="22222222-2222-2222-2222-222222222222",
+        idempotency_key="restore-1",
     )
+
+    assert set(vars(selection)) == {"case_id", "evidence_object_id", "action"}
+    assert set(vars(intent)) == {
+        "selection",
+        "actor_user_id",
+        "reason",
+        "reauth_audit_event_id",
+        "idempotency_key",
+    }
+    assert intent.reason == "exact-byte recovery"
+    forbidden = ("path", "password", "receipt", "command")
+    assert not any(term in name for name in vars(intent) for term in forbidden)
+    annotations = get_type_hints(RecoveryAuthorityProtocol.execute_authorized_recovery)
+    assert annotations["intent"] is AuthorizedRecoveryIntent
+
+
+@pytest.mark.parametrize("reason", ["", "   ", "x" * 1001])
+def test_authorized_recovery_intent_bounds_reason(reason: str):
+    with pytest.raises(ValueError, match="reason"):
+        AuthorizedRecoveryIntent(
+            selection=RecoverySelection(
+                case_id="11111111-1111-1111-1111-111111111111",
+                evidence_object_id="44444444-4444-4444-4444-444444444444",
+                action=RecoveryAction.REPLACE_REACQUIRE,
+            ),
+            actor_user_id="55555555-5555-5555-5555-555555555555",
+            reason=reason,
+            reauth_audit_event_id="22222222-2222-2222-2222-222222222222",
+            idempotency_key="replace-1",
+        )

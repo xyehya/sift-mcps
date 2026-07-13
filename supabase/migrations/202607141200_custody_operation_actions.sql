@@ -73,6 +73,10 @@ begin
       using errcode='invalid_parameter_value';
   end if;
 
+  -- Global custody lock order: case advisory lock first, then audit,
+  -- operation, Evidence Object, version, manifest, and head row locks.
+  perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
+
   if p_action='ADD_SEAL' then
     v_binding:=jsonb_build_object(
       'idempotency_key',p_idempotency_key,
@@ -122,7 +126,6 @@ begin
       using errcode='invalid_authorization_specification';
   end if;
 
-  perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
   if p_action='ADD_SEAL' and (
     exists(select 1 from app.evidence_chain_heads h where h.case_id=p_case_id
       and (h.seal_status='violated' or coalesce(h.issues,'[]'::jsonb)<>'[]'::jsonb))
@@ -251,16 +254,63 @@ begin
   return v_op;
 end $$;
 
+-- Preserve the proven Add/Seal implementation behind an owner-only function,
+-- then restore the public service-role RPC name with an action gate. The gate
+-- runs before the legacy function's COMPLETED replay branch and before any
+-- evidence, manifest, event, object, or head mutation.
+alter function app.custody_operation_commit_verified_seal(uuid,jsonb,text,text)
+  rename to custody_operation_commit_verified_add_seal_v1;
+
+create or replace function app.custody_operation_commit_verified_seal(
+  p_operation_id uuid,p_items jsonb,p_examiner text,p_runner_instance_id text
+) returns app.custody_operations
+language plpgsql security definer set search_path=pg_catalog,app as $$
+declare
+  v_case_id uuid;
+  v_op app.custody_operations;
+begin
+  select case_id into v_case_id from app.custody_operations
+    where id=p_operation_id;
+  if not found then
+    raise exception 'custody_operation_missing' using errcode='no_data_found';
+  end if;
+  -- Finalizers use the same frozen lock order as begin: case, operation, then
+  -- action-specific object/version/manifest/head rows in the inner finalizer.
+  perform pg_advisory_xact_lock(hashtextextended(v_case_id::text,0));
+  select * into v_op from app.custody_operations
+    where id=p_operation_id for update;
+  if v_op.action<>'ADD_SEAL' then
+    raise exception 'custody_operation_finalizer_action_mismatch'
+      using errcode='invalid_parameter_value';
+  end if;
+  select * into v_op from app.custody_operation_commit_verified_add_seal_v1(
+    p_operation_id,p_items,p_examiner,p_runner_instance_id
+  );
+  return v_op;
+end $$;
+
 revoke execute on function app.custody_operation_reauth_event(text,text)
   from public,anon,authenticated;
 revoke execute on function app.custody_operation_begin_or_resume(
   uuid,text,jsonb,text,text,uuid,text,uuid,uuid,text,uuid
 ) from public,anon,authenticated;
+revoke execute on function app.custody_operation_commit_verified_add_seal_v1(
+  uuid,jsonb,text,text
+) from public,anon,authenticated;
+revoke execute on function app.custody_operation_commit_verified_seal(
+  uuid,jsonb,text,text
+) from public,anon,authenticated;
 
 do $$ begin
   if exists(select 1 from pg_roles where rolname='service_role') then
+    revoke execute on function app.custody_operation_commit_verified_add_seal_v1(
+      uuid,jsonb,text,text
+    ) from service_role;
     grant execute on function app.custody_operation_begin_or_resume(
       uuid,text,jsonb,text,text,uuid,text,uuid,uuid,text,uuid
+    ) to service_role;
+    grant execute on function app.custody_operation_commit_verified_seal(
+      uuid,jsonb,text,text
     ) to service_role;
   end if;
 end $$;

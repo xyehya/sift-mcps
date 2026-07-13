@@ -195,6 +195,24 @@ The browser creates one CSPRNG idempotency key when the Seal modal opens, retain
 and rotates it only for a new modal intent. Passwords are re-verified but never persisted in the
 operation, event, request digest, or retry state.
 
+#### P4.23.3/P4.23.4 shared action seam
+
+Later local custody workflows reuse the P4.23.2 operation table and runner CAS through a closed,
+server-selected `CustodyAction` vocabulary: `ADD_SEAL`, `REPLACE_REACQUIRE`, `RESTORE_EXACT`,
+`IGNORE`, `DELETE_STRAY`, and `RETIRE`. Object actions use schema-v2 command material containing
+only the action and server-resolved Evidence Object ID. Postgres derives the required begin,
+completion where applicable, and resume re-authentication event types and validates an exact
+case/object/action/reason/idempotency binding. A server-created `AuthorizedRecoveryIntent` carries
+only the fixed recovery selection, actor ID, bounded reason, single-use re-auth audit capability ID,
+and idempotency key; it contains no password, raw path, browser receipt, or stored command.
+
+This seam provides begin/resume authorization and durable gate blocking only. Every action still
+requires its own database-authoritative finalizer and filesystem orchestration in its owning packet;
+the Add/Seal finalizer rejects every non-`ADD_SEAL` operation before replay or mutation. Custody
+transactions acquire locks in one order: per-case advisory transaction lock first, then operation,
+Evidence Object, version, manifest, and case-head row locks. The action seam adds no Portal route,
+MCP tool, filesystem mutation path, or `anon`/`authenticated` database authority.
+
 ### Re-authentication
 
 - Automatic detection/blocking, Rescan Inventory, Verify Ledger, and Full Verify Evidence do not require password re-authentication. Full Verify may accept an optional note.

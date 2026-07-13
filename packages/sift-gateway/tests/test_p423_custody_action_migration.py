@@ -46,6 +46,33 @@ def test_server_derives_action_reauth_and_exact_object_binding():
     assert "where key not in ('schema_version','action','evidence_object_id')" in MIGRATION
 
 
+def test_begin_and_finalizer_freeze_case_first_lock_order():
+    begin = MIGRATION.split(
+        "create or replace function app.custody_operation_begin_or_resume(", 1
+    )[1].split("alter function app.custody_operation_commit_verified_seal", 1)[0]
+    advisory = begin.index("pg_advisory_xact_lock")
+    assert advisory < begin.index("from app.evidence_objects")
+    assert advisory < begin.index("from app.audit_events")
+    assert advisory < begin.index("from app.custody_operations")
+
+    finalizer = MIGRATION.split(
+        "create or replace function app.custody_operation_commit_verified_seal(", 1
+    )[1].split("revoke execute", 1)[0]
+    assert finalizer.index("pg_advisory_xact_lock") < finalizer.index("for update")
+
+
+def test_add_seal_finalizer_rejects_every_other_action_before_inner_mutation():
+    finalizer = MIGRATION.split(
+        "create or replace function app.custody_operation_commit_verified_seal(", 1
+    )[1].split("revoke execute", 1)[0]
+    guard = finalizer.index("v_op.action<>'ADD_SEAL'")
+    dispatch = finalizer.index("custody_operation_commit_verified_add_seal_v1(")
+    assert guard < dispatch
+    assert "custody_operation_finalizer_action_mismatch" in finalizer
+    assert "rename to custody_operation_commit_verified_add_seal_v1" in MIGRATION
+    assert "from service_role" in MIGRATION
+
+
 def test_shared_operation_security_contract_remains_fail_closed():
     assert "security definer set search_path=pg_catalog,app" in MIGRATION
     assert "pg_advisory_xact_lock" in MIGRATION

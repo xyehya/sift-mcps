@@ -166,17 +166,54 @@ class RecoverySelection:
     evidence_object_id: str
     action: RecoveryAction
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.action, RecoveryAction):
+            raise ValueError("recovery action must be server-selected")
+
+
+@dataclass(frozen=True)
+class AuthorizedRecoveryIntent:
+    """Server-created, scoped authority for one operator recovery choice.
+
+    The Portal service creates this only after fresh step-up authentication. It
+    deliberately carries no password, filesystem path, raw command, or browser
+    receipt; Postgres consumes the single-use audit capability by identifier.
+    """
+
+    selection: RecoverySelection
+    actor_user_id: str
+    reason: str
+    reauth_audit_event_id: str
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        normalized_reason = self.reason.strip()
+        if not 1 <= len(normalized_reason) <= 1000:
+            raise ValueError("recovery reason must contain 1 to 1000 characters")
+        if not 1 <= len(self.idempotency_key) <= 128:
+            raise ValueError("recovery idempotency key must contain 1 to 128 characters")
+        for name, value in (
+            ("case_id", self.selection.case_id),
+            ("evidence_object_id", self.selection.evidence_object_id),
+            ("actor_user_id", self.actor_user_id),
+            ("reauth_audit_event_id", self.reauth_audit_event_id),
+        ):
+            try:
+                uuid.UUID(value)
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValueError(f"{name} must be a UUID") from exc
+        object.__setattr__(self, "reason", normalized_reason)
+
 
 class RecoveryAuthorityProtocol(Protocol):
-    """Operator-only recovery authority; it never accepts paths or receipts.
+    """Operator-only recovery authority; it accepts only a scoped intent.
 
-    Portal authentication, scoped re-authentication, durable command creation,
-    and action-specific finalization stay inside the implementing authority.
-    Inventory/disposition code may pass only this server-selected object choice.
+    Password verification and authorization-intent creation stay in the Portal
+    service. Action-specific finalization stays inside the implementation.
     """
 
     def execute_authorized_recovery(
-        self, selection: RecoverySelection, *, examiner: str
+        self, intent: AuthorizedRecoveryIntent, *, examiner: str
     ) -> dict[str, Any]: ...
 
 
