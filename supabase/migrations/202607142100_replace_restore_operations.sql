@@ -308,7 +308,7 @@ begin
       jsonb_build_object('reacquired',true,'supersedes_version_id',v_obj.current_version_id,
         'superseded_sha256',v_obj.current_sha256,'posture',jsonb_build_object(
           'owner',p_item->>'owner','mode',p_item->>'mode','immutable',p_item->'immutable',
-          'st_dev',p_item->'st_dev','st_ino',p_item->'st_ino','st_nlink',p_item->'st_nlink)),v_op.id);
+          'st_dev',p_item->'st_dev','st_ino',p_item->'st_ino','st_nlink',p_item->'st_nlink')),v_op.id);
     perform app.evidence_append_canonical_event_v1(v_op.id,v_obj.id,'MANIFEST_SEALED',
       v_manifest_version,v_manifest_hash,
       jsonb_build_object('evidence_version_id',v_obj.current_version_id,

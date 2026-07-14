@@ -14,11 +14,61 @@ UNPUBLISHED_CUSTODY_MIGRATIONS = tuple(
 )
 
 
+def _jsonb_arrow_literal_errors(sql: str) -> list[str]:
+    """Lex quoted arrow operands in PL/pgSQL, excluding comments/other strings."""
+    errors: list[str] = []
+    index = 0
+    while index < len(sql):
+        if sql.startswith("--", index):
+            index = sql.find("\n", index)
+            if index < 0:
+                break
+            continue
+        if sql.startswith("/*", index):
+            end = sql.find("*/", index + 2)
+            index = len(sql) if end < 0 else end + 2
+            continue
+        if sql[index] == "'":
+            index += 1
+            while index < len(sql):
+                if sql.startswith("''", index):
+                    index += 2
+                elif sql[index] == "'":
+                    index += 1
+                    break
+                else:
+                    index += 1
+            continue
+        if sql.startswith("->", index):
+            line = sql.count("\n", 0, index) + 1
+            operand = index + (3 if sql.startswith("->>", index) else 2)
+            while operand < len(sql) and sql[operand] in " \t":
+                operand += 1
+            if operand < len(sql) and sql[operand] == "'":
+                cursor = operand + 1
+                key: list[str] = []
+                while cursor < len(sql) and sql[cursor] != "\n":
+                    if sql.startswith("''", cursor):
+                        key.append("'")
+                        cursor += 2
+                    elif sql[cursor] == "'":
+                        break
+                    else:
+                        key.append(sql[cursor])
+                        cursor += 1
+                if cursor >= len(sql) or sql[cursor] == "\n":
+                    errors.append(f"line {line}: unclosed quoted arrow operand")
+                elif "".join(key).endswith(","):
+                    errors.append(f"line {line}: arrow operand swallowed a comma")
+                index = cursor + 1
+                continue
+        index += 1
+    return errors
+
+
 def test_unpublished_custody_jsonb_arrow_literals_are_closed() -> None:
-    """Catch the malformed ``value->'key,'next'`` syntax rejected by Postgres."""
-    malformed = re.compile(r"->>?\s*'[^'\n]*,\s*'")
     for migration in UNPUBLISHED_CUSTODY_MIGRATIONS:
-        assert not malformed.search(migration.read_text()), migration.name
+        assert _jsonb_arrow_literal_errors(migration.read_text()) == [], migration.name
 
 
 def test_recovery_begin_validates_object_before_inner_operation_creation():
