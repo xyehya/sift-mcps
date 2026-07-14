@@ -1,10 +1,16 @@
-import { getChainStatus, postChainSeal, postChainSealResume, postChainVerifyHmac } from '@/api/endpoints'
+import {
+  getChainStatus,
+  postChainSeal,
+  postChainSealResume,
+  postFullVerifyEvidence,
+} from '@/api/endpoints'
 
 import { runGuard } from '@/components/evidence/custody-guard'
 
 // ─────────────────────────────────────────────────────────────────────────
-// useCustodySealActions — operator custody handlers. Verify-HMAC requires only
-// password re-authentication; Add/Seal additionally requires a justification
+// useCustodySealActions — operator custody handlers. Full Verify Evidence
+// re-hashes mounted bytes against database custody authority after password
+// re-authentication; Add/Seal additionally requires a justification
 // and retains one CSPRNG idempotency key across retries of the same modal intent.
 // Seal success refreshes the evidence list via afterSuccess(refreshData).
 // Mock/real split is at the API adapter layer.
@@ -27,11 +33,11 @@ export function useCustodySealActions({
   const guard = (needReason) =>
     runGuard({ needReason, modalPassword, modalReason, setModalLoading, setModalError, setModalResult })
 
-  async function handleVerifyHmac(e) {
+  async function handleFullVerifyEvidence(e) {
     e.preventDefault()
     if (!guard(false)) return
     try {
-      const res = await postChainVerifyHmac({ password: modalPassword })
+      const res = await postFullVerifyEvidence({ password: modalPassword })
       setModalResult(res)
       const status = await getChainStatus()
       if (status) setChainStatus(status)
@@ -90,5 +96,5 @@ export function useCustodySealActions({
     }
   }
 
-  return { handleVerifyHmac, handleSealEvidence, handleResumeSeal }
+  return { handleFullVerifyEvidence, handleSealEvidence, handleResumeSeal }
 }

@@ -111,12 +111,31 @@ def test_inventory_classification_rls_validation_and_exact_replay():
                 "select relrowsecurity,relforcerowsecurity from pg_class where oid='app.evidence_inventory_observations'::regclass"
             )
             assert cur.fetchone() == (True, True)
-            for role in ("public", "anon", "authenticated"):
+            cur.execute(
+                """select to_regprocedure('app.evidence_record_inventory_classification(uuid,text,text,jsonb)') is not null,
+                          to_regprocedure('app.custody_operation_resume_disposition(uuid,uuid,uuid,text)') is not null"""
+            )
+            assert cur.fetchone() == (True, True)
+            for role in ("anon", "authenticated"):
                 cur.execute(
                     "select has_table_privilege(%s,'app.evidence_inventory_observations','SELECT')",
                     (role,),
                 )
                 assert cur.fetchone()[0] is False
+                cur.execute(
+                    """select has_function_privilege(
+                         %s,'app.custody_operation_resume_disposition(uuid,uuid,uuid,text)','EXECUTE')""",
+                    (role,),
+                )
+                assert cur.fetchone()[0] is False
+            cur.execute(
+                """select not exists(
+                     select 1 from pg_proc p,
+                     lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl
+                     where p.oid='app.custody_operation_resume_disposition(uuid,uuid,uuid,text)'::regprocedure
+                       and acl.grantee=0 and acl.privilege_type='EXECUTE')"""
+            )
+            assert cur.fetchone()[0] is True
             cur.execute(
                 "select id from app.evidence_record_inventory_classification(%s,%s,'BLOCKED_PENDING',%s)",
                 (case_id, correlation, Jsonb([finding])),
@@ -135,6 +154,59 @@ def test_inventory_classification_rls_validation_and_exact_replay():
                     (case_id, "bad-" + uuid.uuid4().hex, Jsonb([malformed])),
                 )
             cur.execute("rollback to savepoint malformed")
+            for label, bad_finding in (
+                ("missing-id", {key: value for key, value in finding.items() if key != "observation_id"}),
+                ("numeric-id", {**finding, "observation_id": 7}),
+                ("boolean-object", {**finding, "evidence_object_id": True}),
+            ):
+                cur.execute(f"savepoint {label.replace('-', '_')}")
+                with pytest.raises(psycopg.errors.InvalidParameterValue):
+                    cur.execute(
+                        "select app.evidence_record_inventory_classification(%s,%s,'BLOCKED_PENDING',%s)",
+                        (case_id, label + uuid.uuid4().hex, Jsonb([bad_finding])),
+                    )
+                cur.execute(f"rollback to savepoint {label.replace('-', '_')}")
+            cur.execute("savepoint gate_mismatch")
+            with pytest.raises(psycopg.errors.InvalidParameterValue):
+                cur.execute(
+                    "select app.evidence_record_inventory_classification(%s,%s,'OPEN',%s)",
+                    (case_id, "mismatch-" + uuid.uuid4().hex, Jsonb([finding])),
+                )
+            cur.execute("rollback to savepoint gate_mismatch")
+            violated_id = uuid.uuid4()
+            cur.execute(
+                """insert into app.evidence_objects
+                   (id,case_id,display_name,display_path,status,seal_status)
+                   values(%s,%s,'violated.bin',%s,'violated','violated')""",
+                (violated_id, case_id, f"evidence/{violated_id}.bin"),
+            )
+            cur.execute("savepoint persisted_open")
+            with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+                cur.execute(
+                    "select app.evidence_record_inventory_classification(%s,%s,'OPEN','[]'::jsonb)",
+                    (case_id, "open-" + uuid.uuid4().hex),
+                )
+            cur.execute("rollback to savepoint persisted_open")
+            persisted_finding = {
+                "code": "PERSISTED_VIOLATION",
+                "gate_state": "BLOCKED_VIOLATION",
+                "recovery": "RESTORE_REACQUIRE_RETIRE",
+                "evidence_object_id": str(violated_id),
+                "observation_id": None,
+                "full_verification_required": False,
+            }
+            cur.execute(
+                """select gate_state,findings from app.evidence_record_inventory_classification(
+                   %s,%s,'BLOCKED_VIOLATION',%s)""",
+                (
+                    case_id,
+                    "persisted-" + uuid.uuid4().hex,
+                    Jsonb([persisted_finding]),
+                ),
+            )
+            persisted_gate, persisted_findings = cur.fetchone()
+            assert persisted_gate == "BLOCKED_VIOLATION"
+            assert persisted_findings == [persisted_finding]
             cur.execute("savepoint replay")
             with pytest.raises(psycopg.errors.UniqueViolation):
                 cur.execute(
@@ -142,6 +214,121 @@ def test_inventory_classification_rls_validation_and_exact_replay():
                     (case_id, correlation, Jsonb([{**finding, "observation_id": "other"}])),
                 )
             cur.execute("rollback to savepoint replay")
+        conn.rollback()
+
+
+def test_disposition_resume_rejects_scope_replay_and_runner_reuse():
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as conn:
+        case_id, actor_id = _case_and_actor(conn)
+        object_id = uuid.uuid4()
+        operation_id, *_ = _begin(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            action="DELETE_STRAY",
+            status="detected",
+            seal_status="unsealed",
+        )
+        other_case = uuid.uuid4()
+        with conn.cursor() as cur:
+            cur.execute(
+                "insert into app.cases(id,case_key,title,status) values(%s,%s,'Other case','active')",
+                (other_case, "p423-other-" + uuid.uuid4().hex),
+            )
+            cur.execute(
+                "select relrowsecurity,relforcerowsecurity from pg_class where oid='app.custody_operations'::regclass"
+            )
+            assert cur.fetchone() == (True, True)
+
+        for label, receipt in (
+            (
+                "cross-case",
+                _reauth(
+                    conn,
+                    case_id=other_case,
+                    actor_id=actor_id,
+                    event_type="reauth.evidence_delete_resume",
+                    binding={"operation_id": str(operation_id)},
+                ),
+            ),
+            (
+                "wrong-action",
+                _reauth(
+                    conn,
+                    case_id=case_id,
+                    actor_id=actor_id,
+                    event_type="reauth.evidence_retire_resume",
+                    binding={"operation_id": str(operation_id)},
+                ),
+            ),
+        ):
+            with conn.cursor() as cur:
+                cur.execute(f"savepoint {label.replace('-', '_')}")
+                with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+                    cur.execute(
+                        "select app.custody_operation_resume_disposition(%s,%s,%s,'runner-after')",
+                        (operation_id, actor_id, receipt),
+                    )
+                cur.execute(f"rollback to savepoint {label.replace('-', '_')}")
+
+        valid_receipt = _reauth(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            event_type="reauth.evidence_delete_resume",
+            binding={"operation_id": str(operation_id)},
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                "select phase from app.custody_operation_resume_disposition(%s,%s,%s,'runner-after')",
+                (operation_id, actor_id, valid_receipt),
+            )
+            assert cur.fetchone()[0] == "GATE_BLOCKED"
+            cur.execute("savepoint receipt_reuse")
+            with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+                cur.execute(
+                    "select app.custody_operation_resume_disposition(%s,%s,%s,'runner-after')",
+                    (operation_id, actor_id, valid_receipt),
+                )
+            cur.execute("rollback to savepoint receipt_reuse")
+
+        retired_receipt = _reauth(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            event_type="reauth.evidence_delete_resume",
+            binding={"operation_id": str(operation_id)},
+        )
+        with conn.cursor() as cur:
+            cur.execute("savepoint retired_runner")
+            with pytest.raises(psycopg.Error) as retired:
+                cur.execute(
+                    "select app.custody_operation_resume_disposition(%s,%s,%s,'runner-before')",
+                    (operation_id, actor_id, retired_receipt),
+                )
+            assert retired.value.sqlstate == "P4232"
+            cur.execute("rollback to savepoint retired_runner")
+            cur.execute(
+                "select app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING','{}'::jsonb,'runner-after')",
+                (operation_id,),
+            )
+
+        same_runner_receipt = _reauth(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            event_type="reauth.evidence_delete_resume",
+            binding={"operation_id": str(operation_id)},
+        )
+        with conn.cursor() as cur:
+            with pytest.raises(psycopg.Error) as same_runner:
+                cur.execute(
+                    "select app.custody_operation_resume_disposition(%s,%s,%s,'runner-after')",
+                    (operation_id, actor_id, same_runner_receipt),
+                )
+            assert same_runner.value.sqlstate == "P4232"
         conn.rollback()
 
 

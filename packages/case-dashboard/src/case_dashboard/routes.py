@@ -801,6 +801,7 @@ def _empty_evidence_chain_status() -> dict:
         "authority": "db",
         "status": "no_case",
         "seal_status": "no_case",
+        "gate_state": None,
         "manifest_version": 0,
         "active_count": 0,
         "issues": [],
@@ -808,6 +809,9 @@ def _empty_evidence_chain_status() -> dict:
         "hmac_last_verified_at": None,
         "hmac_last_verified_by": None,
         "hmac_verify_needed": False,
+        "last_verified_at": None,
+        "last_verified_by": None,
+        "verification_needed": False,
         "anchor": {"anchoring_enabled": keypair_configured, "manifest_version": 0},
         "unregistered": [],
         "missing": [],
@@ -876,6 +880,7 @@ def _db_evidence_chain_status() -> dict | None:
         "authority": "db",
         "status": seal_status,
         "seal_status": seal_status,
+        "gate_state": status.get("gate_state"),
         "manifest_version": status.get("manifest_version", 0),
         "active_count": status.get("active_count", 0),
         "issues": status.get("issues", []),
@@ -885,6 +890,9 @@ def _db_evidence_chain_status() -> dict | None:
         # the gate/reauth metadata carries it, else None.
         "hmac_last_verified_by": status.get("last_verified_by"),
         "hmac_verify_needed": status.get("last_verified_at") is None,
+        "last_verified_at": status.get("last_verified_at"),
+        "last_verified_by": status.get("last_verified_by"),
+        "verification_needed": status.get("last_verified_at") is None,
         "incomplete_operation": _public_incomplete_operation(
             status.get("incomplete_operation")
         ),
@@ -1720,7 +1728,7 @@ async def post_evidence_recovery_complete(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# Evidence chain HMAC verify endpoint (Phase 16-verify-remind)
+# Full Verify Evidence endpoint (legacy URL retained for compatibility)
 # ---------------------------------------------------------------------------
 
 
@@ -1768,7 +1776,8 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
     except Exception as exc:
         logger.warning("DB evidence verify failed: %s", type(exc).__name__)
         return JSONResponse(
-            {"error": "HMAC verify failed — check gateway logs"}, status_code=500
+            {"error": "Full evidence verification failed — check gateway logs"},
+            status_code=500,
         )
     result = result if isinstance(result, dict) else {}
     verified = bool(result.get("verified"))
@@ -2481,7 +2490,7 @@ def _apply_delta(case_dir: Path, examiner: str) -> dict:
         # Disk writes — CLI ordering (approve.py:1066-1113):
         # Step 1 (critical): Save primary data FIRST
         # Step 2 (best-effort): Approval log
-        # Step 3 (best-effort): HMAC ledger
+        # Step 3 (best-effort): DB approval-commit hash chain
         # ============================================================
 
         # Step 1: Save findings + timeline + iocs
@@ -4855,7 +4864,9 @@ async def post_case_create(request: Request) -> JSONResponse:
                 f.flush()
                 os.fsync(f.fileno())
 
-        # Evidence chain: write evidence-manifest.json (v0) + evidence-ledger.jsonl
+        # Compatibility proof exports only; Postgres remains custody authority.
+        # Initialize evidence-manifest.json (v0) + evidence-ledger.jsonl for
+        # offline/export consumers, never for admission or Full Verify Evidence.
         init_evidence_chain(real_requested)
         case_approvals_path(real_requested).touch(exist_ok=True)
         runtime_acl = _configure_agent_runtime_case_acl(real_requested)

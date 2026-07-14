@@ -5,15 +5,17 @@ import { Button } from '@/components/ui/button'
 import { formatTime } from './evidence-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
-// HmacBar — full-width integrity reminder bar (legacy IA parity §2). When
-// hmac_verify_needed it shows an amber "overdue / never verified" message and a
-// "Verify Now" CTA; otherwise a jade "verified" line (with last-verified
-// timestamp / examiner) and a "Re-verify" CTA. Opens the verify_hmac modal.
+// FullVerifyBar — full-width database-custody verification reminder. The API
+// retains legacy hmac_* timestamp field names for compatibility, but the active
+// workflow re-hashes mounted evidence against Postgres authority; it does not
+// derive a password key or verify a file ledger.
 // ─────────────────────────────────────────────────────────────────────────
 
-export function HmacBar({ chainStatus, onVerifyClick }) {
+export function FullVerifyBar({ chainStatus, onVerifyClick }) {
   if (!chainStatus) return null
-  const needed = chainStatus.hmac_verify_needed
+  const needed = chainStatus.verification_needed ?? chainStatus.hmac_verify_needed
+  const lastVerifiedAt = chainStatus.last_verified_at ?? chainStatus.hmac_last_verified_at
+  const lastVerifiedBy = chainStatus.last_verified_by ?? chainStatus.hmac_last_verified_by
   const Icon = needed ? AlertTriangle : CheckCircle2
 
   return (
@@ -29,14 +31,14 @@ export function HmacBar({ chainStatus, onVerifyClick }) {
         <Icon className="size-4 shrink-0" aria-hidden />
         <span>
           {needed
-            ? chainStatus.hmac_last_verified_at
-              ? `Evidence chain HMAC verification is overdue (last: ${formatTime(chainStatus.hmac_last_verified_at)}).`
-              : 'Evidence chain HMAC has never been verified.'
-            : `Evidence chain HMAC verified${
-                chainStatus.hmac_last_verified_at
-                  ? ` — last verified ${formatTime(chainStatus.hmac_last_verified_at)}`
+            ? lastVerifiedAt
+              ? `Full evidence verification is overdue (last: ${formatTime(lastVerifiedAt)}).`
+              : 'Evidence has not yet been fully verified against database custody authority.'
+            : `Evidence fully verified against database custody authority${
+                lastVerifiedAt
+                  ? ` — last verified ${formatTime(lastVerifiedAt)}`
                   : ''
-              }${chainStatus.hmac_last_verified_by ? ` by ${chainStatus.hmac_last_verified_by}` : ''}.`}
+              }${lastVerifiedBy ? ` by ${lastVerifiedBy}` : ''}.`}
         </span>
       </div>
 
@@ -52,7 +54,7 @@ export function HmacBar({ chainStatus, onVerifyClick }) {
             : 'text-status-approved border-status-approved/40 hover:bg-status-approved/10',
         )}
       >
-        {needed ? 'Verify Now' : 'Re-verify'}
+        {needed ? 'Full Verify Evidence' : 'Verify Again'}
       </Button>
     </div>
   )

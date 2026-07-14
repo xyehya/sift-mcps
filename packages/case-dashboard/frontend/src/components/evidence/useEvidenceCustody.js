@@ -4,7 +4,7 @@ import { useEvidenceActions } from '@/components/evidence/useEvidenceActions'
 // ─────────────────────────────────────────────────────────────────────────
 // useEvidenceCustody — STABLE public entry (§11). Composes the data-load hook
 // (useEvidenceData: evidence list + chain status) and the action-handlers hook
-// (useEvidenceActions: rescan · verify-hmac · seal · ignore · delete · retire ·
+// (useEvidenceActions: rescan · full database-custody verify · seal · ignore · delete · retire ·
 // replace · restore · recovery completion · anchor · proof-export · per-item verify) into the single
 // combined surface EvidenceTab consumes. Behaviour-identical to the prior
 // monolith; the split is structural (§7 hook ceiling). Keeps EvidenceTab a thin

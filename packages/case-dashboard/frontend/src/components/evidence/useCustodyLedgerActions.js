@@ -90,7 +90,7 @@ export function useCustodyLedgerActions({
         reason: modalReason,
         idempotency_key: sealIntentId,
       })
-      if (res.ignored || res.retired || res.manifest_version !== undefined) {
+      if (res.retired === true) {
         addToast('File retired successfully!', 'success')
         setModalResult({ success: true })
         afterSuccess(refreshData)

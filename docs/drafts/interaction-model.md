@@ -67,26 +67,21 @@ human-owned report input.
 
 ## Re-Auth Gate Model
 
-Five sensitive transitions require a fresh password/HMAC re-auth (`AGENTS.md`;
-`Migration-Spec.md` section 4). These are operator-only — the agent can never
-satisfy them.
+Five sensitive transitions require fresh Supabase password re-authentication.
+These are operator-only — the agent can never satisfy them.
 
 | Gate | Action | Mechanism (MVP) | Authority recorded |
 | --- | --- | --- | --- |
-| G1 | Case activation | local HMAC bridge | `app.active_case_state` |
-| G2 | Evidence seal/ignore/retire | local HMAC bridge (`reauth_audit_event_id`) | `app.evidence_custody_events` + chain head |
-| G3 | Agent credential issuance | local HMAC bridge | Supabase principal + scope rows |
-| G4 | Finding approval | local HMAC bridge (`compute_hmac`) | `app.investigation_*` (human-locked) |
-| G5 | Report inclusion / export | local HMAC bridge | `app.report_metadata` + proof refs |
+| G1 | Case activation | Supabase password re-auth + scoped audit receipt | `app.active_case_state` |
+| G2 | Add/Seal, Replace/Reacquire, exact Restore, Ignore/Delete/Retire, Full Verify Evidence | Supabase password re-auth + operation/object-bound audit receipt | durable custody operation + `app.evidence_custody_events` + chain head |
+| G3 | Agent credential issuance | Supabase password re-auth + scoped audit receipt | Supabase principal + scope rows |
+| G4 | Finding approval | Supabase password re-auth + scoped audit receipt | `app.investigation_*` (human-locked) |
+| G5 | Report inclusion / export | Supabase password re-auth + scoped audit receipt | `app.report_metadata` + proof refs |
 
-MVP mechanism: `_MVP_REAUTH_METHOD = "local_hmac_mvp_bridge"`
-(`packages/case-dashboard/src/case_dashboard/routes.py`); password hashes stored
-0o600 with domain-separated login vs ledger HMAC keys
-(`packages/sift-core/src/sift_core/approval_auth.py`). Whether the demo ships the
-HMAC bridge or full Supabase password re-auth is an open improvement item.
-Status: `needs live proof`; tracked in `known-limitations-and-improvements.md`.
-Live proof that the gates function: BATCH-V1 sealed evidence and approved
-`F-hermes-v1-gate-001` via portal HMAC re-auth (`Session-Notes.md` 2026-06-08).
+The verifier uses the authenticated session identity, discards password-grant
+tokens, and fails closed without Supabase or DB audit authority. Historical
+BATCH-V1 proof used the then-current re-auth mechanism; it is not the active
+credential contract.
 
 Re-auth challenge loop:
 

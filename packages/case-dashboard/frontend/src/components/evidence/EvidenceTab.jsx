@@ -6,7 +6,7 @@ import { useMotionVariants } from '@/lib/motion'
 import { sortEvidence } from '@/components/evidence/evidence-utils'
 import { useEvidenceCustody } from '@/components/evidence/useEvidenceCustody'
 import { EvidenceHeader } from '@/components/evidence/EvidenceHeader'
-import { HmacBar } from '@/components/evidence/HmacBar'
+import { FullVerifyBar } from '@/components/evidence/HmacBar'
 import { CustodyStatusGrid } from '@/components/evidence/CustodyStatusGrid'
 import { CustodyViolations } from '@/components/evidence/CustodyViolations'
 import { UnregisteredFiles } from '@/components/evidence/UnregisteredFiles'
@@ -17,7 +17,7 @@ import { IncompleteCustodyOperation } from '@/components/evidence/IncompleteCust
 // ─────────────────────────────────────────────────────────────────────────
 // EvidenceTab — chain-of-custody dashboard (Mission Control reskin of the
 // legacy single-column custody view). ONE primary scroll owner; no master-
-// detail. Top→bottom IA: Header → HMAC bar → custody status grid (write-block ·
+// detail. Top→bottom IA: Header → full-verification bar → custody status grid (write-block ·
 // Solana · proof-export) → custody violations → unregistered files →
 // registered-evidence table → modals. Reskinned to orange tokens, lucide icons,
 // framer-motion, shadcn primitives, ≤400-line decomposed files.
@@ -139,7 +139,7 @@ export function EvidenceTab() {
           operation.operation_id,
         )} />
 
-        <HmacBar chainStatus={chainStatus} onVerifyClick={() => openModal('verify_hmac')} />
+        <FullVerifyBar chainStatus={chainStatus} onVerifyClick={() => openModal('full_verify')} />
 
         <CustodyStatusGrid
           chainStatus={chainStatus}
@@ -200,7 +200,7 @@ export function EvidenceTab() {
           onPasswordChange: setModalPassword,
           onReasonChange: setModalReason,
           onClose: closeModal,
-          onVerifyHmac: custody.handleVerifyHmac,
+          onFullVerifyEvidence: custody.handleFullVerifyEvidence,
           onSeal: custody.handleSealEvidence,
           onResumeSeal: custody.handleResumeSeal,
           onIgnore: custody.handleIgnoreEvidence,

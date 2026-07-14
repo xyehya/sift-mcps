@@ -537,9 +537,17 @@ class EvidenceAuthorityService(_BasePortalDbService):
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
+                    "select seal_status from app.evidence_chain_heads where case_id=%s",
+                    (case_id,),
+                )
+                head_row = cur.fetchone()
+                persisted_head_violation = bool(
+                    head_row and str(head_row[0]) == "violated"
+                )
+                cur.execute(
                     """
                     select o.id::text, o.display_path, o.current_sha256, o.current_bytes,
-                           o.sealed_at, v.metadata
+                           o.sealed_at, v.metadata, o.status
                     from app.evidence_objects o
                     left join app.evidence_versions v on v.id=o.current_version_id
                     where o.case_id = %s and o.status in ('sealed','violated')
@@ -554,6 +562,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         "bytes": row[3],
                         "sealed_at": row[4],
                         "metadata": row[5] if len(row) > 5 and isinstance(row[5], dict) else {},
+                        "authority_status": str(row[6]) if len(row) > 6 else "sealed",
                     }
                     for row in cur.fetchall()
                 }
@@ -686,6 +695,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     availability=(StorageAvailability.AVAILABLE if storage_available
                                   else StorageAvailability.UNAVAILABLE),
                     expected=tuple(expected_facts),observed=tuple(observed_facts),
+                    persisted_violation_object_ids=tuple(
+                        known["id"]
+                        for known in sealed.values()
+                        if known["authority_status"] == "violated"
+                    ),
+                    persisted_head_violation=persisted_head_violation,
                 ))
                 findings = [{
                     "code": finding.code.value,"gate_state": finding.gate_state.value,

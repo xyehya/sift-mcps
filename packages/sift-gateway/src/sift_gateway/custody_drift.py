@@ -58,6 +58,7 @@ class DriftCode(StrEnum):
     IDENTITY_CHANGED = "IDENTITY_CHANGED"
     FULL_VERIFY_REQUIRED = "FULL_VERIFY_REQUIRED"
     POSTURE_DRIFT = "POSTURE_DRIFT"
+    PERSISTED_VIOLATION = "PERSISTED_VIOLATION"
 
 
 class RecoveryRequirement(StrEnum):
@@ -197,6 +198,8 @@ class InventorySnapshot:
     expected: tuple[AuthorityEvidence, ...] = ()
     observed: tuple[MountedEvidence, ...] = ()
     ledger_valid: bool = True
+    persisted_violation_object_ids: tuple[str, ...] = ()
+    persisted_head_violation: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.availability, StorageAvailability):
@@ -209,6 +212,12 @@ class InventorySnapshot:
             raise ValueError("observed must contain mounted evidence facts")
         if type(self.ledger_valid) is not bool:
             raise ValueError("ledger_valid must be a boolean")
+        if not isinstance(self.persisted_violation_object_ids, tuple):
+            raise ValueError("persisted violation object ids must be an immutable tuple")
+        for object_id in self.persisted_violation_object_ids:
+            _validate_opaque_id("persisted_violation_object_id", object_id)
+        if type(self.persisted_head_violation) is not bool:
+            raise ValueError("persisted_head_violation must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +241,22 @@ class InventoryClassification:
 def classify_inventory(snapshot: InventorySnapshot) -> InventoryClassification:
     """Classify already-resolved facts without consulting ambient authority."""
     findings: list[DriftFinding] = []
+    persisted_ids = tuple(sorted(set(snapshot.persisted_violation_object_ids)))
+    for object_id in persisted_ids:
+        findings.append(
+            _finding(
+                DriftCode.PERSISTED_VIOLATION,
+                CustodyGateState.BLOCKED_VIOLATION,
+                evidence_object_id=object_id,
+            )
+        )
+    if snapshot.persisted_head_violation and not persisted_ids:
+        findings.append(
+            _finding(
+                DriftCode.PERSISTED_VIOLATION,
+                CustodyGateState.BLOCKED_VIOLATION,
+            )
+        )
     if snapshot.availability is not StorageAvailability.AVAILABLE:
         code = (
             DriftCode.INVENTORY_SCAN_FAILED

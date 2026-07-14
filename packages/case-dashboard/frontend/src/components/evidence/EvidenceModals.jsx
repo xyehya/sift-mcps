@@ -161,34 +161,34 @@ function ConfirmButton({ formId, label, tone = 'neutral', disabled, testId }) {
   )
 }
 
-// ── Verify HMAC ────────────────────────────────────────────────────────────
-function VerifyHmacModal({ password, onPasswordChange, loading, error, result, onClose, onSubmit }) {
+// ── Full database-custody verification ────────────────────────────────────
+function FullVerifyEvidenceModal({ password, onPasswordChange, loading, error, result, onClose, onSubmit }) {
   return (
-    <ModalShell title="Verify Evidence Chain HMAC">
+    <ModalShell title="Full Verify Evidence">
       <p className="text-xs text-muted-foreground">
-        Enter password to derive key and verify all manifest entries against the cryptographic
-        verification ledger.
+        Re-authenticate to re-hash every sealed evidence object and compare the mounted bytes with
+        Postgres custody authority. This does not derive a password key or consult a file ledger.
       </p>
-      <form id="modal-verify-hmac" onSubmit={onSubmit} className="space-y-4">
+      <form id="modal-full-verify" onSubmit={onSubmit} className="space-y-4">
         {!result && <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />}
         <ModalError error={error} />
-        {loading && <ModalLoading message="Verifying…" />}
+        {loading && <ModalLoading message="Hashing and verifying mounted evidence…" />}
         {result &&
           (result.ok ? (
-            <ModalSuccess message={`Verified ${result.verified} event(s). Chain is intact.`} />
+            <ModalSuccess message="Mounted evidence matches database custody authority." />
           ) : (
             <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-xs text-destructive">
-              ⚠ {result.failed} event(s) FAILED.
-              {result.failed_indices && (
+              ⚠ Full verification failed with {(result.issues || []).length} issue(s).
+              {result.issues?.length > 0 && (
                 <div className="mono mt-1 text-[10px] opacity-80">
-                  Indices: {JSON.stringify(result.failed_indices)}
+                  {result.issues.join(' · ')}
                 </div>
               )}
             </div>
           ))}
         <div className="flex justify-end gap-2">
           <CancelButton onClose={onClose} label={result ? 'Close' : 'Cancel'} />
-          {!result && <ConfirmButton formId="modal-verify-hmac" label="Verify" tone="primary" disabled={loading} />}
+          {!result && <ConfirmButton formId="modal-full-verify" label="Full Verify" tone="primary" disabled={loading} />}
         </div>
       </form>
     </ModalShell>
@@ -347,8 +347,8 @@ export function EvidenceModals({ activeModal, pendingPath, password, reason, loa
 
   return (
     <AnimatePresence>
-      {activeModal === 'verify_hmac' && (
-        <VerifyHmacModal key="verify_hmac" {...common} onSubmit={handlers.onVerifyHmac} />
+      {activeModal === 'full_verify' && (
+        <FullVerifyEvidenceModal key="full_verify" {...common} onSubmit={handlers.onFullVerifyEvidence} />
       )}
       {activeModal === 'seal' && <EvidenceSealModal key="seal" {...common} onSubmit={handlers.onSeal} />}
       {activeModal === 'resume_seal' && <ResumeSealModal key="resume_seal" {...common} onSubmit={handlers.onResumeSeal} />}

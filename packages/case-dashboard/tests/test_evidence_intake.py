@@ -56,8 +56,9 @@ class FakeActiveCases:
 class FakeEvidenceDB:
     """Minimal DB evidence adapter for the intake endpoints."""
 
-    def __init__(self, *, seal_status="unsealed", objects=None):
+    def __init__(self, *, seal_status="unsealed", gate_state="BLOCKED_PENDING", objects=None):
         self.seal_status = seal_status
+        self.gate_state = gate_state
         self._objects = objects if objects is not None else []
         self.reauth_calls: list = []
         self.seal_calls: list = []
@@ -77,6 +78,7 @@ class FakeEvidenceDB:
     def gate_status(self, case_id):
         return {
             "seal_status": self.seal_status,
+            "gate_state": self.gate_state,
             "manifest_version": 0 if self.seal_status == "unsealed" else 1,
             "active_count": sum(1 for o in self._objects if o.get("status") == "sealed"),
             "issues": [],
@@ -302,6 +304,28 @@ class TestEvidenceChainStatus:
         assert resp.status_code == 200
         data = resp.json()
         assert "write_protected" in data
+
+    def test_status_preserves_precise_unavailable_gate_state(
+        self, passwords_dir, tmp_path, monkeypatch
+    ):
+        ev = FakeEvidenceDB(
+            seal_status="violated", gate_state="BLOCKED_UNAVAILABLE"
+        )
+        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET,
+            session_max_age=28800,
+            active_case_service=FakeActiveCases(),
+            evidence_service=ev,
+            supabase_auth=ReauthFakeSupabaseAuth(),
+        )
+        client = TestClient(app, raise_server_exceptions=True)
+        set_operator_session(client, _SECRET)
+
+        response = client.get("/api/evidence/chain/status")
+
+        assert response.status_code == 200
+        assert response.json()["gate_state"] == "BLOCKED_UNAVAILABLE"
 
     def test_unregistered_file_shows_in_status(self, passwords_dir, tmp_path, monkeypatch):
         """A detected-but-unsealed object surfaces as unregistered."""

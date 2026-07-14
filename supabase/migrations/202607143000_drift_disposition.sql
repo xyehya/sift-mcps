@@ -40,14 +40,17 @@ begin
        or f->>'code' not in ('STORAGE_UNAVAILABLE','INVENTORY_SCAN_FAILED','MOUNT_IDENTITY_CHANGED',
          'LEDGER_INVALID','CONFLICTING_AUTHORITY','CONFLICTING_OBSERVATION','UNKNOWN_OBJECT_BINDING',
          'DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM','SEALED_EVIDENCE_MISSING','UNSAFE_SEALED_ENTRY',
-         'CONTENT_CHANGED','IDENTITY_CHANGED','FULL_VERIFY_REQUIRED','POSTURE_DRIFT')
+         'CONTENT_CHANGED','IDENTITY_CHANGED','FULL_VERIFY_REQUIRED','POSTURE_DRIFT',
+         'PERSISTED_VIOLATION')
        or f->>'gate_state' not in ('BLOCKED_PENDING','BLOCKED_VIOLATION','BLOCKED_UNAVAILABLE')
        or f->>'recovery' not in ('INVESTIGATE_AVAILABILITY','RECONNECT_AND_VERIFY',
          'REPAIR_LEDGER','OPERATOR_DISPOSITION','RESTORE_REACQUIRE_RETIRE','FULL_VERIFY_AND_REPAIR')
-       or (f ? 'evidence_object_id' and f->'evidence_object_id'<>'null'::jsonb
+       or jsonb_typeof(f->'evidence_object_id') not in ('string','null')
+       or (f->'evidence_object_id'<>'null'::jsonb
          and coalesce(f->>'evidence_object_id','') !~
            '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$')
-       or (f ? 'observation_id' and f->'observation_id'<>'null'::jsonb
+       or jsonb_typeof(f->'observation_id') not in ('string','null')
+       or (f->'observation_id'<>'null'::jsonb
          and coalesce(f->>'observation_id','') !~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$')
        or not (f ? 'full_verification_required')
        or jsonb_typeof(f->'full_verification_required')<>'boolean'
@@ -60,6 +63,19 @@ begin
          ('code','gate_state','recovery','evidence_object_id','observation_id','full_verification_required'))
      ) then
     raise exception 'invalid_inventory_classification' using errcode='invalid_parameter_value';
+  end if;
+  if (
+    exists(select 1 from app.evidence_chain_heads h
+      where h.case_id=p_case_id and h.seal_status='violated')
+    or exists(select 1 from app.evidence_objects o
+      where o.case_id=p_case_id and (o.status='violated' or o.seal_status='violated'))
+  ) and (
+    p_gate_state not in ('BLOCKED_VIOLATION','BLOCKED_UNAVAILABLE')
+    or not exists(select 1 from jsonb_array_elements(p_findings) f
+      where f->>'code'='PERSISTED_VIOLATION')
+  ) then
+    raise exception 'persisted_custody_violation_requires_recovery'
+      using errcode='object_not_in_prerequisite_state';
   end if;
   select case
     when exists(select 1 from jsonb_array_elements(p_findings) f
@@ -118,6 +134,13 @@ begin
      or v_reauth.details->'binding' is distinct from
        jsonb_build_object('operation_id',v_op.id::text) then
     raise exception 'resume_reauth_scope_mismatch' using errcode='invalid_authorization_specification';
+  end if;
+  if v_op.retired_runner_instance_ids ? p_runner_instance_id then
+    raise exception 'custody_operation_retired_runner' using errcode='P4232';
+  end if;
+  if v_op.phase in ('FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED')
+     and v_op.runner_instance_id=p_runner_instance_id then
+    raise exception 'custody_operation_same_runner_active' using errcode='P4232';
   end if;
   begin
     insert into app.custody_operation_history(

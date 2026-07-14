@@ -54,7 +54,10 @@ export const postChainSeal = (body) => apiPost('/api/evidence/chain/seal', body,
 export const postChainSealResume = (body) => apiPost('/api/evidence/chain/seal/resume', body, REAUTH_HASH_OPTS)
 export const postChainAnchor = (body) => apiPost('/api/evidence/chain/anchor', body)
 export const postChainProofExport = (body) => apiPost('/api/evidence/chain/proof-export', body, { timeoutMs: LONG_TIMEOUT_MS })
-export const postChainVerifyHmac = (body) => apiPost('/api/evidence/chain/verify-hmac', body, REAUTH_HASH_OPTS)
+export const postFullVerifyEvidence = (body) => apiPost('/api/evidence/chain/verify-hmac', body, REAUTH_HASH_OPTS)
+// Compatibility export for older Portal extensions; the operation is DB custody
+// verification, not HMAC verification.
+export const postChainVerifyHmac = postFullVerifyEvidence
 export const postVerifyEvidence = (path) => apiPost(`/api/evidence/${encodeURIComponent(path)}/verify`, {})
 export const postChainIgnore = (body) => apiPost('/api/evidence/chain/ignore', body, REAUTH_OPTS)
 export const postChainDelete = (body) => apiPost('/api/evidence/chain/delete', body, REAUTH_HASH_OPTS)

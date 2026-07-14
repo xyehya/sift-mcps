@@ -124,9 +124,9 @@ first-login reset (§1.2) is the only in-portal password-reset path; the
 temporary password is the installer handoff value and is unrecoverable after
 reset (rotate via the Supabase path in §1.4). A stale
 `/var/lib/sift/passwords/` directory may remain from older installs; it is no
-longer consulted for login (sensitive-action re-auth challenges under file
-authority still use the local HMAC bridge — retirement is tracked in
-Session-Notes).
+longer consulted for login or sensitive-action re-auth. Sensitive actions verify
+the authenticated operator's password against Supabase and record a scoped audit
+receipt; there is no local credential fallback.
 
 ### 1.6 Creating additional cases
 
@@ -392,10 +392,11 @@ docker exec supabase_db_sift-mcps psql -U postgres -d postgres -tA -c \
    group by status, seal_status order by 1,2;"
 ```
 
-The exported `evidence-ledger.jsonl` (HMAC chain) and
-`evidence-anchor-v{N}.json` are offline court-proof artifacts; the gate consults
+The exported `evidence-ledger.jsonl` (legacy HMAC-chained export format) and
+`evidence-anchor-v{N}.json` are offline proof artifacts only; the gate consults
 the DB (`app.evidence_gate_status` via `evidence_gate.check_evidence_gate_db`),
-not the files.
+not the files. Full Verify Evidence likewise re-hashes mounted objects against
+DB custody authority and does not verify this export file.
 
 > **DANGER (seal/ignore/retire):** sealing makes bytes read-only and advances an
 > append-only custody chain; ignore/retire change evidence usability. These are

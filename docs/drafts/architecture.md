@@ -62,7 +62,7 @@ flowchart LR
     REST["/portal REST<br/>rest.py"]
     MCP["/mcp FastMCP<br/>mcp_server.py"]
     MW["Policy middleware<br/>tool scope, active case,<br/>evidence gate, response guard,<br/>audit envelope"]
-    PWF["Portal security workflows<br/>password/HMAC re-auth"]
+    PWF["Portal security workflows<br/>Supabase password re-auth<br/>scoped DB receipts"]
   end
 
   subgraph AUTH["Authority plane"]

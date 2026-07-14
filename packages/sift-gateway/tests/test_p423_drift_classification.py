@@ -183,6 +183,23 @@ def test_matching_bytes_identity_and_local_posture_are_open() -> None:
     assert result.findings == ()
 
 
+def test_persisted_violation_cannot_reopen_when_mounted_facts_match() -> None:
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.AVAILABLE,
+            expected=(_sealed_local(),),
+            observed=(_mounted(),),
+            persisted_violation_object_ids=("object-1",),
+            persisted_head_violation=True,
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_VIOLATION
+    assert [finding.code for finding in result.findings] == [
+        DriftCode.PERSISTED_VIOLATION
+    ]
+
+
 def test_size_and_same_size_digest_changes_are_violations() -> None:
     size_change = classify_inventory(
         InventorySnapshot(

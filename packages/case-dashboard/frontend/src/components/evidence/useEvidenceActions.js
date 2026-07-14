@@ -14,7 +14,7 @@ import { useCustodyLedgerActions } from '@/components/evidence/useCustodyLedgerA
 
 // ─────────────────────────────────────────────────────────────────────────
 // useEvidenceActions — composes the custody action handlers: the password-
-// guarded seal/verify-HMAC pair (useCustodySealActions), the reason-guarded
+// guarded Add/Seal and Full Verify Evidence pair (useCustodySealActions), the reason-guarded
 // ledgered mutations (useCustodyLedgerActions), plus the unguarded async-toast
 // actions (rescan · anchor · proof-export · per-item verify) it owns directly.
 // Reads the evidence list/refresh from useEvidenceData; modal field state stays

@@ -22,6 +22,10 @@ def test_inventory_observations_are_path_free_append_only_and_force_rls() -> Non
     assert "jsonb_typeof(f->'full_verification_required')<>'boolean'" in sql
     assert "not (f ?& array['code','gate_state','recovery','evidence_object_id'" in sql
     assert "jsonb_typeof(f->'code')<>'string'" in sql
+    assert "jsonb_typeof(f->'evidence_object_id') not in ('string','null')" in sql
+    assert "jsonb_typeof(f->'observation_id') not in ('string','null')" in sql
+    assert "persisted_custody_violation_requires_recovery" in sql
+    assert "'persisted_violation'" in sql
     assert "display_path" not in sql.split(
         "create function app.evidence_record_inventory_classification", 1
     )[0]
@@ -56,6 +60,8 @@ def test_disposition_resume_preserves_preunlink_phase_and_facts() -> None:
     assert "coalesce(v_op.failed_from_phase,'gate_blocked')" in resume
     assert "prepared_facts" in resume
     assert "verified_facts" in resume
+    assert "retired_runner_instance_ids ? p_runner_instance_id" in resume
+    assert "custody_operation_same_runner_active" in resume
     assert "phase='gate_blocked'" not in resume
 
 

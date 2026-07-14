@@ -1,7 +1,7 @@
 # Operator Journey
 
-Status: archival — operator journey and re-auth gates remain accurate.
-No stale facts requiring correction were found by BATCH-RG1 (2026-06-13).
+Status: archival — updated to identify the current Supabase re-auth and durable
+evidence-custody contracts while preserving the historical journey.
 The current authoritative operator manual is `docs/operator/maintenance-guide.md`.
 Last updated: 2026-06-13 (RG1 review — no corrections needed).
 
@@ -13,14 +13,14 @@ the live BATCH-V1 cutover (`docs/migration/Session-Notes.md`, 2026-06-08).
 
 ## Re-Auth Gates (the operator's "moments of authority")
 
-These are the five sensitive transitions that require a fresh password/HMAC
-re-auth (`AGENTS.md`; `Migration-Spec.md` section 4). They are the load-bearing
+These are the five sensitive transitions that require fresh Supabase password
+re-authentication. They are the load-bearing
 human-control points and are called out inline in the journey below.
 
 | Gate | When | Why it matters |
 | --- | --- | --- |
 | **G1 Case activation** | Activating a case | Binds the authoritative active case in Postgres. |
-| **G2 Evidence seal/ignore/retire/re-acquire** | Before any analysis | Nothing agent-facing runs against unsealed evidence; a post-seal custody violation is remediated by operator re-acquire (re-seal at new bytes) or retire, both re-auth-gated. |
+| **G2 Evidence custody/recovery** | Before any analysis | Nothing agent-facing runs against unsealed evidence; durable Add/Seal, Replace/Reacquire, exact Restore, Ignore/Delete/Retire, and Full Verify Evidence are operator-only and fail closed. |
 | **G3 Agent credential issuance** | Before handing off to the agent | Issues a scoped, case-bound, revocable credential. |
 | **G4 Finding approval** | Reviewing agent proposals | Only human-approved findings become reportable. |
 | **G5 Report inclusion / export** | Generating/exporting a report | Locks approved-only inputs + custody appendix into the artifact. |
@@ -95,7 +95,5 @@ flowchart TD
 - Add annotated portal screenshots after the portal journey is re-tested
   (deferred). Status: `TODO`.
 - BATCH-AUT2 owns the exact demo-case operator script.
-- The MVP re-auth mechanism is the local HMAC bridge
-  (`_MVP_REAUTH_METHOD = "local_hmac_mvp_bridge"`); whether the demo ships HMAC
-  or Supabase password re-auth is tracked in
-  `known-limitations-and-improvements.md`. Status: `needs live proof`.
+- Sensitive-action re-auth uses the authenticated Supabase identity and a scoped
+  DB audit receipt; there is no local password/HMAC fallback.

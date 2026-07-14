@@ -499,6 +499,9 @@ class _Cursor:
     def fetchall(self):
         return [self.row]
 
+    def fetchone(self):
+        return None
+
     def __enter__(self):
         return self
 
@@ -558,9 +561,11 @@ class _ObservationCursor:
     def __init__(self):
         self.calls = []
         self._one = None
+        self.last_sql = ""
 
     def execute(self, sql, params):
         normalized = " ".join(sql.split())
+        self.last_sql = normalized
         self.calls.append((normalized, params))
         self._one = ("observed-evidence",) if "evidence_observe_admission" in normalized else None
 
@@ -601,6 +606,13 @@ class _SealedObservationCursor(_ObservationCursor):
 
     def fetchall(self):
         return self.sealed
+
+
+class _ViolatedObservationCursor(_SealedObservationCursor):
+    def fetchone(self):
+        if "from app.evidence_chain_heads" in self.last_sql:
+            return ("violated",)
+        return super().fetchone()
 
 
 @pytest.mark.parametrize("condition", ["changed", "missing"])
@@ -731,6 +743,61 @@ def test_posture_drift_requires_full_verify_without_generic_content_violation(
         "FULL_VERIFY_REQUIRED"
     ]
     assert classification_findings[0]["full_verification_required"] is True
+    assert not any(
+        "evidence_mark_admission_violation" in call[0] for call in cursor.calls
+    )
+
+
+def test_persisted_violation_is_returned_and_recorded_when_mount_matches(
+    tmp_path, monkeypatch
+):
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    image = evidence / "sealed.raw"
+    image.write_bytes(b"sealed")
+    st = image.stat()
+    cursor = _ViolatedObservationCursor(
+        [
+            (
+                "violated-object",
+                "evidence/sealed.raw",
+                "sha256:" + hashlib.sha256(b"sealed").hexdigest(),
+                st.st_size,
+                datetime.now(timezone.utc),
+                {
+                    "posture": {
+                        "st_dev": st.st_dev,
+                        "st_ino": st.st_ino,
+                        "st_mtime_ns": st.st_mtime_ns,
+                        "st_ctime_ns": st.st_ctime_ns,
+                        "st_nlink": st.st_nlink,
+                    }
+                },
+                "violated",
+            )
+        ]
+    )
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
+    monkeypatch.setattr(
+        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True
+    )
+
+    result = service.reconcile_for_admission(
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert result["gate_state"] == "BLOCKED_VIOLATION"
+    classification_call = next(
+        call
+        for call in cursor.calls
+        if "evidence_record_inventory_classification" in call[0]
+    )
+    findings = getattr(classification_call[1][3], "obj", classification_call[1][3])
+    assert classification_call[1][2] == "BLOCKED_VIOLATION"
+    assert [finding["code"] for finding in findings] == ["PERSISTED_VIOLATION"]
     assert not any(
         "evidence_mark_admission_violation" in call[0] for call in cursor.calls
     )

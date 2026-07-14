@@ -7,7 +7,7 @@ import { EvidenceTab } from '@/components/evidence/EvidenceTab'
 
 // ─────────────────────────────────────────────────────────────────────────
 // EvidenceCustody.test.jsx — interaction coverage for custody flows outside
-// EvidenceRecovery.test.jsx (seal · ignore · delete · retire · verify-hmac ·
+// EvidenceRecovery.test.jsx (seal · ignore · delete · retire · Full Verify Evidence ·
 // per-item verify · anchor · proof-export).
 // Locks functionality without a backend.
 //
@@ -39,7 +39,7 @@ vi.mock('@/api/endpoints', async (importOriginal) => {
     postRestoreBegin: vi.fn(),
     postRecoveryComplete: vi.fn(),
     getEvidenceHistory: vi.fn(),
-    postChainVerifyHmac: vi.fn(),
+    postFullVerifyEvidence: vi.fn(),
     postVerifyEvidence: vi.fn(),
     postChainAnchor: vi.fn(),
     postChainProofExport: vi.fn(),
@@ -321,6 +321,19 @@ describe('Retire missing file flow', () => {
 
     expect(await within(modal).findByText('Retire endpoint unavailable')).toBeInTheDocument()
   })
+
+  it('rejects ambiguous retire responses without retired true', async () => {
+    endpoints.postChainRetire.mockResolvedValue({ ignored: true, manifest_version: 5 })
+    render(<EvidenceTab />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Retire File' }))
+    const modal = await screen.findByRole('dialog')
+    fillModal({ reason: 'removed from scope', password: 'pw' })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Retire File' }))
+
+    expect(await within(modal).findByText('Retire failed')).toBeInTheDocument()
+    expect(within(modal).queryByText(/File retired successfully/i)).not.toBeInTheDocument()
+  })
 })
 
 // ── 5. Exact Restore (custody violation: modified) ────────────────────────────
@@ -351,40 +364,42 @@ describe('Exact Restore modified file flow', () => {
   })
 })
 
-// ── 6. Verify HMAC (both result branches) ────────────────────────────────────
-describe('Verify HMAC flow', () => {
+// ── 6. Full database-custody verification (both result branches) ─────────────
+describe('Full Verify Evidence flow', () => {
   beforeEach(() => seed({ status: 'ok', hmac_verify_needed: true, write_protected: true }))
 
-  it('verifies HMAC and renders the intact branch on { ok:true }', async () => {
-    endpoints.postChainVerifyHmac.mockResolvedValue({ ok: true, verified: 12 })
+  it('full-verifies mounted evidence and renders the intact branch on { ok:true }', async () => {
+    endpoints.postFullVerifyEvidence.mockResolvedValue({ ok: true, verified: true, issues: [] })
     render(<EvidenceTab />)
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Verify Now' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Full Verify Evidence' }))
     const modal = await screen.findByRole('dialog')
+    expect(within(modal).getByRole('heading', { name: 'Full Verify Evidence' })).toBeInTheDocument()
+    expect(within(modal).getByText(/Postgres custody authority/i)).toBeInTheDocument()
 
     // Gate: required password empty → endpoint NOT called.
-    fireEvent.click(within(modal).getByRole('button', { name: 'Verify' }))
-    expect(endpoints.postChainVerifyHmac).not.toHaveBeenCalled()
+    fireEvent.click(within(modal).getByRole('button', { name: 'Full Verify' }))
+    expect(endpoints.postFullVerifyEvidence).not.toHaveBeenCalled()
 
     fillModal({ password: 'pw' })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Verify' }))
+    fireEvent.click(within(modal).getByRole('button', { name: 'Full Verify' }))
     await waitFor(() => {
-      expect(endpoints.postChainVerifyHmac).toHaveBeenCalledWith({ password: 'pw' })
+      expect(endpoints.postFullVerifyEvidence).toHaveBeenCalledWith({ password: 'pw' })
     })
-    expect(await within(modal).findByText(/Verified 12 event\(s\)\. Chain is intact\./i)).toBeInTheDocument()
+    expect(await within(modal).findByText(/Mounted evidence matches database custody authority/i)).toBeInTheDocument()
   })
 
-  it('renders the failed branch with failed_indices on { ok:false }', async () => {
-    endpoints.postChainVerifyHmac.mockResolvedValue({ ok: false, failed: 3, failed_indices: [1, 4, 7] })
+  it('renders database verification issues on { ok:false }', async () => {
+    endpoints.postFullVerifyEvidence.mockResolvedValue({ ok: false, verified: false, issues: ['digest mismatch'] })
     render(<EvidenceTab />)
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Verify Now' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Full Verify Evidence' }))
     const modal = await screen.findByRole('dialog')
     fillModal({ password: 'pw' })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Verify' }))
+    fireEvent.click(within(modal).getByRole('button', { name: 'Full Verify' }))
 
-    expect(await within(modal).findByText(/3 event\(s\) FAILED/i)).toBeInTheDocument()
-    expect(within(modal).getByText(/\[1,4,7\]/)).toBeInTheDocument()
+    expect(await within(modal).findByText(/Full verification failed with 1 issue/i)).toBeInTheDocument()
+    expect(within(modal).getByText('digest mismatch')).toBeInTheDocument()
   })
 })
 
