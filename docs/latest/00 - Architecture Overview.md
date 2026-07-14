@@ -97,7 +97,7 @@ Timestamp-ordered, idempotent, covering the `app` schema with 31 `FORCE ROW LEVE
 |---------|------|------|
 | `dfir-exec` | `configs/apparmor/dfir-exec.template` | Complain mode (burn-in); enforce after Wave 2 aa-logprof. Covers the RUN-3 dfir-exec launcher — the short-lived per-command child process. Denies mounts, ptrace, network (except AF_UNIX). |
 | `sift-gateway` | `configs/apparmor/sift-gateway.template` | Complain mode. Covers the long-lived gateway process. Network: localhost TCP only. Denies shell exec. Separate workers NOT confined by this profile. |
-| `sift-custody-delete-broker` | `configs/apparmor/sift-custody-delete-broker.template` | Enforced fixed-broker transition from the Gateway. Same service UID; allows only the Postgres-bound direct pending-file unlink contract while the Gateway evidence write deny remains intact. |
+| `sift-custody-delete-broker` | `configs/apparmor/sift-custody-delete-broker.template` | Exact no-argument sudo transition to a root-owned broker using a root-only scoped three-RPC Postgres credential; it drops to the service UID/GID before the direct pending-file unlink while the Gateway evidence write deny remains intact. |
 
 ### 1 Auditd Rules File
 
@@ -877,5 +877,5 @@ flowchart TD
 - `configs/systemd/sift-opensearch-worker@.service` — OpenSearch worker template unit (101 lines)
 - `configs/apparmor/dfir-exec.template` — dfir-exec AppArmor profile (158 lines)
 - `configs/apparmor/sift-gateway.template` — Gateway AppArmor profile (146 lines)
-- `configs/apparmor/sift-custody-delete-broker.template` — Fixed same-UID Portal custody-delete broker profile
+- `configs/apparmor/sift-custody-delete-broker.template` — Fixed root-entry, service-UID-dropping Portal custody-delete broker profile
 - `configs/audit/99-sift-evidence.rules` — Auditd rules (43 lines)

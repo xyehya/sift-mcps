@@ -436,7 +436,10 @@ def test_local_delete_broker_sends_only_operation_authority(monkeypatch):
         operation_id="33333333-3333-3333-3333-333333333333"
     )
 
-    assert seen["argv"] == ["/usr/local/sbin/sift-custody-delete-broker"]
+    assert seen["argv"] == [
+        "/usr/bin/sudo", "-n", "-u", "root",
+        "/usr/local/sbin/sift-custody-delete-broker",
+    ]
     assert set(cast(dict, seen["request"])) == {
         "schema_version", "operation_id", "runner_instance_id"
     }

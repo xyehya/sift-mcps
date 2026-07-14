@@ -286,6 +286,7 @@ main() {
     # apply_db_migrations, so it only exists now. Mint its password + write the
     # scoped SIFT_AUDIT_WRITER_DSN so least-privilege is ACTIVE (fail-soft).
     provision_audit_writer
+    provision_custody_delete_broker
   else
     DB_MIGRATIONS_RESULT="failed"
   fi

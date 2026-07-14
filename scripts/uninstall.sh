@@ -568,6 +568,7 @@ teardown_systemd_and_users() {
   for f in \
     /etc/sudoers.d/sift-agent-runtime \
     /etc/sudoers.d/sift-ingest-mount \
+    /etc/sudoers.d/sift-custody-delete-broker \
     /etc/sudoers.d/sift-run-command-systemd-scope \
     /etc/sudoers.d/sift-addon-systemd-sandbox; do
     if sudo_if_needed test -f "$f" 2>/dev/null; then
@@ -590,6 +591,10 @@ teardown_systemd_and_users() {
   if sudo_if_needed test -e /etc/sift/custody-delete.json 2>/dev/null; then
     action "remove" "/etc/sift/custody-delete.json"
     run_if_live sudo_if_needed rm -f /etc/sift/custody-delete.json
+  fi
+  if sudo_if_needed test -e /etc/sift/custody-delete-dsn 2>/dev/null; then
+    action "remove" "/etc/sift/custody-delete-dsn"
+    run_if_live sudo_if_needed rm -f /etc/sift/custody-delete-dsn
   fi
 
   if [[ -L /usr/local/bin/hayabusa ]]; then

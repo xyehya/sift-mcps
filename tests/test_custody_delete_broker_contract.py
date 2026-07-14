@@ -16,6 +16,7 @@ HELPER = REPO_ROOT / "scripts" / "sift-custody-delete-broker"
 SETUP = REPO_ROOT / "scripts" / "setup-custody-delete-broker.sh"
 INSTALLER = REPO_ROOT / "install.sh"
 HARDENING = REPO_ROOT / "lib" / "hardening.sh"
+MIGRATIONS_LIB = REPO_ROOT / "lib" / "migrations.sh"
 UNINSTALLER = REPO_ROOT / "scripts" / "uninstall.sh"
 GATEWAY_PROFILE = REPO_ROOT / "configs" / "apparmor" / "sift-gateway.template"
 BROKER_PROFILE = REPO_ROOT / "configs" / "apparmor" / "sift-custody-delete-broker.template"
@@ -31,6 +32,7 @@ def test_interface_is_pathless_and_profile_bound() -> None:
     setup = SETUP.read_text(encoding="utf-8")
     installer = INSTALLER.read_text(encoding="utf-8")
     hardening = HARDENING.read_text(encoding="utf-8")
+    migrations_lib = MIGRATIONS_LIB.read_text(encoding="utf-8")
     uninstaller = UNINSTALLER.read_text(encoding="utf-8")
     gateway = GATEWAY_PROFILE.read_text(encoding="utf-8")
     broker = BROKER_PROFILE.read_text(encoding="utf-8")
@@ -38,19 +40,34 @@ def test_interface_is_pathless_and_profile_bound() -> None:
     assert 'REQUEST_KEYS = {"schema_version", "operation_id", "runner_instance_id"}' in source
     assert 'EXPECTED_PROFILE = "sift-custody-delete-broker (enforce)"' in source
     assert "shell=True" not in source
-    assert "exact sudoers rule" not in source
-    assert "sudoers" not in setup.lower()
+    assert "/etc/sift/custody-delete-dsn" in source
+    assert "/var/lib/sift/.sift/control-plane.env" not in source
+    assert "NOPASSWD: ${HELPER_DST}" in setup
+    assert "${HELPER_DST} *" not in setup
+    assert "visudo" in setup
     assert "install -o root -g root -m 0755" in setup
     assert "sift-custody-delete-broker px -> sift-custody-delete-broker" in gateway
     assert "deny /cases/*/evidence/**                  w," in gateway
     assert "deny capability dac_override," in broker
     assert "deny capability dac_read_search," in broker
+    assert "capability setuid," in broker
+    assert "capability setgid," in broker
+    assert "/etc/sift/custody-delete-dsn               r," in broker
+    assert "/var/lib/sift/.sift/control-plane.env" not in broker
     assert "deny /bin/sh" in broker
     assert "configure_custody_delete_broker" in hardening
     assert installer.index("configure_custody_delete_broker") < installer.index("configure_apparmor")
+    assert "provision_custody_delete_broker" in installer
+    assert "sift_custody_delete_broker" in migrations_lib
+    assert 'install -o root -g root -m 0600 "$tmp" "$destination"' in migrations_lib
+    assert "has_schema_privilege(current_user,'app','USAGE')" in migrations_lib
+    assert "has_table_privilege(current_user,'app.custody_operations','SELECT')" in migrations_lib
+    assert "stale or mis-scoped; rotating" in migrations_lib
     for installed_path in (
         "/usr/local/sbin/sift-custody-delete-broker",
         "/etc/sift/custody-delete.json",
+        "/etc/sift/custody-delete-dsn",
+        "/etc/sudoers.d/sift-custody-delete-broker",
         "/etc/apparmor.d/sift-custody-delete-broker",
     ):
         assert installed_path in uninstaller
@@ -61,13 +78,9 @@ def test_broker_rebinds_uuid_to_postgres_and_durable_receipt() -> None:
     migration = MIGRATION.read_text(encoding="utf-8")
 
     for binding in (
-        'action != "DELETE_STRAY"',
-        'phase != "FILESYSTEM_APPLYING"',
-        'command.get("schema_version") != 2',
-        'storage_profile != "LOCAL_IMMUTABLE"',
-        'storage_state != "AVAILABLE"',
-        "obj.id::text=op.command->>'evidence_object_id'",
-        "prepared_facts_sha256",
+        "sift_custody_broker.authorize",
+        "sift_custody_broker.claim",
+        "sift_custody_broker.complete",
         "missing_without_broker_claim",
         "os.O_NOFOLLOW",
         "regular_single_link_required",
@@ -75,7 +88,15 @@ def test_broker_rebinds_uuid_to_postgres_and_durable_receipt() -> None:
         "os.fsync(evidence_fd)",
     ):
         assert binding in source
+    assert "from app.custody_operations" not in source
     assert "create table app.custody_delete_broker_receipts" in migration
+    assert "create role sift_custody_delete_broker" in migration
+    assert "create schema if not exists sift_custody_broker" in migration
+    assert "grant usage on schema sift_custody_broker" in migration
+    assert "grant usage on schema app" not in migration
+    assert "security definer" in migration
+    assert "completed_custody_delete_broker_receipt_required" in migration
+    assert "custody_delete_broker_verified_required" in migration
     assert "force row level security" in migration
     assert "revoke all" in migration
 

@@ -77,11 +77,13 @@ path-free inventory classifier and append-only Postgres observation seam. Pendin
 storage-unavailable states remain distinct and fail closed; ignored/retired mounted bytes are not
 rediscovered as pending. Ignore, Delete Stray, and Retire are fixed Portal actions on the durable
 operation state machine. Delete records descriptor-pinned hash/size/identity after gate block and
-routes unlink only through a root-owned fixed, same-UID AppArmor broker. The Gateway evidence-file
-write deny remains intact. The broker accepts only operation UUID/current runner, independently
-rebinds Portal/applying/Local-Immutable/object/prepared-fact authority from Postgres, revalidates the
+routes unlink only through an exact no-argument sudo transition into a root-owned fixed AppArmor broker. The Gateway evidence-file
+write deny remains intact. A root-owned `0600` scoped DSN authenticates a dedicated no-inherit role
+with no `app` schema/table access and only three isolated SECURITY DEFINER RPCs. The broker accepts
+only operation UUID/current runner, independently rebinds Portal/applying/Local-Immutable/object/prepared-fact authority from Postgres, drops permanently to the service UID/GID, revalidates the
 direct no-follow entry, and writes a FORCE-RLS exact-operation/facts-digest claim/completion receipt;
-an absent file is never credited without that prior claim. Ignore and Retire never mutate mounted bytes, and Retire creates one excluding
+Postgres rejects verified or completed DELETE transitions without the exact completed receipt, and an
+absent file is never credited without the prior claim. Ignore and Retire never mutate mounted bytes, and Retire creates one excluding
 manifest while preserving prior versions and siblings. Posture-only verification cannot create an
 Evidence Version. These seams add no MCP tool or authenticated-browser database grant.
 

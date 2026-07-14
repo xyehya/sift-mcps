@@ -299,3 +299,124 @@ PY
   rm -f "$tmp"
   trap - EXIT
 }
+
+# Provision the fixed custody-delete broker's only database credential. Unlike
+# the gateway control-plane DSN, this scoped DSN is root-owned 0600 and grants
+# only three SECURITY DEFINER broker RPCs. Failure is fatal: falling back to the
+# gateway/service-role DSN would collapse the independent authorization boundary.
+provision_custody_delete_broker() {
+  local destination="/etc/sift/custody-delete-dsn"
+  if sudo_if_needed test -f "$destination" 2>/dev/null; then
+    local metadata existing_dsn existing_valid=0
+    metadata="$(sudo_if_needed stat -c '%U:%G:%a' "$destination" 2>/dev/null || true)"
+    [[ "$metadata" == "root:root:600" ]] || die \
+      "Existing custody-delete broker credential has unsafe ownership/mode."
+    existing_dsn="$(sudo_if_needed cat "$destination")"
+    if BROKER_DSN="$existing_dsn" "$VENV_DIR/bin/python" - <<'PY'
+import os
+import psycopg
+
+dsn = os.environ["BROKER_DSN"]
+with psycopg.connect(dsn) as conn:
+    row = conn.execute(
+        """select current_user='sift_custody_delete_broker',
+          has_schema_privilege(current_user,'sift_custody_broker','USAGE'),
+          has_schema_privilege(current_user,'app','USAGE'),
+          has_function_privilege(current_user,'sift_custody_broker.authorize(uuid,text)','EXECUTE'),
+          has_function_privilege(current_user,'sift_custody_broker.claim(uuid,text,text)','EXECUTE'),
+          has_function_privilege(current_user,'sift_custody_broker.complete(uuid,text,text)','EXECUTE'),
+          has_table_privilege(current_user,'app.custody_operations','SELECT'),
+          has_table_privilege(current_user,'app.custody_delete_broker_receipts','SELECT'),
+          (select rolsuper or rolbypassrls or rolinherit from pg_roles where rolname=current_user),
+          not exists(select 1 from pg_auth_members m join pg_roles r on r.oid=m.member
+            where r.rolname=current_user)"""
+    ).fetchone()
+if row != (True, True, False, True, True, True, False, False, False, True):
+    raise SystemExit(1)
+PY
+    then
+      existing_valid=1
+    fi
+    unset existing_dsn
+    if [[ "$existing_valid" -eq 1 ]]; then
+      log "Custody-delete broker credential and RPC scope verified; preserving it."
+      return 0
+    fi
+    log "Existing custody-delete broker credential is stale or mis-scoped; rotating it."
+  fi
+
+  local cp_dsn password scoped_output broker_dsn=""
+  cp_dsn="$(_resolved_control_plane_dsn)"
+  [[ -n "$cp_dsn" ]] || die "Custody-delete broker requires the control-plane DSN during install."
+  password="$(random_hex 32)"
+  scoped_output="$(
+    SIFT_CONTROL_PLANE_DSN="$cp_dsn" CUSTODY_DELETE_BROKER_PW="$password" \
+      "$VENV_DIR/bin/python" - <<'PY'
+import os
+from urllib.parse import quote, urlsplit, urlunsplit
+
+import psycopg
+from psycopg import sql
+
+dsn = os.environ["SIFT_CONTROL_PLANE_DSN"]
+password = os.environ["CUSTODY_DELETE_BROKER_PW"]
+role = "sift_custody_delete_broker"
+with psycopg.connect(dsn, autocommit=True) as conn:
+    if conn.execute("select 1 from pg_roles where rolname=%s", (role,)).fetchone() is None:
+        raise SystemExit("broker role missing after migrations")
+    conn.execute(
+        sql.SQL("alter role {} with login password {}").format(
+            sql.Identifier(role), sql.Literal(password)
+        )
+    )
+parts = urlsplit(dsn)
+if parts.scheme not in {"postgresql", "postgres"} or not parts.hostname or not parts.path:
+    raise SystemExit("control-plane DSN must be a postgresql:// URL for scoped broker derivation")
+host = parts.hostname or ""
+netloc = role + ":" + quote(password, safe="") + "@" + host
+if parts.port is not None:
+    netloc += ":" + str(parts.port)
+print("dsn:" + urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment)))
+PY
+  )" || die "Could not provision the least-privilege custody-delete broker role."
+  unset password cp_dsn
+  while IFS= read -r line; do
+    case "$line" in dsn:*) broker_dsn="${line#dsn:}" ;; esac
+  done <<< "$scoped_output"
+  unset scoped_output
+  [[ -n "$broker_dsn" ]] || die "Custody-delete broker provisioning returned no scoped DSN."
+  BROKER_DSN="$broker_dsn" "$VENV_DIR/bin/python" - <<'PY' || die \
+    "New custody-delete broker credential failed least-privilege readback."
+import os
+import psycopg
+
+with psycopg.connect(os.environ["BROKER_DSN"]) as conn:
+    row = conn.execute(
+        """select current_user='sift_custody_delete_broker',
+          has_schema_privilege(current_user,'sift_custody_broker','USAGE'),
+          has_schema_privilege(current_user,'app','USAGE'),
+          has_function_privilege(current_user,'sift_custody_broker.authorize(uuid,text)','EXECUTE'),
+          has_function_privilege(current_user,'sift_custody_broker.claim(uuid,text,text)','EXECUTE'),
+          has_function_privilege(current_user,'sift_custody_broker.complete(uuid,text,text)','EXECUTE'),
+          has_table_privilege(current_user,'app.custody_operations','SELECT'),
+          has_table_privilege(current_user,'app.custody_delete_broker_receipts','SELECT'),
+          (select rolsuper or rolbypassrls or rolinherit from pg_roles where rolname=current_user),
+          not exists(select 1 from pg_auth_members m join pg_roles r on r.oid=m.member
+            where r.rolname=current_user)"""
+    ).fetchone()
+if row != (True, True, False, True, True, True, False, False, False, True):
+    raise SystemExit(1)
+PY
+
+  local tmp
+  tmp="$(mktemp)"
+  trap 'rm -f "'"$tmp"'"; trap - EXIT' EXIT
+  printf '%s\n' "$broker_dsn" > "$tmp"
+  unset broker_dsn
+  sudo_if_needed install -d -o root -g root -m 0755 /etc/sift
+  sudo_if_needed install -o root -g root -m 0600 "$tmp" "$destination" || die \
+    "Could not install the root-only custody-delete broker credential."
+  rm -f "$tmp"
+  trap - EXIT
+  log "Least-privilege custody-delete broker credential installed root-only."
+}

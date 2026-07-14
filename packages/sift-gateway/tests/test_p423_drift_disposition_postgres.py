@@ -391,6 +391,19 @@ def test_delete_post_unlink_resume_preserves_facts_and_commits_one_event():
             phase, prepared = cur.fetchone()
             assert phase == "FILESYSTEM_APPLYING"
             assert prepared["item"] == item
+            cur.execute(
+                "select sift_custody_broker.authorize(%s,'runner-after')",
+                (operation_id,),
+            )
+            digest = cur.fetchone()[0]["prepared_facts_sha256"]
+            cur.execute(
+                "select sift_custody_broker.claim(%s,'runner-after',%s)",
+                (operation_id, digest),
+            )
+            cur.execute(
+                "select sift_custody_broker.complete(%s,'runner-after',%s)",
+                (operation_id, digest),
+            )
             verified = {**item, "file_removed": True}
             cur.execute(
                 "select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-after')",
@@ -618,15 +631,103 @@ def test_delete_missing_or_unsubstantiated_facts_are_rejected():
                 "select app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'runner-before')",
                 (operation_id, Jsonb({"item": item})),
             )
+            with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+                cur.execute(
+                    "select app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-before')",
+                    (operation_id, Jsonb({"item": item})),
+                )
+        conn.rollback()
+
+
+def test_delete_verified_transition_requires_scoped_completed_broker_receipt():
+    from psycopg.types.json import Jsonb
+
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as conn:
+        case_id, actor_id = _case_and_actor(conn)
+        object_id = uuid.uuid4()
+        operation_id, *_ = _begin(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            action="DELETE_STRAY",
+            status="detected",
+            seal_status="unsealed",
+        )
+        item = {
+            "evidence_object_id": str(object_id),
+            "display_path": f"evidence/{object_id}.bin",
+            "prior_status": "detected",
+            "prior_seal_status": "unsealed",
+            "present": True,
+            "sha256": "sha256:" + "a" * 64,
+            "bytes": 10,
+            "st_dev": 11,
+            "st_ino": 12,
+            "st_nlink": 1,
+        }
+        verified = {**item, "file_removed": True}
+        with conn.cursor() as cur:
             cur.execute(
-                "select app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-before')",
+                "select app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'runner-before')",
                 (operation_id, Jsonb({"item": item})),
             )
-            with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+            cur.execute(
+                """select rolsuper,rolinherit,rolbypassrls,
+                     has_schema_privilege('sift_custody_delete_broker','sift_custody_broker','USAGE'),
+                     has_schema_privilege('sift_custody_delete_broker','app','USAGE'),
+                     has_table_privilege('sift_custody_delete_broker','app.custody_operations','SELECT'),
+                     has_table_privilege('sift_custody_delete_broker','app.custody_delete_broker_receipts','SELECT'),
+                     has_function_privilege('sift_custody_delete_broker','sift_custody_broker.authorize(uuid,text)','EXECUTE'),
+                     has_function_privilege('sift_custody_delete_broker','sift_custody_broker.claim(uuid,text,text)','EXECUTE'),
+                     has_function_privilege('sift_custody_delete_broker','sift_custody_broker.complete(uuid,text,text)','EXECUTE'),
+                     not exists(select 1 from pg_auth_members m join pg_roles member on member.oid=m.member
+                       where member.rolname='sift_custody_delete_broker')
+                     from pg_roles where rolname='sift_custody_delete_broker'"""
+            )
+            assert cur.fetchone() == (
+                False, False, False, True, False, False, False, True, True, True, True
+            )
+            cur.execute("savepoint missing_receipt")
+            with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
                 cur.execute(
-                    "select app.custody_operation_commit_verified_disposition(%s,%s,'examiner','runner-before')",
-                    (operation_id, Jsonb(item)),
+                    "select app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-before')",
+                    (operation_id, Jsonb({"item": verified})),
                 )
+            cur.execute("rollback to savepoint missing_receipt")
+            cur.execute(
+                "select sift_custody_broker.authorize(%s,'runner-before')",
+                (operation_id,),
+            )
+            digest = cur.fetchone()[0]["prepared_facts_sha256"]
+            cur.execute(
+                "select sift_custody_broker.claim(%s,'runner-before',%s)",
+                (operation_id, digest),
+            )
+            cur.execute("savepoint claimed_only")
+            with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+                cur.execute(
+                    "select app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-before')",
+                    (operation_id, Jsonb({"item": verified})),
+                )
+            cur.execute("rollback to savepoint claimed_only")
+            cur.execute("savepoint wrong_digest")
+            with pytest.raises(psycopg.errors.IntegrityConstraintViolation):
+                cur.execute(
+                    "select sift_custody_broker.complete(%s,'runner-before',%s)",
+                    (operation_id, "sha256:" + "b" * 64),
+                )
+            cur.execute("rollback to savepoint wrong_digest")
+            cur.execute(
+                "select sift_custody_broker.complete(%s,'runner-before',%s)",
+                (operation_id, digest),
+            )
+            cur.execute(
+                "select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-before')",
+                (operation_id, Jsonb({"item": verified})),
+            )
+            assert cur.fetchone()[0] == "FILESYSTEM_VERIFIED"
         conn.rollback()
 
 

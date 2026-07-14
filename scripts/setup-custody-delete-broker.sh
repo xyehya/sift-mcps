@@ -7,6 +7,7 @@ HELPER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sift-custody-delete-br
 HELPER_DST="/usr/local/sbin/sift-custody-delete-broker"
 CONFIG_DIR="/etc/sift"
 CONFIG_FILE="${CONFIG_DIR}/custody-delete.json"
+SUDOERS_FILE="/etc/sudoers.d/sift-custody-delete-broker"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -26,12 +27,22 @@ id -u "$SERVICE_USER" >/dev/null 2>&1 || { printf 'ERROR: service user not found
   exit 1
 }
 [[ -f "$HELPER_SRC" ]] || { printf 'ERROR: helper source not found\n' >&2; exit 1; }
+VISUDO_BIN="$(command -v visudo || true)"
+[[ -z "$VISUDO_BIN" && -x /usr/sbin/visudo ]] && VISUDO_BIN=/usr/sbin/visudo
+[[ -n "$VISUDO_BIN" ]] || { printf 'ERROR: visudo not found\n' >&2; exit 1; }
 install -o root -g root -m 0755 "$HELPER_SRC" "$HELPER_DST"
 install -d -o root -g root -m 0755 "$CONFIG_DIR"
 config_tmp="$(mktemp)"
-trap 'rm -f "$config_tmp"' EXIT
+sudoers_tmp="$(mktemp)"
+trap 'rm -f "$config_tmp" "$sudoers_tmp"' EXIT
 python3 - "$CASES_ROOT" "$SERVICE_USER" >"$config_tmp" <<'PY'
 import json, sys
 print(json.dumps({"cases_root": sys.argv[1], "service_user": sys.argv[2]}, sort_keys=True))
 PY
 install -o root -g root -m 0644 "$config_tmp" "$CONFIG_FILE"
+printf '%s\n' \
+  '# Managed by sift-mcps. Exact no-argument custody-delete broker only.' \
+  "${SERVICE_USER} ALL=(root) NOPASSWD: ${HELPER_DST}" >"$sudoers_tmp"
+chmod 0440 "$sudoers_tmp"
+"$VISUDO_BIN" -cf "$sudoers_tmp" >/dev/null
+install -o root -g root -m 0440 "$sudoers_tmp" "$SUDOERS_FILE"

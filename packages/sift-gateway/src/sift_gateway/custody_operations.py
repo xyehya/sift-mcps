@@ -96,7 +96,7 @@ class LocalCustodyDeleteBroker:
         }
         try:
             completed = subprocess.run(
-                [self._HELPER],
+                ["/usr/bin/sudo", "-n", "-u", "root", self._HELPER],
                 input=json.dumps(request, sort_keys=True, separators=(",", ":")),
                 text=True,
                 capture_output=True,
