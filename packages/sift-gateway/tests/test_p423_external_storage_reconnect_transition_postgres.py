@@ -96,14 +96,21 @@ def _sealed_external_case(conn, *, version_source: str | None = None):
     return case_id, object_id, source, mount
 
 
-def _classify(conn, case_id, correlation, finding):
+def _classify(
+    conn,
+    case_id,
+    correlation,
+    finding,
+    *,
+    gate_state="BLOCKED_UNAVAILABLE",
+):
     from psycopg.types.json import Jsonb
 
     with conn.cursor() as cur:
         cur.execute(
             """select id from app.evidence_record_inventory_classification_v2(
-                 %s,%s,'BLOCKED_UNAVAILABLE',%s)""",
-            (case_id, correlation, Jsonb([finding])),
+                 %s,%s,%s,%s)""",
+            (case_id, correlation, gate_state, Jsonb([finding])),
         )
         return cur.fetchone()[0]
 
@@ -187,6 +194,105 @@ def test_same_source_read_only_reconnect_advances_only_to_full_verify() -> None:
                 (case_id,),
             )
             assert cur.fetchone() == (2,)
+
+
+def test_same_source_rw_drift_restores_only_to_full_verify_required() -> None:
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as conn:
+        case_id, object_id, source, mount = _sealed_external_case(conn)
+        before_counts = _counts(conn, case_id)
+        posture = {
+            "code": "POSTURE_DRIFT",
+            "gate_state": "BLOCKED_VIOLATION",
+            "recovery": "RESTORE_READ_ONLY",
+            "evidence_object_id": str(object_id),
+            "observation_id": "rw-posture-observation",
+            "full_verification_required": True,
+        }
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """select state,remediation,generation,verified_generation
+                   from app.evidence_storage_record_observation(
+                     %s,'EXTERNALLY_READ_ONLY',true,%s,%s,false)""",
+                (case_id, source, mount),
+            )
+            assert cur.fetchone() == ("READ_WRITE_DRIFT", "RESTORE_READ_ONLY", 2, 2)
+
+        first_rw = _classify(
+            conn,
+            case_id,
+            "rw-first:" + uuid.uuid4().hex,
+            posture,
+            gate_state="BLOCKED_VIOLATION",
+        )
+        repeated_rw = _classify(
+            conn,
+            case_id,
+            "rw-repeat:" + uuid.uuid4().hex,
+            posture,
+            gate_state="BLOCKED_VIOLATION",
+        )
+        assert repeated_rw != first_rw
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """select state,remediation,generation,verified_generation
+                   from app.evidence_storage_record_observation(
+                     %s,'EXTERNALLY_READ_ONLY',true,%s,%s,true)""",
+                (case_id, source, mount),
+            )
+            assert cur.fetchone() == ("FULL_VERIFY_REQUIRED", "FULL_VERIFY", 2, 2)
+
+        first_ro = _classify(
+            conn,
+            case_id,
+            "ro-first:" + uuid.uuid4().hex,
+            _full_verify_finding(),
+        )
+        repeated_ro = _classify(
+            conn,
+            case_id,
+            "ro-repeat:" + uuid.uuid4().hex,
+            _full_verify_finding(),
+        )
+        assert repeated_ro != first_ro
+        assert _counts(conn, case_id) == before_counts
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """select seal_status,issues from app.evidence_chain_heads
+                   where case_id=%s""",
+                (case_id,),
+            )
+            seal_status, issues = cur.fetchone()
+            assert seal_status == "violated"
+            assert issues == [{**_full_verify_finding(), "storage_generation": 2}]
+            cur.execute(
+                """select state,remediation,read_only,generation,verified_generation,
+                          source_identity,verified_mount_instance,observed_mount_instance
+                   from app.evidence_storage_authorities where case_id=%s""",
+                (case_id,),
+            )
+            assert cur.fetchone() == (
+                "FULL_VERIFY_REQUIRED",
+                "FULL_VERIFY",
+                True,
+                2,
+                2,
+                source,
+                mount,
+                mount,
+            )
+            cur.execute(
+                """select gate_state,count(*) from app.evidence_inventory_observations
+                   where case_id=%s group by gate_state order by gate_state""",
+                (case_id,),
+            )
+            assert cur.fetchall() == [
+                ("BLOCKED_UNAVAILABLE", 2),
+                ("BLOCKED_VIOLATION", 2),
+            ]
 
 
 @pytest.mark.parametrize(
