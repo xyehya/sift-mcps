@@ -131,6 +131,22 @@ def test_posture_only_success_opens_and_writes_one_receipt() -> None:
     ]
     with psycopg.connect(_dsn()) as conn:
         setup = _setup(conn, issues)
+        with conn.cursor() as cur:
+            cur.execute(
+                "select count(*) from app.evidence_versions where case_id=%s",
+                (setup[0],),
+            )
+            before_version_count = cur.fetchone()
+            cur.execute(
+                "select count(*) from app.evidence_manifests where case_id=%s",
+                (setup[0],),
+            )
+            before_manifest_count = cur.fetchone()
+            cur.execute(
+                "select current_version_id,status,seal_status from app.evidence_objects where id=%s",
+                (setup[2],),
+            )
+            before_object = cur.fetchone()
         state, correlation = _verify(conn, setup)
         assert state == "AVAILABLE"
         with conn.cursor() as cur:
@@ -145,6 +161,21 @@ def test_posture_only_success_opens_and_writes_one_receipt() -> None:
                 (setup[0], correlation),
             )
             assert cur.fetchone() == (1,)
+            cur.execute(
+                "select count(*) from app.evidence_versions where case_id=%s",
+                (setup[0],),
+            )
+            assert cur.fetchone() == before_version_count == (1,)
+            cur.execute(
+                "select count(*) from app.evidence_manifests where case_id=%s",
+                (setup[0],),
+            )
+            assert cur.fetchone() == before_manifest_count
+            cur.execute(
+                "select current_version_id,status,seal_status from app.evidence_objects where id=%s",
+                (setup[2],),
+            )
+            assert cur.fetchone() == before_object
 
 
 @pytest.mark.parametrize(
@@ -167,9 +198,7 @@ def test_substantive_or_unknown_issue_remains_blocked(blocking_code: str) -> Non
     ]
     with psycopg.connect(_dsn()) as conn:
         setup = _setup(conn, issues)
-        with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
-            with conn.transaction():
-                _verify(conn, setup)
+        _verify(conn, setup)
         with conn.cursor() as cur:
             cur.execute(
                 "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
@@ -195,21 +224,30 @@ def test_violated_object_prevents_synthetic_latch_recovery() -> None:
                 "update app.evidence_objects set seal_status='violated' where id=%s",
                 (setup[2],),
             )
-        _verify(conn, setup)
+            cur.execute(
+                "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+                (setup[0],),
+            )
+            before_head = cur.fetchone()
+            cur.execute(
+                "select count(*) from app.evidence_storage_verifications where case_id=%s",
+                (setup[0],),
+            )
+            before_receipts = cur.fetchone()
+        with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+            with conn.transaction():
+                _verify(conn, setup)
         with conn.cursor() as cur:
             cur.execute(
                 "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
                 (setup[0],),
             )
-            assert cur.fetchone() == (
-                "violated",
-                [{"code": "PERSISTED_VIOLATION"}, {"code": "FULL_VERIFY_REQUIRED"}],
-            )
+            assert cur.fetchone() == before_head
             cur.execute(
                 "select count(*) from app.evidence_storage_verifications where case_id=%s",
                 (setup[0],),
             )
-            assert cur.fetchone() == (0,)
+            assert cur.fetchone() == before_receipts == (0,)
 
 
 @pytest.mark.parametrize(
@@ -221,6 +259,7 @@ def test_reconciliation_and_second_verify_cannot_launder_cause(blocking_code: st
     issues = [
         {"code": "PERSISTED_VIOLATION"},
         {"code": "FULL_VERIFY_REQUIRED"},
+        {"code": "INVENTORY_SCAN_FAILED"},
         {"code": blocking_code},
     ]
     with psycopg.connect(_dsn()) as conn:
@@ -238,6 +277,19 @@ def test_reconciliation_and_second_verify_cannot_launder_cause(blocking_code: st
         assert {issue["code"] for issue in remaining} == {
             "PERSISTED_VIOLATION", blocking_code,
         }
+
+
+def test_complete_reconciliation_clears_transient_inventory_scan_failure() -> None:
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as conn:
+        setup = _setup(conn, [{"code": "INVENTORY_SCAN_FAILED"}])
+        _reconcile_persisted_only(conn, setup)
+        with conn.cursor() as cur:
+            cur.execute(
+                "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+                (setup[0],),
+            )
+            assert cur.fetchone() == ("sealed", [])
 
 
 def test_pending_only_issue_remains_unsealed_after_full_verify() -> None:

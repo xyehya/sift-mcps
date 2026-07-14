@@ -189,6 +189,7 @@ class _FakeDb:
                 for issue in self.issues
                 if issue.get("code") not in {
                     "PERSISTED_VIOLATION", "DETECTED_NEW_ITEM", "UNSAFE_PENDING_ITEM",
+                    "INVENTORY_SCAN_FAILED",
                 }
             ]
             self.issues = []
@@ -588,6 +589,14 @@ class TestVerify:
                 "evidence_object_id": None,
                 "observation_id": None,
                 "full_verification_required": True,
+            },
+            {
+                "code": "INVENTORY_SCAN_FAILED",
+                "gate_state": "BLOCKED_UNAVAILABLE",
+                "recovery": "INVESTIGATE_AVAILABILITY",
+                "evidence_object_id": None,
+                "observation_id": None,
+                "full_verification_required": False,
             },
             {
                 "code": blocking_code,

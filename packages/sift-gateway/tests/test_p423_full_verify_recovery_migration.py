@@ -123,6 +123,9 @@ def test_reconciliation_preserves_closed_causal_issues_across_observations() -> 
     )
     assert "select distinct issue" in wrapper
     assert "'PERSISTED_VIOLATION','DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM'" in wrapper
+    assert "'INVENTORY_SCAN_FAILED'" in wrapper
+    assert "v_scan_failure_only" in wrapper
+    assert "when v_scan_failure_only then 'sealed'" in wrapper
     assert "where issue->>'code' not in ('DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM')" in wrapper
     compact = re.sub(r"\s+", "", MIGRATION)
     signature = "uuid,text,text,jsonb"

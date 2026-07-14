@@ -1886,15 +1886,16 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
         )
     result = result if isinstance(result, dict) else {}
     verified = bool(result.get("verified"))
+    raw_issues = result.get("issues")
+    raw_verification_issues = result.get("verification_issues")
+    issues: list[object] = raw_issues if isinstance(raw_issues, list) else []
+    verification_issues: list[object] = (
+        raw_verification_issues
+        if isinstance(raw_verification_issues, list)
+        else []
+    )
     issue_labels: list[str] = []
-    for issue in [
-        *(result.get("issues") if isinstance(result.get("issues"), list) else []),
-        *(
-            result.get("verification_issues")
-            if isinstance(result.get("verification_issues"), list)
-            else []
-        ),
-    ]:
+    for issue in issues + verification_issues:
         label = (
             str(issue.get("code") or "CUSTODY_VERIFICATION_BLOCKED")
             if isinstance(issue, dict)

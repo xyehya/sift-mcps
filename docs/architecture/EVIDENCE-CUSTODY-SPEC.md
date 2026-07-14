@@ -261,7 +261,9 @@ violated; Restore, Reacquire, or Retire must resolve that object first. A succes
 `FULL_VERIFY_REQUIRED` and current-generation storage/posture latch findings, plus the synthetic
 `PERSISTED_VIOLATION` marker only when the original head positively contained a current recoverable
 cause and no substantive finding or violated object remains. Cheap reconciliation preserves every
-durable substantive or future causal issue instead of replacing it with the synthetic marker. It never
+durable substantive or future causal issue instead of replacing it with the synthetic marker. A later
+complete scan may clear the transient `INVENTORY_SCAN_FAILED` cause and its synthetic latch only when
+no durable cause or violated object coexists. It never
 discharges changed or missing content, ledger/conflicting/unknown findings, identity change, or an
 unauthorized storage-source change. The Portal reports success only when the authoritative gate is
 sealed and open after immediate reconciliation; local hash success cannot hide retained DB issues.

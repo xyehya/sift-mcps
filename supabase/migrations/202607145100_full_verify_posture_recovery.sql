@@ -153,10 +153,16 @@ declare
   v_original_issues jsonb;
   v_current_issues jsonb;
   v_merged_issues jsonb;
+  v_scan_failure_only boolean;
 begin
   perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
   select coalesce(issues,'[]'::jsonb) into v_original_issues
     from app.evidence_chain_heads where case_id=p_case_id for update;
+  select exists(select 1 from jsonb_array_elements(v_original_issues) issue
+      where issue->>'code'='INVENTORY_SCAN_FAILED')
+    and not exists(select 1 from jsonb_array_elements(v_original_issues) issue
+      where issue->>'code' not in ('INVENTORY_SCAN_FAILED','PERSISTED_VIOLATION'))
+    into v_scan_failure_only;
   v_row := app.evidence_record_inventory_classification_v2_pre_causal_preservation(
     p_case_id,p_correlation_id,p_gate_state,p_findings);
   select coalesce(issues,'[]'::jsonb) into v_current_issues
@@ -167,17 +173,32 @@ begin
       v_current_issues || (select coalesce(jsonb_agg(original_issue),'[]'::jsonb)
         from jsonb_array_elements(v_original_issues) original_issue
         where original_issue->>'code' not in (
-          'PERSISTED_VIOLATION','DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM'))
+          'PERSISTED_VIOLATION','DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM',
+          'INVENTORY_SCAN_FAILED'))
     ) issue) merged;
+  if v_scan_failure_only
+     and not exists(select 1 from jsonb_array_elements(v_current_issues) issue
+       where issue->>'code' not in (
+         'PERSISTED_VIOLATION','DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM'))
+     and not exists(select 1 from app.evidence_objects
+       where case_id=p_case_id and (status='violated' or seal_status='violated')) then
+    select coalesce(jsonb_agg(issue),'[]'::jsonb) into v_merged_issues
+      from jsonb_array_elements(v_merged_issues) issue
+      where issue->>'code'<>'PERSISTED_VIOLATION';
+  end if;
   update app.evidence_chain_heads
     set issues=v_merged_issues,
       seal_status=case
+        when exists(select 1 from app.evidence_objects
+          where case_id=p_case_id and (status='violated' or seal_status='violated'))
+          then 'violated'
         when exists(select 1 from jsonb_array_elements(v_merged_issues) issue
           where issue->>'code' not in ('DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM'))
           then 'violated'
         when exists(select 1 from jsonb_array_elements(v_merged_issues) issue
           where issue->>'code' in ('DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM'))
           then 'unsealed'
+        when v_scan_failure_only then 'sealed'
         else seal_status
       end,
       updated_at=now()

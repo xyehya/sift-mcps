@@ -166,6 +166,8 @@ unknown, violated-object, identity-change, and unauthorized source-change findin
 Any current violated object rejects Full Verify before a receipt is written. The synthetic persisted
 marker is removable only with positive original-head provenance for a current recoverable cause;
 reconciliation preserves all durable substantive and future causal issues across later cheap scans.
+`INVENTORY_SCAN_FAILED` is observation-transient: a later complete scan clears it and its synthetic
+latch only when no durable cause or violated object remains.
 Local reconciliation orders a complete whole-case receipt against any matching per-object exact-
 Restore posture receipt and uses only the strictly newer authority; equal or missing timestamps
 suppress historical fallback and require another Full Verify. Portal success

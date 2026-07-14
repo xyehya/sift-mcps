@@ -101,7 +101,8 @@ force another Full Verify. Any current violated object rejects Full Verify befor
 Successful verification discharges only current storage/posture verification latches and a synthetic
 persisted marker when the original head proves a current recoverable cause and no substantive/object
 violation remains. Reconciliation preserves durable substantive and future causal issues across cheap
-scans. It never waives content, missing, ledger, conflict, identity, unknown,
+scans, while a later complete scan may clear transient `INVENTORY_SCAN_FAILED` plus its synthetic
+latch only when no durable cause or violated object remains. It never waives content, missing, ledger, conflict, identity, unknown,
 or unauthorized source-change findings, and Portal success requires the reconciled gate to be open.
 
 **Change routing:** policy/auth/scoping → `sift-gateway`; evidence/findings/reports/execution → `sift-core` + migrations; derived search/ingest → `opensearch-mcp`; human UX → `case-dashboard`; confinement → configs/systemd/AppArmor with the code change.
