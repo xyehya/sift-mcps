@@ -61,7 +61,10 @@ def test_mountinfo_duplicate_mount_id_fails_closed() -> None:
         parse_mountinfo(MOUNTINFO + MOUNTINFO)
 
 
-@pytest.mark.parametrize("escape", [r"\\777", r"\\000", r"\\xyz"])
+@pytest.mark.parametrize(
+    "escape",
+    [r"\\777", r"\\000", r"\\xyz", "\\", r"\\1", r"\\12", r"\\134\\"],
+)
 def test_mountinfo_unknown_escape_fails_closed(escape: str) -> None:
     with pytest.raises(StorageAuthorityError, match="escape"):
         parse_mountinfo(

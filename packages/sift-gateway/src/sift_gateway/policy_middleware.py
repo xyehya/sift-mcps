@@ -37,6 +37,7 @@ from sift_gateway.audit_helpers import (
 from sift_gateway.evidence_admission import (
     bind_admitted_refs,
     command_evidence_references,
+    current_storage_authority,
     reset_admitted_refs,
 )
 from sift_gateway.evidence_gate import (
@@ -655,9 +656,7 @@ class EvidenceGateMiddleware(Middleware):
                     if isinstance(declared, str):
                         refs.append(declared)
                     elif isinstance(declared, (list, tuple)):
-                        refs.extend(
-                            str(item) for item in declared if str(item).strip()
-                        )
+                        refs.extend(str(item) for item in declared if str(item).strip())
                     refs.extend(
                         command_evidence_references(
                             args.get("command"),
@@ -671,9 +670,7 @@ class EvidenceGateMiddleware(Middleware):
                     item = resolver(case.case_id, ref)
                     if not isinstance(item, dict):
                         raise RuntimeError("evidence resolver returned invalid data")
-                    admitted.append(
-                        cast(AdmittedEvidenceBinding, {"ref": ref, **item})
-                    )
+                    admitted.append(cast(AdmittedEvidenceBinding, {"ref": ref, **item}))
             except Exception:
                 logger.info("evidence_admission: sealed-version authorization denied")
                 gate = {
@@ -693,8 +690,54 @@ class EvidenceGateMiddleware(Middleware):
                         "manifest_version": gate["manifest_version"],
                     }
                 else:
-                    token = bind_admitted_refs(admitted, inventory_token=mounted_token)
+                    execution_authority = (
+                        reconciliation.get("execution_authority")
+                        if isinstance(reconciliation, dict)
+                        and isinstance(reconciliation.get("execution_authority"), dict)
+                        else None
+                    )
+                    if execution_authority is None or any(
+                        any(item.get(key) != value for key, value in execution_authority.items())
+                        for item in admitted
+                    ):
+                        gate = {
+                            "blocked": True,
+                            "status": ChainStatus.UNSEALED,
+                            "issues": ["Evidence storage authority binding changed"],
+                            "manifest_version": gate["manifest_version"],
+                        }
+                        continue_dispatch = False
+                    else:
+                        continue_dispatch = True
+                if not gate["blocked"] and continue_dispatch:
+                    token = bind_admitted_refs(
+                        admitted,
+                        inventory_token=mounted_token,
+                        storage_authority=execution_authority,
+                    )
                     try:
+                        if name in {"run_command", "run_command_job"}:
+                            expected_authority = current_storage_authority()
+                            revalidate = getattr(
+                                service, "revalidate_execution_authority", None
+                            )
+                            if not expected_authority or not callable(revalidate):
+                                raise RuntimeError("storage authority unavailable")
+                            await asyncio.to_thread(
+                                revalidate, case.case_id, expected_authority
+                            )
+                    except Exception:
+                        logger.info(
+                            "execution authority changed before dispatch",
+                            exc_info=True,
+                        )
+                        gate = {
+                            "blocked": True,
+                            "status": ChainStatus.UNSEALED,
+                            "issues": ["Storage authority changed before dispatch"],
+                            "manifest_version": gate["manifest_version"],
+                        }
+                    else:
                         return await call_next(context)
                     finally:
                         reset_admitted_refs(token)

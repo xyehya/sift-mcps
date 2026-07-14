@@ -65,6 +65,7 @@ create table app.evidence_storage_verifications (
   issues jsonb not null default '[]'::jsonb check (jsonb_typeof(issues)='array'),
   correlation_id text not null check (length(correlation_id) between 1 and 128),
   actor_user_id uuid null references app.operator_profiles(id) on delete set null,
+  note text null check (note is null or length(note) <= 1000),
   created_at timestamptz not null default now(),
   unique(case_id,correlation_id)
 );
@@ -75,6 +76,25 @@ create trigger evidence_storage_verifications_no_update_delete before update or 
 create trigger evidence_storage_verifications_no_truncate before truncate
   on app.evidence_storage_verifications execute function app.evidence_block_truncate();
 revoke all on app.evidence_storage_verifications from public,anon,authenticated;
+
+create table app.evidence_storage_profile_transitions (
+  case_id uuid not null references app.cases(id) on delete cascade,
+  idempotency_key text not null check (length(idempotency_key) between 1 and 128),
+  profile text not null check (profile in ('LOCAL_IMMUTABLE','EXTERNALLY_READ_ONLY')),
+  reason text not null check (length(reason) between 1 and 1000),
+  actor_user_id uuid not null references app.operator_profiles(id),
+  reauth_audit_event_id uuid not null unique references app.audit_events(id),
+  result jsonb not null check (jsonb_typeof(result)='object'),
+  created_at timestamptz not null default now(),
+  primary key(case_id,idempotency_key)
+);
+alter table app.evidence_storage_profile_transitions enable row level security;
+alter table app.evidence_storage_profile_transitions force row level security;
+create trigger evidence_storage_profile_transitions_no_update_delete before update or delete
+  on app.evidence_storage_profile_transitions for each row execute function app.evidence_block_mutation();
+create trigger evidence_storage_profile_transitions_no_truncate before truncate
+  on app.evidence_storage_profile_transitions execute function app.evidence_block_truncate();
+revoke all on app.evidence_storage_profile_transitions from public,anon,authenticated;
 
 alter table app.evidence_versions
   add column storage_profile text not null default 'LOCAL_IMMUTABLE'
@@ -198,7 +218,8 @@ end $$;
 
 create function app.evidence_storage_record_verify_failure(
   p_case_id uuid,p_generation bigint,p_profile text,p_manifest_version integer,
-  p_manifest_hash text,p_failure_code text,p_correlation_id text,p_actor_user_id uuid
+  p_manifest_hash text,p_failure_code text,p_correlation_id text,p_actor_user_id uuid,
+  p_note text
 ) returns app.evidence_storage_authorities
 language plpgsql security definer set search_path=pg_catalog,app as $$
 declare v_row app.evidence_storage_authorities; v_head app.evidence_chain_heads;
@@ -207,6 +228,7 @@ begin
   if p_failure_code not in ('STORAGE_UNAVAILABLE','READ_WRITE_DRIFT',
       'FULL_VERIFY_FAILED','MOUNTED_EVIDENCE_MISMATCH')
      or length(coalesce(p_correlation_id,'')) not between 1 and 128
+     or length(coalesce(p_note,'')) > 1000
      or p_actor_user_id is null then
     raise exception 'storage_verify_failure_invalid' using errcode='invalid_parameter_value';
   end if;
@@ -224,10 +246,10 @@ begin
     'gate_state',case when p_failure_code='STORAGE_UNAVAILABLE' then 'BLOCKED_UNAVAILABLE'
       else 'BLOCKED_VIOLATION' end);
   insert into app.evidence_storage_verifications(case_id,generation,profile,source_identity,
-    mount_instance,manifest_version,manifest_hash,item_facts,outcome,issues,correlation_id,actor_user_id)
+    mount_instance,manifest_version,manifest_hash,item_facts,outcome,issues,correlation_id,actor_user_id,note)
   values(p_case_id,p_generation,p_profile,v_row.source_identity,v_row.observed_mount_instance,
     p_manifest_version,p_manifest_hash,'[]'::jsonb,'FAILED',jsonb_build_array(v_issue),
-    p_correlation_id,p_actor_user_id);
+    p_correlation_id,p_actor_user_id,nullif(p_note,''));
   update app.evidence_storage_authorities set state=case
       when p_failure_code='STORAGE_UNAVAILABLE' then 'UNAVAILABLE'
       when p_failure_code='READ_WRITE_DRIFT' then 'READ_WRITE_DRIFT'
@@ -482,9 +504,10 @@ end $$;
 create function app.evidence_storage_change_profile(
   p_case_id uuid,p_profile text,p_reason text,p_idempotency_key text,
   p_reauth_audit_event_id uuid,p_actor_user_id uuid
-) returns app.evidence_storage_authorities
+) returns jsonb
 language plpgsql security definer set search_path=pg_catalog,app as $$
 declare v_row app.evidence_storage_authorities; v_reauth app.audit_events;
+  v_existing app.evidence_storage_profile_transitions; v_result jsonb;
 begin
   if p_profile not in ('LOCAL_IMMUTABLE','EXTERNALLY_READ_ONLY')
      or length(btrim(coalesce(p_reason,''))) not between 1 and 1000
@@ -493,9 +516,6 @@ begin
     raise exception 'invalid_storage_profile_change' using errcode='invalid_parameter_value';
   end if;
   perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
-  if exists(select 1 from app.custody_operations where case_id=p_case_id and phase<>'COMPLETED') then
-    raise exception 'custody_operation_active' using errcode='object_in_use';
-  end if;
   select * into v_reauth from app.audit_events where id=p_reauth_audit_event_id for share;
   if not found or v_reauth.case_id is distinct from p_case_id
      or v_reauth.event_type<>'reauth.evidence_storage_profile_change'
@@ -507,7 +527,27 @@ begin
     raise exception 'storage_profile_reauth_scope_mismatch'
       using errcode='invalid_authorization_specification';
   end if;
+  select * into v_existing from app.evidence_storage_profile_transitions
+    where case_id=p_case_id and idempotency_key=btrim(p_idempotency_key);
+  if found then
+    if v_existing.profile is distinct from p_profile
+       or v_existing.reason is distinct from btrim(p_reason)
+       or v_existing.actor_user_id is distinct from p_actor_user_id then
+      raise exception 'storage_profile_idempotency_conflict'
+        using errcode='unique_violation';
+    end if;
+    if v_existing.reauth_audit_event_id is distinct from p_reauth_audit_event_id then
+      raise exception 'storage_profile_retry_receipt_mismatch'
+        using errcode='invalid_authorization_specification';
+    end if;
+    return v_existing.result;
+  end if;
+  if exists(select 1 from app.custody_operations where case_id=p_case_id and phase<>'COMPLETED') then
+    raise exception 'custody_operation_active' using errcode='object_in_use';
+  end if;
   if exists(select 1 from app.evidence_custody_events
+            where reauth_audit_event_id=p_reauth_audit_event_id)
+     or exists(select 1 from app.evidence_storage_profile_transitions
             where reauth_audit_event_id=p_reauth_audit_event_id) then
     raise exception 'storage_profile_reauth_reused'
       using errcode='invalid_authorization_specification';
@@ -539,7 +579,14 @@ begin
     p_reauth_audit_event_id,p_actor_user_id,null,jsonb_build_object(
       'profile',p_profile,'reason',btrim(p_reason),'idempotency_key',btrim(p_idempotency_key),
       'generation',v_row.generation));
-  return v_row;
+  v_result:=jsonb_build_object('storage_profile',p_profile,
+    'storage_availability','FULL_VERIFY_REQUIRED','storage_remediation','FULL_VERIFY',
+    'generation',v_row.generation);
+  insert into app.evidence_storage_profile_transitions(
+    case_id,idempotency_key,profile,reason,actor_user_id,reauth_audit_event_id,result)
+  values(p_case_id,btrim(p_idempotency_key),p_profile,btrim(p_reason),p_actor_user_id,
+    p_reauth_audit_event_id,v_result);
+  return v_result;
 end $$;
 
 create function app.evidence_storage_record_observation(
@@ -577,6 +624,14 @@ begin
       update app.evidence_storage_authorities set state='IDENTITY_DRIFT',read_only=true,
         observed_mount_instance=p_mount_instance,remediation='AUTHORIZE_SOURCE_CHANGE',
         last_observed_at=now(),updated_at=now() where case_id=p_case_id returning * into v_row;
+    elsif v_row.state='CUSTODY_VIOLATION' then
+      update app.evidence_storage_authorities set read_only=true,
+        observed_mount_instance=p_mount_instance,last_observed_at=now(),updated_at=now()
+        where case_id=p_case_id returning * into v_row;
+    elsif v_row.state in ('UNAVAILABLE','FULL_VERIFY_REQUIRED','IDENTITY_DRIFT','READ_WRITE_DRIFT') then
+      update app.evidence_storage_authorities set state='FULL_VERIFY_REQUIRED',read_only=true,
+        observed_mount_instance=p_mount_instance,remediation='FULL_VERIFY',
+        last_observed_at=now(),updated_at=now() where case_id=p_case_id returning * into v_row;
     elsif v_row.verified_mount_instance is distinct from p_mount_instance
        or v_row.verified_generation is distinct from v_row.generation then
       update app.evidence_storage_authorities set state='FULL_VERIFY_REQUIRED',read_only=true,
@@ -594,12 +649,12 @@ end $$;
 create function app.evidence_storage_commit_full_verify(
   p_case_id uuid,p_generation bigint,p_profile text,p_source_identity text,
   p_mount_instance text,p_read_only boolean,p_manifest_version integer,
-  p_items jsonb,p_correlation_id text,p_actor_user_id uuid
+  p_items jsonb,p_correlation_id text,p_actor_user_id uuid,p_note text
 ) returns app.evidence_storage_authorities
 language plpgsql security definer set search_path=pg_catalog,app as $$
 declare v_row app.evidence_storage_authorities; v_head app.evidence_chain_heads;
 begin
-  if p_actor_user_id is null then
+  if p_actor_user_id is null or length(coalesce(p_note,'')) > 1000 then
     raise exception 'storage_full_verify_operator_required'
       using errcode='invalid_authorization_specification';
   end if;
@@ -654,9 +709,9 @@ begin
       then true else null end,last_observed_at=now(),last_full_verified_at=now(),
     remediation='NONE',updated_at=now() where case_id=p_case_id returning * into v_row;
   insert into app.evidence_storage_verifications(case_id,generation,profile,source_identity,
-    mount_instance,manifest_version,manifest_hash,item_facts,correlation_id,actor_user_id)
+    mount_instance,manifest_version,manifest_hash,item_facts,correlation_id,actor_user_id,note)
   values(p_case_id,p_generation,p_profile,p_source_identity,p_mount_instance,p_manifest_version,
-    v_head.manifest_hash,p_items,p_correlation_id,p_actor_user_id);
+    v_head.manifest_hash,p_items,p_correlation_id,p_actor_user_id,nullif(p_note,''));
   update app.evidence_chain_heads set seal_status=case
       when exists(select 1 from app.evidence_objects where case_id=p_case_id
         and (status='violated' or seal_status='violated')) then 'violated'
@@ -682,20 +737,21 @@ revoke execute on function app.evidence_storage_change_profile(uuid,text,text,te
   from public,anon,authenticated;
 revoke execute on function app.evidence_storage_record_observation(uuid,text,boolean,text,text,boolean)
   from public,anon,authenticated;
-revoke execute on function app.evidence_storage_commit_full_verify(uuid,bigint,text,text,text,boolean,integer,jsonb,text,uuid)
+revoke execute on function app.evidence_storage_commit_full_verify(uuid,bigint,text,text,text,boolean,integer,jsonb,text,uuid,text)
   from public,anon,authenticated;
-revoke execute on function app.evidence_storage_record_verify_failure(uuid,bigint,text,integer,text,text,text,uuid)
+revoke execute on function app.evidence_storage_record_verify_failure(uuid,bigint,text,integer,text,text,text,uuid,text)
   from public,anon,authenticated;
 revoke execute on function app.evidence_record_inventory_classification_v2(uuid,text,text,jsonb)
   from public,anon,authenticated;
 revoke execute on function app.evidence_storage_authority_for_new_case()
   from public,anon,authenticated;
 do $$ begin if exists(select 1 from pg_roles where rolname='service_role') then
-  grant select on app.evidence_storage_authorities,app.evidence_storage_verifications to service_role;
+  grant select on app.evidence_storage_authorities,app.evidence_storage_verifications,
+    app.evidence_storage_profile_transitions to service_role;
   grant execute on function app.evidence_storage_change_profile(uuid,text,text,text,uuid,uuid) to service_role;
   grant execute on function app.evidence_storage_record_observation(uuid,text,boolean,text,text,boolean) to service_role;
-  grant execute on function app.evidence_storage_commit_full_verify(uuid,bigint,text,text,text,boolean,integer,jsonb,text,uuid) to service_role;
-  grant execute on function app.evidence_storage_record_verify_failure(uuid,bigint,text,integer,text,text,text,uuid)
+  grant execute on function app.evidence_storage_commit_full_verify(uuid,bigint,text,text,text,boolean,integer,jsonb,text,uuid,text) to service_role;
+  grant execute on function app.evidence_storage_record_verify_failure(uuid,bigint,text,integer,text,text,text,uuid,text)
     to service_role;
   grant execute on function app.evidence_record_inventory_classification_v2(uuid,text,text,jsonb)
     to service_role;

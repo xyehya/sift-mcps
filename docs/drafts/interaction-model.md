@@ -73,7 +73,7 @@ These are operator-only — the agent can never satisfy them.
 | Gate | Action | Mechanism (MVP) | Authority recorded |
 | --- | --- | --- | --- |
 | G1 | Case activation | Supabase password re-auth + scoped audit receipt | `app.active_case_state` |
-| G2 | Add/Seal, Replace/Reacquire, exact Restore, Ignore/Delete/Retire, Full Verify Evidence | Supabase password re-auth + operation/object-bound audit receipt | durable custody operation + `app.evidence_custody_events` + chain head |
+| G2 | Add/Seal, Replace/Reacquire, exact Restore, Ignore/Delete/Retire | Supabase password re-auth + operation/object-bound audit receipt | durable custody operation + `app.evidence_custody_events` + chain head |
 | G3 | Agent credential issuance | Supabase password re-auth + scoped audit receipt | Supabase principal + scope rows |
 | G4 | Finding approval | Supabase password re-auth + scoped audit receipt | `app.investigation_*` (human-locked) |
 | G5 | Report inclusion / export | Supabase password re-auth + scoped audit receipt | `app.report_metadata` + proof refs |
@@ -82,6 +82,10 @@ The verifier uses the authenticated session identity, discards password-grant
 tokens, and fails closed without Supabase or DB audit authority. Historical
 BATCH-V1 proof used the then-current re-auth mechanism; it is not the active
 credential contract.
+
+**Full Verify Evidence is different:** it is a passwordless authenticated
+operator action. The current session identity is recorded on the append-only
+verification receipt, but no fresh password ceremony is performed.
 
 Current re-auth loop:
 

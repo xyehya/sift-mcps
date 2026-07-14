@@ -70,8 +70,8 @@ class FakeEvidenceDB:
     def list_evidence(self, case_id):
         return []
 
-    def verify(self, *, case_id, actor=None):
-        self.verify_calls.append((case_id, actor))
+    def verify(self, *, case_id, actor=None, note=None):
+        self.verify_calls.append((case_id, actor, note))
         return dict(self.verify_result)
 
 
@@ -221,9 +221,10 @@ class TestVerifyHmacEndpoint:
         # CL3a: the Supabase-envelope session populates request.state.principal,
         # so verify carries the operator actor (was None under legacy cookie).
         assert len(ev.verify_calls) == 1
-        case_id, actor = ev.verify_calls[0]
+        case_id, actor, note = ev.verify_calls[0]
         assert case_id == _CASE_ID
         assert isinstance(actor, dict) and actor["principal_type"] == "operator"
+        assert note is None
 
     def test_failed_verify_reports_not_ok(self, passwords_dir, tmp_path, monkeypatch):
         ev = FakeEvidenceDB(
@@ -237,6 +238,7 @@ class TestVerifyHmacEndpoint:
         data = resp.json()
         assert data["ok"] is False
         assert data["issues"] == ["Modified: evidence/x"]
+        assert ev.verify_calls[0][2] == "operator initiated"
 
     def test_invalid_json_returns_400(self, passwords_dir, tmp_path, monkeypatch):
         c = _build_client(passwords_dir, tmp_path, monkeypatch, FakeEvidenceDB())

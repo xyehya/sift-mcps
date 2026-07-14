@@ -220,9 +220,9 @@ file-backed mutation fallback. All mutations require examiner role,
   every prior version. It writes one excluding manifest/event. Exact request
   `{password, path, reason, idempotency_key}` with object-bound fresh re-authentication.
 ### POST `/api/evidence/chain/verify-hmac` (`post_evidence_chain_verify_hmac`, 1426)
-- Compatibility URL for **Full Verify Evidence**. After fresh password re-auth, the
-  gateway re-hashes every sealed mounted object and compares it with Postgres custody
-  authority; no password-derived key or file ledger participates. Records the DB
+- Compatibility URL for **Full Verify Evidence**. This is a passwordless authenticated
+  operator action: the gateway re-hashes every sealed mounted object and compares it
+  with Postgres custody authority; no password-derived key or file ledger participates. Records the DB
   verification timestamp and returns `{ok, verified, issues, verified_at, verified_by}`.
 ### POST `/api/evidence/chain/anchor`, `/proof-export`
 - Solana anchor / DB proof export of the sealed manifest (operator examiner; proof is

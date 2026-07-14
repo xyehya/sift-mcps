@@ -23,6 +23,9 @@ _ADMITTED_REFS: ContextVar[tuple[AdmittedEvidenceBinding, ...]] = ContextVar(
 _INVENTORY_TOKEN: ContextVar[str] = ContextVar(
     "sift_gateway_inventory_token", default=""
 )
+_STORAGE_AUTHORITY: ContextVar[dict[str, Any] | None] = ContextVar(
+    "sift_gateway_storage_execution_authority", default=None
+)
 
 
 def current_admitted_refs() -> list[AdmittedEvidenceBinding]:
@@ -34,18 +37,30 @@ def current_inventory_token() -> str:
     return _INVENTORY_TOKEN.get()
 
 
-def bind_admitted_refs(refs: list[AdmittedEvidenceBinding], *, inventory_token: str):
+def current_storage_authority() -> dict[str, Any]:
+    """Return the DB-authority snapshot bound at admission."""
+    return dict(_STORAGE_AUTHORITY.get() or {})
+
+
+def bind_admitted_refs(
+    refs: list[AdmittedEvidenceBinding],
+    *,
+    inventory_token: str,
+    storage_authority: dict[str, Any] | None = None,
+):
     """Bind authorized references for the duration of one middleware call."""
     return (
         _ADMITTED_REFS.set(tuple(_copy_admitted_ref(item) for item in refs)),
         _INVENTORY_TOKEN.set(inventory_token),
+        _STORAGE_AUTHORITY.set(dict(storage_authority or {})),
     )
 
 
 def reset_admitted_refs(token: Any) -> None:
-    refs_token, inventory_token = token
+    refs_token, inventory_token, storage_authority = token
     _ADMITTED_REFS.reset(refs_token)
     _INVENTORY_TOKEN.reset(inventory_token)
+    _STORAGE_AUTHORITY.reset(storage_authority)
 
 
 def serialize_resolved_ref(item: AdmittedEvidenceBinding) -> AdmittedEvidenceBinding:
@@ -72,6 +87,11 @@ def _copy_admitted_ref(item: AdmittedEvidenceBinding) -> AdmittedEvidenceBinding
         "storage_source_identity": item.get("storage_source_identity", ""),
         "mount_instance_identity": item.get("mount_instance_identity", ""),
         "read_only_required": item.get("read_only_required", False),
+        "storage_generation": item["storage_generation"],
+        "storage_verified_generation": item["storage_verified_generation"],
+        "storage_manifest_version": item["storage_manifest_version"],
+        "storage_manifest_hash": item["storage_manifest_hash"],
+        "storage_verification_receipt_id": item["storage_verification_receipt_id"],
     }
 
 

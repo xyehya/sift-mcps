@@ -173,6 +173,116 @@ def test_storage_observation_distinguishes_reconnect_source_change_and_rw_drift(
                 (case_id, source_a, mount_a),
             )
             assert cur.fetchone() == ("READ_WRITE_DRIFT", "RESTORE_READ_ONLY")
+            cur.execute(
+                "select state,remediation from app.evidence_storage_record_observation(%s,'EXTERNALLY_READ_ONLY',true,%s,%s,true)",
+                (case_id, source_a, mount_a),
+            )
+            assert cur.fetchone() == ("FULL_VERIFY_REQUIRED", "FULL_VERIFY")
+            cur.execute(
+                """update app.evidence_storage_authorities set state='AVAILABLE',
+                   verified_generation=generation,read_only=true where case_id=%s""",
+                (case_id,),
+            )
+            cur.execute(
+                "select state from app.evidence_storage_record_observation(%s,'EXTERNALLY_READ_ONLY',true,%s,%s,true)",
+                (case_id, source_b, mount_a),
+            )
+            assert cur.fetchone() == ("IDENTITY_DRIFT",)
+            cur.execute(
+                "select state,remediation from app.evidence_storage_record_observation(%s,'EXTERNALLY_READ_ONLY',true,%s,%s,true)",
+                (case_id, source_a, mount_a),
+            )
+            assert cur.fetchone() == ("FULL_VERIFY_REQUIRED", "FULL_VERIFY")
+
+
+def test_storage_profile_transition_exact_retry_is_durable_and_conflicts_reject():
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as conn:
+        case_id, actor_id = _case_actor(conn)
+        key = "storage-" + uuid.uuid4().hex
+        binding = {
+            "profile": "EXTERNALLY_READ_ONLY",
+            "reason": "move to operator mounted media",
+            "idempotency_key": key,
+        }
+        receipt = _audit(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            event_type="reauth.evidence_storage_profile_change",
+            binding=binding,
+        )
+        with conn.cursor() as cur:
+            params = (
+                case_id,
+                binding["profile"],
+                binding["reason"],
+                key,
+                receipt,
+                actor_id,
+            )
+            cur.execute(
+                "select app.evidence_storage_change_profile(%s,%s,%s,%s,%s,%s)", params
+            )
+            first = cur.fetchone()[0]
+            cur.execute(
+                "select app.evidence_storage_change_profile(%s,%s,%s,%s,%s,%s)", params
+            )
+            assert cur.fetchone()[0] == first
+            cur.execute(
+                "select generation from app.evidence_storage_authorities where case_id=%s",
+                (case_id,),
+            )
+            assert cur.fetchone()[0] == first["generation"]
+            cur.execute(
+                """select count(*) from app.evidence_custody_events
+                   where case_id=%s and event_type='STORAGE_PROFILE_CHANGED'""",
+                (case_id,),
+            )
+            assert cur.fetchone()[0] == 1
+        conflicting = dict(binding, reason="different transition")
+        conflicting_receipt = _audit(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            event_type="reauth.evidence_storage_profile_change",
+            binding=conflicting,
+        )
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "select app.evidence_storage_change_profile(%s,%s,%s,%s,%s,%s)",
+                        (
+                            case_id,
+                            conflicting["profile"],
+                            conflicting["reason"],
+                            key,
+                            conflicting_receipt,
+                            actor_id,
+                        ),
+                    )
+        fresh_receipt = _audit(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            event_type="reauth.evidence_storage_profile_change",
+            binding=binding,
+        )
+        with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "select app.evidence_storage_change_profile(%s,%s,%s,%s,%s,%s)",
+                        (
+                            case_id,
+                            binding["profile"],
+                            binding["reason"],
+                            key,
+                            fresh_receipt,
+                            actor_id,
+                        ),
+                    )
 
 
 def test_passwordless_full_verify_still_requires_operator_actor():
@@ -185,6 +295,6 @@ def test_passwordless_full_verify_still_requires_operator_actor():
                 with conn.cursor() as cur:
                     cur.execute(
                         """select app.evidence_storage_commit_full_verify(
-                             %s,1,'LOCAL_IMMUTABLE',null,null,null,0,%s,%s,null)""",
+                             %s,1,'LOCAL_IMMUTABLE',null,null,null,0,%s,%s,null,null)""",
                         (uuid.uuid4(), Jsonb([]), "full-verify:" + uuid.uuid4().hex),
                     )

@@ -583,8 +583,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """select (app.evidence_storage_change_profile(
-                         %s,%s,%s,%s,%s,%s)).generation""",
+                    """select app.evidence_storage_change_profile(
+                         %s,%s,%s,%s,%s,%s)""",
                     (
                         case_id,
                         selected.value,
@@ -596,14 +596,9 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 )
                 row = cur.fetchone()
             conn.commit()
-        if not row:
+        if not row or not isinstance(row[0], dict):
             raise PortalServiceError("storage_profile_change_failed", http_status=503)
-        return {
-            "storage_profile": selected.value,
-            "storage_availability": "FULL_VERIFY_REQUIRED",
-            "storage_remediation": "FULL_VERIFY",
-            "generation": int(row[0]),
-        }
+        return dict(row[0])
 
     def reconcile_for_admission(self, case_id: str) -> dict[str, Any]:
         """Observe the mounted inventory and persist custody state, fail closed.
@@ -622,7 +617,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+                    """select seal_status,issues,manifest_version,manifest_hash
+                       from app.evidence_chain_heads where case_id=%s""",
                     (case_id,),
                 )
                 head_row = cur.fetchone()
@@ -664,7 +660,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     and not storage_recoverable_head
                 )
                 cur.execute(
-                    """select v.item_facts from app.evidence_storage_verifications v
+                    """select v.id::text,v.item_facts from app.evidence_storage_verifications v
                        join app.evidence_storage_authorities a on a.case_id=v.case_id
                        join app.evidence_chain_heads h on h.case_id=v.case_id
                        where v.case_id=%s and v.outcome='SUCCESS'
@@ -676,8 +672,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 )
                 receipt_row = cur.fetchone()
                 receipt_items = (
-                    receipt_row[0]
-                    if receipt_row and isinstance(receipt_row[0], list)
+                    receipt_row[1]
+                    if receipt_row and isinstance(receipt_row[1], list)
                     else []
                 )
                 receipt_by_object = {
@@ -723,6 +719,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     _admission_correlation_id() or f"portal-{uuid.uuid4().hex}"
                 )
                 observed_facts: list[MountedEvidence] = []
+                pending_detected: list[tuple[str, str, int | None]] = []
+                scan_complete = True
                 if not evidence_dir.is_dir():
                     storage_available = False
                     unsafe.append("evidence_storage_unavailable")
@@ -775,6 +773,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         )
                     except OSError:
                         entries = []
+                        scan_complete = False
                         storage_available = False
                         unsafe.append("evidence_inventory_unavailable")
                     for entry in entries:
@@ -789,8 +788,10 @@ class EvidenceAuthorityService(_BasePortalDbService):
                             st = entry.stat(follow_symlinks=False)
                             regular = entry.is_file(follow_symlinks=False)
                         except OSError:
-                            st = None
-                            regular = False
+                            scan_complete = False
+                            storage_available = False
+                            unsafe.append("evidence_inventory_unavailable")
+                            break
                         if not regular or st is None or st.st_nlink != 1:
                             kind = (
                                 EntryKind.SYMLINK
@@ -810,13 +811,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                     hidden=entry.name.startswith("."),
                                 )
                             )
-                            self._record_detected_observation(
-                                cur,
-                                case_id,
-                                rel,
-                                entry.name,
-                                st.st_size if st else None,
-                                correlation_id,
+                            pending_detected.append(
+                                (rel, entry.name, st.st_size if st else None)
                             )
                             unsafe.append("unsafe_evidence_inventory_entry")
                             continue
@@ -838,14 +834,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                     hidden=entry.name.startswith("."),
                                 )
                             )
-                            self._record_detected_observation(
-                                cur,
-                                case_id,
-                                rel,
-                                entry.name,
-                                st.st_size,
-                                correlation_id,
-                            )
+                            pending_detected.append((rel, entry.name, st.st_size))
                             continue
                         immutable: bool | None = None
                         if storage_profile is StorageProfile.LOCAL_IMMUTABLE:
@@ -863,7 +852,10 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                 finally:
                                     os.close(flags_fd)
                             except OSError:
-                                immutable = None
+                                scan_complete = False
+                                storage_available = False
+                                unsafe.append("evidence_inventory_unavailable")
+                                break
                         observed_facts.append(
                             MountedEvidence(
                                 observation_id=observation_id,
@@ -892,6 +884,28 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                     else None
                                 ),
                             )
+                        )
+                if not scan_complete:
+                    # A partial inventory is not evidence of object absence or
+                    # tampering.  Discard all per-object conclusions and let the
+                    # aggregate UNAVAILABLE state be the only classification.
+                    live.clear()
+                    observed_facts.clear()
+                    pending_detected.clear()
+                    unsafe = [
+                        item
+                        for item in unsafe
+                        if item != "unsafe_evidence_inventory_entry"
+                    ]
+                elif storage_available:
+                    for rel, display_name, size in pending_detected:
+                        self._record_detected_observation(
+                            cur,
+                            case_id,
+                            rel,
+                            display_name,
+                            size,
+                            correlation_id,
                         )
                 expected_facts: list[AuthorityEvidence] = []
                 for known in sealed.values():
@@ -1037,13 +1051,107 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     ),
                 )
             conn.commit()
+        execution_authority = None
+        if storage_available:
+            try:
+                execution_authority = self.storage_execution_authority(case_id)
+            except PortalServiceError:
+                storage_available = False
+                unsafe.append("evidence_storage_authority_unavailable")
         return {
             "state": "available" if storage_available else "unavailable",
             "gate_state": classification.gate_state.value,
             "observed": len(live),
             "issues": sorted(set(unsafe)),
             "correlation_id": correlation_id,
+            "execution_authority": execution_authority,
         }
+
+    def storage_execution_authority(self, case_id: str) -> dict[str, Any]:
+        """Return and live-check the DB-authoritative execution snapshot.
+
+        This is Gateway-private state.  It binds execution to the current
+        storage generation, manifest, successful verification receipt, source,
+        mount instance, and read-only posture without exposing mount material.
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select a.profile,a.source_identity,a.verified_mount_instance,
+                              a.state,a.generation,a.verified_generation,a.read_only,
+                              h.manifest_version,h.manifest_hash,
+                              (select v.id::text from app.evidence_storage_verifications v
+                               where v.case_id=a.case_id and v.outcome='SUCCESS'
+                                 and v.generation=a.generation and v.profile=a.profile
+                                 and v.manifest_version=h.manifest_version
+                                 and v.manifest_hash=h.manifest_hash
+                               order by v.created_at desc,v.id desc limit 1),
+                              (select count(*) from app.evidence_objects o
+                               where o.case_id=a.case_id and o.status='sealed')
+                       from app.evidence_storage_authorities a
+                       join app.evidence_chain_heads h on h.case_id=a.case_id
+                       where a.case_id=%s""",
+                    (case_id,),
+                )
+                row = cur.fetchone()
+        if (
+            not row
+            or str(row[3]) != "AVAILABLE"
+            or row[5] != row[4]
+            or (int(row[10] or 0) > 0 and not row[9])
+        ):
+            raise PortalServiceError(
+                "external_storage_full_verify_required", http_status=403
+            )
+        profile = StorageProfile(str(row[0]))
+        if profile is StorageProfile.EXTERNALLY_READ_ONLY:
+            case_dir = self._case_artifact_path(case_id)
+            if case_dir is None:
+                raise PortalServiceError(
+                    "evidence_storage_unavailable", http_status=409
+                )
+            root_fd: int | None = None
+            try:
+                root_fd = os.open(
+                    case_dir / "evidence",
+                    os.O_RDONLY
+                    | os.O_CLOEXEC
+                    | os.O_DIRECTORY
+                    | getattr(os, "O_NOFOLLOW", 0),
+                )
+                facts = external_storage_facts(root_fd)
+            except (OSError, StorageAuthorityError) as exc:
+                raise PortalServiceError(
+                    "evidence_storage_unavailable", http_status=409
+                ) from exc
+            finally:
+                if root_fd is not None:
+                    os.close(root_fd)
+            if (
+                facts.source_identity != str(row[1])
+                or facts.mount_instance_identity != str(row[2])
+                or row[6] is not True
+            ):
+                raise PortalServiceError("evidence_posture_changed", http_status=403)
+        return {
+            "storage_profile": profile.value,
+            "storage_source_identity": str(row[1] or ""),
+            "mount_instance_identity": str(row[2] or ""),
+            "storage_generation": int(row[4]),
+            "storage_verified_generation": int(row[5]),
+            "storage_manifest_version": int(row[7] or 0),
+            "storage_manifest_hash": str(row[8] or ""),
+            "storage_verification_receipt_id": str(row[9] or ""),
+        }
+
+    def revalidate_execution_authority(
+        self, case_id: str, expected: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Fail closed if DB or mounted authority changed since admission."""
+        current = self.storage_execution_authority(case_id)
+        if not expected or current != expected:
+            raise PortalServiceError("evidence_authority_changed", http_status=403)
+        return current
 
     @staticmethod
     def _record_detected_observation(
@@ -1299,7 +1407,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 )
                 storage = cur.fetchone()
                 cur.execute(
-                    """select v.item_facts from app.evidence_storage_verifications v
+                    """select v.id::text,v.item_facts from app.evidence_storage_verifications v
                        join app.evidence_storage_authorities a on a.case_id=v.case_id
                        join app.evidence_chain_heads h on h.case_id=v.case_id
                        where v.case_id=%s and v.outcome='SUCCESS'
@@ -1325,9 +1433,10 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 "evidence_storage_authority_unavailable", http_status=503
             )
         profile = StorageProfile(str(storage[0]))
+        execution_authority = self.storage_execution_authority(case_id)
         verification_items = (
-            verification_row[0]
-            if verification_row and isinstance(verification_row[0], list)
+            verification_row[1]
+            if verification_row and isinstance(verification_row[1], list)
             else []
         )
         verified_item = next(
@@ -1376,6 +1485,9 @@ class EvidenceAuthorityService(_BasePortalDbService):
             or external.source_identity != str(storage[1])
             or external.mount_instance_identity != str(storage[2])
             or not isinstance(verified_item, dict)
+            or not verification_row
+            or str(verification_row[0])
+            != execution_authority["storage_verification_receipt_id"]
             or (
                 st.st_dev,
                 st.st_ino,
@@ -1419,6 +1531,15 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 external.mount_instance_identity if external is not None else ""
             ),
             "read_only_required": profile is StorageProfile.EXTERNALLY_READ_ONLY,
+            "storage_generation": execution_authority["storage_generation"],
+            "storage_verified_generation": execution_authority[
+                "storage_verified_generation"
+            ],
+            "storage_manifest_version": execution_authority["storage_manifest_version"],
+            "storage_manifest_hash": execution_authority["storage_manifest_hash"],
+            "storage_verification_receipt_id": execution_authority[
+                "storage_verification_receipt_id"
+            ],
         }
 
     def record_reauth_event(
@@ -2143,6 +2264,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
         *,
         case_id: str,
         actor: Any = None,
+        note: str | None = None,
     ) -> dict[str, Any]:
         """Re-verify sealed evidence against mounted bytes and record the outcome.
 
@@ -2198,6 +2320,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 failure_code=failure_code,
                 correlation_id=correlation_id,
                 actor_user_id=actor_user,
+                note=note,
             )
             raise
         try:
@@ -2214,6 +2337,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     failure_code=failure_code,
                     correlation_id=correlation_id,
                     actor_user_id=actor_user,
+                    note=note,
                 )
                 raise
         finally:
@@ -2254,7 +2378,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 with conn.cursor() as cur:
                     cur.execute(
                         """select app.evidence_storage_commit_full_verify(
-                             %s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                             %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                         (
                             case_id,
                             int(authority[1]),
@@ -2268,6 +2392,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                             _jsonb(items),
                             correlation_id,
                             actor_user,
+                            note,
                         ),
                     )
                 conn.commit()
@@ -2281,6 +2406,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 failure_code="MOUNTED_EVIDENCE_MISMATCH",
                 correlation_id=correlation_id,
                 actor_user_id=actor_user,
+                note=note,
             )
         result = self.gate_status(case_id)
         result["verified"] = ok
@@ -2319,12 +2445,13 @@ class EvidenceAuthorityService(_BasePortalDbService):
         failure_code: str,
         correlation_id: str,
         actor_user_id: str | None,
+        note: str | None = None,
     ) -> None:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """select app.evidence_storage_record_verify_failure(
-                         %s,%s,%s,%s,%s,%s,%s,%s)""",
+                         %s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (
                         case_id,
                         generation,
@@ -2334,6 +2461,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         failure_code,
                         correlation_id,
                         actor_user_id,
+                        note,
                     ),
                 )
             conn.commit()

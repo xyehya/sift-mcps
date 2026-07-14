@@ -34,6 +34,11 @@ class AdmittedEvidenceBinding(TypedDict, total=False):
     storage_source_identity: NotRequired[str]
     mount_instance_identity: NotRequired[str]
     read_only_required: NotRequired[bool]
+    storage_generation: Required[int]
+    storage_verified_generation: Required[int]
+    storage_manifest_version: Required[int]
+    storage_manifest_hash: Required[str]
+    storage_verification_receipt_id: Required[str]
 
 
 InventoryIdentity = tuple[str, int, int, int, int, int, int, int]

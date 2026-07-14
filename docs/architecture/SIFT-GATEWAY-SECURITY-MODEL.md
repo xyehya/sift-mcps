@@ -56,7 +56,8 @@ Authority flows one way: **Postgres (control plane) is the source of truth**; Op
 (data plane) is a derived projection rebuilt from artifacts, never trusted as the system of
 record. Heavy work doesn't block the agent — the gateway **enqueues a durable job**,
 least-privilege workers **claim** it under a lease, confined execution writes results back
-up to Postgres and out to the derived index. Evidence is operator-mounted and immutable;
+up to Postgres and out to the derived index. Evidence is operator-mounted under one of
+the two custody profiles below;
 reports only ever contain approved material.
 
 Evidence storage has two closed profiles. `LOCAL_IMMUTABLE` uses service ownership, fixed mode,
@@ -76,7 +77,7 @@ current version receipt, source, mount instance, identity, link count, and read-
 | ⑤ Add-on MCP backends (`app.mcp_backends`) | **opensearch-mcp** (CORE, ns `opensearch`) · **forensic-rag-mcp** (CORE, ns `kb`, pgvector, knowledge-only) · **opencti-mcp** (EXTERNAL, `cti_*`, query-only) |
 | ⑥ **Data plane — DERIVED** (OpenSearch, security ON, per-consumer scoped roles) | `case-*` indices · `opencti_*`/timeline · N ingest workers `sift-opensearch-worker@` (least-priv, parallel, non-blocking) |
 | ⑦ Execution plane (SIFT VM) | `sift-job-worker` (claim `FOR UPDATE SKIP LOCKED`, lease 300s, poll 1s; types run_command/ingest/enrich) · sandboxed `run_command` (Landlock v4 + seccomp=kill + cgroup + AppArmor=enforce) |
-| ⑧ Evidence & reports | Evidence Vault (immutable raw bytes + sha256, `chattr +i`, manifest+ledger, operator-mounted only) · Reports/Exports (APPROVED findings & data only) |
+| ⑧ Evidence & reports | Evidence Vault (`LOCAL_IMMUTABLE` or descriptor-pinned `EXTERNALLY_READ_ONLY`; Postgres manifest, version, verification, and custody-event authority) · Reports/Exports (APPROVED findings & data only) |
 
 ## VP-3 — One ordered path, nine fail-closed gates
 Every agent tool call traverses this fixed chain (verified in `mcp_server.py` +
@@ -111,12 +112,12 @@ scrubbed before re-entering the agent's context — the prompt-injection-from-ev
 | # | Trust boundary | STRIDE | Enforcing control |
 | --- | --- | --- | --- |
 | 1 | Client → Gateway single policy boundary; per-backend `/mcp` routes disabled | S T R E | `AuthMiddleware` + `SiftTokenVerifier` (Supabase JWT); `ToolAuthorization` fail-closed on no identity / out-of-scope |
-| 2 | Execution/Core → Evidence Vault immutability | T R I | `EvidenceGate` (sealed + chain OK before any tool runs); `chattr +i`; append-only custody chains |
+| 2 | Execution/Core → Evidence Vault custody | T R I | `EvidenceGate` (sealed version + current storage generation/receipt before dispatch); local immutable flags or externally read-only descriptor/source/mount checks; append-only Postgres custody chains |
 | 3 | Worker → OS Sandbox privilege confinement | E D T | Landlock v4 + seccomp=kill + AppArmor=enforce + no-new-privs; cgroup `MemoryMax`/`TasksMax`, `IPAddressDeny=any`; runtime-user fail-closed |
 | 4 | Gateway → Control Plane authority | T R E | Postgres authoritative + `FORCE RLS`; `active_case_authority` (no env/pointer state); append-only audit |
 | 5 | Gateway/Add-ons → Data Plane derived-data | T I E | OpenSearch never authoritative; per-consumer scoped roles; provenance; case-scoped mediated search |
 | 6 | Tool output → Agent untrusted-output | I T | `ResponseGuard`: secret patterns → `[REDACTED:*]`, untrusted-output labelling, no path/traceback leaks |
-| 7 | Operator → privileged action human step-up | S R E | Supabase fail-closed re-verify (CL3a/b) on case activation, evidence seal/retire, finding approval, report export, credential issuance; `approval_ledger` |
+| 7 | Operator → privileged action human step-up | S R E | Supabase fail-closed re-verify (CL3a/b) on case activation, evidence seal/retire, finding approval, report export, credential issuance; passwordless authenticated-operator Full Verify writes an append-only receipt; `approval_ledger` |
 
 **Residual risk (boundary 2 — accepted):** custody hash, seal, and append-only chain prove
 *integrity and provenance* of registered evidence — **not** that image bytes are safe to

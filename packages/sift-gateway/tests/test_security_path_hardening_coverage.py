@@ -76,6 +76,15 @@ class _Resolver:
             "st_mtime_ns": 3,
             "st_ctime_ns": 4,
             "immutable_required": True,
+            "storage_profile": "LOCAL_IMMUTABLE",
+            "storage_source_identity": "",
+            "mount_instance_identity": "",
+            "read_only_required": False,
+            "storage_generation": 1,
+            "storage_verified_generation": 1,
+            "storage_manifest_version": 1,
+            "storage_manifest_hash": "sha256:manifest",
+            "storage_verification_receipt_id": "receipt-1",
         }
 
 
@@ -163,6 +172,15 @@ def test_run_command_evidence_refs_are_resolved_only_by_active_case_service():
         "st_mtime_ns": 3,
         "st_ctime_ns": 4,
         "immutable_required": True,
+        "storage_profile": "LOCAL_IMMUTABLE",
+        "storage_source_identity": "",
+        "mount_instance_identity": "",
+        "read_only_required": False,
+        "storage_generation": 1,
+        "storage_verified_generation": 1,
+        "storage_manifest_version": 1,
+        "storage_manifest_hash": "sha256:manifest",
+        "storage_verification_receipt_id": "receipt-1",
     }]
     assert resolver.calls == [(_CASE.case_id, "evidence/disk.E01")]
 

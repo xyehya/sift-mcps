@@ -75,6 +75,16 @@ class _AdmissionService:
         self.observations = []
         self.known = set(known)
         self.unavailable = unavailable
+        self.execution_authority = {
+            "storage_profile": "LOCAL_IMMUTABLE",
+            "storage_source_identity": "",
+            "mount_instance_identity": "",
+            "storage_generation": 1,
+            "storage_verified_generation": 1,
+            "storage_manifest_version": 1,
+            "storage_manifest_hash": "sha256:manifest",
+            "storage_verification_receipt_id": "receipt-1",
+        }
 
     def reconcile_for_admission(self, case_id):
         self.reconciled.append(case_id)
@@ -90,7 +100,17 @@ class _AdmissionService:
                 "observed": 0,
                 "issues": ["evidence_storage_unavailable"],
             }
-        return {"state": "available", "observed": len(self.observations), "issues": []}
+        return {
+            "state": "available",
+            "observed": len(self.observations),
+            "issues": [],
+            "execution_authority": dict(self.execution_authority),
+        }
+
+    def revalidate_execution_authority(self, _case_id, expected):
+        if expected != self.execution_authority:
+            raise RuntimeError("authority changed")
+        return dict(self.execution_authority)
 
     def resolve_evidence_reference(self, case_id, ref):
         self.resolved.append((case_id, ref))
@@ -106,6 +126,7 @@ class _AdmissionService:
             "st_dev": 1,
             "st_ino": 2,
             "st_mtime_ns": 3,
+            **self.execution_authority,
         }
 
 
@@ -399,6 +420,51 @@ async def test_operator_recovery_allows_only_sealed_version_with_no_pending_sibl
 
 
 @pytest.mark.asyncio
+async def test_storage_authorization_change_after_admission_denies_before_handler(
+    tmp_path,
+):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "sealed.raw").write_bytes(b"sealed")
+    service = _AdmissionService(case_dir=tmp_path, known={"evidence/sealed.raw"})
+    gateway = _gateway(tmp_path, service)
+    mcp = FastMCP("aggregate", middleware=gateway_policy_middlewares(gateway))
+    calls = []
+
+    @mcp.tool(name="run_command")
+    async def run_command(command: str):
+        calls.append(command)
+        return "must-not-run"
+
+    def changed(_case_id, _expected):
+        # Models profile/source authorization after the first reconcile while
+        # file/source/mount fingerprint values themselves remain unchanged.
+        service.execution_authority["storage_generation"] += 1
+        raise RuntimeError("storage authorization changed")
+
+    service.revalidate_execution_authority = changed
+    opened = {
+        "blocked": False,
+        "status": ChainStatus.OK,
+        "issues": [],
+        "manifest_version": 2,
+    }
+    with (
+        patch(
+            "sift_gateway.policy_middleware.check_evidence_gate_db",
+            return_value=opened,
+        ),
+        patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=None),
+    ):
+        result = await mcp.call_tool(
+            "run_command", {"command": "cat evidence/sealed.raw"}
+        )
+
+    assert result.is_error is True
+    assert calls == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "command",
     [
@@ -569,6 +635,20 @@ class _Cursor:
         return [self.row]
 
     def fetchone(self):
+        if "from app.evidence_storage_authorities a" in self.sql:
+            return (
+                "LOCAL_IMMUTABLE",
+                None,
+                None,
+                "AVAILABLE",
+                1,
+                1,
+                None,
+                1,
+                "sha256:manifest",
+                "receipt-1",
+                1,
+            )
         if "evidence_storage_authorities" in self.sql:
             return (
                 "LOCAL_IMMUTABLE",
@@ -615,6 +695,20 @@ class _ResolveCursor:
         self.sql = " ".join(sql.split())
 
     def fetchone(self):
+        if "from app.evidence_storage_authorities a" in self.sql:
+            return (
+                "LOCAL_IMMUTABLE",
+                None,
+                None,
+                "AVAILABLE",
+                1,
+                1,
+                None,
+                1,
+                "sha256:manifest",
+                "receipt-1",
+                1,
+            )
         if "evidence_storage_authorities" in self.sql:
             return ("LOCAL_IMMUTABLE", None, None, "AVAILABLE", 1, 1, None)
         if "evidence_storage_verifications" in self.sql:
@@ -654,8 +748,22 @@ class _ExternalResolveCursor(_ResolveCursor):
         self.queries.append(self.sql)
 
     def fetchone(self):
+        if "from app.evidence_storage_authorities a" in self.sql:
+            return (
+                self.storage[0],
+                self.storage[1],
+                self.storage[2],
+                self.storage[3],
+                self.storage[4],
+                self.storage[5],
+                self.storage[6],
+                1,
+                "sha256:manifest",
+                "receipt-1",
+                1,
+            )
         if "evidence_storage_verifications" in self.sql:
-            return (self.receipt,)
+            return ("receipt-1", self.receipt)
         if "evidence_storage_authorities" in self.sql:
             return self.storage
         return self.row
@@ -687,15 +795,31 @@ class _ObservationCursor:
         self.calls.append((normalized, params))
         if "evidence_storage_authorities" in normalized:
             self._one = (
-                "LOCAL_IMMUTABLE",
-                None,
-                None,
-                "AVAILABLE",
-                1,
-                1,
-                None,
-                None,
-                "NONE",
+                (
+                    "LOCAL_IMMUTABLE",
+                    None,
+                    None,
+                    "AVAILABLE",
+                    1,
+                    1,
+                    None,
+                    1,
+                    "sha256:manifest",
+                    "receipt-1",
+                    0,
+                )
+                if "join app.evidence_chain_heads" in normalized
+                else (
+                    "LOCAL_IMMUTABLE",
+                    None,
+                    None,
+                    "AVAILABLE",
+                    1,
+                    1,
+                    None,
+                    None,
+                    "NONE",
+                )
             )
         elif "evidence_storage_verifications" in normalized:
             self._one = None
@@ -821,6 +945,72 @@ def test_unavailable_storage_is_not_recorded_as_a_violation(tmp_path, monkeypatc
     assert not any(
         "evidence_mark_admission_violation" in call[0] for call in cursor.calls
     )
+
+
+def test_midscan_entry_race_discards_all_object_conclusions(tmp_path, monkeypatch):
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    stable = evidence / "new.raw"
+    stable.write_bytes(b"new")
+
+    class StableEntry:
+        name = "new.raw"
+        path = str(stable)
+
+        @staticmethod
+        def stat(*, follow_symlinks=False):
+            return stable.stat(follow_symlinks=follow_symlinks)
+
+        @staticmethod
+        def is_file(*, follow_symlinks=False):
+            del follow_symlinks
+            return True
+
+    class RacyEntry:
+        name = "racy.raw"
+        path = str(evidence / "racy.raw")
+
+        @staticmethod
+        def stat(*, follow_symlinks=False):
+            del follow_symlinks
+            raise OSError("entry disappeared")
+
+        @staticmethod
+        def is_file(*, follow_symlinks=False):
+            del follow_symlinks
+            return True
+
+    cursor = _ObservationCursor()
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
+    monkeypatch.setattr(
+        service,
+        "storage_execution_authority",
+        lambda _case_id: pytest.fail("partial scan cannot issue execution authority"),
+    )
+    monkeypatch.setattr(os, "scandir", lambda _path: [StableEntry(), RacyEntry()])
+
+    result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
+
+    assert result["state"] == "unavailable"
+    assert "evidence_inventory_unavailable" in result["issues"]
+    assert not any(
+        marker in sql
+        for sql, _params in cursor.calls
+        for marker in (
+            "evidence_observe_admission",
+            "evidence_mark_admission_violation",
+        )
+    )
+    classification_call = next(
+        call
+        for call in cursor.calls
+        if "evidence_record_inventory_classification" in call[0]
+    )
+    findings = getattr(classification_call[1][3], "obj", classification_call[1][3])
+    assert [finding["code"] for finding in findings] == ["STORAGE_UNAVAILABLE"]
 
 
 def test_posture_drift_requires_full_verify_without_generic_content_violation(
@@ -1057,7 +1247,9 @@ def test_local_immutable_posture_drift_denies_reference(tmp_path, monkeypatch):
         service.resolve_evidence_reference("case-1", "evidence/sealed.raw")
 
 
-@pytest.mark.parametrize("receipt_version,allowed", [("ver-1", True), ("stale-ver", False)])
+@pytest.mark.parametrize(
+    "receipt_version,allowed", [("ver-1", True), ("stale-ver", False)]
+)
 def test_external_reference_requires_exact_current_receipt_version(
     receipt_version, allowed, tmp_path, monkeypatch
 ):
@@ -1069,22 +1261,40 @@ def test_external_reference_requires_exact_current_receipt_version(
     st = image.stat()
     source, mount = "a" * 64, "b" * 64
     row = (
-        "ev-1", "evidence/sealed.raw", "sealed", "sealed", "ver-1",
-        "sha256:" + "c" * 64, st.st_size, "ACTIVE", "sealed",
+        "ev-1",
+        "evidence/sealed.raw",
+        "sealed",
+        "sealed",
+        "ver-1",
+        "sha256:" + "c" * 64,
+        st.st_size,
+        "ACTIVE",
+        "sealed",
     )
-    receipt = [{
-        "evidence_object_id": "ev-1", "evidence_version_id": receipt_version,
-        "sha256": "sha256:" + "c" * 64, "bytes": st.st_size,
-        "st_dev": st.st_dev, "st_ino": st.st_ino, "st_mtime_ns": st.st_mtime_ns,
-        "st_ctime_ns": st.st_ctime_ns, "st_nlink": st.st_nlink,
-        "storage_source_identity": source, "mount_instance_identity": mount,
-    }]
+    receipt = [
+        {
+            "evidence_object_id": "ev-1",
+            "evidence_version_id": receipt_version,
+            "sha256": "sha256:" + "c" * 64,
+            "bytes": st.st_size,
+            "st_dev": st.st_dev,
+            "st_ino": st.st_ino,
+            "st_mtime_ns": st.st_mtime_ns,
+            "st_ctime_ns": st.st_ctime_ns,
+            "st_nlink": st.st_nlink,
+            "storage_source_identity": source,
+            "mount_instance_identity": mount,
+        }
+    ]
     connection = _ExternalResolveConnection(
         row, ("EXTERNALLY_READ_ONLY", source, mount, "AVAILABLE", 7, 7, True), receipt
     )
     service = EvidenceAuthorityService("postgresql://unused")
-    monkeypatch.setattr(service, "reconcile_for_admission", lambda _case_id: {"state": "available"})
+    monkeypatch.setattr(
+        service, "reconcile_for_admission", lambda _case_id: {"state": "available"}
+    )
     monkeypatch.setattr(service, "_connect", lambda: connection)
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: tmp_path)
     monkeypatch.setattr(service, "_resolve_evidence_path", lambda *_args: image)
     monkeypatch.setattr(
         "sift_gateway.portal_services.external_storage_facts",
@@ -1096,14 +1306,17 @@ def test_external_reference_requires_exact_current_receipt_version(
         assert resolved["version_id"] == "ver-1"
         assert resolved["storage_source_identity"] == source
         receipt_query = next(
-            q for q in connection.cursor_instance.queries
+            q
+            for q in connection.cursor_instance.queries
             if "evidence_storage_verifications" in q
         )
         assert "v.outcome='SUCCESS'" in receipt_query
         assert "v.generation=a.generation" in receipt_query
         assert "v.manifest_version=h.manifest_version" in receipt_query
     else:
-        with pytest.raises(PortalServiceError, match="external_storage_full_verify_required"):
+        with pytest.raises(
+            PortalServiceError, match="external_storage_full_verify_required"
+        ):
             service.resolve_evidence_reference("case-1", "evidence/sealed.raw")
 
 

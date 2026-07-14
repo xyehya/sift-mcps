@@ -11,9 +11,10 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from mcp.types import TextContent
+from sift_core.execute.evidence_binding import AdmittedEvidenceBinding
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,7 @@ async def handle_run_command_job(
         from sift_gateway.evidence_admission import (
             current_admitted_refs,
             current_inventory_token,
+            current_storage_authority,
             serialize_resolved_ref,
         )
 
@@ -144,6 +146,18 @@ async def handle_run_command_job(
             resolved_evidence = _resolve_evidence_refs(
                 gateway, case, arguments.get("evidence_refs")
             )
+        storage_authority = current_storage_authority()
+        if not storage_authority:
+            authority_reader = getattr(
+                getattr(gateway, "evidence_service", None),
+                "storage_execution_authority",
+                None,
+            )
+            if not callable(authority_reader):
+                raise GatewayJobToolError(
+                    "evidence_authority_unavailable", http_status=503
+                )
+            storage_authority = authority_reader(case.case_id)
         spec_public = _drop_none(
             {
                 "command": str(arguments.get("command")),
@@ -166,6 +180,7 @@ async def handle_run_command_job(
             "case_key": case.case_key,
             "examiner": examiner or getattr(identity, "principal", None) or "agent",
             "evidence_inventory_token": current_inventory_token(),
+            "storage_execution_authority": storage_authority,
         }
         if resolved_evidence:
             spec_internal["resolved_evidence_refs"] = resolved_evidence
@@ -257,10 +272,12 @@ def _resolve_evidence_refs(gateway: Any, case: Any, value: Any) -> list[dict[str
     for ref in refs:
         item = _resolve_evidence(gateway, case, ref)
         resolved.append(
-            _serialize_evidence_binding({
-                "ref": ref,
-                **item,
-            })
+            _serialize_evidence_binding(
+                {
+                    "ref": ref,
+                    **item,
+                }
+            )
         )
     return resolved
 
@@ -268,7 +285,7 @@ def _resolve_evidence_refs(gateway: Any, case: Any, value: Any) -> list[dict[str
 def _serialize_evidence_binding(item: dict[str, Any]) -> dict[str, Any]:
     from sift_gateway.evidence_admission import serialize_resolved_ref
 
-    return serialize_resolved_ref(item)
+    return dict(serialize_resolved_ref(cast(AdmittedEvidenceBinding, item)))
 
 
 def _relative_display_path(value: str) -> str:

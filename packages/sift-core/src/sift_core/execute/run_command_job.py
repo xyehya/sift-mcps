@@ -13,6 +13,11 @@ from sift_common.audit import AuditWriter
 
 from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
 from sift_core.agent_tools import _run_command
+from sift_core.evidence_storage import (
+    StorageAuthorityError,
+    StorageProfile,
+    external_storage_facts,
+)
 from sift_core.execute.evidence_binding import inventory_token as _inventory_token
 from sift_core.execute.job_worker import (
     ClaimedJob,
@@ -39,6 +44,7 @@ def build_custody_validator(dsn: str):
                         job.spec_internal.get("evidence_inventory_token") or ""
                     )
                     case_dir = str(job.spec_internal.get("case_dir") or "")
+                    _validate_storage_authority(cur, job, case_dir)
                     current_inventory = ""
                     try:
                         current_inventory = _inventory_token(case_dir)
@@ -94,6 +100,73 @@ def build_custody_validator(dsn: str):
             raise FatalJobError("custody_admission_denied")
 
     return validate
+
+
+def _validate_storage_authority(cur: Any, job: ClaimedJob, case_dir: str) -> None:
+    """Validate current DB authority and external mount facts for every job."""
+    expected = job.spec_internal.get("storage_execution_authority")
+    if not isinstance(expected, dict) or not expected:
+        raise FatalJobError("custody_admission_denied")
+    cur.execute(
+        """select a.profile,a.source_identity,a.verified_mount_instance,a.state,
+                  a.generation,a.verified_generation,a.read_only,h.manifest_version,
+                  h.manifest_hash,
+                  (select v.id::text from app.evidence_storage_verifications v
+                   where v.case_id=a.case_id and v.outcome='SUCCESS'
+                     and v.generation=a.generation and v.profile=a.profile
+                     and v.manifest_version=h.manifest_version
+                     and v.manifest_hash=h.manifest_hash
+                   order by v.created_at desc,v.id desc limit 1)
+           from app.evidence_storage_authorities a
+           join app.evidence_chain_heads h on h.case_id=a.case_id
+           where a.case_id=%s""",
+        (job.case_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise FatalJobError("custody_admission_denied")
+    current = {
+        "storage_profile": str(row[0]),
+        "storage_source_identity": str(row[1] or ""),
+        "mount_instance_identity": str(row[2] or ""),
+        "storage_generation": int(row[4]),
+        "storage_verified_generation": int(row[5]) if row[5] is not None else -1,
+        "storage_manifest_version": int(row[7] or 0),
+        "storage_manifest_hash": str(row[8] or ""),
+        "storage_verification_receipt_id": str(row[9] or ""),
+    }
+    if str(row[3]) != "AVAILABLE" or row[5] != row[4] or current != expected:
+        raise FatalJobError("custody_admission_denied")
+    for item in job.spec_internal.get("resolved_evidence_refs") or []:
+        if not isinstance(item, dict) or any(
+            item.get(key) != value for key, value in current.items()
+        ):
+            raise FatalJobError("custody_admission_denied")
+    if current["storage_profile"] == StorageProfile.EXTERNALLY_READ_ONLY:
+        root_fd: int | None = None
+        try:
+            root_fd = os.open(
+                Path(case_dir) / "evidence",
+                os.O_RDONLY
+                | os.O_CLOEXEC
+                | os.O_DIRECTORY
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            facts = external_storage_facts(root_fd)
+        except (OSError, StorageAuthorityError) as exc:
+            raise FatalJobError("custody_admission_denied") from exc
+        finally:
+            if root_fd is not None:
+                os.close(root_fd)
+        if (
+            row[6] is not True
+            or facts.read_only is not True
+            or facts.source_identity != current["storage_source_identity"]
+            or facts.mount_instance_identity != current["mount_instance_identity"]
+        ):
+            raise FatalJobError("custody_admission_denied")
+    elif current["storage_profile"] != StorageProfile.LOCAL_IMMUTABLE:
+        raise FatalJobError("custody_admission_denied")
 
 
 def _record_inventory_change(cur: Any, job: ClaimedJob, case_dir: str) -> None:
@@ -220,6 +293,9 @@ def run_command_job_handler(job: ClaimedJob, ctx: JobContext) -> JobResult:
         membership_role=None,
         db_active=True,
     )
+    # Claim/execution validation protects the durable queue boundary; repeat
+    # once more immediately before the command handler can create a process.
+    ctx.validate_custody("preexec")
     with use_active_case_context(context):
         result = _run_command(args, examiner, audit)
 

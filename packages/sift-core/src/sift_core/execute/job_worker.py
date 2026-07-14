@@ -197,6 +197,12 @@ class JobContext:
     def heartbeat(self) -> bool:
         return self._worker._heartbeat(self.job)
 
+    def validate_custody(self, phase: str = "preexec") -> None:
+        """Repeat custody validation immediately before process dispatch."""
+        validator = self._worker._custody_validator
+        if validator is not None and self.job.job_type == "run_command":
+            validator(self.job, phase)
+
     def log(self, message: str, *, level: str = "info", step_id: str | None = None) -> str | None:
         return self._worker._append_log(self.job.job_id, message, level=level, step_id=step_id)
 

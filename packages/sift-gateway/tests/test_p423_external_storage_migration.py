@@ -22,6 +22,8 @@ def test_storage_authority_and_receipts_are_service_only_append_only_authority()
     )
     assert "evidence_storage_verifications_no_update_delete" in MIGRATION
     assert "evidence_storage_verifications_no_truncate" in MIGRATION
+    assert "evidence_storage_profile_transitions_no_update_delete" in MIGRATION
+    assert "evidence_storage_profile_transitions_no_truncate" in MIGRATION
     assert (
         "revoke all on app.evidence_storage_authorities from public,anon,authenticated"
         in MIGRATION
@@ -79,6 +81,8 @@ def test_source_change_is_not_collapsed_into_reconnectable_mount_change() -> Non
     assert "'STORAGE_FULL_VERIFY_REQUIRED'" in classification
     assert "'AUTHORIZE_STORAGE_SOURCE_CHANGE'" in classification
     assert "'MOUNT_IDENTITY_CHANGED'" in classification
+    assert "v_row.state in ('UNAVAILABLE','FULL_VERIFY_REQUIRED','IDENTITY_DRIFT','READ_WRITE_DRIFT')" in observation
+    assert "state='FULL_VERIFY_REQUIRED'" in observation
 
 
 def test_full_verify_is_generation_manifest_and_exact_active_version_bound() -> None:
@@ -98,6 +102,7 @@ def test_full_verify_is_generation_manifest_and_exact_active_version_bound() -> 
     assert "x->>'storage_source_identity'<>p_source_identity" in verify
     assert "x->>'mount_instance_identity'<>p_mount_instance" in verify
     assert "x ? 'owner' or x ? 'mode' or x ? 'immutable'" in verify
+    assert "nullif(p_note,'')" in verify
 
 
 def test_failed_full_verify_is_append_only_path_free_and_cannot_reopen_gate() -> None:
@@ -113,6 +118,7 @@ def test_failed_full_verify_is_append_only_path_free_and_cannot_reopen_gate() ->
     assert "display_path" not in failure
     assert "'RESTORE_REACQUIRE_RETIRE'" in failure
     assert "'CUSTODY_VIOLATION'" in failure
+    assert "nullif(p_note,'')" in failure
 
 
 def test_profile_transition_is_scoped_reauthenticated_and_preserves_violation() -> None:
@@ -123,6 +129,10 @@ def test_profile_transition_is_scoped_reauthenticated_and_preserves_violation() 
     )
     assert "'idempotency_key',btrim(p_idempotency_key)" in transition
     assert "storage_profile_reauth_reused" in transition
+    assert "app.evidence_storage_profile_transitions" in transition
+    assert "return v_existing.result" in transition
+    assert "storage_profile_idempotency_conflict" in transition
+    assert "storage_profile_retry_receipt_mismatch" in transition
     assert "generation=app.evidence_storage_authorities.generation+1" in transition
     assert "and (status='violated' or seal_status='violated'))" in transition
     assert "issue->>'code' not in (" in transition

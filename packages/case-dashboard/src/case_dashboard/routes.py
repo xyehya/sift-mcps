@@ -1778,7 +1778,11 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
         return _no_case_response()
 
     try:
-        result = verifier(case_id=_active_case_id(), actor=_request_principal(request))
+        result = verifier(
+            case_id=_active_case_id(),
+            actor=_request_principal(request),
+            note=str(body.get("note") or "").strip() or None,
+        )
     except Exception as exc:
         logger.warning("DB evidence verify failed: %s", type(exc).__name__)
         return JSONResponse(

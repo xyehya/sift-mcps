@@ -91,6 +91,10 @@ same-source remount requires Full Verify, while a changed source requires fresh 
 idempotent Portal authorization. Successful and failed verification receipts are append-only and
 bound to case generation, profile, manifest, active Evidence Version, hash, bytes, identity, and
 posture; stale receipts cannot authorize a worker binding.
+Profile/source transition results are durably idempotent per case/key, drift remains latched until
+Full Verify, and partial scans cannot create object-level conclusions. Execution rechecks the
+generation, manifest, receipt, and live mount posture at synchronous dispatch plus durable
+claim/execution/pre-exec, including commands without explicit evidence refs.
 
 **Change routing:** policy/auth/scoping → `sift-gateway`; evidence/findings/reports/execution → `sift-core` + migrations; derived search/ingest → `opensearch-mcp`; human UX → `case-dashboard`; confinement → configs/systemd/AppArmor with the code change.
 

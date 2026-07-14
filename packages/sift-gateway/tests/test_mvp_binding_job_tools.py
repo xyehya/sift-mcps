@@ -71,6 +71,16 @@ class _JobService:
 class _EvidenceService:
     def __init__(self, case_dir: Path):
         self.case_dir = case_dir
+        self.authority = {
+            "storage_profile": "LOCAL_IMMUTABLE",
+            "storage_source_identity": "",
+            "mount_instance_identity": "",
+            "storage_generation": 1,
+            "storage_verified_generation": 1,
+            "storage_manifest_version": 1,
+            "storage_manifest_hash": "sha256:manifest",
+            "storage_verification_receipt_id": "receipt-1",
+        }
 
     def resolve_evidence_reference(self, case_id, ref):
         path = self.case_dir / "evidence" / "disk.E01"
@@ -87,11 +97,25 @@ class _EvidenceService:
             "st_mtime_ns": st.st_mtime_ns,
             "st_ctime_ns": st.st_ctime_ns,
             "immutable_required": False,
+            **self.authority,
         }
 
     def reconcile_for_admission(self, case_id):
         self.reconciled_case_id = case_id
-        return {"state": "available", "observed": 1, "issues": []}
+        return {
+            "state": "available",
+            "observed": 1,
+            "issues": [],
+            "execution_authority": dict(self.authority),
+        }
+
+    def storage_execution_authority(self, _case_id):
+        return dict(self.authority)
+
+    def revalidate_execution_authority(self, _case_id, expected):
+        if expected != self.authority:
+            raise RuntimeError("authority changed")
+        return dict(self.authority)
 
     def list_evidence(self, case_id):
         return [
@@ -201,6 +225,8 @@ def test_run_command_job_enqueues_public_args_and_internal_case_dir(tmp_path):
             "st_mtime_ns": (case_dir / "evidence" / "disk.E01").stat().st_mtime_ns,
             "st_ctime_ns": (case_dir / "evidence" / "disk.E01").stat().st_ctime_ns,
             "immutable_required": False,
+            "read_only_required": False,
+            **gateway.evidence_service.authority,
         }
     ]
     assert "case_dir" not in json.dumps(body)
@@ -471,6 +497,8 @@ def test_prepare_run_command_args_resolves_db_refs_and_strips_private(tmp_path):
             "st_mtime_ns": (case_dir / "evidence" / "disk.E01").stat().st_mtime_ns,
             "st_ctime_ns": (case_dir / "evidence" / "disk.E01").stat().st_ctime_ns,
             "immutable_required": False,
+            "read_only_required": False,
+            **gateway.evidence_service.authority,
         }
     ]
     assert "_evidence_ref_error" not in prepared

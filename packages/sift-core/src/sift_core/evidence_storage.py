@@ -32,7 +32,6 @@ class StorageProfile(StrEnum):
 
 
 _MOUNT_ESCAPE = re.compile(r"\\([0-7]{3})")
-_ANY_MOUNT_ESCAPE = re.compile(r"\\\S{3}")
 _OPAQUE = re.compile(r"[0-9a-f]{64}\Z")
 _SUPPORTED_EXTERNAL_FILESYSTEMS = frozenset(
     {
@@ -65,7 +64,10 @@ def _unescape_mount_field(value: str) -> str:
         return chr(int(encoded, 8))
 
     decoded = _MOUNT_ESCAPE.sub(replace, value)
-    if _ANY_MOUNT_ESCAPE.search(decoded):
+    # A backslash is not a literal mountinfo character.  After the four kernel
+    # escapes above have been decoded, any residual backslash -- including a
+    # truncated one at end-of-field -- is malformed and must fail closed.
+    if "\\" in decoded:
         raise StorageAuthorityError("mountinfo contains a malformed escape")
     return decoded
 

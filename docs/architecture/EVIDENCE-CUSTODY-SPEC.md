@@ -359,6 +359,16 @@ generation/profile/manifest/version-bound receipts. MCP resolution requires the 
 successful receipt and revalidates all descriptor and storage facts. VM Gate C remains required
 before this ticket is DONE.
 
+Profile/source transition idempotency is Postgres-authoritative: an exact retry with the original
+scoped receipt returns the stored result without advancing generation or appending another event;
+conflicting key reuse or a different retry receipt fails closed. Read-write, source, reconnect, and
+mount drift remain latched at `FULL_VERIFY_REQUIRED` after the immediate condition clears and only a
+successful Full Verify reopens the gate. Partial inventory scans discard object-level missing or
+tamper conclusions. Full Verify is a passwordless authenticated-operator action; its optional note
+is bounded and retained on the append-only success or failure receipt. Synchronous dispatch and
+durable claim/execution/pre-exec revalidate the current generation, verified generation, manifest,
+receipt, source, mount, and read-only posture even when the command has no explicit evidence refs.
+
 These items must be replaced in dependency order. Tests that describe obsolete behavior are removed only after stronger public-seam replacements land.
 
 ## Out of Scope
