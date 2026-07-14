@@ -105,10 +105,14 @@ def test_broker_profile_allows_required_runtime_path_introspection_only() -> Non
         for line in BROKER_PROFILE.read_text(encoding="utf-8").splitlines()
     }
 
-    assert "/usr/local/sbin/ r," in rules
-    assert "/proc/@{pid}/attr/current r," in rules
-    assert "/usr/local/sbin/** r," not in rules
-    assert "/proc/** r," not in rules
+    assert {
+        rule for rule in rules if rule.startswith("/usr/local/sbin/ ")
+    } == {"/usr/local/sbin/ r,"}
+    assert {
+        rule for rule in rules if rule.startswith("/proc/@{pid}/attr/current ")
+    } == {"/proc/@{pid}/attr/current r,"}
+    assert not any(rule.startswith("/usr/local/sbin/** ") for rule in rules)
+    assert not any(rule.startswith("/proc/** ") for rule in rules)
 
 
 def test_broker_rebinds_uuid_to_postgres_and_durable_receipt() -> None:
