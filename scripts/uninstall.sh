@@ -501,10 +501,13 @@ teardown_docker_images() {
   fi
 }
 
-# --- 5e AppArmor (gateway + dfir-exec)
+# --- 5e AppArmor (gateway + fixed custody broker + dfir-exec)
 teardown_apparmor() {
   local profile_dst
-  for profile_dst in /etc/apparmor.d/sift-gateway /etc/apparmor.d/dfir-exec; do
+  for profile_dst in \
+    /etc/apparmor.d/sift-gateway \
+    /etc/apparmor.d/sift-custody-delete-broker \
+    /etc/apparmor.d/dfir-exec; do
     if sudo_if_needed test -f "$profile_dst" 2>/dev/null; then
       action "AppArmor unload + remove" "$profile_dst"
       if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -575,6 +578,7 @@ teardown_systemd_and_users() {
 
   for f in \
     /usr/local/sbin/sift-run-command-systemd-scope \
+    /usr/local/sbin/sift-custody-delete-broker \
     /usr/local/sbin/sift-addon-systemd-sandbox \
     /usr/local/sbin/sift-addon-stdio-relay; do
     if sudo_if_needed test -e "$f" 2>/dev/null; then
@@ -582,6 +586,11 @@ teardown_systemd_and_users() {
       run_if_live sudo_if_needed rm -f "$f"
     fi
   done
+
+  if sudo_if_needed test -e /etc/sift/custody-delete.json 2>/dev/null; then
+    action "remove" "/etc/sift/custody-delete.json"
+    run_if_live sudo_if_needed rm -f /etc/sift/custody-delete.json
+  fi
 
   if [[ -L /usr/local/bin/hayabusa ]]; then
     action "remove" "/usr/local/bin/hayabusa (hayabusa symlink)"

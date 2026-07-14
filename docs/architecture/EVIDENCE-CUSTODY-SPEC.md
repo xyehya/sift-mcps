@@ -145,7 +145,7 @@ stateDiagram-v2
 
 - Adding a sibling requires no Unseal/Replace of existing evidence.
 - Generic standalone Unseal is removed from the public model. Replace/Reacquire begins with re-authentication and a reason, records durable intent, blocks the gate, and only then clears the selected object's protection.
-- Ignore applies only to detected pending items. Delete applies only to detected, registered-pending, or ignored stray items and records hash/size before unlink. Sealed or retired bytes cannot use this action.
+- Ignore applies only to detected pending items. Delete applies only to detected, registered-pending, or ignored Local Immutable stray items and records hash/size/descriptor identity before unlink. The write-denied Gateway never unlinks directly: a root-owned, same-UID fixed broker accepts only operation UUID plus restart-runner identity, independently rebinds the applying operation/current object/prepared facts/storage posture in Postgres, and revalidates the direct no-follow file before unlink and directory fsync. A durable exact-operation/facts-digest broker claim is required before unlink and before an absent file can be credited on restart. Sealed, immutable, linked, changed, retired, external-storage, or unclaimed absent bytes are rejected.
 - Retirement excludes a sealed Evidence Object through a new manifest while preserving history and protected bytes. Physical purge is a separate high-ceremony workflow.
 - No “force open” or acknowledgment-only recovery exists.
 
@@ -336,7 +336,10 @@ The following are known current-state facts, not accepted target behavior:
 
 - Ticket 4 routes Ignore, Delete Stray, and Retire through the shared durable operation state
   machine. Delete persists descriptor-pinned hash, size, and identity facts only after the gate is
-  blocked and before descriptor-relative unlink. Ignore and Retire never mutate mounted bytes;
+  blocked. The fixed same-UID custody-delete broker is the sole unlink path: its separate enforced
+  AppArmor profile preserves the Gateway evidence-file write deny, its pathless request is rebound
+  to Postgres authority, and its FORCE-RLS claim/completion receipt makes missing-file recovery
+  operation-specific. Ignore and Retire never mutate mounted bytes;
   Retire appends a manifest that excludes the object while preserving the prior version and sealed
   siblings. Legacy direct disposition RPC grants are revoked. Standalone Unseal and one-shot
   Reacquire remain unreachable.

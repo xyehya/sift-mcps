@@ -91,12 +91,13 @@ Timestamp-ordered, idempotent, covering the `app` schema with 31 `FORCE ROW LEVE
 | `sift-job-worker.service` | `configs/systemd/sift-job-worker.service` | Durable `run_command` lane. Claims jobs from Postgres (`FOR UPDATE SKIP LOCKED`, 300s lease, 1s poll). Pinned to `--job-types run_command`. CapabilityBoundingSet=CAP_LINUX_IMMUTABLE only. |
 | `sift-opensearch-worker@.service` | `configs/systemd/sift-opensearch-worker@.service` | Template unit (N instances: `osw-1`, `osw-2`, ...). Claims `ingest,enrich` jobs. FUSE-mount capable: runs in host mount namespace with CAP_SYS_ADMIN. No ProtectSystem/PrivateTmp (breaks FUSE). |
 
-### 2 AppArmor Profiles
+### AppArmor Profiles
 
 | Profile | File | Mode |
 |---------|------|------|
 | `dfir-exec` | `configs/apparmor/dfir-exec.template` | Complain mode (burn-in); enforce after Wave 2 aa-logprof. Covers the RUN-3 dfir-exec launcher — the short-lived per-command child process. Denies mounts, ptrace, network (except AF_UNIX). |
 | `sift-gateway` | `configs/apparmor/sift-gateway.template` | Complain mode. Covers the long-lived gateway process. Network: localhost TCP only. Denies shell exec. Separate workers NOT confined by this profile. |
+| `sift-custody-delete-broker` | `configs/apparmor/sift-custody-delete-broker.template` | Enforced fixed-broker transition from the Gateway. Same service UID; allows only the Postgres-bound direct pending-file unlink contract while the Gateway evidence write deny remains intact. |
 
 ### 1 Auditd Rules File
 
@@ -876,4 +877,5 @@ flowchart TD
 - `configs/systemd/sift-opensearch-worker@.service` — OpenSearch worker template unit (101 lines)
 - `configs/apparmor/dfir-exec.template` — dfir-exec AppArmor profile (158 lines)
 - `configs/apparmor/sift-gateway.template` — Gateway AppArmor profile (146 lines)
+- `configs/apparmor/sift-custody-delete-broker.template` — Fixed same-UID Portal custody-delete broker profile
 - `configs/audit/99-sift-evidence.rules` — Auditd rules (43 lines)

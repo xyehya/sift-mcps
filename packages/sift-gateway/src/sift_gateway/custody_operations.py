@@ -13,6 +13,7 @@ import logging
 import os
 import pwd
 import stat
+import subprocess
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -66,6 +67,61 @@ class RecoveryAction(StrEnum):
 
     REPLACE_REACQUIRE = CustodyAction.REPLACE_REACQUIRE
     RESTORE_EXACT = CustodyAction.RESTORE_EXACT
+
+
+class CustodyDeleteBrokerProtocol(Protocol):
+    """Narrow local broker used only for Portal-authorized pending-file deletion."""
+
+    def delete(
+        self,
+        *,
+        operation_id: str,
+    ) -> None: ...
+
+
+class LocalCustodyDeleteBroker:
+    """Invoke the root-owned, AppArmor-confined fixed delete broker."""
+
+    _HELPER = "/usr/local/sbin/sift-custody-delete-broker"
+
+    def delete(
+        self,
+        *,
+        operation_id: str,
+    ) -> None:
+        request = {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "runner_instance_id": _RUNNER_INSTANCE_ID,
+        }
+        try:
+            completed = subprocess.run(
+                [self._HELPER],
+                input=json.dumps(request, sort_keys=True, separators=(",", ":")),
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=30,
+                env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"},
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise CustodyOperationError(
+                "delete_broker_unavailable", http_status=500
+            ) from exc
+        if completed.returncode != 0:
+            # The helper deliberately returns no path-bearing diagnostics to the
+            # Portal. Keep its stderr out of logs and expose only a stable reason.
+            raise CustodyOperationError("delete_broker_rejected", http_status=409)
+        try:
+            response = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise CustodyOperationError(
+                "delete_broker_response_invalid", http_status=500
+            ) from exc
+        if response != {"removed": True, "schema_version": 1}:
+            raise CustodyOperationError(
+                "delete_broker_response_invalid", http_status=500
+            )
 
 
 RESUMABLE_SEAL_PHASES = (
@@ -1378,10 +1434,12 @@ class DispositionCustodyOperation:
         repository: CustodyOperationRepositoryProtocol,
         case_dir: Callable[[str], Path | None],
         object_for_id: Callable[[str, str], dict[str, Any]],
+        delete_broker: CustodyDeleteBrokerProtocol | None = None,
     ) -> None:
         self._repository = repository
         self._case_dir = case_dir
         self._object_for_id = object_for_id
+        self._delete_broker = delete_broker or LocalCustodyDeleteBroker()
 
     @staticmethod
     def _name(display_path: str) -> str:
@@ -1562,9 +1620,16 @@ class DispositionCustodyOperation:
                             raise CustodyOperationError(
                                 "delete_directory_entry_changed", http_status=409
                             )
-                        os.unlink(name, dir_fd=root_fd)
+                        self._delete_broker.delete(
+                            operation_id=operation.operation_id,
+                        )
                         item["file_removed"] = True
                     elif item.get("present") is True:
+                        # Absence is not deletion proof. The broker accepts it
+                        # only when its durable exact-operation claim exists.
+                        self._delete_broker.delete(
+                            operation_id=operation.operation_id,
+                        )
                         item["file_removed"] = True
                     else:
                         item["file_removed"] = False

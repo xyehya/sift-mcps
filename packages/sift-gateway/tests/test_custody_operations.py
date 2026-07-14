@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import pwd
 from dataclasses import replace
@@ -17,6 +18,7 @@ from sift_gateway.custody_operations import (
     CustodyOperationRepositoryProtocol,
     DispositionCustodyOperation,
     ExternalReadOnlyPostureAdapter,
+    LocalCustodyDeleteBroker,
     LocalImmutablePostureAdapter,
     ObjectCustodyCommand,
     PinnedEvidenceFile,
@@ -29,6 +31,17 @@ from sift_gateway.portal_services import EvidenceAuthorityService, PortalService
 CASE_ID = "11111111-1111-1111-1111-111111111111"
 REAUTH_ID = "22222222-2222-2222-2222-222222222222"
 ACTOR_ID = "55555555-5555-5555-5555-555555555555"
+
+
+class FakeDeleteBroker:
+    def __init__(self, callback=None) -> None:
+        self.callback = callback
+        self.operation_ids: list[str] = []
+
+    def delete(self, *, operation_id: str) -> None:
+        self.operation_ids.append(operation_id)
+        if self.callback is not None:
+            self.callback()
 
 
 class FakeRepository:
@@ -271,6 +284,7 @@ def test_delete_stray_blocks_gate_before_descriptor_pinned_unlink(tmp_path):
             "status": "detected",
             "seal_status": "unsealed",
         },
+        FakeDeleteBroker(target.unlink),
     )
 
     result = runner.execute(_disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner")
@@ -296,6 +310,7 @@ def test_delete_stray_rejects_missing_initial_item_without_committing(tmp_path):
             "status": "detected",
             "seal_status": "unsealed",
         },
+        FakeDeleteBroker(),
     )
 
     with pytest.raises(CustodyOperationError, match="delete_requires_readable_pending_item"):
@@ -326,6 +341,7 @@ def test_non_delete_disposition_never_mutates_evidence_bytes(tmp_path, action):
             "current_bytes": len(b"preserved evidence"),
             "current_version_id": "77777777-7777-4777-8777-777777777777",
         },
+        FakeDeleteBroker(lambda: pytest.fail("non-delete action reached delete broker")),
     )
 
     runner.execute(_disposition_command(action), examiner="examiner")
@@ -353,16 +369,77 @@ def test_delete_resume_after_unlink_commits_stored_pre_unlink_facts(tmp_path):
         phase=CustodyOperationPhase.FILESYSTEM_APPLYING,
         prepared_facts={"item": item},
     )
+    broker = FakeDeleteBroker()
     runner = DispositionCustodyOperation(
         cast(CustodyOperationRepositoryProtocol, repo),
         lambda _case_id: tmp_path,
         lambda *_args: pytest.fail("resume must use stored facts"),
+        broker,
     )
 
     result = runner.execute(_disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner")
 
     assert result["file_removed"] is True
     assert result["sha256"] == item["sha256"]
+    assert broker.operation_ids == [repo.record.operation_id]
+
+
+def test_delete_resume_missing_without_broker_receipt_is_rejected(tmp_path):
+    (tmp_path / "evidence").mkdir()
+    repo = FakeDispositionRepository(CustodyAction.DELETE_STRAY)
+    item = {
+        "evidence_object_id": "44444444-4444-4444-8444-444444444444",
+        "display_path": "evidence/stray.bin",
+        "prior_status": "detected",
+        "prior_seal_status": "unsealed",
+        "present": True,
+        "sha256": "sha256:" + hashlib.sha256(b"gone").hexdigest(),
+        "bytes": 4,
+        "st_dev": 1,
+        "st_ino": 2,
+        "st_nlink": 1,
+    }
+    repo.record = replace(
+        repo.record,
+        phase=CustodyOperationPhase.FILESYSTEM_APPLYING,
+        prepared_facts={"item": item},
+    )
+
+    def reject_missing() -> None:
+        raise CustodyOperationError("delete_broker_rejected", http_status=409)
+
+    broker = FakeDeleteBroker(reject_missing)
+    runner = DispositionCustodyOperation(
+        cast(CustodyOperationRepositoryProtocol, repo),
+        lambda _case_id: tmp_path,
+        lambda *_args: pytest.fail("resume must use stored facts"),
+        broker,
+    )
+
+    with pytest.raises(CustodyOperationError, match="delete_broker_rejected"):
+        runner.execute(_disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner")
+
+    assert broker.operation_ids == [repo.record.operation_id]
+    assert "commit_verified_disposition" not in [name for name, _ in repo.calls]
+
+
+def test_local_delete_broker_sends_only_operation_authority(monkeypatch):
+    seen: dict[str, object] = {}
+
+    def run(argv, **kwargs):
+        seen["argv"] = argv
+        seen["request"] = json.loads(kwargs["input"])
+        return type("Completed", (), {"returncode": 0, "stdout": '{"removed":true,"schema_version":1}'})()
+
+    monkeypatch.setattr("sift_gateway.custody_operations.subprocess.run", run)
+    LocalCustodyDeleteBroker().delete(
+        operation_id="33333333-3333-3333-3333-333333333333"
+    )
+
+    assert seen["argv"] == ["/usr/local/sbin/sift-custody-delete-broker"]
+    assert set(cast(dict, seen["request"])) == {
+        "schema_version", "operation_id", "runner_instance_id"
+    }
 
 
 class _ResumeLookupCursor:

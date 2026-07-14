@@ -143,6 +143,7 @@ profile sift-gateway flags=(attach_disconnected) {
   /usr/bin/python3*                          rix,
   /usr/local/sbin/sift-run-command-systemd-scope px -> sift-run-command-scope,
   /usr/local/sbin/sift-addon-systemd-sandbox px -> sift-addon-broker,
+  /usr/local/sbin/sift-custody-delete-broker px -> sift-custody-delete-broker,
   /usr/local/sbin/sift-addon-stdio-relay        rix,
   /run/sift-addon-client/                       rw,
   /run/sift-addon-client/**                     rwk,

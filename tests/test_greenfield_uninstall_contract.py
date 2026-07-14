@@ -117,6 +117,7 @@ def test_apparmor_teardown_includes_dfir_exec() -> None:
     section = src.split("teardown_apparmor()", 1)[1].split("\n}", 1)[0]
     assert "/etc/apparmor.d/sift-gateway" in section
     assert "/etc/apparmor.d/dfir-exec" in section
+    assert "/etc/apparmor.d/sift-custody-delete-broker" in section
 
 
 def test_addon_sandbox_sudoers_removed() -> None:

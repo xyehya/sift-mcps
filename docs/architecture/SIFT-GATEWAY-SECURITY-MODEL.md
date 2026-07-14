@@ -176,7 +176,14 @@ is derived from the authoritative sealed/open gate after immediate reconciliatio
 
 Ignore, Delete Stray, and Retire are fixed Portal-only durable actions. Postgres blocks admission
 before any disposition filesystem step. Delete is limited to unsealed pending objects and records
-descriptor-pinned pre-unlink facts; Retire never unlinks or clears protection and creates a manifest
+descriptor-pinned pre-unlink facts. The Gateway AppArmor domain remains write-denied for evidence
+entries. Delete crosses only the root-owned fixed executable into a same-UID broker profile; the
+broker accepts operation UUID and current runner identity rather than a path or filesystem facts,
+then independently reads Postgres to bind Portal actor/re-auth, `DELETE_STRAY`, applying phase,
+Local Immutable storage, canonical case/object/path/status, and the prepared-facts digest. It
+reopens the direct entry no-follow, rejects immutable/non-regular/linked/changed objects, durably
+claims the exact operation/facts digest, unlinks, fsyncs the directory, and records completion.
+Absent-file restart recovery requires that exact prior claim. Retire never unlinks or clears protection and creates a manifest
 excluding the retired object. Inventory observations are path-free, append-only, FORCE-RLS, and
 service-role-only. Neither the browser DB role nor MCP receives custody mutation authority.
 

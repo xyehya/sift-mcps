@@ -33,7 +33,7 @@ All 17 declared invariants from `docs/drafts/architecture/sift-architecture.html
 - 86 REST API endpoints
 - 27 security controls across 5 architectural layers
 - 3 systemd services (sift-gateway, sift-job-worker, sift-opensearch-worker@)
-- 2 AppArmor profiles (dfir-exec, sift-gateway)
+- AppArmor profiles for dfir execution, the Gateway, fixed local brokers, and isolated add-ons
 - 1 auditd rules file
 - 1 gateway config template
 - 5 add-on manifests (sift-backend.json)

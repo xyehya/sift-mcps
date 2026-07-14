@@ -1,0 +1,42 @@
+abi <abi/4.0>,
+
+#include <tunables/global>
+
+# Fixed Portal custody-delete broker. The gateway's evidence-file write deny is
+# intentionally preserved; only this root-owned program enters this profile.
+profile sift-custody-delete-broker flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/python>
+  #include <abstractions/nameservice>
+
+  /usr/local/sbin/sift-custody-delete-broker r,
+  /usr/bin/python3*                           rix,
+  /etc/sift/custody-delete.json              r,
+  /var/lib/sift/.sift/control-plane.env      r,
+  /usr/local/lib/sift/prepare-evidence-python/ r,
+  /usr/local/lib/sift/prepare-evidence-python/** mr,
+  /proc/self/attr/current                     r,
+
+  @@SIFT_CASES_ROOT@@/                        r,
+  @@SIFT_CASES_ROOT@@/*/                      r,
+  @@SIFT_CASES_ROOT@@/*/evidence/             rw,
+  @@SIFT_CASES_ROOT@@/*/evidence/*            rw,
+
+  network inet tcp,
+  network inet6 tcp,
+  network unix,
+  deny network udp,
+  deny network raw,
+  deny mount,
+  deny remount,
+  deny umount,
+  deny ptrace,
+  deny capability setuid,
+  deny capability setgid,
+  deny capability dac_override,
+  deny capability dac_read_search,
+  deny /bin/bash                              x,
+  deny /bin/sh                                x,
+  deny /usr/bin/bash                          x,
+  deny /usr/bin/sh                            x,
+}

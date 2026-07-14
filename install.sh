@@ -270,6 +270,7 @@ main() {
   # This grants NOTHING else — `sift` is used only for that 2775 cache dir.
   join_shared_symbol_group
   configure_ingest_mount_sudoers
+  configure_custody_delete_broker
   configure_fuse
   generate_tls
   write_default_examiner

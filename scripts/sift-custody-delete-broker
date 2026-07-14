@@ -1,0 +1,382 @@
+#!/usr/bin/python3
+"""Delete one descriptor-verified pending evidence entry for a Portal operation.
+
+The command accepts no argv and a bounded JSON request on stdin. It is installed
+root-owned, admitted through an exact sudoers rule, and must execute in its
+dedicated AppArmor profile. It independently resolves the configured cases root,
+reopens the direct entry without following links, rejects immutable/linked files,
+and rechecks all prepared facts before unlink. It is not an MCP tool.
+"""
+
+from __future__ import annotations
+
+import array
+import fcntl
+import hashlib
+import json
+import os
+import pwd
+import re
+import stat
+import sys
+import uuid
+from pathlib import Path
+from typing import Any, NoReturn
+
+CONFIG = Path("/etc/sift/custody-delete.json")
+CONTROL_PLANE_ENV = Path("/var/lib/sift/.sift/control-plane.env")
+ROOT_PYTHON_DEPS = Path("/usr/local/lib/sift/prepare-evidence-python")
+EXPECTED_PROFILE = "sift-custody-delete-broker (enforce)"
+MAX_REQUEST_BYTES = 8192
+FS_IOC_GETFLAGS = 0x80086601
+FS_IMMUTABLE_FL = 0x00000010
+CASE_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+NAME_RE = re.compile(r"^[^/\\\x00]{1,255}$")
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+REQUEST_KEYS = {"schema_version", "operation_id", "runner_instance_id"}
+
+
+class DeleteBrokerError(RuntimeError):
+    pass
+
+
+def _fail(reason: str) -> NoReturn:
+    raise DeleteBrokerError(reason)
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    info = path.stat(follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0:
+        _fail("configuration_type_or_owner_invalid")
+    if stat.S_IMODE(info.st_mode) & 0o022:
+        _fail("configuration_is_writable")
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        _fail("configuration_invalid")
+    return value
+
+
+def load_config(path: Path = CONFIG) -> tuple[Path, pwd.struct_passwd]:
+    value = _read_json_object(path)
+    if set(value) != {"cases_root", "service_user"}:
+        _fail("configuration_keys_invalid")
+    cases_root = Path(str(value["cases_root"]))
+    if not cases_root.is_absolute() or cases_root == Path("/"):
+        _fail("cases_root_invalid")
+    service = pwd.getpwnam(str(value["service_user"]))
+    return cases_root, service
+
+
+def parse_request(raw: bytes) -> dict[str, Any]:
+    if not raw or len(raw) > MAX_REQUEST_BYTES:
+        _fail("request_size_invalid")
+    value = json.loads(raw.decode("utf-8"))
+    if not isinstance(value, dict) or set(value) != REQUEST_KEYS:
+        _fail("request_shape_invalid")
+    if value["schema_version"] != 1:
+        _fail("request_schema_invalid")
+    try:
+        uuid.UUID(str(value["operation_id"]))
+    except ValueError:
+        _fail("operation_id_invalid")
+    runner = value["runner_instance_id"]
+    if not isinstance(runner, str) or not (1 <= len(runner) <= 256):
+        _fail("runner_instance_invalid")
+    return value
+
+
+def _activate_root_owned_dependencies(path: Path = ROOT_PYTHON_DEPS) -> None:
+    root_info = path.stat(follow_symlinks=False)
+    if not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != 0 or stat.S_IMODE(root_info.st_mode) & 0o022:
+        _fail("dependency_root_invalid")
+    for child in path.rglob("*"):
+        info = child.lstat()
+        if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
+            _fail("dependency_entry_invalid")
+    sys.path.insert(0, str(path))
+
+
+def _read_control_plane_dsn(path: Path, service: pwd.struct_passwd) -> str:
+    info = path.stat(follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid not in (0, service.pw_uid):
+        _fail("control_plane_owner_or_type_invalid")
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        _fail("control_plane_mode_invalid")
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, separator, value = line.partition("=")
+        if separator and key == "SIFT_CONTROL_PLANE_DSN":
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                value = value[1:-1]
+            if value:
+                return value
+    _fail("control_plane_dsn_missing")
+
+
+def resolve_operation(
+    dsn: str, operation_id: str, runner_instance_id: str, cases_root: Path
+) -> dict[str, Any]:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """select op.action,op.phase,op.prepared_facts,op.command,
+                      c.case_key,c.legacy_case_dir,
+                      obj.display_path,obj.status,obj.seal_status,obj.id::text,
+                      op.runner_instance_id,op.actor_user_id::text,
+                      op.actor_service_identity_id::text,op.reauth_audit_event_id::text,
+                      receipt.runner_instance_id,receipt.prepared_facts_sha256,
+                      receipt.claimed_at is not null,receipt.completed_at is not null,
+                      op.retired_runner_instance_ids,storage.profile,storage.state
+               from app.custody_operations op
+               join app.cases c on c.id=op.case_id
+               join app.evidence_objects obj
+                on obj.case_id=op.case_id
+                and obj.id::text=op.command->>'evidence_object_id'
+               left join app.custody_delete_broker_receipts receipt
+                 on receipt.operation_id=op.id
+               join app.evidence_storage_authorities storage
+                 on storage.case_id=op.case_id
+               where op.id=%s""",
+            (operation_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        _fail("operation_not_found")
+    (
+        action, phase, prepared, command, case_key, legacy_case_dir,
+        display_path, status, seal_status, object_id, stored_runner,
+        actor_user_id, actor_service_id, reauth_id, receipt_runner,
+        receipt_digest, receipt_claimed, receipt_completed, retired_runners,
+        storage_profile, storage_state,
+    ) = row
+    if action != "DELETE_STRAY" or phase != "FILESYSTEM_APPLYING":
+        _fail("operation_not_delete_applying")
+    if (
+        stored_runner != runner_instance_id
+        or not actor_user_id
+        or actor_service_id is not None
+        or not reauth_id
+        or storage_profile != "LOCAL_IMMUTABLE"
+        or storage_state != "AVAILABLE"
+    ):
+        _fail("operation_authority_invalid")
+    if not isinstance(prepared, dict) or not isinstance(command, dict):
+        _fail("operation_facts_invalid")
+    if command.get("schema_version") != 2 or command.get("action") != "DELETE_STRAY":
+        _fail("operation_command_invalid")
+    item = prepared.get("item")
+    if not isinstance(item, dict) or command.get("evidence_object_id") != object_id:
+        _fail("operation_object_binding_invalid")
+    case_key = str(case_key)
+    if not CASE_KEY_RE.fullmatch(case_key) or case_key in {".", ".."}:
+        _fail("case_key_invalid")
+    if Path(str(legacy_case_dir)) != cases_root / case_key:
+        _fail("case_directory_binding_invalid")
+    path_parts = Path(str(display_path)).parts
+    if len(path_parts) != 2 or path_parts[0] != "evidence":
+        _fail("display_path_invalid")
+    name = path_parts[1]
+    if not NAME_RE.fullmatch(name) or name in {".", ".."}:
+        _fail("name_invalid")
+    if (
+        item.get("evidence_object_id") != object_id
+        or item.get("display_path") != display_path
+        or item.get("prior_status") != status
+        or item.get("prior_seal_status") != seal_status
+        or status not in {"detected", "registered", "ignored"}
+        or seal_status != "unsealed"
+        or item.get("present") is not True
+        or not SHA256_RE.fullmatch(str(item.get("sha256")))
+    ):
+        _fail("pending_object_binding_invalid")
+    for key in ("bytes", "st_dev", "st_ino"):
+        value = item.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            _fail(f"{key}_invalid")
+    if item.get("st_nlink") != 1:
+        _fail("link_count_invalid")
+    facts_digest = "sha256:" + hashlib.sha256(
+        json.dumps(item, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    retired = retired_runners if isinstance(retired_runners, list) else []
+    receipt_runner_authorized = receipt_runner == runner_instance_id or receipt_runner in retired
+    receipt_matches = bool(
+        receipt_claimed
+        and receipt_runner_authorized
+        and receipt_digest == facts_digest
+    )
+    if receipt_claimed and not receipt_matches:
+        _fail("broker_receipt_binding_changed")
+    return {
+        "operation_id": operation_id,
+        "runner_instance_id": runner_instance_id,
+        "prepared_facts_sha256": facts_digest,
+        "receipt_claimed": receipt_matches,
+        "receipt_completed": bool(receipt_completed),
+        "receipt_runner_instance_id": receipt_runner,
+        "case_key": case_key,
+        "name": name,
+        **item,
+    }
+
+
+def claim_operation(dsn: str, operation: dict[str, Any]) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """insert into app.custody_delete_broker_receipts(
+                   operation_id,runner_instance_id,prepared_facts_sha256)
+                 select id,runner_instance_id,%s
+                   from app.custody_operations
+                  where id=%s and action='DELETE_STRAY'
+                    and phase='FILESYSTEM_APPLYING' and runner_instance_id=%s
+                 on conflict(operation_id) do nothing""",
+            (
+                operation["prepared_facts_sha256"],
+                operation["operation_id"],
+                operation["runner_instance_id"],
+            ),
+        )
+        cur.execute(
+            """select runner_instance_id,prepared_facts_sha256
+                 from app.custody_delete_broker_receipts where operation_id=%s""",
+            (operation["operation_id"],),
+        )
+        row = cur.fetchone()
+        expected_runner = (
+            operation["receipt_runner_instance_id"]
+            if operation["receipt_claimed"]
+            else operation["runner_instance_id"]
+        )
+        if row != (expected_runner, operation["prepared_facts_sha256"]):
+            _fail("broker_claim_conflict")
+
+
+def complete_operation(dsn: str, operation: dict[str, Any]) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """update app.custody_delete_broker_receipts
+                 set completed_at=coalesce(completed_at,clock_timestamp())
+                 where operation_id=%s and prepared_facts_sha256=%s""",
+            (
+                operation["operation_id"],
+                operation["prepared_facts_sha256"],
+            ),
+        )
+        if cur.rowcount != 1:
+            _fail("broker_completion_conflict")
+
+
+def _open_dir(path_or_name: Path | str, *, dir_fd: int | None = None) -> int:
+    return os.open(
+        path_or_name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        dir_fd=dir_fd,
+    )
+
+
+def _immutable(fd: int) -> bool:
+    flags = array.array("I", [0])
+    fcntl.ioctl(fd, FS_IOC_GETFLAGS, flags, True)
+    return bool(flags[0] & FS_IMMUTABLE_FL)
+
+
+def _hash_fd(fd: int) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    total = 0
+    offset = 0
+    while True:
+        chunk = os.pread(fd, 1024 * 1024, offset)
+        if not chunk:
+            break
+        digest.update(chunk)
+        total += len(chunk)
+        offset += len(chunk)
+    return "sha256:" + digest.hexdigest(), total
+
+
+def delete_verified(
+    operation: dict[str, Any], cases_root: Path, service: pwd.struct_passwd, dsn: str
+) -> None:
+    root_fd = case_fd = evidence_fd = target_fd = None
+    try:
+        root_fd = _open_dir(cases_root)
+        case_fd = _open_dir(str(operation["case_key"]), dir_fd=root_fd)
+        evidence_fd = _open_dir("evidence", dir_fd=case_fd)
+        try:
+            target_fd = os.open(
+                str(operation["name"]),
+                os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=evidence_fd,
+            )
+        except FileNotFoundError:
+            if not operation["receipt_claimed"]:
+                _fail("missing_without_broker_claim")
+            complete_operation(dsn, operation)
+            return
+        before = os.fstat(target_fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            _fail("regular_single_link_required")
+        if _immutable(target_fd):
+            _fail("immutable_evidence_refused")
+        digest, size = _hash_fd(target_fd)
+        expected = (operation["st_dev"], operation["st_ino"], operation["st_nlink"])
+        observed = (before.st_dev, before.st_ino, before.st_nlink)
+        if observed != expected or digest != operation["sha256"] or size != operation["bytes"]:
+            _fail("prepared_facts_changed")
+        entry = os.stat(str(operation["name"]), dir_fd=evidence_fd, follow_symlinks=False)
+        if (entry.st_dev, entry.st_ino) != (before.st_dev, before.st_ino):
+            _fail("directory_entry_changed")
+
+        if os.geteuid() != service.pw_uid or os.getegid() != service.pw_gid:
+            _fail("service_identity_required")
+        claim_operation(dsn, operation)
+        os.unlink(str(operation["name"]), dir_fd=evidence_fd)
+        os.fsync(evidence_fd)
+        complete_operation(dsn, operation)
+    finally:
+        for fd in (target_fd, evidence_fd, case_fd, root_fd):
+            if fd is not None:
+                os.close(fd)
+
+
+def main() -> int:
+    try:
+        if sys.argv != [sys.argv[0]]:
+            _fail("fixed_command_required")
+        label = Path("/proc/self/attr/current").read_text(encoding="utf-8").strip()
+        if label != EXPECTED_PROFILE:
+            _fail("apparmor_profile_not_enforced")
+        request = parse_request(sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1))
+        cases_root, service = load_config()
+        if service.pw_uid == 0:
+            _fail("service_identity_is_root")
+        _activate_root_owned_dependencies()
+        if os.geteuid() != service.pw_uid or os.getegid() != service.pw_gid:
+            _fail("service_identity_required")
+        dsn = _read_control_plane_dsn(CONTROL_PLANE_ENV, service)
+        operation = resolve_operation(
+            dsn,
+            str(request["operation_id"]),
+            str(request["runner_instance_id"]),
+            cases_root,
+        )
+        delete_verified(operation, cases_root, service, dsn)
+        print('{"removed":true,"schema_version":1}')
+        return 0
+    except (DeleteBrokerError, OSError, KeyError, UnicodeError, json.JSONDecodeError, OverflowError):
+        # Stable, path-free output. The Portal receives only a generic broker
+        # rejection; kernel audit and the durable operation retain attribution.
+        print("custody_delete_rejected", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

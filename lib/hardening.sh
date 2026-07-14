@@ -107,9 +107,19 @@ configure_apparmor() {
     return 0
   fi
   [[ -x "$VENV_PYTHON" ]] || return 0
-  local profile_src="${REPO_DIR}/configs/apparmor/sift-gateway.template"
-  local profile_dst="/etc/apparmor.d/sift-gateway"
+  local profile_src="${REPO_DIR}/configs/apparmor/sift-custody-delete-broker.template"
+  local profile_dst="/etc/apparmor.d/sift-custody-delete-broker"
   local tmp
+  [[ -f "$profile_src" ]] || die "Missing required custody delete broker AppArmor profile."
+  tmp="$(mktemp)"
+  sed -e "s|@@SIFT_CASES_ROOT@@|${SIFT_CASES_ROOT}|g" "$profile_src" > "$tmp"
+  sudo_if_needed cp "$tmp" "$profile_dst"
+  rm -f "$tmp"
+  sudo_if_needed chmod 644 "$profile_dst"
+  _apparmor_load_profile "$profile_dst"
+
+  profile_src="${REPO_DIR}/configs/apparmor/sift-gateway.template"
+  profile_dst="/etc/apparmor.d/sift-gateway"
   tmp="$(mktemp)"
   cp "$profile_src" "$tmp"
   sudo_if_needed cp "$tmp" "$profile_dst"
@@ -135,11 +145,21 @@ configure_apparmor() {
   if [[ "${SIFT_APPARMOR_ENFORCE:-0}" == "1" ]]; then
     sudo_if_needed aa-status 2>/dev/null | grep -Fq 'sift-gateway' || die \
       "Required sift-gateway AppArmor profile is not loaded."
+    sudo_if_needed aa-status 2>/dev/null | grep -Fq 'sift-custody-delete-broker' || die \
+      "Required sift-custody-delete-broker AppArmor profile is not loaded."
     log "AppArmor profiles installed (ENFORCE mode)."
   else
     log "AppArmor profiles installed (complain mode). Re-run ./install.sh"
     log "  --apparmor-enforce for the proven enforce posture."
   fi
+}
+
+configure_custody_delete_broker() {
+  log "Configuring fixed Portal custody-delete broker for service user: ${SIFT_GATEWAY_SERVICE_USER}."
+  sudo_if_needed "$REPO_DIR/scripts/setup-custody-delete-broker.sh" \
+    --service-user "$SIFT_GATEWAY_SERVICE_USER" \
+    --cases-root "$SIFT_CASES_ROOT" \
+    --helper-src "$REPO_DIR/scripts/sift-custody-delete-broker"
 }
 
 verify_gateway_apparmor_attachment() {

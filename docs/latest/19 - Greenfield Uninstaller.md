@@ -91,7 +91,7 @@ Fail-closed; no component menu.
 3. Remove OpenCTI / OpenSearch secret+config files under `SIFT_HOME`
 4. Supabase stop + CLI binary cleanup
 5. Docker **image** rm unless `--keep-caches`
-6. AppArmor (`sift-gateway`, `dfir-exec`), auditd rules, FUSE `user_allow_other`
+6. AppArmor (`sift-gateway`, `sift-custody-delete-broker`, `dfir-exec`), auditd rules, FUSE `user_allow_other`
 7. Remove unit files, sudoers, helpers, users/groups
 8. Runtime: always remove `.venv`; remove staged `/opt/sift-mcps` if ≠ clone;
    wipe `SIFT_HOME` (after optional hayabusa cache copy)
