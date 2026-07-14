@@ -11,6 +11,12 @@ profile sift-mount-observer flags=(attach_disconnected) {
   /opt/sift-mcps/                            r,
   /opt/sift-mcps/**                          r,
   /opt/sift-mcps/.venv/lib/**                mr,
+  /opt/sift-mcps/.venv/bin/sift-mount-observer rix,
+  /opt/sift-mcps/.venv/bin/python            rix,
+  /opt/sift-mcps/.venv/bin/python3           rix,
+  /opt/sift-mcps/.venv/bin/python3.[0-9]*    rix,
+  /usr/bin/python3                           rix,
+  /usr/bin/python3.[0-9]*                    rix,
 
   /run/sift-mount-observer/                  rw,
   /run/sift-mount-observer/observer.sock     rw,

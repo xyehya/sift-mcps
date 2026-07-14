@@ -42,6 +42,14 @@ def test_observer_runs_unprivileged_in_host_mount_namespace() -> None:
 def test_observer_apparmor_is_directory_only_and_cannot_mutate_mounts() -> None:
     profile = PROFILE.read_text(encoding="utf-8")
 
+    assert "/opt/sift-mcps/.venv/bin/sift-mount-observer rix," in profile
+    assert "/opt/sift-mcps/.venv/bin/python            rix," in profile
+    assert "/opt/sift-mcps/.venv/bin/python3           rix," in profile
+    assert "/opt/sift-mcps/.venv/bin/python3.[0-9]*    rix," in profile
+    assert "/usr/bin/python3                           rix," in profile
+    assert "/usr/bin/python3.[0-9]*                    rix," in profile
+    assert "/opt/sift-mcps/.venv/bin/**" not in profile
+    assert "/usr/bin/**" not in profile
     assert "@@SIFT_CASES_ROOT@@/*/evidence/            r," in profile
     assert "deny @@SIFT_CASES_ROOT@@/*/evidence/**     rw," in profile
     assert "owner /proc/@{pid}/mountinfo               r," in profile
