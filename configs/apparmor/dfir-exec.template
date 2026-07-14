@@ -101,8 +101,6 @@ profile dfir-exec @@DFIR_EXEC_LAUNCHER@@ {
   /proc/meminfo                            r,
   /proc/stat                               r,
   /proc/mounts                             r,
-  /proc/self/                              r,
-  /proc/self/**                            r,
   /proc/[0-9]*/auxv                        r,
   /proc/[0-9]*/cmdline                     r,
   /proc/[0-9]*/limits                      r,
@@ -111,11 +109,14 @@ profile dfir-exec @@DFIR_EXEC_LAUNCHER@@ {
   /proc/[0-9]*/mounts                      r,
   /proc/[0-9]*/stat                        r,
   /proc/[0-9]*/status                      r,
-  # The launcher enumerates inherited FDs via os.listdir("/proc/self/fd"); the
-  # kernel resolves /proc/self -> /proc/<pid> before AppArmor mediates, so the
-  # /proc/self/** rule above does not match the resolved path. Grant the dir
-  # listing on the pid-form path for the FD-close pass.
+  # AppArmor mediates /proc/self through its resolved numeric-PID path. The
+  # launcher needs the exact fdinfo fact for final external-mount validation,
+  # enumerates inherited descriptors for its close pass, and rewrites admitted
+  # evidence operands to inherited /proc/self/fd/<fd> paths. Keep these grants
+  # read-only and at numeric FD leaves; never grant a recursive proc subtree.
+  /proc/[0-9]*/fdinfo/[0-9]*               r,
   /proc/[0-9]*/fd/                         r,
+  /proc/[0-9]*/fd/[0-9]*                   r,
   /sys/devices/system/                     r,
   /sys/devices/system/**                   r,
   deny @{PROC}/sys/kernel/**               w,
