@@ -240,6 +240,36 @@ class TestVerifyHmacEndpoint:
         assert data["issues"] == ["Modified: evidence/x"]
         assert ev.verify_calls[0][2] == "operator initiated"
 
+    def test_failed_verify_normalizes_structured_and_runtime_issues(
+        self, passwords_dir, tmp_path, monkeypatch
+    ):
+        ev = FakeEvidenceDB(
+            verify_result={
+                "verified": False,
+                "issues": [
+                    {"code": "LEDGER_INVALID"},
+                    {"unexpected_future_shape": True},
+                ],
+                "verification_issues": [
+                    "mounted_evidence_digest_mismatch",
+                    "LEDGER_INVALID",
+                ],
+            }
+        )
+        c = _build_client(passwords_dir, tmp_path, monkeypatch, ev)
+
+        resp = c.post("/api/evidence/chain/verify-hmac", json={})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert data["issues"] == [
+            "LEDGER_INVALID",
+            "CUSTODY_VERIFICATION_BLOCKED",
+            "mounted_evidence_digest_mismatch",
+        ]
+        assert all(isinstance(issue, str) for issue in data["issues"])
+
     def test_invalid_json_returns_400(self, passwords_dir, tmp_path, monkeypatch):
         c = _build_client(passwords_dir, tmp_path, monkeypatch, FakeEvidenceDB())
         resp = c.post(

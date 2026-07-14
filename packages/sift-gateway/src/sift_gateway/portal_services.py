@@ -973,6 +973,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 expected_facts: list[AuthorityEvidence] = []
                 for known in sealed.values():
                     posture = known["metadata"].get("posture", {})
+                    receipt_authority_ambiguous = False
                     if storage_profile is StorageProfile.EXTERNALLY_READ_ONLY:
                         receipt = storage_receipt_by_object.get(known["id"], {})
                     else:
@@ -1011,8 +1012,15 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                 and first_created != second_created
                                 else {}
                             )
+                            receipt_authority_ambiguous = not receipt
                         else:
                             receipt = candidates[0] if candidates else {}
+                    if receipt_authority_ambiguous:
+                        # Two otherwise-current posture authorities without a
+                        # strict ordering cannot be resolved from historical
+                        # version metadata. Suppress every fallback so the
+                        # classifier emits FULL_VERIFY_REQUIRED explicitly.
+                        posture = {}
                     receipt_matches_current = (
                         receipt.get("evidence_version_id") == known["version_id"]
                         and receipt.get("sha256") == known["sha256"]
@@ -1045,6 +1053,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     if (
                         identity is None
                         and storage_profile is StorageProfile.LOCAL_IMMUTABLE
+                        and not receipt_authority_ambiguous
                     ):
                         observed = next(
                             (

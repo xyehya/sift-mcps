@@ -1886,6 +1886,22 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
         )
     result = result if isinstance(result, dict) else {}
     verified = bool(result.get("verified"))
+    issue_labels: list[str] = []
+    for issue in [
+        *(result.get("issues") if isinstance(result.get("issues"), list) else []),
+        *(
+            result.get("verification_issues")
+            if isinstance(result.get("verification_issues"), list)
+            else []
+        ),
+    ]:
+        label = (
+            str(issue.get("code") or "CUSTODY_VERIFICATION_BLOCKED")
+            if isinstance(issue, dict)
+            else str(issue or "CUSTODY_VERIFICATION_BLOCKED")
+        )
+        if label not in issue_labels:
+            issue_labels.append(label)
 
     from datetime import datetime, timezone
     verified_at = datetime.now(timezone.utc).isoformat()
@@ -1893,7 +1909,7 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
     return JSONResponse({
         "ok": verified,
         "verified": verified,
-        "issues": result.get("issues", []),
+        "issues": issue_labels,
         "verified_at": verified_at,
         "verified_by": examiner,
         "authority": "db",

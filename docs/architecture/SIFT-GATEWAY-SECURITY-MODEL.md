@@ -163,8 +163,12 @@ append-only SUCCESS receipt must cover the exact current active set and current 
 profile, manifest version/hash, Evidence Versions, hashes, byte counts, and descriptor posture. It
 may clear only current storage/posture verification latches; content/missing, ledger, conflict,
 unknown, violated-object, identity-change, and unauthorized source-change findings remain blocked.
+Any current violated object rejects Full Verify before a receipt is written. The synthetic persisted
+marker is removable only with positive original-head provenance for a current recoverable cause;
+reconciliation preserves all durable substantive and future causal issues across later cheap scans.
 Local reconciliation orders a complete whole-case receipt against any matching per-object exact-
-Restore posture receipt and uses only the strictly newer authority; ties fail closed. Portal success
+Restore posture receipt and uses only the strictly newer authority; equal or missing timestamps
+suppress historical fallback and require another Full Verify. Portal success
 is derived from the authoritative sealed/open gate after immediate reconciliation, not hashing alone.
 
 Ignore, Delete Stray, and Retire are fixed Portal-only durable actions. Postgres blocks admission

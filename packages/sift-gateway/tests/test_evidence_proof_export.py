@@ -184,7 +184,17 @@ class _FakeDb:
                 finding["code"] == "PERSISTED_VIOLATION" for finding in findings
             ):
                 raise RuntimeError("persisted_custody_violation_requires_recovery")
-            self.issues = findings
+            durable_causes = [
+                issue
+                for issue in self.issues
+                if issue.get("code") not in {
+                    "PERSISTED_VIOLATION", "DETECTED_NEW_ITEM", "UNSAFE_PENDING_ITEM",
+                }
+            ]
+            self.issues = []
+            for issue in [*findings, *durable_causes]:
+                if issue not in self.issues:
+                    self.issues.append(issue)
             return [(None,)]
         if "evidence_gate_status" in s and "seal_status, manifest_version, head_hash" in s:
             return [(self.seal_status, self.manifest_version, self.head_hash, len(self.sealed_objects), self.issues, None)]
@@ -550,3 +560,51 @@ class TestVerify:
         assert result["gate_state"] == "BLOCKED_VIOLATION"
         assert result["issues"][0]["code"] == "PERSISTED_VIOLATION"
         assert result["verification_issues"] == []
+
+    @pytest.mark.parametrize(
+        "blocking_code",
+        ("LEDGER_INVALID", "CONFLICTING_AUTHORITY", "FUTURE_UNKNOWN_VIOLATION"),
+    )
+    def test_repeated_full_verify_cannot_launder_durable_cause(
+        self, service, blocking_code
+    ):
+        svc, db, tmp_path = service
+        sha, size = _make_sealed_file(tmp_path, "evidence/disk.bin", b"v" * 20)
+        db.sealed_objects = [("obj-1", "evidence/disk.bin", sha, size)]
+        db.seal_status = "violated"
+        db.issues = [
+            {
+                "code": "PERSISTED_VIOLATION",
+                "gate_state": "BLOCKED_VIOLATION",
+                "recovery": "RESTORE_REACQUIRE_RETIRE",
+                "evidence_object_id": None,
+                "observation_id": None,
+                "full_verification_required": False,
+            },
+            {
+                "code": "FULL_VERIFY_REQUIRED",
+                "gate_state": "BLOCKED_VIOLATION",
+                "recovery": "FULL_VERIFY",
+                "evidence_object_id": None,
+                "observation_id": None,
+                "full_verification_required": True,
+            },
+            {
+                "code": blocking_code,
+                "gate_state": "BLOCKED_VIOLATION",
+                "recovery": "RESTORE_REACQUIRE_RETIRE",
+                "evidence_object_id": None,
+                "observation_id": None,
+                "full_verification_required": False,
+            },
+        ]
+
+        first = svc.verify(case_id=_CASE)
+        second = svc.verify(case_id=_CASE)
+
+        for result in (first, second):
+            assert result["verified"] is False
+            assert result["seal_status"] == "violated"
+            assert result["gate_state"] == "BLOCKED_VIOLATION"
+            assert blocking_code in {issue["code"] for issue in result["issues"]}
+        assert len([call for call in db.verify_calls if call[0] is True]) == 2

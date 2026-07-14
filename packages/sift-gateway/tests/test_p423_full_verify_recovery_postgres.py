@@ -103,6 +103,25 @@ def _verify(conn, setup, *, generation=1, profile="LOCAL_IMMUTABLE", items=None,
     return state, correlation
 
 
+def _reconcile_persisted_only(conn, setup) -> None:
+    from psycopg.types.json import Jsonb
+
+    findings = [{
+        "code": "PERSISTED_VIOLATION",
+        "gate_state": "BLOCKED_VIOLATION",
+        "recovery": "RESTORE_REACQUIRE_RETIRE",
+        "evidence_object_id": None,
+        "observation_id": None,
+        "full_verification_required": False,
+    }]
+    with conn.cursor() as cur:
+        cur.execute(
+            "select id from app.evidence_record_inventory_classification_v2(%s,%s,%s,%s)",
+            (setup[0], "reconcile:" + uuid.uuid4().hex, "BLOCKED_VIOLATION", Jsonb(findings)),
+        )
+        assert cur.fetchone() is not None
+
+
 def test_posture_only_success_opens_and_writes_one_receipt() -> None:
     psycopg = pytest.importorskip("psycopg")
     issues = [
@@ -148,7 +167,9 @@ def test_substantive_or_unknown_issue_remains_blocked(blocking_code: str) -> Non
     ]
     with psycopg.connect(_dsn()) as conn:
         setup = _setup(conn, issues)
-        _verify(conn, setup)
+        with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+            with conn.transaction():
+                _verify(conn, setup)
         with conn.cursor() as cur:
             cur.execute(
                 "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
@@ -182,8 +203,66 @@ def test_violated_object_prevents_synthetic_latch_recovery() -> None:
             )
             assert cur.fetchone() == (
                 "violated",
-                [{"code": "PERSISTED_VIOLATION"}],
+                [{"code": "PERSISTED_VIOLATION"}, {"code": "FULL_VERIFY_REQUIRED"}],
             )
+            cur.execute(
+                "select count(*) from app.evidence_storage_verifications where case_id=%s",
+                (setup[0],),
+            )
+            assert cur.fetchone() == (0,)
+
+
+@pytest.mark.parametrize(
+    "blocking_code",
+    ("LEDGER_INVALID", "CONFLICTING_AUTHORITY", "FUTURE_UNKNOWN_VIOLATION"),
+)
+def test_reconciliation_and_second_verify_cannot_launder_cause(blocking_code: str) -> None:
+    psycopg = pytest.importorskip("psycopg")
+    issues = [
+        {"code": "PERSISTED_VIOLATION"},
+        {"code": "FULL_VERIFY_REQUIRED"},
+        {"code": blocking_code},
+    ]
+    with psycopg.connect(_dsn()) as conn:
+        setup = _setup(conn, issues)
+        _verify(conn, setup)
+        _reconcile_persisted_only(conn, setup)
+        _verify(conn, setup)
+        with conn.cursor() as cur:
+            cur.execute(
+                "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+                (setup[0],),
+            )
+            seal_status, remaining = cur.fetchone()
+        assert seal_status == "violated"
+        assert {issue["code"] for issue in remaining} == {
+            "PERSISTED_VIOLATION", blocking_code,
+        }
+
+
+def test_pending_only_issue_remains_unsealed_after_full_verify() -> None:
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as conn:
+        setup = _setup(conn, [
+            {"code": "FULL_VERIFY_REQUIRED"},
+            {"code": "DETECTED_NEW_ITEM"},
+        ])
+        with conn.cursor() as cur:
+            cur.execute(
+                """insert into app.evidence_objects(
+                     id,case_id,display_name,display_path,status,seal_status)
+                   values(%s,%s,'pending.raw','evidence/pending.raw','detected','unsealed')""",
+                (uuid.uuid4(), setup[0]),
+            )
+        _verify(conn, setup)
+        with conn.cursor() as cur:
+            cur.execute(
+                "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+                (setup[0],),
+            )
+            seal_status, remaining = cur.fetchone()
+        assert seal_status == "unsealed"
+        assert {issue["code"] for issue in remaining} == {"DETECTED_NEW_ITEM"}
 
 
 def test_wrong_generation_and_unauthorized_source_change_remain_blocked() -> None:

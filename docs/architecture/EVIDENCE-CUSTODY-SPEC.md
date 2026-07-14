@@ -255,9 +255,13 @@ Full Verify Evidence writes one indivisible whole-active-set SUCCESS receipt bou
 storage generation/profile, manifest version/hash, and every current Evidence Version/hash/byte and
 descriptor/posture fact. For Local Immutable reconciliation, that whole-case receipt and a matching
 per-object exact-Restore posture receipt are both eligible authority; the strictly newer receipt wins
-for that object, while equal or missing ordering fails closed. A successful Full Verify may discharge
+for that object, while equal or missing ordering suppresses historical-metadata fallback and forces
+another Full Verify. Full Verify is rejected before writing a receipt when any current object is
+violated; Restore, Reacquire, or Retire must resolve that object first. A successful Full Verify may discharge
 `FULL_VERIFY_REQUIRED` and current-generation storage/posture latch findings, plus the synthetic
-`PERSISTED_VIOLATION` marker only when no substantive finding or violated object remains. It never
+`PERSISTED_VIOLATION` marker only when the original head positively contained a current recoverable
+cause and no substantive finding or violated object remains. Cheap reconciliation preserves every
+durable substantive or future causal issue instead of replacing it with the synthetic marker. It never
 discharges changed or missing content, ledger/conflicting/unknown findings, identity change, or an
 unauthorized storage-source change. The Portal reports success only when the authoritative gate is
 sealed and open after immediate reconciliation; local hash success cannot hide retained DB issues.

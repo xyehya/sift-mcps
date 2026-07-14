@@ -46,6 +46,12 @@ def test_success_clears_only_current_storage_and_posture_findings() -> None:
     assert "PERSISTED_VIOLATION" in wrapper
     assert "from jsonb_array_elements(v_original_issues) issue" in wrapper
     assert "coalesce(issue->>'storage_generation','') ~ '^[0-9]+$'" in wrapper
+    assert "v_had_current_recoverable" in wrapper
+    assert "if v_had_current_recoverable and not v_has_object_violation" in wrapper
+    assert "full_verify_violated_object_requires_recovery" in wrapper
+    assert wrapper.index("full_verify_violated_object_requires_recovery") < wrapper.index(
+        "app.evidence_storage_commit_full_verify_pre_posture_recovery("
+    )
     for preserved in (
         "CONTENT_CHANGED",
         "SEALED_EVIDENCE_MISSING",
@@ -106,3 +112,29 @@ def test_every_success_receipt_read_requires_the_exact_whole_active_set() -> Non
         "not exists(select 1\n"
         "                                       from jsonb_array_elements(v.item_facts) x"
     ) in SERVICE
+
+
+def test_reconciliation_preserves_closed_causal_issues_across_observations() -> None:
+    wrapper = _function("evidence_record_inventory_classification_v2")
+    assert "v_original_issues" in wrapper
+    assert (
+        "app.evidence_record_inventory_classification_v2_pre_causal_preservation("
+        in wrapper
+    )
+    assert "select distinct issue" in wrapper
+    assert "'PERSISTED_VIOLATION','DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM'" in wrapper
+    assert "where issue->>'code' not in ('DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM')" in wrapper
+    compact = re.sub(r"\s+", "", MIGRATION)
+    signature = "uuid,text,text,jsonb"
+    assert (
+        "revokeexecuteonfunction"
+        "app.evidence_record_inventory_classification_v2_pre_causal_preservation("
+        f"{signature})fromservice_role"
+    ) in compact
+
+
+def test_pending_only_projection_remains_unsealed_not_violated() -> None:
+    wrapper = _function("evidence_storage_commit_full_verify")
+    assert "v_has_pending_issue" in wrapper
+    assert "when v_has_object_violation or v_has_violation_issue then 'violated'" in wrapper
+    assert "when v_has_pending_object or v_has_pending_issue then 'unsealed'" in wrapper

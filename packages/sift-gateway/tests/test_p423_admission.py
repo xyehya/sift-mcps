@@ -1495,12 +1495,14 @@ def test_exact_restore_receipt_rebinds_current_posture_without_new_version(
         "actual_source",
         "restore_version",
         "expected_gate",
+        "baseline_matches_live",
     ),
     (
-        (2, 1, "storage", "version-7", "OPEN"),
-        (1, 2, "restore", "version-7", "OPEN"),
-        (1, 1, "storage", "version-7", "BLOCKED_VIOLATION"),
-        (1, 2, "storage", "version-old", "OPEN"),
+        (2, 1, "storage", "version-7", "OPEN", False),
+        (1, 2, "restore", "version-7", "OPEN", False),
+        (1, 1, "storage", "version-7", "BLOCKED_VIOLATION", False),
+        (1, 1, "storage", "version-7", "BLOCKED_VIOLATION", True),
+        (1, 2, "storage", "version-old", "OPEN", False),
     ),
 )
 def test_local_posture_authority_uses_strictly_newest_complete_receipt(
@@ -1511,6 +1513,7 @@ def test_local_posture_authority_uses_strictly_newest_complete_receipt(
     actual_source,
     restore_version,
     expected_gate,
+    baseline_matches_live,
 ):
     case_dir = tmp_path / "case"
     evidence = case_dir / "evidence"
@@ -1558,9 +1561,9 @@ def test_local_posture_authority_uses_strictly_newest_complete_receipt(
                 {
                     "posture": {
                         "st_dev": st.st_dev,
-                        "st_ino": st.st_ino - 1,
-                        "st_mtime_ns": st.st_mtime_ns - 1,
-                        "st_ctime_ns": st.st_ctime_ns - 1,
+                        "st_ino": st.st_ino if baseline_matches_live else st.st_ino - 1,
+                        "st_mtime_ns": st.st_mtime_ns if baseline_matches_live else st.st_mtime_ns - 1,
+                        "st_ctime_ns": st.st_ctime_ns if baseline_matches_live else st.st_ctime_ns - 1,
                         "st_nlink": st.st_nlink,
                     }
                 },
