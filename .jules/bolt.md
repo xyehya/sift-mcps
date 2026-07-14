@@ -1,0 +1,3 @@
+## 2024-07-14 - [Date Object Allocation in Hot Loops]
+**Learning:** Instantiating `new Date(timestamp)` multiple times per event inside hot loops like React array mappings (e.g., Timeline event components) causes unnecessary allocation overhead and garbage collection pressure. Additionally, mixing local time logic like `.toDateString()` for separator comparisons with `.toISOString()` for UTC display causes mismatches and bugs on timezone boundaries.
+**Action:** Use fast-path string slicing for well-formed ISO strings (`substring(0, 10)` for date, `substring(11, 19)` for time) rather than re-instantiating `Date` objects when extracting date and time parts from a known timestamp field for rendering.
