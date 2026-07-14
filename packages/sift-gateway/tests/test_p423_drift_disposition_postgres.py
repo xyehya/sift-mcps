@@ -11,6 +11,28 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
+AUTHORIZE_REPAIR_MIGRATION = (
+    Path(__file__).resolve().parents[3]
+    / "supabase"
+    / "migrations"
+    / "202607145300_custody_delete_broker_authorize_shape.sql"
+)
+DELETE_BROKER_ITEM_KEYS = (
+    "evidence_object_id",
+    "display_path",
+    "prior_status",
+    "prior_seal_status",
+    "original_version_id",
+    "original_sha256",
+    "original_bytes",
+    "present",
+    "sha256",
+    "bytes",
+    "st_dev",
+    "st_ino",
+    "st_nlink",
+)
+
 
 def _dsn() -> str:
     dsn = os.environ.get("SIFT_CONTROL_PLANE_DSN", "").strip()
@@ -233,6 +255,46 @@ def _begin(conn, *, case_id, actor_id, object_id, action, status, seal_status):
         )
         operation_id = cur.fetchone()[0]
     return operation_id, key, reason
+
+
+def _valid_delete_broker_item(object_id) -> dict[str, object]:
+    return {
+        "evidence_object_id": str(object_id),
+        "display_path": f"evidence/{object_id}.bin",
+        "prior_status": "detected",
+        "prior_seal_status": "unsealed",
+        "original_version_id": None,
+        "original_sha256": None,
+        "original_bytes": None,
+        "present": True,
+        "sha256": "sha256:" + "a" * 64,
+        "bytes": 10,
+        "st_dev": 11,
+        "st_ino": 12,
+        "st_nlink": 1,
+    }
+
+
+def _authorize_catalog_state(cur) -> tuple:
+    cur.execute(
+        """select p.proowner,p.prosecdef,p.proconfig,
+                  has_function_privilege(
+                    'sift_custody_delete_broker',p.oid,'EXECUTE'),
+                  not exists(
+                    select 1
+                    from aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl
+                    left join pg_roles grantee on grantee.oid=acl.grantee
+                    where acl.privilege_type='EXECUTE'
+                      and acl.grantee<>p.proowner
+                      and coalesce(grantee.rolname,'PUBLIC')<>
+                        'sift_custody_delete_broker')
+             from pg_proc p
+             where p.oid=
+               'sift_custody_broker.authorize(uuid,text)'::regprocedure"""
+    )
+    state = cur.fetchone()
+    assert state is not None
+    return state
 
 
 def test_inventory_classification_rls_validation_and_exact_replay():
@@ -910,9 +972,107 @@ def test_delete_verified_transition_requires_scoped_completed_broker_receipt(
         conn.rollback()
 
 
+def test_broker_authorize_repair_migration_applies_and_rolls_back_cleanly():
+    psycopg = pytest.importorskip("psycopg")
+    repair_sql = AUTHORIZE_REPAIR_MIGRATION.read_text(encoding="utf-8")
+
+    with psycopg.connect(_admin_dsn()) as conn, conn.cursor() as cur:
+        before = _authorize_catalog_state(cur)
+        cur.execute("savepoint authorize_repair_syntax")
+        cur.execute(repair_sql)
+        after = _authorize_catalog_state(cur)
+
+        assert after[0] == before[0]
+        assert after[1] is True
+        assert set(after[2] or ()) == {"search_path=pg_catalog, app"}
+        assert after[3:] == (True, True)
+
+        cur.execute("rollback to savepoint authorize_repair_syntax")
+        assert _authorize_catalog_state(cur) == before
+
+
+def test_broker_authorize_accepts_exact_production_item_shape(
+    committed_broker_fixture_cleanup,
+):
+    from psycopg.types.json import Jsonb
+
+    psycopg = pytest.importorskip("psycopg")
+    broker_dsn = _broker_dsn()
+    with psycopg.connect(_dsn()) as conn:
+        case_id, actor_id = _case_and_actor(conn)
+        committed_broker_fixture_cleanup(case_id, actor_id)
+        object_id = uuid.uuid4()
+        operation_id, *_ = _begin(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            action="DELETE_STRAY",
+            status="detected",
+            seal_status="unsealed",
+        )
+        item = _valid_delete_broker_item(object_id)
+        with conn.cursor() as cur:
+            cur.execute(
+                "select app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'runner-before')",
+                (operation_id, Jsonb({"item": item})),
+            )
+        conn.commit()
+
+        with psycopg.connect(broker_dsn) as broker_conn, broker_conn.cursor() as cur:
+            cur.execute(
+                "select sift_custody_broker.authorize(%s,'runner-before')",
+                (operation_id,),
+            )
+            authorized = cur.fetchone()
+            assert authorized is not None
+            assert authorized[0]["item"] == item
+            assert set(authorized[0]["item"]) == set(DELETE_BROKER_ITEM_KEYS)
+
+
+@pytest.mark.parametrize("missing_key", DELETE_BROKER_ITEM_KEYS)
+def test_broker_authorize_rejects_each_missing_production_item_key(
+    missing_key: str, committed_broker_fixture_cleanup
+):
+    from psycopg.types.json import Jsonb
+
+    psycopg = pytest.importorskip("psycopg")
+    broker_dsn = _broker_dsn()
+    with psycopg.connect(_dsn()) as conn:
+        case_id, actor_id = _case_and_actor(conn)
+        committed_broker_fixture_cleanup(case_id, actor_id)
+        object_id = uuid.uuid4()
+        operation_id, *_ = _begin(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            action="DELETE_STRAY",
+            status="detected",
+            seal_status="unsealed",
+        )
+        item = _valid_delete_broker_item(object_id)
+        item.pop(missing_key)
+        with conn.cursor() as cur:
+            cur.execute(
+                "select app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'runner-before')",
+                (operation_id, Jsonb({"item": item})),
+            )
+        conn.commit()
+
+        with psycopg.connect(broker_dsn) as broker_conn, broker_conn.cursor() as cur:
+            with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+                cur.execute(
+                    "select sift_custody_broker.authorize(%s,'runner-before')",
+                    (operation_id,),
+                )
+            broker_conn.rollback()
+
+
 @pytest.mark.parametrize(
     "extra_key",
     [
+        "unexpected",
         "case_key",
         "name",
         "operation_id",

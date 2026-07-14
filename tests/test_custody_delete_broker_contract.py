@@ -23,6 +23,12 @@ UNINSTALLER = REPO_ROOT / "scripts" / "uninstall.sh"
 GATEWAY_PROFILE = REPO_ROOT / "configs" / "apparmor" / "sift-gateway.template"
 BROKER_PROFILE = REPO_ROOT / "configs" / "apparmor" / "sift-custody-delete-broker.template"
 MIGRATION = REPO_ROOT / "supabase" / "migrations" / "202607145200_custody_delete_broker_receipts.sql"
+AUTHORIZE_REPAIR_MIGRATION = (
+    REPO_ROOT
+    / "supabase"
+    / "migrations"
+    / "202607145300_custody_delete_broker_authorize_shape.sql"
+)
 LATEST_INDEX = REPO_ROOT / "docs" / "latest" / "README.md"
 CONTROL_PLANE_DOC = REPO_ROOT / "docs" / "latest" / "08 - Control Plane.md"
 
@@ -122,6 +128,35 @@ def test_broker_rebinds_uuid_to_postgres_and_durable_receipt() -> None:
     assert "'original_version_id','original_sha256','original_bytes'" in migration
     assert "force row level security" in migration
     assert "revoke all" in migration
+
+
+def test_broker_authorize_forward_repair_is_exact_shape_and_least_privilege() -> None:
+    original = MIGRATION.read_text(encoding="utf-8").lower()
+    repair = AUTHORIZE_REPAIR_MIGRATION.read_text(encoding="utf-8").lower()
+
+    assert "jsonb_object_length(v_item)<>13" in original
+    assert "jsonb_object_length(v_item)" not in repair
+    assert (
+        "create or replace function sift_custody_broker.authorize("
+        in repair
+    )
+    assert "language plpgsql security definer set search_path=pg_catalog,app" in repair
+    assert "not (v_item ?& array['evidence_object_id','display_path'" in repair
+    assert "'st_dev','st_ino','st_nlink'])" in repair
+    assert (
+        "v_item-array['evidence_object_id','display_path'" in repair
+    )
+    assert "drop function" not in repair
+    assert (
+        "revoke all on function sift_custody_broker.authorize(uuid,text)\n"
+        "  from public,anon,authenticated,service_role"
+        in repair
+    )
+    assert (
+        "grant execute on function sift_custody_broker.authorize(uuid,text)\n"
+        "  to sift_custody_delete_broker"
+        in repair
+    )
 
 
 def _install_fake_authority(monkeypatch, authority: dict) -> None:
