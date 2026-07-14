@@ -1379,6 +1379,149 @@ def test_external_mount_loss_never_scans_same_named_writable_underlay(
     )
 
 
+def test_external_read_only_reconnect_classifies_returned_full_verify_authority(
+    tmp_path, monkeypatch
+):
+    from sift_core.evidence_storage import ExternalStorageFacts
+
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    image = evidence / "sealed.raw"
+    image.write_bytes(b"sealed")
+    sibling = evidence / "sibling.raw"
+    sibling.write_bytes(b"sibling")
+    st = image.stat()
+    sibling_st = sibling.stat()
+    source, verified_mount, observed_mount = "a" * 64, "b" * 64, "e" * 64
+    unavailable_finding = {
+        "code": "STORAGE_UNAVAILABLE",
+        "gate_state": "BLOCKED_UNAVAILABLE",
+        "recovery": "RECONNECT_AND_VERIFY",
+        "evidence_object_id": None,
+        "observation_id": None,
+        "full_verification_required": False,
+        "storage_generation": 2,
+    }
+    full_verify_finding = {
+        "code": "STORAGE_FULL_VERIFY_REQUIRED",
+        "gate_state": "BLOCKED_UNAVAILABLE",
+        "recovery": "FULL_VERIFY_AND_REPAIR",
+        "evidence_object_id": None,
+        "observation_id": None,
+        "full_verification_required": True,
+    }
+
+    class ReconnectObservationCursor(_SealedObservationCursor):
+        def execute(self, sql, params):
+            normalized = " ".join(sql.split())
+            super().execute(sql, params)
+            if "from app.evidence_chain_heads where case_id=%s" in normalized:
+                self._one = (
+                    "violated",
+                    [unavailable_finding],
+                    1,
+                    "sha256:" + "d" * 64,
+                )
+            elif (
+                "from app.evidence_storage_authorities where case_id=%s"
+                in normalized
+            ):
+                self._one = (
+                    "EXTERNALLY_READ_ONLY",
+                    source,
+                    verified_mount,
+                    "UNAVAILABLE",
+                    2,
+                    2,
+                    None,
+                    None,
+                    "RECONNECT_AND_VERIFY",
+                )
+            elif "from app.evidence_storage_record_observation(" in normalized:
+                self._one = (
+                    "EXTERNALLY_READ_ONLY",
+                    source,
+                    verified_mount,
+                    "FULL_VERIFY_REQUIRED",
+                    2,
+                    2,
+                    True,
+                    None,
+                    "FULL_VERIFY",
+                )
+            elif "evidence_record_inventory_classification_v2" in normalized:
+                findings = getattr(params[3], "obj", params[3])
+                if findings != [full_verify_finding]:
+                    raise RuntimeError(
+                        "persisted_custody_violation_requires_recovery"
+                    )
+
+    cursor = ReconnectObservationCursor(
+        [
+            (
+                "sealed-object",
+                "evidence/sealed.raw",
+                "sha256:" + hashlib.sha256(b"sealed").hexdigest(),
+                st.st_size,
+                datetime.now(timezone.utc),
+                {},
+                "sealed",
+                "sealed-version",
+            ),
+            (
+                "sibling-object",
+                "evidence/sibling.raw",
+                "sha256:" + hashlib.sha256(b"sibling").hexdigest(),
+                sibling_st.st_size,
+                datetime.now(timezone.utc),
+                {},
+                "sealed",
+                "sibling-version",
+            ),
+        ]
+    )
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
+    monkeypatch.setattr(
+        service,
+        "storage_execution_authority",
+        lambda _case_id: (_ for _ in ()).throw(
+            PortalServiceError("external_storage_full_verify_required", http_status=403)
+        ),
+    )
+    monkeypatch.setattr(
+        "sift_gateway.portal_services.external_storage_facts",
+        lambda _fd, **_kwargs: ExternalStorageFacts(
+            source, observed_mount, "ext4", True
+        ),
+    )
+
+    result = service.reconcile_for_admission(
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert result["gate_state"] == "BLOCKED_UNAVAILABLE"
+    assert result["state"] == "unavailable"
+    assert result["observed"] == 2
+    classification_call = next(
+        call
+        for call in cursor.calls
+        if "evidence_record_inventory_classification_v2" in call[0]
+    )
+    findings = getattr(classification_call[1][3], "obj", classification_call[1][3])
+    assert findings == [full_verify_finding]
+    assert all(finding["evidence_object_id"] is None for finding in findings)
+    observation_query = next(
+        sql
+        for sql, _params in cursor.calls
+        if "from app.evidence_storage_record_observation(" in sql
+    )
+    assert "observed.verified_generation" in observation_query
+    assert "observed.remediation" in observation_query
+
+
 def test_midscan_entry_race_discards_all_object_conclusions(tmp_path, monkeypatch):
     case_dir = tmp_path / "case"
     evidence = case_dir / "evidence"

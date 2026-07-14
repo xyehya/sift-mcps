@@ -808,8 +808,13 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                 expected_mount_path=evidence_dir,
                             )
                             cur.execute(
-                                """select (app.evidence_storage_record_observation(
-                                     %s,%s,true,%s,%s,%s)).state""",
+                                """select observed.profile,observed.source_identity,
+                                          observed.verified_mount_instance,observed.state,
+                                          observed.generation,observed.verified_generation,
+                                          observed.read_only,observed.last_full_verified_at,
+                                          observed.remediation
+                                   from app.evidence_storage_record_observation(
+                                     %s,%s,true,%s,%s,%s) observed""",
                                 (
                                     case_id,
                                     storage_profile.value,
@@ -818,9 +823,19 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                     external_facts.read_only,
                                 ),
                             )
-                            state_row = cur.fetchone()
+                            observed_storage_row = cur.fetchone()
+                            if not observed_storage_row:
+                                raise StorageAuthorityError(
+                                    "external storage observation unavailable"
+                                )
+                            # The observation RPC may advance UNAVAILABLE or a
+                            # restored read-only posture to FULL_VERIFY_REQUIRED.
+                            # Classification in this same locked transaction
+                            # must use that returned authority, not the snapshot
+                            # read before the live mount observation.
+                            storage_row = observed_storage_row
                             storage_available = True
-                            if not state_row or str(state_row[0]) != "AVAILABLE":
+                            if str(storage_row[3]) != "AVAILABLE":
                                 unsafe.append("external_storage_full_verify_required")
                         except (OSError, StorageAuthorityError):
                             storage_available = False
