@@ -224,7 +224,7 @@ sequenceDiagram
   participant POR as Portal
   participant PG as Postgres
   participant REP as Report export
-  OP->>POR: approve finding (re-auth, HMAC)
+  OP->>POR: approve finding (fresh Supabase password re-auth)
   POR->>PG: status DRAFT -> approved + content hash
   OP->>POR: generate + export report (re-auth)
   PG->>REP: approved findings + DB custody appendix

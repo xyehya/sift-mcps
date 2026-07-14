@@ -82,7 +82,7 @@ Backend: `packages/case-dashboard/src/case_dashboard/routes.py` (5730 lines).
 | POST | `/portal/api/evidence/chain/restore/begin` | Authorize exact Restore and block the gate |
 | POST | `/portal/api/evidence/chain/recovery/complete` | Fresh re-auth, verify bytes/posture, and atomically finalize recovery |
 | GET | `/portal/api/evidence/objects/{object_id}/history` | Path-free object version/event history |
-| POST | `/portal/api/evidence/chain/verify-hmac` | Re-verify HMAC |
+| POST | `/portal/api/evidence/chain/verify-hmac` | **Full Verify Evidence** against Postgres custody authority (legacy compatibility URL; no HMAC/file-ledger verification) |
 | POST | `/portal/api/evidence/chain/anchor` | Anchor on Solana |
 | GET | `/portal/api/evidence/{path}/verify` | Single file verify |
 

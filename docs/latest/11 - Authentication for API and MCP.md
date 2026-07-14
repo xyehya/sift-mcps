@@ -54,7 +54,12 @@ Legacy tokens still work for REST API access but are **removed from the MCP surf
 
 The envelope wraps Supabase access/refresh tokens so the portal can re-validate and refresh on each request without re-prompting.
 
-### 2.4 Approval Password
+### 2.4 Legacy Local Approval Helpers (not active Portal re-auth)
+
+The following file format and helpers remain for legacy/local compatibility
+coverage only. Active Portal sensitive actions re-verify the signed-in
+operator's password with Supabase and bind a scoped, consumable DB audit receipt;
+there is no local password-file or HMAC fallback.
 
 | Property | Value |
 |---|---|
@@ -244,7 +249,8 @@ No-op when Supabase is not the active authority (`request.state.supabase_enabled
 - Register backend (`POST /api/v1/backends`)
 - Mint join code (`POST /api/v1/setup/join-code`)
 - Evidence seal/resume, ignore, delete, retire, Replace/Reacquire begin,
-  exact Restore begin, recovery completion, and verify-hmac
+  exact Restore begin, recovery completion, and Full Verify Evidence (legacy
+  `/verify-hmac` compatibility URL)
 - Commit review delta (`POST /api/commit`)
 - Case activation
 - Response guard override

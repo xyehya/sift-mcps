@@ -137,7 +137,7 @@ rarely need changing.
 | `SIFT_BACKUP_DIR` | `$SIFT_HOME/backups` | installer backup area |
 | `SIFT_CONFIG` | `$SIFT_HOME/gateway.yaml` | gateway config path (`--config`) |
 | `SIFT_PASSWORDS_DIR` | `$SIFT_STATE_DIR/passwords` | legacy PBKDF2 examiner hash |
-| `SIFT_VERIFICATION_DIR` | `$SIFT_STATE_DIR/verification` | file-mode HMAC verification ledger (fallback) |
+| `SIFT_VERIFICATION_DIR` | `$SIFT_STATE_DIR/verification` | retired file-mode verification-ledger location retained for legacy cleanup/export compatibility; never active DB custody authority |
 | `SIFT_TOKENS_DIR` | `$SIFT_STATE_DIR/tokens` | installer handoff |
 | `SIFT_SNAPSHOTS_DIR` | `$SIFT_STATE_DIR/snapshots` | operator forensic snapshots |
 | `SIFT_ENRICHMENT_DIR` | `$SIFT_STATE_DIR/enrichment` | FK/RAG enrichment symlinks |

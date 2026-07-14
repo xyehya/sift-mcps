@@ -58,7 +58,7 @@ live authority.
 | Investigation TODOs | db | `app.investigation_todos` `202606081500_report_metadata.sql:70` | `todos.json` = file-mirror | `PostgresInvestigationStore` | portal | portal/MCP | Postgres dump | migrated; JSON = mirror |
 | Content-hash (approval guard) | db | `content_hash` columns on `app.investigation_*` | none (single impl) | `compute_content_hash` `investigation_store.py:186` (BATCH-NW1 single authority) | reporting reconcile (DB) `reporting.py:696-723` | n/a | Postgres dump | migrated (NW1 consolidation) |
 | Report metadata + export provenance | db | `app.report_metadata` (`status`, `seal_status`, `manifest_hash`, `chain_head_hash`, `exported`) `202606081500_report_metadata.sql:89` | generated report files (PDF/MD) = export artifacts | core `reporting.py` + portal | portal Reports tab | generate/export via portal (re-auth gated) | Postgres dump; report files are exports | migrated |
-| Post-approval HMAC verification ledger | db (DB-active) | `content_hash` in `app.investigation_*`, reconciled by `reconcile_verification_db` `reporting.py:696-723` | `/var/lib/sift/verification/{case_id}.jsonl` HMAC ledger `verification.py:18` is **file-mode fallback only** | `verification.write_ledger_entry` `verification.py:41` | `reconcile_verification` (file path) `reporting.py:726-801` | n/a | back up `/var/lib/sift/verification/` if file-mode | **legacy fallback** - superseded by DB `content_hash` in DB-active; see FORK-2 |
+| Investigation content verification | db | `content_hash` in `app.investigation_*`, reconciled by `reconcile_verification_db` `reporting.py:696-723` | `/var/lib/sift/verification/{case_id}.jsonl` is a retired legacy format, not a runtime fallback | DB investigation writes + `reconcile_verification_db` | DB reconciliation only | n/a | Postgres dump | migrated; legacy file path may be removed during cleanup |
 | Durable jobs (ingest/enrich/report/run_command) | db | `app.jobs` (+`job_steps`,`job_logs`,`worker_heartbeats`) `202606081200_durable_jobs.sql:38`; sanitized read `app.job_status_public` `:535` | none (no external queue, no job file/sqlite) | `app.enqueue_job` `:170`; `app.claim_next_job` FOR UPDATE SKIP LOCKED `:215`; `JobWorker` `execute/job_worker.py:211` | portal/agents via `job_status_public` | restart `sift-job-worker.service`; `app.expire_stale_jobs()` reclaims leases `:415` | Postgres dump | migrated (BATCH-D1); fully DB |
 | Worker liveness | db | `app.worker_heartbeats` `202606081200_durable_jobs.sql:146` | none | `app.worker_heartbeat` `:507` | `app.expire_stale_jobs` | restart worker service | Postgres dump | migrated |
 | OpenSearch indices (search plane) | derived | registry `app.opensearch_indices` `202606081300_opensearch_provenance.sql:27`; provenance `app.opensearch_ingest_provenance` `:80` | OpenSearch index data in Docker volume | `app.register_opensearch_index` `:114`; ingest job adapter | portal/agent via `app.opensearch_index_coverage` `:205` | rebuild by re-running ingest; reindex | Docker volume snapshot OR rebuild from sealed evidence | derived/rebuildable; registry+provenance are DB |
@@ -85,27 +85,26 @@ live authority.
 | Python venv + runtime checkout | derived | none | `$REPO/.venv`, `/opt/sift-mcps` `install.sh:74,397` | installer `uv sync` | services | rebuild via `uv sync` / reinstall | rebuildable from repo | derived; not backed up |
 | Supabase CLI project state (Docker) | secret/config + data | Postgres itself | `$REPO/supabase/.supabase` (Docker volumes) `setup-supabase.sh:241` | `supabase start` | Supabase stack | manage via Supabase CLI | **Postgres volume is the primary backup target** | the DB data plane |
 
-## Remaining File-Authoritative Items (each justified)
+## File Authority and Retired Lookalikes
 
 These are the only items where a file (not the DB) is still authoritative in the
 live deployment, or where a file holds truth that the DB intentionally does not.
+The first two legacy paths below may still exist on upgraded installs, but they
+are explicitly **not** file-authoritative and are listed only to prevent them
+being mistaken for a fallback.
 
-1. **Examiner password fallback** - `/var/lib/sift/passwords/examiner.json`
-   (PBKDF2) `install.sh:908`. Supabase Auth is the target authority; this is a
-   legacy local-auth fallback. **Justification / follow-up:** auth hardening and
-   credential consolidation is BATCH-HR1; raise as FORK-1 for the conductor (is
-   this fallback still wanted, or should it be removed once Supabase Auth login
-   is mandatory?).
+1. **Retired examiner password file** - `/var/lib/sift/passwords/examiner.json`
+   (PBKDF2) may remain for cleanup compatibility. Active Portal login and
+   sensitive-action re-auth both require Supabase; there is no local fallback.
 
-2. **Post-approval HMAC verification ledger** -
+2. **Retired post-approval HMAC verification ledger** -
    `/var/lib/sift/verification/{case_id}.jsonl` `verification.py:18`. In DB-active
    mode the authoritative reconciliation is `content_hash` in
    `app.investigation_*` via `reconcile_verification_db`
    `reporting.py:696-723`; the JSONL path (`reconcile_verification`
-   `reporting.py:726-801`) is the **file-mode fallback**. **Justification:**
-   superseded by DB in DB-active deployments. Follow-up FORK-2: confirm the
-   file-mode verification path can be retired (or kept only for offline export);
-   candidate for BATCH-CL1 legacy cleanup.
+   `reporting.py:726-801`) is legacy compatibility code, not an active runtime
+   fallback. It may be removed during legacy cleanup; Postgres remains the sole
+   investigation verification authority.
 
 3. **Static reference data** - tool catalogs
    (`packages/sift-core/data/catalog/*.yaml`), forensic-knowledge artifact/tool
@@ -213,15 +212,13 @@ here** (out of OR2 scope).
    `evidence-manifest.json` fresh on every call." RG1 should verify this against
    the DB-gate path (`evidence_gate.py`) and reclassify.
 
-## Open Authority Questions (fork candidates for the conductor)
+## Historical Authority Questions and Current Resolutions
 
-- **FORK-1 (auth fallback):** Should the local PBKDF2 `examiner.json` fallback
-  (`install.sh:908`) be retained, or removed once Supabase Auth login is
-  mandatory? Touches BATCH-HR1.
-- **FORK-2 (verification ledger):** Can the file-mode HMAC verification ledger
-  (`/var/lib/sift/verification/*.jsonl`, `verification.py`) be retired now that
-  `content_hash` in `app.investigation_*` is the DB-active authority, or must it
-  persist as an offline export? Candidate for BATCH-CL1.
+- **FORK-1 (resolved):** Supabase Auth is mandatory. The local PBKDF2
+  `examiner.json` path is not a Portal login or re-auth fallback.
+- **FORK-2 (resolved):** The file-mode HMAC verification ledger is retired as
+  runtime authority. DB `content_hash` reconciliation is authoritative; any
+  retained file format is cleanup/export compatibility only.
 - **FORK-3 (reference data):** Formally declare static reference data (catalogs,
   forensic-knowledge YAML, OS mappings, manifest schema) as intentionally file-
   authoritative and out of DB-authority scope?

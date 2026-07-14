@@ -9,7 +9,7 @@ status: draft
 
 ## 1. System Summary
 
-The SIFT MCP runtime is a portable, single-policy-boundary MCP gateway for autonomous DFIR agents running on the SANS SIFT Workstation. It provides 42 MCP tools across 5 backends, 86 REST API endpoints, and 3 worker processes for durable job execution. **Postgres (Supabase) is the authoritative control plane** — the source of truth for identity, cases, evidence custody, audit, jobs, and configurations. **OpenSearch is the derived data plane** — a rebuildable projection of indexed forensic artifacts, never authoritative. Evidence flows through an append-only hash-linked custody chain with HMAC signatures and OS-level immutability (`chattr +i`). Heavy work (ingest, enrich, `run_command`) is dispatched as durable Postgres jobs claimed by least-privilege workers under leases (`FOR UPDATE SKIP LOCKED`). The gateway enforces a 10-stage fail-closed policy chain on every MCP tool call, and the `run_command` execution sandbox defaults to deny at both the policy layer (allowlist ceiling) and the kernel layer (Landlock v4 + seccomp=kill + AppArmor=enforce + cgroup floor).
+The SIFT MCP runtime is a portable, single-policy-boundary MCP gateway for autonomous DFIR agents running on the SANS SIFT Workstation. It provides 42 MCP tools across 5 backends, 86 REST API endpoints, and 3 worker processes for durable job execution. **Postgres (Supabase) is the authoritative control plane** — the source of truth for identity, cases, evidence custody, audit, jobs, and configurations. **OpenSearch is the derived data plane** — a rebuildable projection of indexed forensic artifacts, never authoritative. Evidence flows through an append-only Postgres hash-linked custody chain plus protected filesystem posture; Full Verify Evidence re-hashes mounted objects against that DB authority. Heavy work (ingest, enrich, `run_command`) is dispatched as durable Postgres jobs claimed by least-privilege workers under leases (`FOR UPDATE SKIP LOCKED`). The gateway enforces a 10-stage fail-closed policy chain on every MCP tool call, and the `run_command` execution sandbox defaults to deny at both the policy layer (allowlist ceiling) and the kernel layer (Landlock v4 + seccomp=kill + AppArmor=enforce + cgroup floor).
 
 ## 2. The 8 Planes
 
@@ -242,25 +242,28 @@ The active case is the singleton `app.active_case_state` row — never an env va
 ### Evidence Flow
 
 ```
-Operator mounts forensic image → registers files → seals manifest
+Operator mounts forensic image read-only → Portal detects/registers objects → Portal seals
 
-Register: file path containment check → register in evidence.json / app.evidence_objects
-Seal: SHA-256 hash each file → write manifest version N → append to evidence-ledger.jsonl
-    (HMAC-SHA256 signed) → set chattr +i → RPC evidence_seal → custody event appended
-    to app.evidence_custody_events (hash-linked, UPDATE/DELETE blocked at DB trigger level)
+Register/Seal: canonical path + posture checks → SHA-256 each file → service-only
+    Postgres RPC creates the version/manifest/head transition and appends a hash-linked
+    app.evidence_custody_events row (UPDATE/DELETE blocked at DB trigger level)
+    → apply and verify protected filesystem posture
 
-Chain integrity: manifest hash → ledger chain of previous_manifest_hash/new_manifest_hash
-    → HMAC verification → chattr +i on sealed files → symlink rejection
+Admission/Full Verify: inspect mounted bytes, identity, posture, and mount availability
+    → compare with Postgres object/version/head authority → fail closed on drift,
+    interrupted operation, unavailable external evidence, or persisted violation
 ```
 
 Evidence Chain invariants:
 1. Manifest versioning: every mutation increments version by exactly 1
-2. Ledger chain: each event carries `previous_manifest_hash` + `new_manifest_hash`
-3. HMAC signing: every event HMAC-SHA256 signed with domain-separated `derive_ledger_key()`
-4. File permissions: ledger files `chmod 0o444`, sealed files `+i`
-5. Atomic writes: `tempfile.mkstemp` + `os.replace` + `os.fsync`
-6. Symlink rejection: `_resolve_sealed_target()` rejects symlinks at literal path
-7. Append-only DB: `evidence_block_mutation()` trigger + BEFORE TRUNCATE triggers (F3)
+2. Custody chain: each DB event carries `prev_hash` + `event_hash`; the head is
+   Postgres-authoritative and append-only
+3. Operator authority: evidence mutations require fresh Supabase password re-verification
+   and an action/object/operation-scoped consumable audit receipt
+4. Filesystem posture: sealed objects receive protected posture and are re-read back
+5. Durable operations: gate block precedes byte mutation; retry/restart preserves state
+6. Path safety: canonical containment and symlink/hardlink/mount-identity checks fail closed
+7. Append-only DB: mutation/TRUNCATE guards protect custody history and operation records
 
 ### Ingest Flow
 
@@ -373,7 +376,7 @@ flowchart TD
         REQ3[Request] --> PSM[PortalSessionMiddleware]
         PSM --> COOKIE{Has sift_portal_session?}
         COOKIE -->|No| REDIRECT[Redirect to login]
-        COOKIE -->|Yes| VERIFY[Verify HMAC-SHA256]
+        COOKIE -->|Yes| VERIFY[Verify signed session envelope\nHMAC-SHA256 cookie integrity only]
         VERIFY -->|Invalid| REDIRECT
         VERIFY -->|Valid| DECODE[Decode JSON envelope]
         DECODE --> ECHECK{ei at <= 12h?}
@@ -619,7 +622,7 @@ flowchart TD
     end
 
     subgraph EVIDENCE["Evidence & Reports"]
-        EV[Evidence Vault\n+chattr +i immutable\n+Append-only ledger\n+HMAC-SHA256\n+Symlink rejection\n+Atomic writes\n→ T2, R2, I2]
+        EV[Evidence Vault\n+Postgres custody authority\n+Append-only hash chain\n+Protected posture\n+Path and mount checks\n+Durable recovery\n→ T2, R2, I2]
         RP[Reports\n+APPROVED only\n+Draft/rejected dropped\n+Content hash verify\n→ I2]
     end
 
@@ -654,7 +657,7 @@ flowchart TD
 | # | Trust Boundary | STRIDE | Control(s) |
 |---|---------------|--------|------------|
 | 1 | Client → Gateway | S T R E | `AuthMiddleware` + `SiftTokenVerifier` (Supabase JWT) · `ToolAuthorization` fail-closed · `MCPAuthASGIApp` body cap/token verify/readonly deny · IP rate limit · Origin check |
-| 2 | Evidence Vault immutability | T R I | `EvidenceGate` (sealed + chain OK) · `chattr +i` · Append-only hash-linked custody · HMAC-SHA256 signing · Symlink rejection · Atomic writes |
+| 2 | Evidence Vault immutability | T R I | `EvidenceGate` (sealed + custody state OK) · protected posture · Postgres append-only hash-linked custody · durable recovery state · symlink/hardlink/mount checks · exact byte re-hash |
 | 3 | Worker → OS Sandbox | E D T | Landlock v4 + seccomp=kill + AppArmor=enforce + no-new-privs · cgroup MemoryMax/TasksMax · `IPAddressDeny=any` · Runtime-user fail-closed · CapabilityBoundingSet confinement · `FORCE RLS` at DB |
 | 4 | Gateway → Control Plane | T R E | Postgres authoritative · `FORCE RLS` on all 31 app.* tables · `active_case_state` sole authority · Append-only audit events · SECURITY DEFINER RPCs only · `sift_audit_writer` no BYPASSRLS |
 | 5 | Gateway/Add-ons → Data Plane | T I E | OpenSearch never authoritative · Per-consumer scoped roles · Provenance stamping · Case-prefix index isolation · ProxyActiveCase validation |
@@ -689,14 +692,14 @@ flowchart TD
 ### sift-core (`packages/sift-core/src/sift_core/`)
 
 - `agent_tools.py` — 8 core tool specs, `call_core_tool()` dispatcher
-- `evidence_chain.py` — `ChainStatus`, `init_evidence_chain()`, `seal_manifest()`, `verify_chain_integrity()`, `harden_sealed_evidence()`, 7 append-only enforcement points
+- `evidence_chain.py` — legacy compatibility/export helpers; not DB-active custody, admission, mutation, or Full Verify authority
 - `evidence_ops.py` — `register_evidence_data()`, `list_evidence_data()`, `verify_evidence_data()`
 - `case_manager.py` — `CaseManager`, finding/timeline/todo lifecycle, `_derive_confidence_ceiling()`, `_persist_investigation()`
 - `case_ops.py` — `case_init_data()`, `case_status_data()`, `case_list_data()`
 - `case_io.py` — `cases_root()`, `get_case_dir()`, `resolve_case_path()`, `export_bundle()`, `import_bundle()`
 - `finding_validation.py` — `validate()` with required fields, confidence ceiling, attribution rule
 - `reporting.py` — `generate_report_data()` (6 profiles), `build_mitre_mapping()`, `build_custody_appendix()`
-- `approval_auth.py` — PBKDF2-SHA256 password auth (600K iterations), `derive_auth_key()`, `derive_ledger_key()`
+- `approval_auth.py` — legacy/local-mode PBKDF2/HMAC helpers; active Portal re-auth uses Supabase password re-verification and scoped DB receipts
 - `active_case_context.py` — `AuthorityContext`, `db_authority_active()`
 - `identity.py` — `get_examiner_identity()` (slug: lowercase alphanumeric + hyphens, max 20)
 - `investigation_store.py` — `InvestigationAuthorityStore` ABC + Postgres implementation

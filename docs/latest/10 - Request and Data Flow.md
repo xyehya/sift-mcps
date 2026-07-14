@@ -114,8 +114,8 @@ sequenceDiagram
     Postgres->>Postgres: INSERT INTO evidence_custody_events (append-only)
     Postgres->>Postgres: UPDATE evidence_chain_heads
     Portal->>FS: chattr +i (immutable flag)
-    Portal->>FS: update evidence-manifest.json
-    Portal->>FS: append to evidence-ledger.jsonl (HMAC signed)
+    Portal->>FS: apply and read back protected evidence posture
+    Portal->>Postgres: commit version/manifest/head atomically
     Operator-->>Portal: {sealed, manifest_version}
 ```
 

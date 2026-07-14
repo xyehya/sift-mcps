@@ -316,9 +316,9 @@ The following are known current-state facts, not accepted target behavior:
   Reacquire remain unreachable.
 - Add/Seal now uses the P4.23.2 durable custody-operation state machine: Postgres blocks the gate before filesystem work, binds scoped re-authentication and one restart-instance owner, persists prepared/verified facts, and commits the manifest, versions, and canonical events atomically. A different systemd invocation claims even a `GATE_BLOCKED` operation before returning; every later mutation compares both phase and runner. `GATE_BLOCKED`, `FILESYSTEM_APPLYING`, `FILESYSTEM_VERIFIED`, and `FAILED_RECOVERABLE` are exposed as path-free resumable states; `REQUESTED` and `LEDGER_COMMITTED` are not. A page-reloaded Portal submits only password plus operation id. Gateway verifies the original actor/case/strict stored command, while Postgres independently validates a fresh `reauth.evidence_seal_resume` receipt bound exactly to that operation and records the receipt in append-only operation history before ownership changes. The original Seal authorization and request digest remain immutable. Direct authenticated-role table access remains denied. Remaining recovery workflows adopt this seam in later packets.
 - Portal recovery UI uses only operator HTTP workflows; no fictitious MCP custody mutation action is shown.
-- “Verify HMAC” and file manifest/JSONL authority terminology remains in older
-  compatibility coverage; current Portal recovery documentation and tests use
-  durable Replace/Reacquire and exact Restore with Postgres authority.
+- Legacy compatibility identifiers such as the `/verify-hmac` URL may remain
+  temporarily, but current UI and documentation label the action **Full Verify
+  Evidence** and do not imply file manifest/JSONL or HMAC authority.
 - Some Rescan tests pass when no reconciliation callback occurs, and the unused watcher/cache no-op does not provide continuous protection.
 
 P4.23.1 resolved the former admission drift: every aggregate MCP dispatch now performs read-only

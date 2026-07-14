@@ -368,7 +368,8 @@ agent is told to pass `audit_id` from each tool response into `record_finding`.
   guidance?}`; on failure `{status:"VALIDATION_FAILED", errors, guidance (FD-001/003/
   005)}`. Parallel-safety: **serialized-mutation** (case-serialized).
 - Saved-artifact: staged DRAFT row (DB/case authority); becomes reportable only after
-  operator approval (POST `/api/commit`, HMAC). Provenance: requires `audit_ids` from
+  operator approval (POST `/api/commit`, fresh Supabase password re-verification
+  plus a scoped DB receipt). Provenance: requires `audit_ids` from
   real tool calls; SHELL-only provenance gets `provenance_guidance` to re-run via MCP.
 - Recovery: read the `guidance` codes and add the missing audit_id/justification.
   Live-proven: BATCH-V1 `F-hermes-v1-gate-001` staged → portal-approved.
@@ -453,5 +454,6 @@ Outcomes recorded in `agent-autonomy-assessment.md` (AUT1-B1…B6).
    `evidence_chain_unsealed` and the agent must hand back to the operator to seal in the
    portal (it cannot self-remediate).
 3. The DRAFT→approval handoff: `record_finding` stages DRAFT → operator approves via
-   portal commit (HMAC) → finding becomes reportable. This is the core agent↔operator
+   portal commit (fresh Supabase password re-verification + scoped DB receipt) →
+   finding becomes reportable. This is the core agent↔operator
    recovery/handoff edge.

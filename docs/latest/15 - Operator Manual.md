@@ -100,8 +100,8 @@ disk.
    - The immutable flag (`chattr +i`) is set on each sealed file via
      in-process ioctl (`evidence_chain.py:817`, `harden_sealed_evidence`).
      Requires `CAP_LINUX_IMMUTABLE` on the venv interpreter.
-   - The manifest version increments by 1. The ledger chain links
-     `prev_hash` → `new_hash` with HMAC signing.
+   - The manifest version increments by 1. Postgres appends the custody event
+     and advances the hash-linked chain from `prev_hash` to `event_hash`.
    - `app.evidence_chain_heads` is updated (gate read model).
 4. After seal: the evidence gate passes → all 42 MCP tools become available
    for the agent.

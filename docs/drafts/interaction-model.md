@@ -83,16 +83,21 @@ tokens, and fails closed without Supabase or DB audit authority. Historical
 BATCH-V1 proof used the then-current re-auth mechanism; it is not the active
 credential contract.
 
-Re-auth challenge loop:
+Current re-auth loop:
 
-1. Portal requests a challenge for the sensitive action.
-2. Gateway records the intended action, case, actor, and expiry in process-local
-   challenge state for the MVP bridge.
-3. Operator submits the action with the HMAC/password proof.
-4. Gateway verifies the proof, writes the DB transition and audit/custody
-   reference, then consumes the challenge.
-5. Gateway restart clears unconsumed in-process challenges. The operator can
-   request a new challenge; the sensitive action is not applied without proof.
+1. The signed-in operator submits the sensitive action with their password and
+   exact action inputs.
+2. The Gateway re-verifies that password with Supabase for the authenticated
+   session identity; it never accepts a client-supplied identity.
+3. The Gateway records an action/object/operation-scoped DB audit receipt and
+   discards any returned password-grant token.
+4. The service-only transition RPC validates and consumes the receipt, then
+   atomically records the authorized state change. Missing, reused, cross-case,
+   cross-action, or wrong-actor receipts fail closed.
+
+There is no process-local challenge state and no local HMAC/password proof in
+the active contract. Gateway restart therefore cannot erase authorization state
+for an already-started durable custody operation.
 
 ## Agent Tool Loops
 

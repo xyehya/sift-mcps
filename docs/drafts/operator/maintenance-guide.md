@@ -67,7 +67,7 @@ secret):
 | `portal_login_email` | the email to sign in with (normally `examiner@operators.sift.local`) |
 | `supabase_operator_temp_password` | one-time portal password (Supabase Auth path) |
 | `supabase_forced_reset` | `required_on_first_login` when a reset is pending |
-| `temporary_examiner_password` | legacy local-auth fallback password (only if Supabase was not bootstrapped) |
+| `temporary_examiner_password` | retired legacy handoff field; never an active login or sensitive-action fallback |
 | `portal_url`, `gateway_mcp_url`, `ca_cert`, `gateway_config` | endpoints / paths |
 
 The installer's own end-of-run summary also points here:
@@ -131,10 +131,9 @@ receipt; there is no local credential fallback.
 ### 1.6 Creating additional cases
 
 Operators (examiner role) create new cases from the portal Header
-case-selector -> "New case". Case activation re-auth depends on authority
-mode: under DB/Supabase authority the activation is gated by the Supabase
-session (no separate password challenge); under file authority a password
-HMAC challenge is required.
+case-selector -> "New case". Case activation requires fresh Supabase password
+re-verification for the signed-in operator and records a scoped DB audit
+receipt. There is no file-authority or local challenge fallback.
 
 ---
 

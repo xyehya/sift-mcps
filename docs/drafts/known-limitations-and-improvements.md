@@ -1,17 +1,26 @@
 # Known Limitations and Areas of Improvement
 
-Status: archival — partially superseded. Updated by BATCH-RG1 (2026-06-13):
+Status: **historical snapshot — fully superseded as a current-state source.**
+The limitation/status claims below describe the 2026-06-10 freeze and must not
+be used as present runtime truth. Current custody and re-auth authority are
+defined by `docs/architecture/EVIDENCE-CUSTODY-SPEC.md`,
+`docs/architecture/SIFT-GATEWAY-SECURITY-MODEL.md`, and
+`docs/operator/state-authority-map.md`.
+
+Corrections applied after this snapshot:
+- Sensitive Portal actions use fresh Supabase password re-verification plus
+  scoped, consumable DB audit receipts. The local HMAC/password bridge is retired.
 - Ingest mount privilege row updated: service now runs as `sift-service` (HR3/BATCH-HR3).
 - RAG scope introspection row updated: `rag_search_case` removed; RAG is `kb_*` via add-on.
 - See `docs/operator/maintenance-guide.md` for the current operational state.
 Last updated: 2026-06-13 (RG1 corrections applied on top of original 2026-06-10 entry).
 
-## Current Known Limitations
+## Historical Known Limitations (2026-06-10 snapshot)
 
 | Area | Limitation | Demo impact | Improvement path |
 | --- | --- | --- | --- |
-| Re-auth | MVP uses a local HMAC/password bridge for sensitive portal actions. | Acceptable if explained clearly; not a custody bypass because Gateway still records the re-auth event and DB transition. | Move to Supabase password re-auth/session verification. |
-| Re-acquisition click proof | The `violated -> sealed` re-acquisition path is deployed and route/unit tested, and live service-RPC proof exists, but the portal click path has not been rerun in this FRZ1 pass. | Do not present a live re-acquire click on the prepared Rocba case unless rerun on a throwaway file first. The custody story can show the already-retired ghost and re-acquired replacement. | Run the click proof on a throwaway case/file: seal small file, modify bytes, rescan to violation, re-seal with reason/HMAC, confirm gate clears. |
+| Re-auth (resolved after snapshot) | The snapshot used a local HMAC/password bridge for sensitive portal actions. | Historical only; the active Gateway now uses Supabase password re-verification and scoped DB receipts. | **Resolved.** |
+| Re-acquisition click proof | The `violated -> sealed` re-acquisition path was deployed and route/unit tested, and live service-RPC proof existed, but the portal click path had not been rerun in this FRZ1 pass. | Historical proof status only. | The current Replace/Reacquire flow requires a reason, fresh Supabase password re-verification, and a scoped durable-operation receipt. |
 | Ingest mount privilege | Disk-image ingest needs root to mount (xmount/ewfmount/mount/losetup/qemu-nbd/modprobe nbd/partprobe/umount/fusermount). **RG1 (2026-06-13): RESOLVED in BATCH-HR3** — gateway/worker now run as the dedicated non-admin `sift-service` user with a narrow audited sudoers allowlist (`configs/systemd/sift-gateway.service`, `sift-job-worker.service`). The blanket `sansforensics` sudo is no longer used for service execution. Residual: per-exec kernel sandbox (bwrap/seccomp) still TODO (see IMP-FRZ1-10). | Residual per-exec sandbox only | Per-exec bwrap/LXC sandbox (IMP-FRZ1-10). |
 | Installer re-run | A full destructive `./install.sh` re-run has not been exercised on a throwaway VM. Source now installs `ripgrep`/`acl`, repairs `pyewf` after `uv sync`, renders both Gateway and worker unit files, and wires the runtime + ingest sudoers helpers. | None for the live demo if the prepared VM is used. Risk is reinstall/idempotency drift on a fresh VM. | Run a destructive idempotency pass on a throwaway VM before claiming installer freeze complete. |
 | Offline memory symbols | Volatility now works unprivileged and is live-proven on `Rocba-Memory2.raw`, but a cold offline VM may need Microsoft symbols already cached or staged. | Online/cached demo is OK. Fully offline demo should warm or bundle symbols first. | Bundle common Windows ISF symbols into the install image or pre-warm the case symbol cache before the demo. |
@@ -45,8 +54,9 @@ Last updated: 2026-06-13 (RG1 corrections applied on top of original 2026-06-10 
 - `record_finding` artifact/audit validation accepts DB transport audit IDs in
   DB-active mode.
 - `case_info` finding counters are DB-authoritative.
-- Portal login, local HMAC verification, fresh agent issuance, and 48-hour
-  token TTL are live-proven.
+- At the time of this snapshot, Portal login, the then-current local HMAC
+  verification path, fresh agent issuance, and 48-hour token TTL were live-proven.
+  This is historical evidence, not the active re-auth contract.
 - Portal principal/session table now shows Supabase JWT token type, display
   name, active/expired/revoked state, TTL remaining, scopes, and disables/dims
   revoke after success; legacy PR02 token controls are no longer shown in the

@@ -59,9 +59,9 @@ file presence under `packages/**/tests/`.
 | --- | --- |
 | `agent_tools.py` | `CORE_TOOL_SPECS` (the local agent tool catalog: `case_info`, `evidence_info`, `record_finding`, `record_timeline_event`, `list_existing_findings`, `manage_todo`, `get_tool_help`, `run_command`); `call_core_tool`, `core_tool_names`, `core_tool_specs`. |
 | `investigation_store.py` | `InvestigationAuthorityStore` / `PostgresInvestigationStore`; `compute_content_hash`, `StaleVersionError`, `is_human_locked`. |
-| `evidence_chain.py`, `verification.py`, `evidence_ops.py` | File-backed custody assets, HMAC ledger, seal/verify (exports in DB-active mode). |
+| `evidence_chain.py`, `verification.py`, `evidence_ops.py` | Legacy file/export helpers. In DB-active mode they are not custody, admission, mutation, re-auth, or Full Verify authority. |
 | `active_case_context.py` | Authority context plumbing for DB-active requests. |
-| `approval_auth.py` | Password/HMAC re-auth (`derive_auth_key`, `derive_ledger_key`, lockout). |
+| `approval_auth.py` | Legacy/local-mode PBKDF2 and HMAC helpers retained for compatibility tests; active Portal re-auth is Supabase password re-verification plus scoped DB receipts. |
 | `reporting.py`, `report_profiles.py` | `generate_report_data`, `build_custody_appendix`, MITRE/IOC builders, approved-only filtering. |
 | `case_manager.py`, `case_io.py`, `case_ops.py`, `case_metadata.py` | Case operations and IO. |
 | `execute/` | Sandboxed execution + durable worker (see below). |
@@ -97,7 +97,7 @@ go through this add-on.
 
 ### case-dashboard (human/policy)
 
-`routes.py` (portal routes + re-auth callbacks; `_MVP_REAUTH_METHOD`,
+`routes.py` (portal routes + Supabase re-auth callbacks; `_MVP_REAUTH_METHOD`,
 `_reauth_event_id`), `session_jwt.py` (HttpOnly session), `auth.py` (login),
 `frontend/src/**` (React portal incl. `components/reports/ReportsTab.jsx`).
 

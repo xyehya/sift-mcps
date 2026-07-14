@@ -35,7 +35,13 @@ Tool specs (from `core_tool_specs()`):
 
 **call_core_tool(name, arguments, *, examiner, manager, audit)** -> str: Validates name in `_SPECS_BY_NAME`. Routes via if/elif chain. Returns JSON text. Exceptions become `{"success": False, "tool": name, "data": None, "error": ...}`.
 
-### evidence_chain.py — Append-Only Evidence Chain
+### evidence_chain.py — Legacy File/Export Compatibility Helpers
+
+These functions describe the retained file-format implementation and its tests.
+They are not the active DB custody, admission, mutation, re-authentication, or
+Full Verify Evidence authority. In DB-active operation, Postgres objects,
+versions, chain heads, custody events, and durable operations are authoritative;
+file manifests/JSONL are export/proof artifacts only.
 
 **class ChainStatus(str, Enum)**: OK, UNSEALED, MODIFIED, MISSING, UNREGISTERED, LEDGER_ERROR.
 
@@ -51,7 +57,7 @@ Key functions:
 - `hash_file(path)` — Streaming SHA-256
 - `compute_manifest_hash(manifest)` — SHA-256 of canonical manifest JSON
 
-7 append-only enforcement points in evidence_chain.py:
+Historical file-format enforcement points in `evidence_chain.py`:
 1. Manifest versioning: every mutation increments version by exactly 1
 2. Ledger chain: each event carries `previous_manifest_hash` + `new_manifest_hash`; `_check_hash_chain()` links consecutive events
 3. HMAC signing: every event HMAC-SHA256 signed with `derived_key`
@@ -164,7 +170,11 @@ Path-free receipt persisted to Postgres.
 
 `generate_report_data(profile_name, case_dir, ...)` — 6 profiles: full, executive, timeline, ioc, findings, status. Reports include **only APPROVED** items. `build_mitre_mapping()`, `build_custody_appendix()`, `reconcile_verification_db()` for DB content_hash verification.
 
-### approval_auth.py — Approval Password Authentication
+### approval_auth.py — Legacy Local-Mode Password Helpers
+
+This module is not the active Portal sensitive-action verifier. Current Portal
+actions use fresh Supabase password re-verification for the signed-in identity,
+then bind a scoped, consumable DB audit receipt to the transition.
 
 `set_password(config_path, analyst)`: PBKDF2-SHA256, 600K iterations, random 32-byte salt.
 `verify_password()`: Constant-time comparison.
@@ -180,7 +190,9 @@ Path-free receipt persisted to Postgres.
 ## Invariants
 
 - **DB authority kills file fallback**: When `db_authority_active()` is True, core resolvers use only `AuthorityContext`. Case data writes go to Postgres only; raises if store unavailable. (`active_case_context.py`, `case_manager.py:_persist_investigation`)
-- **Evidence chain is append-only**: Hash-linked ledger with HMAC signatures. Each seal increments manifest version. Sealed files are `+i` immutable. (`evidence_chain.py`)
+- **DB custody is append-only**: Postgres custody events and versions are
+  hash-linked and mutation-guarded; each successful seal increments manifest
+  version exactly once. Protected filesystem posture is verified separately.
 - **run_command sandbox defaults to deny**: Both ceiling (policy allowlist) and floor (kernel Landlock/seccomp) default deny. `validate_shell_command()` prevents injection. (`execute/security.py`, `execute/dfir_exec_launcher.py`)
 - **Reports include only APPROVED items**: Draft/rejected findings and timeline events are dropped. (`reporting.py`)
 - **Finding confidence ceiling is provenance-derived**: Agent-supplied confidence is clamped DOWN, never up. (`case_manager.py:_derive_confidence_ceiling()`)
@@ -221,7 +233,7 @@ Path-free receipt persisted to Postgres.
 - `finding_validation.py` — Finding validation rules
 - `identity.py` — Examiner identity resolution
 - `reporting.py` — Report generation (6 profiles, approved-only)
-- `approval_auth.py` — Password-based approval with PBKDF2
+- `approval_auth.py` — legacy/local-mode password and HMAC compatibility helpers; not active Portal re-auth
 - `active_case_context.py` — AuthorityContext, db_authority_active
 - `investigation_store.py` — InvestigationAuthorityStore ABC + Postgres impl
 

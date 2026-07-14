@@ -89,22 +89,19 @@ Security notes / Tests-or-live-proof
 Authority: Supabase Auth + operator profile status. Routes: `routes.py` ≈6025-6034.
 
 ### POST `/api/auth/login`
-- Actor: operator. Auth: establishes session (challenge/response over local PBKDF2 in
-  legacy mode; Supabase login when `_SUPABASE_AUTH` wired). Source: `post_auth_login`
-  (routes.py:3717).
-- Response: sets the session envelope (or legacy `sift_session`) cookie; body carries
+- Actor: operator. Auth: establishes a Supabase session; the local PBKDF2
+  challenge/login fallback is removed. Source: `post_auth_login`.
+- Response: sets the signed `sift_portal_session` envelope cookie; body carries
   operator identity + `must_reset` flag.
 - State transition: anonymous → authenticated operator session. An `invited` operator
   may log in but is forced into reset (F-MVP-6 fix: login allows `active`+`invited`).
-- Failure modes: 401 bad credentials; 429 login lockout (`_check_login_lockout`,
-  5 attempts / 900s, separate `login:` namespace).
+- Failure modes: 401 bad credentials; 503 unavailable Supabase/control plane.
 - Live proof: BATCH-V1 (2026-06-08) — "invited operator can log in, receives
   `must_reset`, completes forced reset, `invited -> active`."
 
-### GET `/api/auth/challenge`
-- Issues a login challenge nonce + salt/iterations for legacy password proof.
-  Disabled when `_legacy_password_auth_disabled()` (Supabase mode) → 403. Source:
-  `get_auth_challenge`.
+### Removed: GET `/api/auth/challenge`
+- Historical local-PBKDF2 login route. It is not registered; Supabase Auth is
+  the sole login authority.
 
 ### POST `/api/auth/forced-reset`  (`post_supabase_forced_reset`, 3668)
 - Actor: operator with `must_reset_password`. Transitions profile `invited → active`
@@ -263,7 +260,9 @@ until human approval. Routes ≈5991-6006.
 Authority: DB report metadata + approved-only eligibility. Routes ≈5985-5990.
 
 ### GET `/api/reports` (`get_reports`, 5567) — list report metadata (DB authority).
-### GET `/api/reports/challenge` (`get_report_challenge`, 5558) — report re-auth challenge.
+### Removed: GET `/api/reports/challenge`
+- Historical local-HMAC route; report generation submits the password directly
+  for Supabase re-verification and a scoped DB audit receipt.
 ### POST `/api/reports/generate` (`generate_report_route`, 5613)
 - Actor: operator examiner. **Approved-only gate**: 409 `No approved findings...` when
   `_report_eligibility()` says ineligible (routes.py:5625). Re-auth: `_report_reauth`
