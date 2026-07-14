@@ -207,6 +207,7 @@ class MountedEvidence:
 @dataclass(frozen=True, slots=True)
 class InventorySnapshot:
     availability: StorageAvailability
+    storage_profile: StorageProfile = StorageProfile.LOCAL_IMMUTABLE
     expected: tuple[AuthorityEvidence, ...] = ()
     observed: tuple[MountedEvidence, ...] = ()
     ledger_valid: bool = True
@@ -216,6 +217,8 @@ class InventorySnapshot:
     def __post_init__(self) -> None:
         if not isinstance(self.availability, StorageAvailability):
             raise ValueError("availability must use the closed vocabulary")
+        if not isinstance(self.storage_profile, StorageProfile):
+            raise ValueError("storage_profile must use the closed vocabulary")
         if not isinstance(self.expected, tuple) or not isinstance(self.observed, tuple):
             raise ValueError("inventory facts must be immutable tuples")
         if not all(isinstance(item, AuthorityEvidence) for item in self.expected):
@@ -307,10 +310,7 @@ def classify_inventory(snapshot: InventorySnapshot) -> InventoryClassification:
         recovery = (
             RecoveryRequirement.RECONNECT_AND_VERIFY
             if code is DriftCode.STORAGE_UNAVAILABLE
-            and any(
-                item.storage_profile is StorageProfile.EXTERNALLY_READ_ONLY
-                for item in snapshot.expected
-            )
+            and snapshot.storage_profile is StorageProfile.EXTERNALLY_READ_ONLY
             else RecoveryRequirement.INVESTIGATE_AVAILABILITY
         )
         findings.append(

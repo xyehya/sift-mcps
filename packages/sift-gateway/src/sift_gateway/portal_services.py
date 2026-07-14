@@ -1136,6 +1136,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                 else StorageAvailability.AVAILABLE
                             )
                         ),
+                        storage_profile=storage_profile,
                         expected=tuple(expected_facts),
                         observed=tuple(observed_facts),
                         persisted_violation_object_ids=(

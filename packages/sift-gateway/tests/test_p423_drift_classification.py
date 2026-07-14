@@ -53,6 +53,7 @@ def test_unavailable_storage_is_not_misclassified_as_missing_evidence() -> None:
     result = classify_inventory(
         InventorySnapshot(
             availability=StorageAvailability.UNAVAILABLE,
+            storage_profile=StorageProfile.EXTERNALLY_READ_ONLY,
             expected=(
                 AuthorityEvidence(
                     evidence_object_id="object-1",
@@ -69,6 +70,34 @@ def test_unavailable_storage_is_not_misclassified_as_missing_evidence() -> None:
     assert [finding.code for finding in result.findings] == ["STORAGE_UNAVAILABLE"]
     assert result.findings[0].evidence_object_id is None
     assert result.findings[0].recovery is RecoveryRequirement.RECONNECT_AND_VERIFY
+
+
+def test_virgin_external_unavailable_requires_reconnect_without_expected_objects() -> (
+    None
+):
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.UNAVAILABLE,
+            storage_profile=StorageProfile.EXTERNALLY_READ_ONLY,
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_UNAVAILABLE
+    assert [finding.code for finding in result.findings] == ["STORAGE_UNAVAILABLE"]
+    assert result.findings[0].recovery is RecoveryRequirement.RECONNECT_AND_VERIFY
+
+
+def test_local_unavailable_keeps_availability_investigation_remediation() -> None:
+    result = classify_inventory(
+        InventorySnapshot(availability=StorageAvailability.UNAVAILABLE)
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_UNAVAILABLE
+    assert result.findings[0].code is DriftCode.STORAGE_UNAVAILABLE
+    assert (
+        result.findings[0].recovery
+        is RecoveryRequirement.INVESTIGATE_AVAILABILITY
+    )
 
 
 def test_scan_failure_is_unavailable_not_a_tamper_accusation() -> None:

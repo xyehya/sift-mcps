@@ -1256,8 +1256,9 @@ def test_unavailable_storage_is_not_recorded_as_a_violation(tmp_path, monkeypatc
     )
 
 
+@pytest.mark.parametrize("has_sealed_authority", [False, True])
 def test_external_mount_loss_never_scans_same_named_writable_underlay(
-    tmp_path, monkeypatch
+    has_sealed_authority, tmp_path, monkeypatch
 ):
     from sift_core.evidence_storage import StorageAuthorityError
 
@@ -1288,7 +1289,7 @@ def test_external_mount_loss_never_scans_same_named_writable_underlay(
                     "NONE",
                 )
 
-    cursor = ExternalObservationCursor(
+    sealed_rows = (
         [
             (
                 "sealed-object",
@@ -1301,7 +1302,10 @@ def test_external_mount_loss_never_scans_same_named_writable_underlay(
                 "sealed-version",
             )
         ]
+        if has_sealed_authority
+        else []
     )
+    cursor = ExternalObservationCursor(sealed_rows)
     service = EvidenceAuthorityService("postgresql://unused")
     monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
     monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
