@@ -1,6 +1,7 @@
--- P4.23 Gate C: repeated current-generation storage-only classifications are
--- append-only observations, not new custody violations. Object/content causes
--- still require the synthetic persisted marker and their owning recovery lane.
+-- P4.23 Gate C: repeated current-generation external storage-unavailable
+-- classifications are append-only observations, not new custody violations.
+-- Object/content causes still require the synthetic persisted marker and their
+-- owning recovery lane.
 
 do $$ begin
   if to_regprocedure(
@@ -114,4 +115,4 @@ end if; end $$;
 
 comment on function app.evidence_record_inventory_classification_v2(
   uuid,text,text,jsonb
-) is 'Service-only append-only inventory classification; exact current-generation external storage-only repeats are idempotent while object/content violations retain recovery enforcement.';
+) is 'Service-only append-only inventory classification; exact current-generation external storage-unavailable repeats are idempotent while object/content violations retain recovery enforcement.';

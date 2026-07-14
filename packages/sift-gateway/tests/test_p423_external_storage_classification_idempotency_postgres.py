@@ -135,6 +135,37 @@ def _authority_snapshot(conn, case_id):
     return head, storage, tuple(counts)
 
 
+def test_runtime_grants_expose_only_the_public_v2_wrapper_to_service_role() -> None:
+    psycopg = pytest.importorskip("psycopg")
+    public = "app.evidence_record_inventory_classification_v2(uuid,text,text,jsonb)"
+    predecessor = (
+        "app.evidence_record_inventory_classification_v2_"
+        "pre_storage_repeat_idempotency(uuid,text,text,jsonb)"
+    )
+    with psycopg.connect(_dsn()) as conn:
+        with conn.cursor() as cur:
+            for signature in (public, predecessor):
+                cur.execute("select to_regprocedure(%s) is not null", (signature,))
+                assert cur.fetchone() == (True,), signature
+            for role in ("public", "anon", "authenticated"):
+                cur.execute(
+                    "select has_function_privilege(%s,%s,'EXECUTE')",
+                    (role, public),
+                )
+                assert cur.fetchone() == (False,), (role, public)
+            for role in ("public", "anon", "authenticated", "service_role"):
+                cur.execute(
+                    "select has_function_privilege(%s,%s,'EXECUTE')",
+                    (role, predecessor),
+                )
+                assert cur.fetchone() == (False,), (role, predecessor)
+            cur.execute(
+                "select has_function_privilege('service_role',%s,'EXECUTE')",
+                (public,),
+            )
+            assert cur.fetchone() == (True,)
+
+
 def test_repeated_current_generation_unavailable_is_append_only_and_idempotent() -> (
     None
 ):
