@@ -526,6 +526,106 @@ def test_legacy_posture_drift_with_new_stable_mount_enters_full_verify_lane() ->
                 )
 
 
+@pytest.mark.parametrize("version_mount", ("b" * 64, "c" * 64))
+def test_receipt_backed_direct_remount_exact_replay_is_idempotent(
+    version_mount: str,
+) -> None:
+    psycopg = pytest.importorskip("psycopg")
+    from psycopg.types.json import Jsonb
+
+    with psycopg.connect(_dsn()) as conn:
+        observed_mount = "e" * 64
+        case_id, _object_id, source, verified_mount = _sealed_external_case(
+            conn, version_mount=version_mount, object_count=2
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """select o.id::text,v.id::text,v.sha256,v.bytes
+                   from app.evidence_objects o
+                   join app.evidence_versions v on v.id=o.current_version_id
+                   where o.case_id=%s and o.status='sealed'
+                   order by o.id::text""",
+                (case_id,),
+            )
+            receipt_items = [
+                {
+                    "evidence_object_id": object_id,
+                    "evidence_version_id": version_id,
+                    "sha256": digest,
+                    "bytes": byte_count,
+                    "storage_profile": "EXTERNALLY_READ_ONLY",
+                    "storage_source_identity": source,
+                    "mount_instance_identity": verified_mount,
+                    "read_only": True,
+                    "st_nlink": 1,
+                }
+                for object_id, version_id, digest, byte_count in cur.fetchall()
+            ]
+            cur.execute(
+                """insert into app.evidence_storage_verifications(
+                     case_id,generation,profile,source_identity,mount_instance,
+                     manifest_version,manifest_hash,item_facts,outcome,correlation_id)
+                   values(%s,2,'EXTERNALLY_READ_ONLY',%s,%s,1,%s,%s,
+                     'SUCCESS','direct-remount-receipt:'||%s)""",
+                (
+                    case_id,
+                    source,
+                    verified_mount,
+                    "sha256:" + "d" * 64,
+                    Jsonb(receipt_items),
+                    uuid.uuid4().hex,
+                ),
+            )
+            cur.execute(
+                """select state,remediation from
+                     app.evidence_storage_record_observation(
+                       %s,'EXTERNALLY_READ_ONLY',true,%s,%s,true)""",
+                (case_id, source, observed_mount),
+            )
+            assert cur.fetchone() == (
+                "FULL_VERIFY_REQUIRED",
+                "RECONNECT_AND_VERIFY",
+            )
+        conn.commit()
+
+        correlation = "direct-remount:" + uuid.uuid4().hex
+        observation_id = _classify(
+            conn, case_id, correlation, _full_verify_finding()
+        )
+        assert (
+            _classify(conn, case_id, correlation, _full_verify_finding())
+            == observation_id
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                """select count(*) from app.evidence_inventory_observations
+                   where case_id=%s and correlation_id=%s""",
+                (case_id, correlation),
+            )
+            assert cur.fetchone() == (1,)
+            cur.execute(
+                """select seal_status,issues from app.evidence_chain_heads
+                   where case_id=%s""",
+                (case_id,),
+            )
+            assert cur.fetchone() == (
+                "violated",
+                [{**_full_verify_finding(), "storage_generation": 2}],
+            )
+            cur.execute(
+                """select state,remediation,verified_mount_instance,
+                          observed_mount_instance
+                   from app.evidence_storage_authorities where case_id=%s""",
+                (case_id,),
+            )
+            assert cur.fetchone() == (
+                "FULL_VERIFY_REQUIRED",
+                "RECONNECT_AND_VERIFY",
+                verified_mount,
+                observed_mount,
+            )
+
+
 def test_stale_legacy_correlation_rolls_back_new_mount_observation() -> None:
     psycopg = pytest.importorskip("psycopg")
     from psycopg.types.json import Jsonb

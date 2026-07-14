@@ -66,7 +66,10 @@ def test_legacy_replay_requires_exact_current_head_and_storage_state() -> None:
     assert "v_row.findings is distinct from p_findings" in candidate
     assert "v_head.seal_status='violated'" in candidate
     assert "v_storage.state='FULL_VERIFY_REQUIRED'" in candidate
-    assert "v_storage.remediation='FULL_VERIFY'" in candidate
+    assert (
+        "v_storage.remediation in ('FULL_VERIFY','RECONNECT_AND_VERIFY')"
+        in candidate
+    )
     assert "v_storage.read_only is true" in candidate
     assert "coalesce(v_head.issues,'[]'::jsonb)=jsonb_build_array(" in candidate
     assert candidate.count("inventory_correlation_reused") == 2

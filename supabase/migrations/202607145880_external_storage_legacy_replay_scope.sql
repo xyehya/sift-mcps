@@ -134,7 +134,7 @@ begin
     end if;
     v_repeat := v_head.seal_status='violated'
       and v_storage.state='FULL_VERIFY_REQUIRED'
-      and v_storage.remediation='FULL_VERIFY'
+      and v_storage.remediation in ('FULL_VERIFY','RECONNECT_AND_VERIFY')
       and v_storage.read_only is true
       and coalesce(v_head.issues,'[]'::jsonb)=jsonb_build_array(
         v_expected_finding||jsonb_build_object(
