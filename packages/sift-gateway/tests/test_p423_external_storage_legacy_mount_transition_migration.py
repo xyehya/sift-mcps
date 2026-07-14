@@ -93,17 +93,24 @@ def test_transition_appends_observation_and_updates_only_chain_head_projection()
     )
 
 
-def test_correlation_replay_precedes_mutated_state_and_conflicts_fail_closed() -> None:
+def test_correlation_replay_requires_exact_locked_current_repeat_state() -> None:
     wrapper = _wrapper()
-    replay = wrapper.split(
-        "perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));", 1
-    )[1].split("select * into v_head", 1)[0]
-    assert "length(coalesce(p_correlation_id,'')) not between 1 and 128" in replay
-    assert "from app.evidence_inventory_observations" in replay
-    assert "v_row.gate_state is distinct from p_gate_state" in replay
-    assert "v_row.findings is distinct from p_findings" in replay
-    assert "inventory_correlation_reused" in replay
-    assert "return v_row" in replay
+    head_lock = "select * into v_head from app.evidence_chain_heads"
+    storage_lock = "select * into v_storage from app.evidence_storage_authorities"
+    replay_read = "select * into v_row from app.evidence_inventory_observations"
+    assert wrapper.index(head_lock) < wrapper.index(replay_read)
+    assert wrapper.index(storage_lock) < wrapper.index(replay_read)
+    assert "v_existing := found" in wrapper
+    assert "v_row.gate_state is distinct from p_gate_state" in wrapper
+    assert "v_row.findings is distinct from p_findings" in wrapper
+    assert "v_prior_issues=jsonb_build_array(" in wrapper
+    assert "v_repeat := v_prior_issues=jsonb_build_array(" in wrapper
+    replay_gate = wrapper.split("if v_existing then", 1)[1].split(
+        "if v_transition then", 1
+    )[0]
+    assert "if v_repeat then" in replay_gate
+    assert "return v_row" in replay_gate
+    assert "inventory_correlation_reused" in replay_gate
 
 
 def test_every_other_state_delegates_and_predecessor_is_private() -> None:

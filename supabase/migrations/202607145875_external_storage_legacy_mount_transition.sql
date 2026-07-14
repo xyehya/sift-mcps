@@ -24,27 +24,28 @@ declare
   v_storage app.evidence_storage_authorities;
   v_finding jsonb;
   v_prior_issues jsonb;
+  v_existing boolean := false;
   v_exact_receipt boolean := false;
   v_transition boolean := false;
+  v_repeat boolean := false;
 begin
   perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
   if length(coalesce(p_correlation_id,'')) not between 1 and 128 then
     raise exception 'invalid_inventory_classification'
       using errcode='invalid_parameter_value';
   end if;
-  select * into v_row from app.evidence_inventory_observations
-    where case_id=p_case_id and correlation_id=p_correlation_id;
-  if found then
-    if v_row.gate_state is distinct from p_gate_state
-       or v_row.findings is distinct from p_findings then
-      raise exception 'inventory_correlation_reused' using errcode='unique_violation';
-    end if;
-    return v_row;
-  end if;
   select * into v_head from app.evidence_chain_heads
     where case_id=p_case_id for update;
   select * into v_storage from app.evidence_storage_authorities
     where case_id=p_case_id for update;
+  select * into v_row from app.evidence_inventory_observations
+    where case_id=p_case_id and correlation_id=p_correlation_id;
+  v_existing := found;
+  if v_existing
+     and (v_row.gate_state is distinct from p_gate_state
+       or v_row.findings is distinct from p_findings) then
+    raise exception 'inventory_correlation_reused' using errcode='unique_violation';
+  end if;
 
   v_finding := case
     when jsonb_typeof(p_findings)='array' and jsonb_array_length(p_findings)=1
@@ -101,33 +102,37 @@ begin
            or coalesce(ev.storage_mount_instance,'') !~ '^[0-9a-f]{64}$'))
      and not exists(select 1 from app.custody_operations op
        where op.case_id=p_case_id and op.phase<>'COMPLETED')
-     and jsonb_array_length(v_prior_issues)=v_head.active_count
-     and not exists(select 1 from jsonb_array_elements(v_prior_issues) issue
-       where jsonb_typeof(issue)<>'object'
-         or issue<>jsonb_build_object(
-           'code','POSTURE_DRIFT',
-           'gate_state','BLOCKED_VIOLATION',
-           'recovery','RESTORE_READ_ONLY',
-           'evidence_object_id',issue->'evidence_object_id',
-           'observation_id',issue->'observation_id',
-           'full_verification_required',true,
-           'storage_generation',v_storage.generation)
-         or jsonb_typeof(issue->'evidence_object_id')<>'string'
-         or coalesce(issue->>'evidence_object_id','') !~
-           '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
-         or jsonb_typeof(issue->'observation_id')<>'string'
-         or coalesce(issue->>'observation_id','') !~
-           '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
-         or not exists(select 1 from app.evidence_objects o
-           where o.case_id=p_case_id
-             and o.id::text=lower(issue->>'evidence_object_id')
-             and o.status='sealed' and o.seal_status='sealed'))
-     and (select count(distinct issue->>'evidence_object_id')
-       from jsonb_array_elements(v_prior_issues) issue)=v_head.active_count
-     and not exists(select 1 from app.evidence_objects o
-       where o.case_id=p_case_id and o.status='sealed'
-         and not exists(select 1 from jsonb_array_elements(v_prior_issues) issue
-           where lower(issue->>'evidence_object_id')=o.id::text)) then
+     and ((
+       jsonb_array_length(v_prior_issues)=v_head.active_count
+       and not exists(select 1 from jsonb_array_elements(v_prior_issues) issue
+         where jsonb_typeof(issue)<>'object'
+           or issue<>jsonb_build_object(
+             'code','POSTURE_DRIFT',
+             'gate_state','BLOCKED_VIOLATION',
+             'recovery','RESTORE_READ_ONLY',
+             'evidence_object_id',issue->'evidence_object_id',
+             'observation_id',issue->'observation_id',
+             'full_verification_required',true,
+             'storage_generation',v_storage.generation)
+           or jsonb_typeof(issue->'evidence_object_id')<>'string'
+           or coalesce(issue->>'evidence_object_id','') !~
+             '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+           or jsonb_typeof(issue->'observation_id')<>'string'
+           or coalesce(issue->>'observation_id','') !~
+             '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+           or not exists(select 1 from app.evidence_objects o
+             where o.case_id=p_case_id
+               and o.id::text=lower(issue->>'evidence_object_id')
+               and o.status='sealed' and o.seal_status='sealed'))
+       and (select count(distinct issue->>'evidence_object_id')
+         from jsonb_array_elements(v_prior_issues) issue)=v_head.active_count
+       and not exists(select 1 from app.evidence_objects o
+         where o.case_id=p_case_id and o.status='sealed'
+           and not exists(select 1 from jsonb_array_elements(v_prior_issues) issue
+             where lower(issue->>'evidence_object_id')=o.id::text))
+     ) or v_prior_issues=jsonb_build_array(
+       v_finding||jsonb_build_object(
+         'storage_generation',v_storage.generation))) then
     select exists(select 1
       from app.evidence_storage_verifications v
       where v.case_id=p_case_id
@@ -165,7 +170,19 @@ begin
               and x->>'sha256'=ev.sha256
               and x->>'bytes'=ev.bytes::text)))
       into v_exact_receipt;
-    v_transition := v_exact_receipt;
+    if v_exact_receipt then
+      v_repeat := v_prior_issues=jsonb_build_array(
+        v_finding||jsonb_build_object(
+          'storage_generation',v_storage.generation));
+      v_transition := not v_repeat;
+    end if;
+  end if;
+
+  if v_existing then
+    if v_repeat then
+      return v_row;
+    end if;
+    raise exception 'inventory_correlation_reused' using errcode='unique_violation';
   end if;
 
   if v_transition then

@@ -526,6 +526,121 @@ def test_legacy_posture_drift_with_new_stable_mount_enters_full_verify_lane() ->
                 )
 
 
+def test_stale_legacy_correlation_rolls_back_new_mount_observation() -> None:
+    psycopg = pytest.importorskip("psycopg")
+    from psycopg.types.json import Jsonb
+
+    with psycopg.connect(_dsn()) as conn:
+        version_mount = "c" * 64
+        first_observed_mount = "e" * 64
+        next_observed_mount = "f" * 64
+        case_id, _object_id, source, verified_mount = _sealed_external_case(
+            conn, version_mount=version_mount, object_count=2
+        )
+        _set_legacy_posture_recovery_state(
+            conn,
+            case_id,
+            source=source,
+            verified_mount=verified_mount,
+            observed_mount=first_observed_mount,
+        )
+        correlation = "legacy-stale:" + uuid.uuid4().hex
+        _classify(conn, case_id, correlation, _full_verify_finding())
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """select o.id::text,v.id::text,v.sha256,v.bytes
+                   from app.evidence_objects o
+                   join app.evidence_versions v on v.id=o.current_version_id
+                   where o.case_id=%s and o.status='sealed'
+                   order by o.id::text""",
+                (case_id,),
+            )
+            receipt_items = [
+                {
+                    "evidence_object_id": object_id,
+                    "evidence_version_id": version_id,
+                    "sha256": digest,
+                    "bytes": byte_count,
+                    "storage_profile": "EXTERNALLY_READ_ONLY",
+                    "storage_source_identity": source,
+                    "mount_instance_identity": first_observed_mount,
+                    "read_only": True,
+                    "st_nlink": 1,
+                }
+                for object_id, version_id, digest, byte_count in cur.fetchall()
+            ]
+            cur.execute(
+                """insert into app.evidence_storage_verifications(
+                     case_id,generation,profile,source_identity,mount_instance,
+                     manifest_version,manifest_hash,item_facts,outcome,correlation_id)
+                   values(%s,2,'EXTERNALLY_READ_ONLY',%s,%s,1,%s,%s,
+                     'SUCCESS','simulated-full-verify:'||%s)""",
+                (
+                    case_id,
+                    source,
+                    first_observed_mount,
+                    "sha256:" + "d" * 64,
+                    Jsonb(receipt_items),
+                    uuid.uuid4().hex,
+                ),
+            )
+            cur.execute(
+                """update app.evidence_storage_authorities
+                   set state='AVAILABLE',remediation='NONE',read_only=true,
+                     verified_mount_instance=%s,observed_mount_instance=%s,
+                     last_full_verified_at=now()
+                   where case_id=%s""",
+                (first_observed_mount, first_observed_mount, case_id),
+            )
+            cur.execute(
+                """update app.evidence_chain_heads
+                   set seal_status='sealed',issues='[]'::jsonb where case_id=%s""",
+                (case_id,),
+            )
+        conn.commit()
+
+        with pytest.raises(
+            psycopg.errors.UniqueViolation,
+            match="inventory_correlation_reused",
+        ):
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """select state,remediation from
+                             app.evidence_storage_record_observation(
+                               %s,'EXTERNALLY_READ_ONLY',true,%s,%s,true)""",
+                        (case_id, source, next_observed_mount),
+                    )
+                    assert cur.fetchone() == (
+                        "FULL_VERIFY_REQUIRED",
+                        "RECONNECT_AND_VERIFY",
+                    )
+                _classify(conn, case_id, correlation, _full_verify_finding())
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """select state,remediation,read_only,source_identity,
+                          verified_mount_instance,observed_mount_instance
+                   from app.evidence_storage_authorities where case_id=%s""",
+                (case_id,),
+            )
+            assert cur.fetchone() == (
+                "AVAILABLE",
+                "NONE",
+                True,
+                source,
+                first_observed_mount,
+                first_observed_mount,
+            )
+            cur.execute(
+                """select seal_status,issues from app.evidence_chain_heads
+                   where case_id=%s""",
+                (case_id,),
+            )
+            assert cur.fetchone() == ("sealed", [])
+
+
 @pytest.mark.parametrize(
     "defect",
     (
