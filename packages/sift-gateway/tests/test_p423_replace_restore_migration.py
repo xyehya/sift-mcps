@@ -3,6 +3,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 SQL = (ROOT / "supabase/migrations/202607142100_replace_restore_operations.sql").read_text()
+UNPUBLISHED_CUSTODY_MIGRATIONS = tuple(
+    ROOT / "supabase/migrations" / name
+    for name in (
+        "202607141200_custody_operation_actions.sql",
+        "202607142100_replace_restore_operations.sql",
+        "202607143000_drift_disposition.sql",
+        "202607144000_external_read_only_storage.sql",
+    )
+)
+
+
+def test_unpublished_custody_jsonb_arrow_literals_are_closed() -> None:
+    """Catch the malformed ``value->'key,'next'`` syntax rejected by Postgres."""
+    malformed = re.compile(r"->>?\s*'[^'\n]*,\s*'")
+    for migration in UNPUBLISHED_CUSTODY_MIGRATIONS:
+        assert not malformed.search(migration.read_text()), migration.name
 
 
 def test_recovery_begin_validates_object_before_inner_operation_creation():
