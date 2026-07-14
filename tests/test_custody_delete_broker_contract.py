@@ -72,6 +72,14 @@ def test_interface_is_pathless_and_profile_bound() -> None:
     assert migrations_lib.count("has_table_privilege(current_user,c.oid,'SELECT')") == 2
     assert "c.relname='custody_operations'" in migrations_lib
     assert "c.relname='custody_delete_broker_receipts'" in migrations_lib
+    assert (
+        "where n.nspname='app' and c.relname='custody_operations'),true)"
+        in migrations_lib
+    )
+    assert (
+        "where n.nspname='app' and c.relname='custody_delete_broker_receipts'),true)"
+        in migrations_lib
+    )
     assert migrations_lib.count("select current_user='sift_custody_delete_broker'") == 1
     assert migrations_lib.count("_custody_delete_broker_scope_valid") == 3
     assert "stale or mis-scoped; rotating" in migrations_lib
