@@ -10,14 +10,17 @@ export function IncompleteCustodyOperation({ operation, onResume }) {
   if (!operation) return null
   const phase = String(operation.phase || 'UNKNOWN')
   const recovery = operation.action === 'REPLACE_REACQUIRE' || operation.action === 'RESTORE_EXACT'
+  const disposition = ['IGNORE', 'DELETE_STRAY', 'RETIRE'].includes(operation.action)
   const recoveryLabel = operation.action === 'RESTORE_EXACT' ? 'Exact Restore' : 'Replace/Reacquire'
-  const nextAction = recovery
+  const nextAction = disposition
+    ? 'Re-authenticate to resume the exact stored disposition without changing its target or action.'
+    : recovery
     ? phase === 'FAILED_RECOVERABLE'
       ? `Retry ${recoveryLabel} completion with fresh re-authentication.`
       : `${recoveryLabel} remains gate-blocked; complete it with fresh re-authentication after any interrupted service run.`
     : NEXT_ACTION[phase] || 'Refresh custody status before taking another action.'
-  const title = recovery ? `${recoveryLabel} is incomplete` : 'Add & Seal is incomplete'
-  const button = recovery ? 'Complete Recovery' : 'Resume Add & Seal'
+  const title = recovery ? `${recoveryLabel} is incomplete` : disposition ? 'Evidence disposition is incomplete' : 'Add & Seal is incomplete'
+  const button = recovery ? 'Complete Recovery' : disposition ? 'Resume Disposition' : 'Resume Add & Seal'
   return (
     <section aria-label="Incomplete custody operation" className="rounded-xl border border-status-pending/30 bg-status-pending/5 p-3 text-xs">
       <div className="font-semibold text-status-pending">{title}</div>

@@ -240,6 +240,28 @@ def test_posture_only_requires_matching_full_hash_and_never_a_new_version() -> N
     assert verified.findings[0].recovery is RecoveryRequirement.FULL_VERIFY_AND_REPAIR
 
 
+def test_immutable_flag_ctime_change_with_matching_hash_is_posture_only() -> None:
+    changed_ctime = FileIdentity(
+        device=LOCAL_IDENTITY.device,
+        inode=LOCAL_IDENTITY.inode,
+        byte_count=LOCAL_IDENTITY.byte_count,
+        mtime_ns=LOCAL_IDENTITY.mtime_ns,
+        ctime_ns=LOCAL_IDENTITY.ctime_ns + 1,
+        link_count=LOCAL_IDENTITY.link_count,
+    )
+
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.AVAILABLE,
+            expected=(_sealed_local(),),
+            observed=(_mounted(identity=changed_ctime, immutable=False),),
+        )
+    )
+
+    assert result.findings[0].code is DriftCode.POSTURE_DRIFT
+    assert result.findings[0].full_verification_required is True
+
+
 def test_missing_trusted_change_signal_requires_full_verification() -> None:
     result = classify_inventory(
         InventorySnapshot(

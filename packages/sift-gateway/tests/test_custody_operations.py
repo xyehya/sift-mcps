@@ -8,10 +8,13 @@ from pathlib import Path
 
 import pytest
 from sift_gateway.custody_operations import (
+    CustodyAction,
     CustodyOperationError,
     CustodyOperationPhase,
     CustodyOperationRecord,
+    DispositionCustodyOperation,
     LocalImmutablePostureAdapter,
+    ObjectCustodyCommand,
     PinnedEvidenceFile,
     PostureBatch,
     SealCommand,
@@ -174,6 +177,163 @@ def _seal(service: EvidenceAuthorityService):
         actor={"principal_type": "operator", "principal_id": ACTOR_ID},
         examiner="examiner",
     )
+
+
+class FakeDispositionRepository:
+    def __init__(self, action: CustodyAction) -> None:
+        self.record = CustodyOperationRecord(
+            operation_id="66666666-6666-4666-8666-666666666666",
+            case_id=CASE_ID,
+            action=action.value,
+            phase=CustodyOperationPhase.GATE_BLOCKED,
+            idempotency_key="disposition-001",
+            request_digest="sha256:" + "b" * 64,
+            failed_from_phase=None,
+            failure_code=None,
+            result=None,
+        )
+        self.calls: list[tuple[str, object]] = []
+
+    def begin_or_resume(self, command: ObjectCustodyCommand) -> CustodyOperationRecord:
+        self.calls.append(("begin_or_resume", command))
+        return self.record
+
+    def advance(self, operation_id, expected, target, *, facts=None):
+        self.calls.append(("advance", (expected, target, facts)))
+        assert self.record.phase == expected
+        prepared = facts if target is CustodyOperationPhase.FILESYSTEM_APPLYING else self.record.prepared_facts
+        verified = facts if target is CustodyOperationPhase.FILESYSTEM_VERIFIED else self.record.verified_facts
+        self.record = replace(
+            self.record, phase=target, prepared_facts=prepared, verified_facts=verified
+        )
+        return self.record
+
+    def fail(self, operation_id, expected, failure_code):
+        self.calls.append(("fail", (expected, failure_code)))
+        self.record = replace(
+            self.record,
+            phase=CustodyOperationPhase.FAILED_RECOVERABLE,
+            failed_from_phase=expected,
+            failure_code=failure_code,
+        )
+        return self.record
+
+    def commit_verified_disposition(self, operation_id, *, item, examiner):
+        self.calls.append(("commit_verified_disposition", item))
+        assert self.record.phase is CustodyOperationPhase.FILESYSTEM_VERIFIED
+        self.record = replace(
+            self.record,
+            phase=CustodyOperationPhase.COMPLETED,
+            result={"operation_phase": "COMPLETED", **item},
+        )
+        return self.record
+
+
+def _disposition_command(action: CustodyAction) -> ObjectCustodyCommand:
+    return ObjectCustodyCommand(
+        action=action,
+        case_id=CASE_ID,
+        evidence_object_id="44444444-4444-4444-8444-444444444444",
+        actor_user_id=ACTOR_ID,
+        actor_service_identity_id=None,
+        reason="Operator disposition",
+        reauth_audit_event_id=REAUTH_ID,
+        idempotency_key="disposition-001",
+    )
+
+
+def test_delete_stray_blocks_gate_before_descriptor_pinned_unlink(tmp_path):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    target = evidence / "stray.bin"
+    target.write_bytes(b"untrusted stray bytes")
+    repo = FakeDispositionRepository(CustodyAction.DELETE_STRAY)
+    seen: list[bool] = []
+    original_advance = repo.advance
+
+    def advance(*args, **kwargs):
+        seen.append(target.exists())
+        return original_advance(*args, **kwargs)
+
+    repo.advance = advance
+    runner = DispositionCustodyOperation(
+        repo,
+        lambda _case_id: tmp_path,
+        lambda _case_id, _object_id: {
+            "evidence_object_id": "44444444-4444-4444-8444-444444444444",
+            "display_path": "evidence/stray.bin",
+            "status": "detected",
+            "seal_status": "unsealed",
+        },
+    )
+
+    result = runner.execute(_disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner")
+
+    assert seen[0] is True
+    assert target.exists() is False
+    assert result["file_removed"] is True
+    assert result["sha256"] == "sha256:" + hashlib.sha256(b"untrusted stray bytes").hexdigest()
+    assert [name for name, _ in repo.calls] == [
+        "begin_or_resume", "advance", "advance", "commit_verified_disposition"
+    ]
+
+
+@pytest.mark.parametrize("action", [CustodyAction.IGNORE, CustodyAction.RETIRE])
+def test_non_delete_disposition_never_mutates_evidence_bytes(tmp_path, action):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    target = evidence / "disk.raw"
+    target.write_bytes(b"preserved evidence")
+    repo = FakeDispositionRepository(action)
+    runner = DispositionCustodyOperation(
+        repo,
+        lambda _case_id: tmp_path,
+        lambda _case_id, _object_id: {
+            "evidence_object_id": "44444444-4444-4444-8444-444444444444",
+            "display_path": "evidence/disk.raw",
+            "status": "detected" if action is CustodyAction.IGNORE else "sealed",
+            "seal_status": "unsealed" if action is CustodyAction.IGNORE else "sealed",
+            "current_sha256": "sha256:" + hashlib.sha256(b"preserved evidence").hexdigest(),
+            "current_bytes": len(b"preserved evidence"),
+            "current_version_id": "77777777-7777-4777-8777-777777777777",
+        },
+    )
+
+    runner.execute(_disposition_command(action), examiner="examiner")
+
+    assert target.read_bytes() == b"preserved evidence"
+
+
+def test_delete_resume_after_unlink_commits_stored_pre_unlink_facts(tmp_path):
+    (tmp_path / "evidence").mkdir()
+    repo = FakeDispositionRepository(CustodyAction.DELETE_STRAY)
+    item = {
+        "evidence_object_id": "44444444-4444-4444-8444-444444444444",
+        "display_path": "evidence/stray.bin",
+        "prior_status": "detected",
+        "prior_seal_status": "unsealed",
+        "present": True,
+        "sha256": "sha256:" + hashlib.sha256(b"gone").hexdigest(),
+        "bytes": 4,
+        "st_dev": 1,
+        "st_ino": 2,
+        "st_nlink": 1,
+    }
+    repo.record = replace(
+        repo.record,
+        phase=CustodyOperationPhase.FILESYSTEM_APPLYING,
+        prepared_facts={"item": item},
+    )
+    runner = DispositionCustodyOperation(
+        repo,
+        lambda _case_id: tmp_path,
+        lambda *_args: pytest.fail("resume must use stored facts"),
+    )
+
+    result = runner.execute(_disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner")
+
+    assert result["file_removed"] is True
+    assert result["sha256"] == item["sha256"]
 
 
 class _ResumeLookupCursor:

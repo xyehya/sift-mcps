@@ -74,6 +74,15 @@ tool → Gateway audit + job → Postgres → worker claims (FOR UPDATE SKIP LOC
 
 Operation-local `advance`/`fail` phase-CAS helpers are outside the case-first finalizer contract.
 
+11. **Classify drift without granting mutation authority.** Admission and Portal status share one
+path-free inventory classifier and append-only Postgres observation seam. Pending, violation, and
+storage-unavailable states remain distinct and fail closed; ignored/retired mounted bytes are not
+rediscovered as pending. Ignore, Delete Stray, and Retire are fixed Portal actions on the durable
+operation state machine. Delete records descriptor-pinned hash/size/identity after gate block and
+before unlink; Ignore and Retire never mutate mounted bytes, and Retire creates one excluding
+manifest while preserving prior versions and siblings. Posture-only verification cannot create an
+Evidence Version. These seams add no MCP tool or authenticated-browser database grant.
+
 **Change routing:** policy/auth/scoping → `sift-gateway`; evidence/findings/reports/execution → `sift-core` + migrations; derived search/ingest → `opensearch-mcp`; human UX → `case-dashboard`; confinement → configs/systemd/AppArmor with the code change.
 
 ## TRADEOFFS

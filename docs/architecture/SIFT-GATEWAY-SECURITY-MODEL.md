@@ -146,6 +146,12 @@ applying/verified recoverable phase; every receipt remains globally consumed in 
 append-only history and a replaced runner is retired. Legacy standalone Unseal and one-shot
 Reacquire routes and runtime RPC grants are absent.
 
+Ignore, Delete Stray, and Retire are fixed Portal-only durable actions. Postgres blocks admission
+before any disposition filesystem step. Delete is limited to unsealed pending objects and records
+descriptor-pinned pre-unlink facts; Retire never unlinks or clears protection and creates a manifest
+excluding the retired object. Inventory observations are path-free, append-only, FORCE-RLS, and
+service-role-only. Neither the browser DB role nor MCP receives custody mutation authority.
+
 **P4.23.1 status (2026-07-13; source and VM Gate A live-proven):** aggregate MCP admission reconciles
 the mounted inventory before reading the Postgres gate and independently requires every declared or
 raw command evidence operand to resolve to an active sealed Evidence Version. Local immutable

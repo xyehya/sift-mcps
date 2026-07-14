@@ -1279,11 +1279,14 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
 
     rel_path = str(body.get("path", "")).strip()
     reason = str(body.get("reason", "")).strip()
+    idempotency_key = str(body.get("idempotency_key", "")).strip()
 
     if not rel_path:
         return JSONResponse({"error": "Missing path"}, status_code=400)
     if not reason:
         return JSONResponse({"error": "Missing reason"}, status_code=400)
+    if len(idempotency_key) > 128:
+        return JSONResponse({"error": "idempotency_key is too long (max 128 characters)"}, status_code=400)
 
     # CL3a: re-verify the operator's password against Supabase (fail closed).
     reauth_err = await _supabase_reverify(request, body)
@@ -1294,15 +1297,26 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     ignorer = getattr(_EVIDENCE_DB, "ignore", None) if _EVIDENCE_DB is not None else None
     if not callable(ignorer):
         return _no_case_response()
+    resolver = getattr(_EVIDENCE_DB, "recovery_object_id", None)
+    evidence_object_id = "00000000-0000-4000-8000-000000000000"
+    if callable(resolver):
+        try:
+            evidence_object_id = resolver(case_id=_active_case_id(), display_path=rel_path)
+        except Exception as exc:
+            return _active_case_error_response(exc, default=500)
 
-    reauth_id = _record_reauth_event(request, examiner, "evidence_ignore")
+    reauth_id = _record_reauth_event(request, examiner, "evidence_ignore", binding={
+        "action": "IGNORE", "evidence_object_id": evidence_object_id,
+        "idempotency_key": idempotency_key, "reason": reason,
+    })
     if not reauth_id:
         return JSONResponse(
             {"error": "Re-auth audit event required for ignore"},
             status_code=403,
         )
+    effective_idempotency_key = idempotency_key or f"ignore:{reauth_id}"
     try:
-        ignorer(
+        ignore_args = dict(
             case_id=_active_case_id(),
             display_path=rel_path,
             reason=reason,
@@ -1310,6 +1324,9 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
             actor=_request_principal(request),
             examiner=examiner,
         )
+        if idempotency_key:
+            ignore_args["idempotency_key"] = effective_idempotency_key
+        ignorer(**ignore_args)
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
 
@@ -1359,11 +1376,14 @@ async def post_evidence_chain_delete(request: Request) -> JSONResponse:
 
     rel_path = str(body.get("path", "")).strip()
     reason = str(body.get("reason", "")).strip()
+    idempotency_key = str(body.get("idempotency_key", "")).strip()
 
     if not rel_path:
         return JSONResponse({"error": "Missing path"}, status_code=400)
     if not reason:
         return JSONResponse({"error": "Missing reason"}, status_code=400)
+    if len(idempotency_key) > 128:
+        return JSONResponse({"error": "idempotency_key is too long (max 128 characters)"}, status_code=400)
 
     # CL3a: re-verify the operator's password against Supabase (fail closed).
     reauth_err = await _supabase_reverify(request, body)
@@ -1374,15 +1394,26 @@ async def post_evidence_chain_delete(request: Request) -> JSONResponse:
     deleter = getattr(_EVIDENCE_DB, "delete_object", None) if _EVIDENCE_DB is not None else None
     if not callable(deleter):
         return _no_case_response()
+    resolver = getattr(_EVIDENCE_DB, "recovery_object_id", None)
+    evidence_object_id = "00000000-0000-4000-8000-000000000000"
+    if callable(resolver):
+        try:
+            evidence_object_id = resolver(case_id=_active_case_id(), display_path=rel_path)
+        except Exception as exc:
+            return _active_case_error_response(exc, default=500)
 
-    reauth_id = _record_reauth_event(request, examiner, "evidence_delete")
+    reauth_id = _record_reauth_event(request, examiner, "evidence_delete", binding={
+        "action": "DELETE_STRAY", "evidence_object_id": evidence_object_id,
+        "idempotency_key": idempotency_key, "reason": reason,
+    })
     if not reauth_id:
         return JSONResponse(
             {"error": "Re-auth audit event required for delete"},
             status_code=403,
         )
+    effective_idempotency_key = idempotency_key or f"delete:{reauth_id}"
     try:
-        result = deleter(
+        delete_args = dict(
             case_id=_active_case_id(),
             display_path=rel_path,
             reason=reason,
@@ -1390,6 +1421,9 @@ async def post_evidence_chain_delete(request: Request) -> JSONResponse:
             actor=_request_principal(request),
             examiner=examiner,
         )
+        if idempotency_key:
+            delete_args["idempotency_key"] = effective_idempotency_key
+        result = deleter(**delete_args)
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
     result = result if isinstance(result, dict) else {}
@@ -1442,11 +1476,14 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
 
     rel_path = str(body.get("path", "")).strip()
     reason = str(body.get("reason", "")).strip()
+    idempotency_key = str(body.get("idempotency_key", "")).strip()
 
     if not rel_path:
         return JSONResponse({"error": "Missing path"}, status_code=400)
     if not reason:
         return JSONResponse({"error": "Missing reason"}, status_code=400)
+    if len(idempotency_key) > 128:
+        return JSONResponse({"error": "idempotency_key is too long (max 128 characters)"}, status_code=400)
 
     # CL3a: re-verify the operator's password against Supabase (fail closed).
     reauth_err = await _supabase_reverify(request, body)
@@ -1457,15 +1494,26 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
     retirer = getattr(_EVIDENCE_DB, "retire", None) if _EVIDENCE_DB is not None else None
     if not callable(retirer):
         return _no_case_response()
+    resolver = getattr(_EVIDENCE_DB, "recovery_object_id", None)
+    evidence_object_id = "00000000-0000-4000-8000-000000000000"
+    if callable(resolver):
+        try:
+            evidence_object_id = resolver(case_id=_active_case_id(), display_path=rel_path)
+        except Exception as exc:
+            return _active_case_error_response(exc, default=500)
 
-    reauth_id = _record_reauth_event(request, examiner, "evidence_retire")
+    reauth_id = _record_reauth_event(request, examiner, "evidence_retire", binding={
+        "action": "RETIRE", "evidence_object_id": evidence_object_id,
+        "idempotency_key": idempotency_key, "reason": reason,
+    })
     if not reauth_id:
         return JSONResponse(
             {"error": "Re-auth audit event required for retire"},
             status_code=403,
         )
+    effective_idempotency_key = idempotency_key or f"retire:{reauth_id}"
     try:
-        retirer(
+        retire_args = dict(
             case_id=_active_case_id(),
             display_path=rel_path,
             reason=reason,
@@ -1473,6 +1521,9 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
             actor=_request_principal(request),
             examiner=examiner,
         )
+        if idempotency_key:
+            retire_args["idempotency_key"] = effective_idempotency_key
+        retirer(**retire_args)
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
 
@@ -1489,6 +1540,53 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
         "path": rel_path,
         "reauth_method": _MVP_REAUTH_METHOD,
     })
+
+
+async def post_evidence_chain_disposition_resume(request: Request) -> JSONResponse:
+    """Resume one stored disposition by operation id after fresh re-auth."""
+    if (role_err := _require_examiner_role(request)) is not None:
+        return role_err
+    if (err := _must_reset_check(request)) is not None:
+        return err
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(body, dict) or set(body) - {"password", "operation_id"}:
+        return JSONResponse({"error": "Unknown disposition resume field"}, status_code=400)
+    try:
+        operation_id = str(uuid.UUID(str(body.get("operation_id") or "")))
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "operation_id is required"}, status_code=400)
+    if (reauth_err := await _supabase_reverify(request, body)) is not None:
+        return reauth_err
+    action_getter = getattr(_EVIDENCE_DB, "disposition_operation_action", None)
+    resumer = getattr(_EVIDENCE_DB, "resume_disposition", None)
+    if not callable(action_getter) or not callable(resumer):
+        return _no_case_response()
+    try:
+        action = action_getter(case_id=_active_case_id(), operation_id=operation_id)
+        event = {
+            "IGNORE": "evidence_ignore_resume",
+            "DELETE_STRAY": "evidence_delete_resume",
+            "RETIRE": "evidence_retire_resume",
+        }[action]
+        reauth_id = _record_reauth_event(
+            request, examiner, event, binding={"operation_id": operation_id}
+        )
+        if not reauth_id:
+            return JSONResponse({"error": "Re-auth audit event required"}, status_code=403)
+        result = resumer(
+            case_id=_active_case_id(),operation_id=operation_id,
+            actor=_request_principal(request),examiner=examiner,
+            resume_reauth_audit_event_id=reauth_id,
+        )
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
+    return JSONResponse({"completed": True, **(result if isinstance(result, dict) else {})})
 
 
 async def _post_evidence_recovery_begin(
@@ -5648,6 +5746,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/chain/ignore", post_evidence_chain_ignore, methods=["POST"]),
         Route("/api/evidence/chain/delete", post_evidence_chain_delete, methods=["POST"]),
         Route("/api/evidence/chain/retire", post_evidence_chain_retire, methods=["POST"]),
+        Route("/api/evidence/chain/disposition/resume", post_evidence_chain_disposition_resume, methods=["POST"]),
         Route("/api/evidence/chain/replace/begin", post_evidence_replace_begin, methods=["POST"]),
         Route("/api/evidence/chain/restore/begin", post_evidence_restore_begin, methods=["POST"]),
         Route("/api/evidence/chain/recovery/complete", post_evidence_recovery_complete, methods=["POST"]),

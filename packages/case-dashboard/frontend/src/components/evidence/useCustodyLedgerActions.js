@@ -2,6 +2,7 @@ import {
   postChainIgnore,
   postChainDelete,
   postChainRetire,
+  postDispositionResume,
   postReplaceBegin,
   postRestoreBegin,
   postRecoveryComplete,
@@ -35,7 +36,12 @@ export function useCustodyLedgerActions({
     e.preventDefault()
     if (!guard(true)) return
     try {
-      const res = await postChainIgnore({ password: modalPassword, path: pendingPath, reason: modalReason })
+      const res = await postChainIgnore({
+        password: modalPassword,
+        path: pendingPath,
+        reason: modalReason,
+        idempotency_key: sealIntentId,
+      })
       if (res.ignored) {
         addToast('File marked as ignored successfully!', 'success')
         setModalResult({ success: true })
@@ -54,7 +60,12 @@ export function useCustodyLedgerActions({
     e.preventDefault()
     if (!guard(true)) return
     try {
-      const res = await postChainDelete({ password: modalPassword, path: pendingPath, reason: modalReason })
+      const res = await postChainDelete({
+        password: modalPassword,
+        path: pendingPath,
+        reason: modalReason,
+        idempotency_key: sealIntentId,
+      })
       if (res.deleted) {
         addToast(res.file_removed ? 'File permanently deleted from evidence.' : 'Stray record removed.', 'success')
         setModalResult({ success: true })
@@ -73,7 +84,12 @@ export function useCustodyLedgerActions({
     e.preventDefault()
     if (!guard(true)) return
     try {
-      const res = await postChainRetire({ password: modalPassword, path: pendingPath, reason: modalReason })
+      const res = await postChainRetire({
+        password: modalPassword,
+        path: pendingPath,
+        reason: modalReason,
+        idempotency_key: sealIntentId,
+      })
       if (res.ignored || res.retired || res.manifest_version !== undefined) {
         addToast('File retired successfully!', 'success')
         setModalResult({ success: true })
@@ -134,6 +150,25 @@ export function useCustodyLedgerActions({
     }
   }
 
+  async function handleDispositionResume(e) {
+    e.preventDefault()
+    if (!guard(false)) return
+    try {
+      const res = await postDispositionResume({
+        password: modalPassword,
+        operation_id: pendingPath,
+      })
+      if (!res.completed) throw new Error(res.error || 'Disposition resume failed')
+      addToast('Custody disposition completed.', 'success')
+      setModalResult({ success: true })
+      afterSuccess(refreshData)
+    } catch (err) {
+      setModalError(err.message || 'Disposition resume failed')
+    } finally {
+      setModalLoading(false)
+    }
+  }
+
   return {
     handleIgnoreEvidence,
     handleDeleteEvidence,
@@ -141,5 +176,6 @@ export function useCustodyLedgerActions({
     handleReplaceBegin,
     handleRestoreBegin,
     handleRecoveryComplete,
+    handleDispositionResume,
   }
 }

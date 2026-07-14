@@ -240,11 +240,12 @@ describe('Ignore unregistered file flow', () => {
     fillModal({ password: 'pw' })
     fireEvent.click(within(modal).getByRole('button', { name: 'Ignore File' }))
     await waitFor(() => {
-      expect(endpoints.postChainIgnore).toHaveBeenCalledWith({
+      expect(endpoints.postChainIgnore).toHaveBeenCalledWith(expect.objectContaining({
         password: 'pw',
         path: 'evidence/temp.log',
         reason: 'temp scan file',
-      })
+        idempotency_key: expect.any(String),
+      }))
     })
     expect(await within(modal).findByText(/marked as ignored successfully/i)).toBeInTheDocument()
   })
@@ -269,11 +270,12 @@ describe('Delete stray file flow', () => {
     fillModal({ reason: 'unauthorized file', password: 'pw' })
     fireEvent.click(within(modal).getByRole('button', { name: 'Delete File' }))
     await waitFor(() => {
-      expect(endpoints.postChainDelete).toHaveBeenCalledWith({
+      expect(endpoints.postChainDelete).toHaveBeenCalledWith(expect.objectContaining({
         password: 'pw',
         path: 'evidence/stray.bin',
         reason: 'unauthorized file',
-      })
+        idempotency_key: expect.any(String),
+      }))
     })
     expect(await within(modal).findByText(/File deleted from evidence/i)).toBeInTheDocument()
   })
@@ -298,11 +300,12 @@ describe('Retire missing file flow', () => {
     fillModal({ reason: 'removed from scope', password: 'pw' })
     fireEvent.click(within(modal).getByRole('button', { name: 'Retire File' }))
     await waitFor(() => {
-      expect(endpoints.postChainRetire).toHaveBeenCalledWith({
+      expect(endpoints.postChainRetire).toHaveBeenCalledWith(expect.objectContaining({
         password: 'pw',
         path: 'evidence/lost.img',
         reason: 'removed from scope',
-      })
+        idempotency_key: expect.any(String),
+      }))
     })
     expect(await within(modal).findByText(/File retired successfully/i)).toBeInTheDocument()
   })

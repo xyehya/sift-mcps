@@ -430,11 +430,19 @@ def _classify_bound(
         and observed.identity is not None
         and observed.identity != expected.identity
     ):
-        code = (
-            DriftCode.IDENTITY_CHANGED
-            if observed.sha256 == expected.sha256
-            else DriftCode.FULL_VERIFY_REQUIRED
+        stable_except_ctime = (
+            observed.identity.device == expected.identity.device
+            and observed.identity.inode == expected.identity.inode
+            and observed.identity.byte_count == expected.identity.byte_count
+            and observed.identity.mtime_ns == expected.identity.mtime_ns
+            and observed.identity.link_count == expected.identity.link_count
         )
+        if stable_except_ctime and observed.sha256 == expected.sha256:
+            code = DriftCode.POSTURE_DRIFT
+        elif observed.sha256 == expected.sha256:
+            code = DriftCode.IDENTITY_CHANGED
+        else:
+            code = DriftCode.FULL_VERIFY_REQUIRED
         return _finding(
             code,
             CustodyGateState.BLOCKED_VIOLATION,

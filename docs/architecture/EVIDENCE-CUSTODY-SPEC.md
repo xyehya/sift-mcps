@@ -308,8 +308,12 @@ Tests should exercise the highest existing public seam and assert externally obs
 
 The following are known current-state facts, not accepted target behavior:
 
-- Delete can still unlink before durable disposition; Ticket 4 replaces that path. Standalone Unseal
-  and one-shot Reacquire are no longer publicly reachable after P4.23.3.
+- Ticket 4 routes Ignore, Delete Stray, and Retire through the shared durable operation state
+  machine. Delete persists descriptor-pinned hash, size, and identity facts only after the gate is
+  blocked and before descriptor-relative unlink. Ignore and Retire never mutate mounted bytes;
+  Retire appends a manifest that excludes the object while preserving the prior version and sealed
+  siblings. Legacy direct disposition RPC grants are revoked. Standalone Unseal and one-shot
+  Reacquire remain unreachable.
 - Add/Seal now uses the P4.23.2 durable custody-operation state machine: Postgres blocks the gate before filesystem work, binds scoped re-authentication and one restart-instance owner, persists prepared/verified facts, and commits the manifest, versions, and canonical events atomically. A different systemd invocation claims even a `GATE_BLOCKED` operation before returning; every later mutation compares both phase and runner. `GATE_BLOCKED`, `FILESYSTEM_APPLYING`, `FILESYSTEM_VERIFIED`, and `FAILED_RECOVERABLE` are exposed as path-free resumable states; `REQUESTED` and `LEDGER_COMMITTED` are not. A page-reloaded Portal submits only password plus operation id. Gateway verifies the original actor/case/strict stored command, while Postgres independently validates a fresh `reauth.evidence_seal_resume` receipt bound exactly to that operation and records the receipt in append-only operation history before ownership changes. The original Seal authorization and request digest remain immutable. Direct authenticated-role table access remains denied. Remaining recovery workflows adopt this seam in later packets.
 - Portal recovery UI uses only operator HTTP workflows; no fictitious MCP custody mutation action is shown.
 - “Verify HMAC” and file manifest/JSONL authority terminology remains in older
@@ -337,6 +341,12 @@ the existing immutable sibling retained its digest and all observed metadata. Au
 
 P4.23.3 implements durable Replace/Reacquire and exact Restore locally. Consolidated live proof is
 deferred by design to VM Gate C after Tickets 3–5 integrate.
+
+P4.23.4 implements a pure path-free classifier plus append-only persisted inventory observations.
+Admission and Portal status reuse the same reconciliation path, including precise pending,
+violation, and unavailable gate states. Mounted ignored/retired objects remain retained history and
+are suppressed from new-pending rediscovery. Missing/changed recovery delegates to Ticket 3;
+verified posture-only drift does not authorize a new Evidence Version.
 
 These items must be replaced in dependency order. Tests that describe obsolete behavior are removed only after stronger public-seam replacements land.
 

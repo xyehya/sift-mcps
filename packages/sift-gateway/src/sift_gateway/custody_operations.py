@@ -278,6 +278,14 @@ class CustodyOperationRepositoryProtocol(Protocol):
         examiner: str,
     ) -> CustodyOperationRecord: ...
 
+    def commit_verified_disposition(
+        self,
+        operation_id: str,
+        *,
+        item: dict[str, Any],
+        examiner: str,
+    ) -> CustodyOperationRecord: ...
+
     def get_incomplete(self, case_id: str) -> CustodyOperationRecord | None: ...
 
 
@@ -493,6 +501,26 @@ class CustodyOperationRepository:
                 cur.execute(
                     f"""select {_OP_COLUMNS}
                          from app.custody_operation_commit_verified_recovery(
+                           %s, %s, %s, %s
+                         )""",
+                    (operation_id, _jsonb(item), examiner, _RUNNER_INSTANCE_ID),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return _record(row)
+
+    def commit_verified_disposition(
+        self,
+        operation_id: str,
+        *,
+        item: dict[str, Any],
+        examiner: str,
+    ) -> CustodyOperationRecord:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""select {_OP_COLUMNS}
+                         from app.custody_operation_commit_verified_disposition(
                            %s, %s, %s, %s
                          )""",
                     (operation_id, _jsonb(item), examiner, _RUNNER_INSTANCE_ID),
@@ -1052,6 +1080,191 @@ class RecoveryCustodyOperation:
                 os.close(root_fd)
 
 
+class DispositionCustodyOperation:
+    """Gate-first Portal-only Ignore/Delete/Retire orchestration."""
+
+    _ACTIONS = (CustodyAction.IGNORE, CustodyAction.DELETE_STRAY, CustodyAction.RETIRE)
+
+    def __init__(
+        self,
+        repository: CustodyOperationRepositoryProtocol,
+        case_dir: Callable[[str], Path | None],
+        object_for_id: Callable[[str, str], dict[str, Any]],
+    ) -> None:
+        self._repository = repository
+        self._case_dir = case_dir
+        self._object_for_id = object_for_id
+
+    @staticmethod
+    def _name(display_path: str) -> str:
+        parts = Path(display_path).parts
+        if len(parts) != 2 or parts[0] != "evidence" or parts[1] in ("", ".", ".."):
+            raise CustodyOperationError("invalid_evidence_path", http_status=409)
+        return parts[1]
+
+    def _pin(self, case_id: str, display_path: str) -> tuple[int, int]:
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
+            raise CustodyOperationError("o_nofollow_required", http_status=500)
+        case_dir = self._case_dir(case_id)
+        if case_dir is None:
+            raise CustodyOperationError("case_artifact_path_unavailable", http_status=404)
+        root_fd = os.open(
+            case_dir / "evidence", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | nofollow
+        )
+        try:
+            fd = os.open(
+                self._name(display_path), os.O_RDONLY | os.O_CLOEXEC | nofollow, dir_fd=root_fd
+            )
+        except Exception:
+            os.close(root_fd)
+            raise
+        return root_fd, fd
+
+    def _prepare_item(
+        self, command: ObjectCustodyCommand, obj: dict[str, Any]
+    ) -> tuple[dict[str, Any], int | None, int | None]:
+        status = str(obj.get("status") or "")
+        seal_status = str(obj.get("seal_status") or "")
+        if command.action is CustodyAction.IGNORE:
+            if status != "detected" or seal_status != "unsealed":
+                raise CustodyOperationError("disposition_object_not_pending", http_status=409)
+        elif command.action is CustodyAction.DELETE_STRAY:
+            if status not in ("detected", "registered", "ignored") or seal_status != "unsealed":
+                raise CustodyOperationError("disposition_object_not_pending", http_status=409)
+        elif status not in ("sealed", "violated") or not obj.get("current_version_id"):
+            raise CustodyOperationError("retire_requires_versioned_evidence", http_status=409)
+        display_path = str(obj.get("display_path") or "")
+        item: dict[str, Any] = {
+            "evidence_object_id": command.evidence_object_id,
+            "display_path": display_path,
+            "prior_status": status,
+            "prior_seal_status": seal_status,
+            "original_version_id": obj.get("current_version_id"),
+            "original_sha256": obj.get("current_sha256"),
+            "original_bytes": obj.get("current_bytes"),
+        }
+        try:
+            root_fd, fd = self._pin(command.case_id, display_path)
+        except FileNotFoundError as exc:
+            if command.action is CustodyAction.IGNORE:
+                raise CustodyOperationError(
+                    "ignore_requires_readable_pending_item", http_status=409
+                ) from exc
+            item.update({"present": False, "file_removed": False})
+            return item, None, None
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            os.close(fd)
+            os.close(root_fd)
+            raise CustodyOperationError("evidence_regular_single_link_required", http_status=409)
+        sha256, size = LocalImmutablePostureAdapter._hash_fd(fd)
+        item.update(
+            {"present": True, "sha256": sha256, "bytes": size,
+             "st_dev": st.st_dev, "st_ino": st.st_ino, "st_nlink": st.st_nlink}
+        )
+        return item, root_fd, fd
+
+    def execute(self, command: ObjectCustodyCommand, *, examiner: str) -> dict[str, Any]:
+        if command.action not in self._ACTIONS:
+            raise CustodyOperationError("disposition_action_required", http_status=400)
+        operation = self._repository.begin_or_resume(command)
+        if operation.phase is CustodyOperationPhase.COMPLETED:
+            return dict(operation.result or {})
+        if operation.phase not in (
+            CustodyOperationPhase.GATE_BLOCKED,
+            CustodyOperationPhase.FILESYSTEM_APPLYING,
+            CustodyOperationPhase.FILESYSTEM_VERIFIED,
+        ):
+            raise CustodyOperationError("custody_operation_not_resumable", http_status=409)
+        current = operation.phase
+        root_fd: int | None = None
+        fd: int | None = None
+        try:
+            if operation.phase is CustodyOperationPhase.GATE_BLOCKED:
+                obj = self._object_for_id(command.case_id, command.evidence_object_id)
+                if str(obj.get("evidence_object_id")) != command.evidence_object_id:
+                    raise CustodyOperationError("disposition_object_binding_changed", http_status=409)
+                item, root_fd, fd = self._prepare_item(command, obj)
+                operation = self._repository.advance(
+                    operation.operation_id,
+                    CustodyOperationPhase.GATE_BLOCKED,
+                    CustodyOperationPhase.FILESYSTEM_APPLYING,
+                    facts={"item": item},
+                )
+                current = operation.phase
+            else:
+                stored = (
+                    operation.verified_facts
+                    if operation.phase is CustodyOperationPhase.FILESYSTEM_VERIFIED
+                    else operation.prepared_facts
+                ) or {}
+                item = stored.get("item")
+                if not isinstance(item, dict):
+                    raise CustodyOperationError("disposition_facts_missing", http_status=409)
+
+            if operation.phase is CustodyOperationPhase.FILESYSTEM_APPLYING:
+                if command.action is CustodyAction.DELETE_STRAY:
+                    if fd is None:
+                        try:
+                            root_fd, fd = self._pin(command.case_id, str(item["display_path"]))
+                        except FileNotFoundError:
+                            root_fd = None
+                            fd = None
+                    if fd is not None:
+                        before = os.fstat(fd)
+                        sha256, size = LocalImmutablePostureAdapter._hash_fd(fd)
+                        if (
+                            sha256 != item.get("sha256")
+                            or size != item.get("bytes")
+                            or before.st_dev != item.get("st_dev")
+                            or before.st_ino != item.get("st_ino")
+                        ):
+                            raise CustodyOperationError("delete_descriptor_identity_changed", http_status=409)
+                        name = self._name(str(item["display_path"]))
+                        directory_entry = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+                        if (directory_entry.st_dev, directory_entry.st_ino) != (
+                            before.st_dev,
+                            before.st_ino,
+                        ):
+                            raise CustodyOperationError(
+                                "delete_directory_entry_changed", http_status=409
+                            )
+                        os.unlink(name, dir_fd=root_fd)
+                        item["file_removed"] = True
+                    elif item.get("present") is True:
+                        item["file_removed"] = True
+                    else:
+                        item["file_removed"] = False
+                else:
+                    item["file_removed"] = False
+                operation = self._repository.advance(
+                    operation.operation_id,
+                    CustodyOperationPhase.FILESYSTEM_APPLYING,
+                    CustodyOperationPhase.FILESYSTEM_VERIFIED,
+                    facts={"item": item},
+                )
+                current = operation.phase
+            operation = self._repository.commit_verified_disposition(
+                operation.operation_id, item=item, examiner=examiner
+            )
+            return dict(operation.result or {})
+        except Exception as exc:
+            failure = exc.reason if isinstance(exc, CustodyOperationError) else type(exc).__name__
+            try:
+                self._repository.fail(operation.operation_id, current, failure)
+            except Exception:
+                logger.warning("custody disposition failure persistence failed", exc_info=True)
+            if isinstance(exc, CustodyOperationError):
+                raise
+            raise CustodyOperationError("disposition_failed_recoverable", http_status=500) from exc
+        finally:
+            if fd is not None:
+                os.close(fd)
+            if root_fd is not None:
+                os.close(root_fd)
+
+
 def public_operation(record: CustodyOperationRecord | None) -> dict[str, Any] | None:
     """Return path-free, authorization-free state safe for the human Portal."""
     if record is None:
@@ -1065,6 +1278,7 @@ def public_operation(record: CustodyOperationRecord | None) -> dict[str, Any] | 
         ),
         "failure_code": record.failure_code,
         "recoverable": record.action in {
-            "ADD_SEAL", "REPLACE_REACQUIRE", "RESTORE_EXACT"
+            "ADD_SEAL", "REPLACE_REACQUIRE", "RESTORE_EXACT",
+            "IGNORE", "DELETE_STRAY", "RETIRE"
         } and record.phase in RESUMABLE_SEAL_PHASES,
     }

@@ -20,12 +20,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sift_gateway.custody_drift import (
+    AuthorityEvidence,
+    EntryKind,
+    FileIdentity,
+    InventorySnapshot,
+    MountedEvidence,
+    StorageAvailability,
+    StorageProfile,
+    classify_inventory,
+)
 from sift_gateway.custody_operations import (
     RESUMABLE_SEAL_PHASES,
     CustodyAction,
     CustodyOperationError,
     CustodyOperationRepository,
     CustodyOperationRepositoryProtocol,
+    DispositionCustodyOperation,
     LocalImmutablePostureAdapter,
     LocalImmutablePostureProtocol,
     ObjectCustodyCommand,
@@ -525,10 +536,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    select id::text, display_path, current_sha256, current_bytes,
-                           sealed_at
-                    from app.evidence_objects
-                    where case_id = %s and status = 'sealed' and seal_status = 'sealed'
+                    select o.id::text, o.display_path, o.current_sha256, o.current_bytes,
+                           o.sealed_at, v.metadata
+                    from app.evidence_objects o
+                    left join app.evidence_versions v on v.id=o.current_version_id
+                    where o.case_id = %s and o.status = 'sealed' and o.seal_status = 'sealed'
                     """,
                     (case_id,),
                 )
@@ -538,13 +550,21 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         "sha256": str(row[2] or ""),
                         "bytes": row[3],
                         "sealed_at": row[4],
+                        "metadata": row[5] if isinstance(row[5], dict) else {},
                     }
                     for row in cur.fetchall()
                 }
+                cur.execute(
+                    """select display_path from app.evidence_objects
+                       where case_id=%s and status in ('ignored','retired')""",
+                    (case_id,),
+                )
+                dispositioned_paths = {str(row[0]) for row in cur.fetchall()}
                 live: set[str] = set()
                 unsafe: list[str] = []
                 storage_available = True
                 correlation_id = _admission_correlation_id()
+                observed_facts: list[MountedEvidence] = []
                 if not evidence_dir.is_dir():
                     storage_available = False
                     unsafe.append("evidence_storage_unavailable")
@@ -557,7 +577,10 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         unsafe.append("evidence_inventory_unavailable")
                     for entry in entries:
                         rel = f"evidence/{entry.name}"
+                        observation_id = hashlib.sha256(rel.encode("utf-8")).hexdigest()[:32]
                         live.add(rel)
+                        if rel in dispositioned_paths:
+                            continue
                         try:
                             st = entry.stat(follow_symlinks=False)
                             regular = entry.is_file(follow_symlinks=False)
@@ -565,6 +588,15 @@ class EvidenceAuthorityService(_BasePortalDbService):
                             st = None
                             regular = False
                         if not regular or st is None or st.st_nlink != 1:
+                            kind = EntryKind.SYMLINK if entry.is_symlink() else (
+                                EntryKind.DIRECTORY if st is not None and stat.S_ISDIR(st.st_mode)
+                                else EntryKind.OTHER
+                            )
+                            observed_facts.append(MountedEvidence(
+                                observation_id=observation_id,evidence_object_id=None,
+                                entry_kind=kind,byte_count=st.st_size if st else None,
+                                hidden=entry.name.startswith("."),
+                            ))
                             obj_id = self._record_detected_observation(
                                 cur,
                                 case_id,
@@ -584,10 +616,34 @@ class EvidenceAuthorityService(_BasePortalDbService):
                             continue
                         known = sealed.get(rel)
                         if known is None:
+                            observed_facts.append(MountedEvidence(
+                                observation_id=observation_id,evidence_object_id=None,
+                                entry_kind=EntryKind.REGULAR,
+                                identity=FileIdentity(st.st_dev,st.st_ino,st.st_size,
+                                    st.st_mtime_ns,st.st_ctime_ns,st.st_nlink),
+                                hidden=entry.name.startswith("."),
+                            ))
                             self._record_detected_observation(
                                 cur, case_id, rel, entry.name, st.st_size, correlation_id
                             )
                             continue
+                        immutable: bool | None = None
+                        try:
+                            from sift_core.evidence_chain import get_immutable_flag_fd
+                            flags_fd = os.open(entry.path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+                            try:
+                                immutable = get_immutable_flag_fd(flags_fd)
+                            finally:
+                                os.close(flags_fd)
+                        except OSError:
+                            immutable = None
+                        observed_facts.append(MountedEvidence(
+                            observation_id=observation_id,evidence_object_id=known["id"],
+                            entry_kind=EntryKind.REGULAR,
+                            identity=FileIdentity(st.st_dev,st.st_ino,st.st_size,
+                                st.st_mtime_ns,st.st_ctime_ns,st.st_nlink),
+                            immutable=immutable,
+                        ))
                         sealed_at = known["sealed_at"]
                         sealed_ns = (
                             int(sealed_at.timestamp() * 1_000_000_000)
@@ -618,6 +674,41 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                 correlation_id,
                             )
                             unsafe.append("sealed_evidence_missing")
+                expected_facts: list[AuthorityEvidence] = []
+                for known in sealed.values():
+                    posture = known["metadata"].get("posture", {})
+                    identity = None
+                    if all(posture.get(key) is not None for key in (
+                        "st_dev","st_ino","st_mtime_ns","st_ctime_ns","st_nlink"
+                    )) and known["bytes"] is not None:
+                        identity = FileIdentity(
+                            int(posture["st_dev"]),int(posture["st_ino"]),int(known["bytes"]),
+                            int(posture["st_mtime_ns"]),int(posture["st_ctime_ns"]),
+                            int(posture["st_nlink"]),
+                        )
+                    sha = str(known["sha256"] or "").removeprefix("sha256:")
+                    if len(sha) == 64 and known["bytes"] is not None:
+                        expected_facts.append(AuthorityEvidence(
+                            evidence_object_id=known["id"],sha256=sha,
+                            byte_count=int(known["bytes"]),
+                            storage_profile=StorageProfile.LOCAL_IMMUTABLE,identity=identity,
+                        ))
+                classification = classify_inventory(InventorySnapshot(
+                    availability=(StorageAvailability.AVAILABLE if storage_available
+                                  else StorageAvailability.UNAVAILABLE),
+                    expected=tuple(expected_facts),observed=tuple(observed_facts),
+                ))
+                findings = [{
+                    "code": finding.code.value,"gate_state": finding.gate_state.value,
+                    "recovery": finding.recovery.value,
+                    "evidence_object_id": finding.evidence_object_id,
+                    "observation_id": finding.observation_id,
+                    "full_verification_required": finding.full_verification_required,
+                } for finding in classification.findings]
+                cur.execute(
+                    "select app.evidence_record_inventory_classification(%s,%s,%s,%s)",
+                    (case_id,correlation_id,classification.gate_state.value,_jsonb(findings)),
+                )
             conn.commit()
         return {
             "state": "available" if storage_available else "unavailable",
@@ -659,7 +750,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
         )
 
     def gate_status(self, case_id: str) -> dict[str, Any]:
-        self._scan_evidence(case_id)
+        self.reconcile_for_admission(case_id)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1126,7 +1217,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
             with conn.cursor() as cur:
                 cur.execute(
                     """select id::text,display_path,status,current_version_id::text,
-                              current_sha256,current_bytes
+                              current_sha256,current_bytes,seal_status
                        from app.evidence_objects
                        where id=%s and case_id=%s""",
                     (evidence_object_id, case_id),
@@ -1141,7 +1232,110 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "current_version_id": str(row[3]) if row[3] else None,
             "current_sha256": str(row[4]) if row[4] else None,
             "current_bytes": int(row[5]) if row[5] is not None else None,
+            "seal_status": str(row[6]),
         }
+
+    def _execute_disposition(
+        self,
+        *,
+        case_id: str,
+        display_path: str,
+        action: CustodyAction,
+        reason: str,
+        idempotency_key: str,
+        reauth_audit_event_id: str,
+        actor: Any,
+        examiner: str,
+    ) -> dict[str, Any]:
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        if actor_type != "user" or not actor_user or actor_service:
+            raise PortalServiceError("disposition_actor_required", http_status=403)
+        path = _relative_display_path(display_path)
+        evidence_object_id = self._evidence_id_for_path(case_id, path)
+        if not evidence_object_id:
+            self._scan_evidence(case_id)
+            evidence_object_id = self._evidence_id_for_path(case_id, path)
+        if not evidence_object_id:
+            raise PortalServiceError("evidence_object_not_found", http_status=404)
+        command = ObjectCustodyCommand(
+            action=action,
+            case_id=case_id,
+            evidence_object_id=evidence_object_id,
+            actor_user_id=actor_user,
+            actor_service_identity_id=None,
+            reason=reason,
+            reauth_audit_event_id=reauth_audit_event_id,
+            idempotency_key=idempotency_key,
+        )
+        try:
+            return DispositionCustodyOperation(
+                self._custody_repository,
+                self._case_artifact_path,
+                self._recovery_object_for_id,
+            ).execute(command, examiner=examiner)
+        except CustodyOperationError as exc:
+            raise PortalServiceError(exc.reason, http_status=exc.http_status) from exc
+
+    def disposition_operation_action(self, *, case_id: str, operation_id: str) -> str:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select action from app.custody_operations
+                       where id=%s and case_id=%s
+                         and action in ('IGNORE','DELETE_STRAY','RETIRE')""",
+                    (operation_id, case_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise PortalServiceError("custody_operation_not_found", http_status=404)
+        return str(row[0])
+
+    def resume_disposition(
+        self,
+        *,
+        case_id: str,
+        operation_id: str,
+        actor: Any,
+        examiner: str,
+        resume_reauth_audit_event_id: str,
+    ) -> dict[str, Any]:
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        if actor_type != "user" or not actor_user or actor_service:
+            raise PortalServiceError("disposition_actor_required", http_status=403)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select command,reason,idempotency_key,reauth_audit_event_id::text,
+                              actor_user_id::text,actor_service_identity_id::text,action
+                       from app.custody_operations
+                       where id=%s and case_id=%s
+                         and action in ('IGNORE','DELETE_STRAY','RETIRE')
+                         and phase=any(%s)""",
+                    (operation_id, case_id, [phase.value for phase in RESUMABLE_SEAL_PHASES]),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise PortalServiceError("custody_operation_not_resumable", http_status=404)
+        if str(row[4] or "") != actor_user or row[5] is not None:
+            raise PortalServiceError("disposition_actor_required", http_status=403)
+        stored = row[0] if isinstance(row[0], dict) else {}
+        evidence_object_id = str(stored.get("evidence_object_id") or "")
+        try:
+            action = CustodyAction(str(row[6]))
+            command = ObjectCustodyCommand(
+                action=action,case_id=case_id,evidence_object_id=evidence_object_id,
+                actor_user_id=actor_user,actor_service_identity_id=None,
+                reason=str(row[1] or ""),reauth_audit_event_id=str(row[3] or ""),
+                idempotency_key=str(row[2] or ""),
+                resume_reauth_audit_event_id=resume_reauth_audit_event_id,
+            )
+            return DispositionCustodyOperation(
+                self._custody_repository,self._case_artifact_path,self._recovery_object_for_id,
+            ).execute(command, examiner=examiner)
+        except (CustodyOperationError, ValueError) as exc:
+            reason = exc.reason if isinstance(exc, CustodyOperationError) else "custody_operation_command_invalid"
+            status = exc.http_status if isinstance(exc, CustodyOperationError) else 409
+            raise PortalServiceError(reason, http_status=status) from exc
 
     def recovery_object_id(self, *, case_id: str, display_path: str) -> str:
         """Resolve a Portal display path to the server-authoritative object ID."""
@@ -1262,22 +1456,13 @@ class EvidenceAuthorityService(_BasePortalDbService):
         reauth_audit_event_id: str,
         actor: Any,
         examiner: str,
+        idempotency_key: str = "",
     ) -> dict[str, Any]:
-        del examiner
-        self._scan_evidence(case_id)
-        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
-        del actor_type
-        path = _relative_display_path(display_path)
-        evidence_id = self._ensure_detected(case_id, path, actor_user, actor_service)
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "select id::text, display_path, status from app.evidence_ignore(%s, %s, %s, %s, %s)",
-                    (evidence_id, reason, reauth_audit_event_id, actor_user, actor_service),
-                )
-                row = cur.fetchone()
-            conn.commit()
-        return {"evidence_id": row[0], "display_path": row[1], "status": row[2]} if row else {}
+        return self._execute_disposition(
+            case_id=case_id,display_path=display_path,action=CustodyAction.IGNORE,
+            reason=reason,idempotency_key=idempotency_key or f"ignore:{reauth_audit_event_id}",
+            reauth_audit_event_id=reauth_audit_event_id,actor=actor,examiner=examiner,
+        )
 
     def retire(
         self,
@@ -1288,23 +1473,13 @@ class EvidenceAuthorityService(_BasePortalDbService):
         reauth_audit_event_id: str,
         actor: Any,
         examiner: str,
+        idempotency_key: str = "",
     ) -> dict[str, Any]:
-        del examiner
-        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
-        del actor_type
-        path = _relative_display_path(display_path)
-        evidence_id = self._evidence_id_for_path(case_id, path)
-        if not evidence_id:
-            raise PortalServiceError("evidence_object_not_found", http_status=404)
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "select id::text, display_path, status from app.evidence_retire(%s, %s, %s, %s, %s)",
-                    (evidence_id, reason, reauth_audit_event_id, actor_user, actor_service),
-                )
-                row = cur.fetchone()
-            conn.commit()
-        return {"evidence_id": row[0], "display_path": row[1], "status": row[2]} if row else {}
+        return self._execute_disposition(
+            case_id=case_id,display_path=display_path,action=CustodyAction.RETIRE,
+            reason=reason,idempotency_key=idempotency_key or f"retire:{reauth_audit_event_id}",
+            reauth_audit_event_id=reauth_audit_event_id,actor=actor,examiner=examiner,
+        )
 
     def delete_object(
         self,
@@ -1315,6 +1490,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
         reauth_audit_event_id: str,
         actor: Any,
         examiner: str,
+        idempotency_key: str = "",
     ) -> dict[str, Any]:
         """Operator-delete a non-sealed stray file: physically unlink the bytes
         and record an auditable disposition.
@@ -1329,70 +1505,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
         Forensic record: the file's sha256 + size are captured before unlink and
         embedded in the append-only custody event via ``evidence_ignore``.
         """
-        del examiner
-        self._scan_evidence(case_id)
-        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
-        del actor_type
-        path = _relative_display_path(display_path)
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "select id::text, status, seal_status "
-                    "from app.evidence_objects where case_id = %s and display_path = %s",
-                    (case_id, path),
-                )
-                row = cur.fetchone()
-        if not row:
-            raise PortalServiceError("evidence_object_not_found", http_status=404)
-        evidence_id, status, seal_status = str(row[0]), row[1], row[2]
-        if status not in ("detected", "registered", "ignored") or seal_status != "unsealed":
-            # Sealed/violated evidence is custody-protected and must not be deleted.
-            raise PortalServiceError("cannot_delete_sealed_evidence", http_status=409)
-
-        # Capture a forensic record of the bytes, then remove them. The file may
-        # already be absent (e.g. a transient copy temp that was renamed away), in
-        # which case we still record the disposition.
-        file_removed = False
-        sha: str | None = None
-        size: int | None = None
-        try:
-            abspath: Path | None = self._resolve_evidence_path(case_id, path)
-        except PortalServiceError:
-            abspath = None
-        if abspath is not None:
-            try:
-                sha, size = _hash_file(abspath)
-            except OSError:
-                sha, size = None, None
-            try:
-                abspath.unlink()
-                file_removed = True
-            except OSError as exc:
-                raise PortalServiceError(
-                    "evidence_file_delete_failed", http_status=500
-                ) from exc
-
-        full_reason = (
-            f"operator_deleted_stray_file: {reason.strip()}"
-            f" | removed={file_removed} sha256={sha} bytes={size}"
+        return self._execute_disposition(
+            case_id=case_id,display_path=display_path,action=CustodyAction.DELETE_STRAY,
+            reason=reason,idempotency_key=idempotency_key or f"delete:{reauth_audit_event_id}",
+            reauth_audit_event_id=reauth_audit_event_id,actor=actor,examiner=examiner,
         )
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "select id::text, display_path, status "
-                    "from app.evidence_ignore(%s, %s, %s, %s, %s)",
-                    (evidence_id, full_reason, reauth_audit_event_id, actor_user, actor_service),
-                )
-                disp = cur.fetchone()
-            conn.commit()
-        return {
-            "evidence_id": disp[0] if disp else evidence_id,
-            "display_path": path,
-            "status": disp[2] if disp else "ignored",
-            "file_removed": file_removed,
-            "sha256": sha,
-            "bytes": size,
-        }
 
     def _scan_evidence(self, case_id: str) -> None:
         """Reconcile the mounted evidence tree against DB custody authority.

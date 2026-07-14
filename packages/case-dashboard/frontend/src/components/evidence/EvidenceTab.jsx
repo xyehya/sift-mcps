@@ -66,7 +66,11 @@ export function EvidenceTab() {
     setModalReason('')
     setModalError('')
     setModalResult(null)
-    setSealIntentId(['seal', 'replace', 'restore'].includes(name) ? crypto.randomUUID() : null)
+    setSealIntentId(
+      ['seal', 'replace', 'restore', 'ignore', 'delete', 'retire'].includes(name)
+        ? crypto.randomUUID()
+        : null,
+    )
   }
 
   function closeModal() {
@@ -127,7 +131,11 @@ export function EvidenceTab() {
         <EvidenceHeader chainStatus={chainStatus} onRescan={custody.handleRescan} />
 
         <IncompleteCustodyOperation operation={chainStatus?.incomplete_operation} onResume={(operation) => openModal(
-          operation.action === 'ADD_SEAL' ? 'resume_seal' : 'complete_recovery',
+          operation.action === 'ADD_SEAL'
+            ? 'resume_seal'
+            : ['IGNORE', 'DELETE_STRAY', 'RETIRE'].includes(operation.action)
+              ? 'resume_disposition'
+              : 'complete_recovery',
           operation.operation_id,
         )} />
 
@@ -201,6 +209,7 @@ export function EvidenceTab() {
           onReplaceBegin: custody.handleReplaceBegin,
           onRestoreBegin: custody.handleRestoreBegin,
           onRecoveryComplete: custody.handleRecoveryComplete,
+          onDispositionResume: custody.handleDispositionResume,
         }}
       />
     </div>
