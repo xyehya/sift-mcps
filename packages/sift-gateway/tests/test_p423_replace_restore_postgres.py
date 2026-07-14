@@ -47,13 +47,14 @@ def _setup(conn, action: str):
     return case_id, actor_id, object_id, version_id, audit_id, key, reason, command, old_sha
 
 
-def _begin(cur, setup, action: str):
+def _begin(cur, setup, action: str, *, runner_instance_id: str = "recovery-runner"):
     from psycopg.types.json import Jsonb
 
     case_id, actor_id, _object_id, _version_id, audit_id, key, reason, command, _sha = setup
     cur.execute("""select id::text from app.custody_operation_begin_or_resume(
-                   %s,%s,%s,%s,%s,%s,%s,%s,null,'recovery-runner',null)""",
-                (case_id, action, Jsonb(command), "sha256:" + "c" * 64, reason, audit_id, key, actor_id))
+                   %s,%s,%s,%s,%s,%s,%s,%s,null,%s,null)""",
+                (case_id, action, Jsonb(command), "sha256:" + "c" * 64, reason,
+                 audit_id, key, actor_id, runner_instance_id))
     return cur.fetchone()[0]
 
 
@@ -151,7 +152,12 @@ def test_fresh_receipt_recovers_interrupted_completion_exactly_once(failed_from)
         prepared, item = _recovery_facts(setup, "sha256:" + "d" * 64)
         receipt_one, receipt_two, wrong_receipt = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
         with conn.cursor() as cur:
-            operation_id = _begin(cur, setup, "REPLACE_REACQUIRE")
+            operation_id = _begin(
+                cur,
+                setup,
+                "REPLACE_REACQUIRE",
+                runner_instance_id="runner-before-restart",
+            )
             cur.execute(
                 "select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'runner-before-restart')",
                 (operation_id, Jsonb(prepared)),

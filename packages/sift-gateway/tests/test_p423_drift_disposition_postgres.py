@@ -173,6 +173,16 @@ def test_inventory_classification_rls_validation_and_exact_replay():
                     (case_id, "mismatch-" + uuid.uuid4().hex, Jsonb([finding])),
                 )
             cur.execute("rollback to savepoint gate_mismatch")
+            # Prove conflicting replay while the original pending classification is
+            # still the authoritative gate cause. A persisted violation added below
+            # must fail closed before correlation replay is considered.
+            cur.execute("savepoint replay")
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                cur.execute(
+                    "select app.evidence_record_inventory_classification(%s,%s,'BLOCKED_PENDING',%s)",
+                    (case_id, correlation, Jsonb([{**finding, "observation_id": "other"}])),
+                )
+            cur.execute("rollback to savepoint replay")
             violated_id = uuid.uuid4()
             cur.execute(
                 """insert into app.evidence_objects
@@ -207,13 +217,6 @@ def test_inventory_classification_rls_validation_and_exact_replay():
             persisted_gate, persisted_findings = cur.fetchone()
             assert persisted_gate == "BLOCKED_VIOLATION"
             assert persisted_findings == [persisted_finding]
-            cur.execute("savepoint replay")
-            with pytest.raises(psycopg.errors.UniqueViolation):
-                cur.execute(
-                    "select app.evidence_record_inventory_classification(%s,%s,'BLOCKED_PENDING',%s)",
-                    (case_id, correlation, Jsonb([{**finding, "observation_id": "other"}])),
-                )
-            cur.execute("rollback to savepoint replay")
         conn.rollback()
 
 

@@ -417,33 +417,25 @@ def test_storage_profile_transition_exact_retry_is_durable_and_conflicts_reject(
             )
             assert cur.fetchone()[0] == 1
         conflicting = dict(binding, reason="different transition")
-        conflicting_receipt = _audit(
-            conn,
-            case_id=case_id,
-            actor_id=actor_id,
-            event_type="reauth.evidence_storage_profile_change",
-            binding=conflicting,
-        )
+        # The append-only re-auth ledger binds one intent per scoped
+        # idempotency key, so a conflicting ceremony is rejected before the
+        # transition function can observe it.
         with pytest.raises(psycopg.errors.UniqueViolation):
             with conn.transaction():
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "select app.evidence_storage_change_profile(%s,%s,%s,%s,%s,%s)",
-                        (
-                            case_id,
-                            conflicting["profile"],
-                            conflicting["reason"],
-                            key,
-                            conflicting_receipt,
-                            actor_id,
-                        ),
-                    )
+                _audit(
+                    conn,
+                    case_id=case_id,
+                    actor_id=actor_id,
+                    event_type="reauth.evidence_storage_profile_change",
+                    binding=conflicting,
+                )
+        mismatched_binding = dict(binding, idempotency_key=key + "-different")
         fresh_receipt = _audit(
             conn,
             case_id=case_id,
             actor_id=actor_id,
             event_type="reauth.evidence_storage_profile_change",
-            binding=binding,
+            binding=mismatched_binding,
         )
         with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
             with conn.transaction():
@@ -459,6 +451,24 @@ def test_storage_profile_transition_exact_retry_is_durable_and_conflicts_reject(
                             actor_id,
                         ),
                     )
+        with conn.cursor() as cur:
+            cur.execute(
+                "select generation from app.evidence_storage_authorities where case_id=%s",
+                (case_id,),
+            )
+            assert cur.fetchone()[0] == first["generation"]
+            cur.execute(
+                """select count(*) from app.evidence_storage_profile_transitions
+                   where case_id=%s and idempotency_key=%s""",
+                (case_id, key),
+            )
+            assert cur.fetchone()[0] == 1
+            cur.execute(
+                """select count(*) from app.evidence_custody_events
+                   where case_id=%s and event_type='STORAGE_PROFILE_CHANGED'""",
+                (case_id,),
+            )
+            assert cur.fetchone()[0] == 1
 
 
 def test_passwordless_full_verify_still_requires_operator_actor():
