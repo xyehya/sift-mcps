@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import os
+import pwd
+import runpy
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -408,6 +412,180 @@ def test_delete_post_unlink_resume_preserves_facts_and_commits_one_event():
                 (operation_id,),
             )
             assert cur.fetchone() == (1, "DELETE_STRAY")
+        conn.rollback()
+
+
+def test_delete_broker_completed_receipt_is_idempotent_across_new_runner(
+    tmp_path: Path,
+):
+    """A lost response/advance reuses exact completion without rewriting it."""
+    from psycopg.types.json import Jsonb
+
+    psycopg = pytest.importorskip("psycopg")
+    helper_path = (
+        Path(__file__).resolve().parents[3]
+        / "scripts"
+        / "sift-custody-delete-broker"
+    )
+    broker = runpy.run_path(str(helper_path))
+    delete_verified = broker["delete_verified"]
+    delete_verified.__globals__["_immutable"] = lambda _fd: False
+
+    with psycopg.connect(_dsn()) as conn:
+        case_id, actor_id = _case_and_actor(conn)
+        object_id, sibling_id, sibling_version = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        operation_id, *_ = _begin(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            action="DELETE_STRAY",
+            status="detected",
+            seal_status="unsealed",
+        )
+        with conn.cursor() as cur:
+            cur.execute("select case_key from app.cases where id=%s", (case_id,))
+            case_key = cur.fetchone()[0]
+            case_dir = tmp_path / case_key
+            evidence_dir = case_dir / "evidence"
+            evidence_dir.mkdir(parents=True)
+            target = evidence_dir / f"{object_id}.bin"
+            sibling = evidence_dir / f"{sibling_id}.bin"
+            target.write_bytes(b"broker pending bytes")
+            sibling.write_bytes(b"sealed sibling bytes")
+            cur.execute(
+                "update app.cases set legacy_case_dir=%s where id=%s",
+                (str(case_dir), case_id),
+            )
+            cur.execute(
+                """insert into app.evidence_objects
+                   (id,case_id,display_name,display_path,status,seal_status)
+                   values(%s,%s,'sibling.bin',%s,'sealed','sealed')""",
+                (
+                    sibling_id,
+                    case_id,
+                    f"evidence/{sibling_id}.bin",
+                ),
+            )
+            cur.execute(
+                """insert into app.evidence_versions
+                   (id,evidence_object_id,case_id,manifest_version,sha256,bytes,entry_status)
+                   values(%s,%s,%s,1,%s,%s,'ACTIVE')""",
+                (
+                    sibling_version,
+                    sibling_id,
+                    case_id,
+                    "sha256:" + hashlib.sha256(b"sealed sibling bytes").hexdigest(),
+                    len(b"sealed sibling bytes"),
+                ),
+            )
+            cur.execute(
+                """update app.evidence_objects set current_version_id=%s,
+                     current_sha256=%s,current_bytes=%s where id=%s""",
+                (
+                    sibling_version,
+                    "sha256:" + hashlib.sha256(b"sealed sibling bytes").hexdigest(),
+                    len(b"sealed sibling bytes"),
+                    sibling_id,
+                ),
+            )
+            info = target.stat()
+            item = {
+                "evidence_object_id": str(object_id),
+                "display_path": f"evidence/{object_id}.bin",
+                "prior_status": "detected",
+                "prior_seal_status": "unsealed",
+                "present": True,
+                "sha256": "sha256:" + hashlib.sha256(b"broker pending bytes").hexdigest(),
+                "bytes": len(b"broker pending bytes"),
+                "st_dev": info.st_dev,
+                "st_ino": info.st_ino,
+                "st_nlink": info.st_nlink,
+            }
+            cur.execute(
+                "select app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'runner-before')",
+                (operation_id, Jsonb({"item": item})),
+            )
+        conn.commit()
+
+        operation = broker["resolve_operation"](
+            _dsn(), str(operation_id), "runner-before", tmp_path
+        )
+        delete_verified(operation, tmp_path, pwd.getpwuid(os.geteuid()), _dsn())
+        assert not target.exists()
+
+        # Simulate loss after the broker committed its receipt but before the
+        # Gateway advanced FILESYSTEM_APPLYING. A fresh runner is authorized.
+        with conn.cursor() as cur:
+            cur.execute(
+                "select app.custody_operation_fail(%s,'FILESYSTEM_APPLYING','lost_broker_response','runner-before')",
+                (operation_id,),
+            )
+        resume_id = _reauth(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            event_type="reauth.evidence_delete_resume",
+            binding={"operation_id": str(operation_id)},
+        )
+        with conn.cursor() as cur:
+            cur.execute(
+                "select phase from app.custody_operation_resume_disposition(%s,%s,%s,'runner-after')",
+                (operation_id, actor_id, resume_id),
+            )
+            assert cur.fetchone()[0] == "FILESYSTEM_APPLYING"
+        conn.commit()
+
+        resumed = broker["resolve_operation"](
+            _dsn(), str(operation_id), "runner-after", tmp_path
+        )
+        assert resumed["receipt_claimed"] is True
+        assert resumed["receipt_completed"] is True
+        delete_verified(resumed, tmp_path, pwd.getpwuid(os.geteuid()), _dsn())
+
+        verified = {**item, "file_removed": True}
+        with conn.cursor() as cur:
+            cur.execute(
+                "select app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-after')",
+                (operation_id, Jsonb({"item": verified})),
+            )
+            cur.execute(
+                "select phase from app.custody_operation_commit_verified_disposition(%s,%s,'examiner','runner-after')",
+                (operation_id, Jsonb(verified)),
+            )
+            assert cur.fetchone()[0] == "COMPLETED"
+            cur.execute(
+                """select count(*),count(*) filter(where completed_at is not null)
+                     from app.custody_delete_broker_receipts where operation_id=%s""",
+                (operation_id,),
+            )
+            assert cur.fetchone() == (1, 1)
+            cur.execute(
+                "select count(*) from app.custody_operation_history where operation_id=%s and phase='COMPLETED'",
+                (operation_id,),
+            )
+            assert cur.fetchone()[0] == 1
+            cur.execute(
+                "select count(*) from app.evidence_custody_events where custody_operation_id=%s",
+                (operation_id,),
+            )
+            assert cur.fetchone()[0] == 1
+            cur.execute(
+                "select count(*) from app.evidence_versions where case_id=%s",
+                (case_id,),
+            )
+            assert cur.fetchone()[0] == 1
+            cur.execute(
+                "select count(*) from app.evidence_manifests where case_id=%s",
+                (case_id,),
+            )
+            assert cur.fetchone()[0] == 0
+            cur.execute(
+                "select status,current_version_id from app.evidence_objects where id=%s",
+                (sibling_id,),
+            )
+            assert cur.fetchone() == ("sealed", sibling_version)
+        assert sibling.read_bytes() == b"sealed sibling bytes"
         conn.rollback()
 
 

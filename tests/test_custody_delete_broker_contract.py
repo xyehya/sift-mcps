@@ -110,6 +110,24 @@ def test_missing_file_without_durable_claim_fails_closed(tmp_path: Path) -> None
         module["delete_verified"](operation, tmp_path, account, "unused")
 
 
+def test_missing_file_with_completed_receipt_is_idempotent_success(tmp_path: Path) -> None:
+    module = _module()
+    case_key = "case-1"
+    (tmp_path / case_key / "evidence").mkdir(parents=True)
+    operation = {
+        "case_key": case_key,
+        "name": "already-removed.bin",
+        "receipt_claimed": True,
+        "receipt_completed": True,
+    }
+    delete_verified = module["delete_verified"]
+    delete_verified.__globals__["complete_operation"] = lambda *_args: pytest.fail(
+        "completed receipt must not be updated twice"
+    )
+
+    delete_verified(operation, tmp_path, pwd.getpwuid(os.geteuid()), "unused")
+
+
 def test_present_file_is_revalidated_before_claim_and_unlink(tmp_path: Path) -> None:
     module = _module()
     case_key = "case-1"
@@ -123,6 +141,7 @@ def test_present_file_is_revalidated_before_claim_and_unlink(tmp_path: Path) -> 
         "runner_instance_id": "process:test",
         "prepared_facts_sha256": "sha256:" + "a" * 64,
         "receipt_claimed": False,
+        "receipt_completed": False,
         "receipt_runner_instance_id": None,
         "case_key": case_key,
         "name": target.name,

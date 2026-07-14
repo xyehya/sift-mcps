@@ -320,7 +320,12 @@ def delete_verified(
         except FileNotFoundError:
             if not operation["receipt_claimed"]:
                 _fail("missing_without_broker_claim")
-            complete_operation(dsn, operation)
+            # A lost broker response or lost Gateway phase advance may retry
+            # after the one-way completion was already recorded. That exact
+            # completed receipt is terminal proof; never issue a forbidden
+            # second UPDATE against the immutable receipt row.
+            if not operation["receipt_completed"]:
+                complete_operation(dsn, operation)
             return
         before = os.fstat(target_fd)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
@@ -335,6 +340,8 @@ def delete_verified(
         entry = os.stat(str(operation["name"]), dir_fd=evidence_fd, follow_symlinks=False)
         if (entry.st_dev, entry.st_ino) != (before.st_dev, before.st_ino):
             _fail("directory_entry_changed")
+        if operation["receipt_completed"]:
+            _fail("completed_receipt_target_present")
 
         if os.geteuid() != service.pw_uid or os.getegid() != service.pw_gid:
             _fail("service_identity_required")
