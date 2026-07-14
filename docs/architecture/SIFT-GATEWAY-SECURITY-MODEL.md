@@ -65,7 +65,9 @@ and immutable flags. `EXTERNALLY_READ_ONLY` never grants Gateway or MCP mutation
 pinned descriptors must agree on read-only open mode, VFS flags, and mount/superblock options,
 and Postgres stores only opaque source and global mount-instance identities. A same-source remount
 requires Full Verify, a changed source requires an explicit re-authenticated Portal authorization,
-and writable posture is a blocking custody violation. Final worker open revalidates the exact
+and writable posture is a blocking custody violation. The canonical evidence root must resolve to
+the external mount point itself: mount loss that exposes a writable local underlay is unavailable,
+not read-write drift. Final worker open revalidates the exact
 current version receipt, source, mount instance, identity, link count, and read-only posture.
 For virgin external intake, there is no active sealed set to Full Verify. The Portal-only Add & Seal
 lane is enabled only by an exact v0/source-less/current-generation predicate, targets every DETECTED

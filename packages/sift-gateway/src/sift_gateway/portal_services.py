@@ -803,7 +803,9 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                 | getattr(os, "O_NOFOLLOW", 0),
                             )
                             external_facts = external_storage_facts(
-                                root_fd, require_read_only=False
+                                root_fd,
+                                require_read_only=False,
+                                expected_mount_path=evidence_dir,
                             )
                             cur.execute(
                                 """select (app.evidence_storage_record_observation(
@@ -830,15 +832,24 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         finally:
                             if root_fd is not None:
                                 os.close(root_fd)
-                    try:
-                        entries = sorted(
-                            os.scandir(evidence_dir), key=lambda item: item.name
-                        )
-                    except OSError:
+                    if (
+                        storage_profile is StorageProfile.EXTERNALLY_READ_ONLY
+                        and external_facts is None
+                    ):
+                        # The external root is unavailable or no longer mounted at
+                        # the canonical evidence root. Never inventory the local
+                        # underlay exposed by mount loss as though it were evidence.
                         entries = []
-                        scan_complete = False
-                        storage_available = False
-                        unsafe.append("evidence_inventory_unavailable")
+                    else:
+                        try:
+                            entries = sorted(
+                                os.scandir(evidence_dir), key=lambda item: item.name
+                            )
+                        except OSError:
+                            entries = []
+                            scan_complete = False
+                            storage_available = False
+                            unsafe.append("evidence_inventory_unavailable")
                     for entry in entries:
                         rel = f"evidence/{entry.name}"
                         observation_id = hashlib.sha256(

@@ -222,10 +222,20 @@ def external_storage_facts(
     descriptor_flags: int | None = None,
     unique_mount_id: int | None = None,
     require_read_only: bool = True,
+    expected_mount_path: str | os.PathLike[str] | None = None,
     supported_filesystems: Iterable[str] = _SUPPORTED_EXTERNAL_FILESYSTEMS,
 ) -> ExternalStorageFacts:
     """Establish external identity and read-only posture from one pinned fd."""
     mount = mount_for_fd(fd, fdinfo_text=fdinfo_text, mountinfo_text=mountinfo_text)
+    if expected_mount_path is not None:
+        expected = os.path.abspath(
+            os.path.normpath(os.fspath(expected_mount_path))
+        )
+        observed = os.path.abspath(os.path.normpath(mount.mount_point))
+        if observed != expected:
+            raise StorageAuthorityError(
+                "external evidence root is not the mounted source"
+            )
     if mount.filesystem_type not in frozenset(supported_filesystems):
         raise StorageAuthorityError("external filesystem semantics are unsupported")
     try:

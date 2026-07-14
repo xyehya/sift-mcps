@@ -1256,6 +1256,125 @@ def test_unavailable_storage_is_not_recorded_as_a_violation(tmp_path, monkeypatc
     )
 
 
+def test_external_mount_loss_never_scans_same_named_writable_underlay(
+    tmp_path, monkeypatch
+):
+    from sift_core.evidence_storage import StorageAuthorityError
+
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    # This is the local directory exposed after the external mount disappears.
+    # A stale same-named file must not be treated as the sealed mounted object.
+    (evidence / "sealed.raw").write_bytes(b"writable underlay")
+
+    class ExternalObservationCursor(_SealedObservationCursor):
+        def execute(self, sql, params):
+            normalized = " ".join(sql.split())
+            super().execute(sql, params)
+            if (
+                "from app.evidence_storage_authorities where case_id=%s"
+                in normalized
+            ):
+                self._one = (
+                    "EXTERNALLY_READ_ONLY",
+                    "a" * 64,
+                    "b" * 64,
+                    "AVAILABLE",
+                    2,
+                    2,
+                    True,
+                    None,
+                    "NONE",
+                )
+
+    cursor = ExternalObservationCursor(
+        [
+            (
+                "sealed-object",
+                "evidence/sealed.raw",
+                "sha256:" + "c" * 64,
+                1,
+                datetime.now(timezone.utc),
+                {},
+                "sealed",
+                "sealed-version",
+            )
+        ]
+    )
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
+    monkeypatch.setattr(
+        service,
+        "storage_execution_authority",
+        lambda _case_id: pytest.fail("mount loss cannot issue execution authority"),
+    )
+    monkeypatch.setattr(
+        service,
+        "_record_detected_observation",
+        lambda *_args, **_kwargs: pytest.fail(
+            "writable underlay cannot create DETECTED observations"
+        ),
+    )
+
+    def missing_exact_mount(
+        _fd, *, require_read_only=True, expected_mount_path=None
+    ):
+        assert require_read_only is False
+        assert expected_mount_path == evidence
+        raise StorageAuthorityError("external evidence root is not the mounted source")
+
+    monkeypatch.setattr(
+        "sift_gateway.portal_services.external_storage_facts",
+        missing_exact_mount,
+    )
+    monkeypatch.setattr(
+        os,
+        "scandir",
+        lambda _path: pytest.fail("writable underlay must not be enumerated"),
+    )
+
+    result = service.reconcile_for_admission(
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert result["state"] == "unavailable"
+    assert result["gate_state"] == "BLOCKED_UNAVAILABLE"
+    assert result["observed"] == 0
+    assert result["execution_authority"] is None
+    classification_call = next(
+        call
+        for call in cursor.calls
+        if "evidence_record_inventory_classification" in call[0]
+    )
+    findings = getattr(
+        classification_call[1][3], "obj", classification_call[1][3]
+    )
+    assert findings == [
+        {
+            "code": "STORAGE_UNAVAILABLE",
+            "gate_state": "BLOCKED_UNAVAILABLE",
+            "recovery": "RECONNECT_AND_VERIFY",
+            "evidence_object_id": None,
+            "observation_id": None,
+            "full_verification_required": False,
+        }
+    ]
+    assert any(
+        "evidence_storage_record_observation" in sql and "false" in sql
+        for sql, _params in cursor.calls
+    )
+    assert not any(
+        marker in sql
+        for sql, _params in cursor.calls
+        for marker in (
+            "evidence_observe_admission",
+            "evidence_mark_admission_violation",
+        )
+    )
+
+
 def test_midscan_entry_race_discards_all_object_conclusions(tmp_path, monkeypatch):
     case_dir = tmp_path / "case"
     evidence = case_dir / "evidence"

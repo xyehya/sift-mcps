@@ -95,6 +95,8 @@ Evidence Version. These seams add no MCP tool or authenticated-browser database 
 12. **Bind external read-only storage by source, mount instance, and exact receipt.**
 `EXTERNALLY_READ_ONLY` is operator-authorized and never MCP-mutated. Gateway reads use pinned
 no-follow descriptors with read-only agreement at descriptor, VFS, and mount/superblock layers.
+The canonical evidence root must be the mount point itself; if mount loss exposes its writable
+local underlay, reconciliation reports storage unavailable rather than read-write drift.
 Stable source identity is distinct from Linux `STATX_MNT_ID_UNIQUE` mount-instance identity: a
 same-source remount requires Full Verify, while a changed source requires fresh reasoned,
 idempotent Portal authorization. Successful and failed verification receipts are append-only and

@@ -106,6 +106,33 @@ def test_external_read_only_requires_mountinfo_and_statvfs_agreement() -> None:
         )
 
 
+def test_external_root_must_be_the_exact_mount_point() -> None:
+    facts = external_storage_facts(
+        7,
+        fdinfo_text="mnt_id:\t36\n",
+        mountinfo_text=MOUNTINFO,
+        statvfs_flags=0,
+        descriptor_flags=os.O_RDONLY,
+        unique_mount_id=9001,
+        require_read_only=False,
+        expected_mount_path="/mnt/evidence/",
+    )
+    assert facts.read_only is False
+
+    writable_underlay = "25 1 8:1 / / rw - ext4 /dev/vda1 rw\n"
+    with pytest.raises(StorageAuthorityError, match="not the mounted source"):
+        external_storage_facts(
+            7,
+            fdinfo_text="mnt_id:\t25\n",
+            mountinfo_text=writable_underlay,
+            statvfs_flags=0,
+            descriptor_flags=os.O_RDONLY,
+            unique_mount_id=9002,
+            require_read_only=False,
+            expected_mount_path="/cases/case-one/evidence",
+        )
+
+
 def test_unsupported_external_filesystem_fails_closed() -> None:
     overlay = "36 25 0:32 / /mnt/evidence ro - overlay overlay ro\n"
     with pytest.raises(StorageAuthorityError, match="unsupported"):

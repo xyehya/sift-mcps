@@ -68,7 +68,7 @@ def test_unavailable_storage_is_not_misclassified_as_missing_evidence() -> None:
     assert result.gate_state is CustodyGateState.BLOCKED_UNAVAILABLE
     assert [finding.code for finding in result.findings] == ["STORAGE_UNAVAILABLE"]
     assert result.findings[0].evidence_object_id is None
-    assert result.findings[0].recovery is RecoveryRequirement.INVESTIGATE_AVAILABILITY
+    assert result.findings[0].recovery is RecoveryRequirement.RECONNECT_AND_VERIFY
 
 
 def test_scan_failure_is_unavailable_not_a_tamper_accusation() -> None:
