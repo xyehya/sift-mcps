@@ -31,10 +31,8 @@ If this is your first login after installation, you have a temporary password fr
      (symlink-traversal guarded — `R5` check).
    - `CASE.yaml` is written with the case metadata.
    - An `app.cases` row is inserted in Postgres (the DB authority).
-   - An empty evidence chain is initialised:
-     `evidence_chain.py:104` (`init_evidence_chain`) — writes
-     `evidence-manifest.json` (version 0, empty files list) and
-     `evidence-ledger.jsonl` (empty), then sets `chmod 0o444` on the ledger.
+   - Postgres initialises the case's version-0 evidence-chain head. Any local
+     manifest or ledger material is export/compatibility output, never authority.
 
 ## 3. Activate the Case
 
@@ -58,7 +56,10 @@ Before the agent can investigate, evidence must be registered and sealed.
 Until sealed, the `EvidenceGate` middleware blocks **all** MCP tool calls
 for the case.
 
-1. Place evidence files under `<case_dir>/evidence/` on the Gateway host.
+1. Make evidence available at `<case_dir>/evidence/`. In the Portal, authorize
+   either `LOCAL_IMMUTABLE` or `EXTERNALLY_READ_ONLY` with a reason and fresh
+   re-authentication. External storage must be mounted read-only; SIFT records opaque
+   source and mount-instance identities and never repairs or mutates its metadata.
 2. In the Portal, open the **Evidence** panel.
 3. View the chain status.
    → `GET /portal/api/evidence/chain/status` (`routes.py:1010`,
@@ -80,31 +81,37 @@ for the case.
 
 ## 5. Seal the Evidence Chain
 
-Sealing commits the evidence to the hash chain and makes it immutable on
-disk.
+Sealing commits evidence versions and custody events to Postgres and verifies the
+selected storage profile.
 
 1. In the **Evidence** panel, select the files to register and click
    **Seal**.
    → `POST /portal/api/evidence/chain/seal` (`routes.py:1040`,
    `post_evidence_chain_seal`)
 2. You will be prompted to re-enter your password (step-up re-auth).
-3. What happens under the hood (`evidence_chain.py:448`, `seal_manifest`):
-   - Each file is hashed with streaming SHA-256 (`evidence_chain.py:170`,
-     `hash_file`).
+3. What happens under the hood:
+   - Each descriptor-pinned file is hashed with streaming SHA-256.
    - File metadata (path, hash, size, mtime) is recorded.
    - A row is inserted into `app.evidence_objects` (Postgres DB
      authority, `202606081000_evidence_custody.sql:30`).
    - A `MANIFEST_SEALED` event is appended to `app.evidence_custody_events`
      — append-only, hash-linked, no UPDATE/DELETE (trigger-enforced,
      `202606081000_evidence_custody.sql:24`).
-   - The immutable flag (`chattr +i`) is set on each sealed file via
-     in-process ioctl (`evidence_chain.py:817`, `harden_sealed_evidence`).
-     Requires `CAP_LINUX_IMMUTABLE` on the venv interpreter.
+   - `LOCAL_IMMUTABLE` applies and reads back protected local posture.
+     `EXTERNALLY_READ_ONLY` instead verifies descriptor, VFS, and mount/superblock
+     read-only agreement and never changes external bytes or metadata.
    - The manifest version increments by 1. Postgres appends the custody event
      and advances the hash-linked chain from `prev_hash` to `event_hash`.
    - `app.evidence_chain_heads` is updated (gate read model).
 4. After seal: the evidence gate passes → all 42 MCP tools become available
    for the agent.
+
+If external storage disconnects, the gate reports it as unavailable rather than
+tampering. Reconnecting the same authorized source requires **Full Verify Evidence**;
+a different source requires an explicit re-authorized profile transition. Full Verify
+is an authenticated examiner action with no password prompt: it hashes every ACTIVE
+mounted object, verifies storage posture, records an append-only success/failure
+receipt, and only a successful current receipt can reopen MCP admission.
 
 > **DB authority only (C1).** Sealing requires the Postgres custody broker
 > to be wired. Without it the seal returns a 404 "no case" response — there
@@ -244,8 +251,8 @@ Once you have staged all your decisions, commit them to apply.
 > Until evidence is registered and sealed, the `EvidenceGate` middleware
 > blocks ALL MCP tool calls for the case. The agent sees nothing until you
 > seal. The seal is the load-bearing integrity property — files are hashed,
-> custody events are recorded in the append-only DB ledger, and evidence is
-> made immutable on disk.
+> custody events and versions are recorded in the append-only Postgres chain, and the
+> selected local-protected or external-read-only posture is verified before use.
 
 > [!important] **Reports contain ONLY APPROVED items.**
 > DRAFT, REJECTED, and other statuses are excluded. Report generation

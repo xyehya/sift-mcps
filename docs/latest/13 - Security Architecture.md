@@ -91,10 +91,10 @@ status: draft
 │ ⑧ EVIDENCE & REPORTS PLANE                   │
 │  ┌───────────────────┐ ┌───────────────────┐  │
 │  │ Evidence Vault     │ │ Reports / Exports  │  │
-│  │ [chattr +i]       │ │ [APPROVED only]    │  │
-│  │ [SHA-256 hashes]  │ │ [evidence chain    │  │
-│  │ [manifest+ledger] │ │  appendix]         │  │
-│  │ [operator-mount]  │ │                    │  │
+│  │ [closed profile]  │ │ [APPROVED only]    │  │
+│  │ [SHA-256 hashes]  │ │ [custody proof     │  │
+│  │ [DB chain+receipt]│ │  appendix]         │  │
+│  │ [descriptor-pinned]││                    │  │
 │  └───────────────────┘ └───────────────────┘  │
 └──────────────────────────────────────────────┘
 ```
@@ -128,7 +128,7 @@ status: draft
 | 23 | Landlock + seccomp + no_new_privs + rlimits | E/T/D | Kernel | `dfir_exec_launcher.py:531` | Yes | Subprocess containment — Landlock FS+net deny-default, seccomp=KILL, no_new_privs, rlimits 4G/64 tasks |
 | 24 | Environment scrubbing | I/E | Application/OS | `runtime_acl.py:153` | Yes | Credential leakage — allowlist-only env with secret-pattern deny pass |
 | 25 | Authority-file write protection | T/R | Application/Data | `runtime_acl.py:232,244` | Yes | Integrity record overwrite — block writes to audit/anchors/authority paths |
-| 26 | Evidence chain append-only | T/R | Applic/Data/Blockchain | `evidence_chain.py` | Yes | Evidence tampering — SHA-256 hash chain, ledger.jsonl append-only, `chattr +i` on seal |
+| 26 | Evidence custody append-only | T/R | Application/Data | Postgres custody service | Yes | Postgres-only authority: hash-linked immutable events/versions plus profile-specific storage posture and Full Verify receipts |
 | 27 | Tool-boundary path redaction | I | Application | `security.py:1312` | Yes | Path leakage — deep recursive path sanitization through response structures |
 
 ### Control Detail Notes
@@ -168,7 +168,7 @@ The architecture defines 7 trust boundaries (mapped from the C4+STRIDE viewpoint
 | # | Trust Boundary | S | T | R | I | D | E | Key Control(s) |
 |---|---|---|---|---|---|---|---|---|
 | 1 | Client → Gateway | ✓ | ✓ | ✓ | | | ✓ | `AuthMiddleware` + `SiftTokenVerifier` (Supabase JWT), `ToolAuthorization` fail-closed on no identity, `PortalHTTPSGuard` enforces TLS, `SecureHeadersMiddleware` hardens browser surface |
-| 2 | Execution → Evidence Vault | | ✓ | ✓ | ✓ | | | `EvidenceGateMiddleware` + `check_evidence_gate_db` (sealed + chain OK before tool runs), `chattr +i` on sealed evidence, append-only custody chains with SHA-256 hash chain |
+| 2 | Execution → Evidence Vault | | ✓ | ✓ | ✓ | | | `EvidenceGateMiddleware` + Postgres gate; descriptor-pinned final-open validation; `LOCAL_IMMUTABLE` protection or `EXTERNALLY_READ_ONLY` source/mount/read-only enforcement; append-only custody chain and Full Verify receipt |
 | 3 | Worker → OS Sandbox | | | | | ✓ | ✓ | Landlock ABI v4 (FS+net deny-default), seccomp=KILL (30 syscall deny), no_new_privs, AppArmor=ENFORCE, cgroup `MemoryMax=4G`/`TasksMax=64`, `IPAddressDeny=any`, runtime-user fail-closed (`agent_runtime` uid), `systemd-run --scope` |
 | 4 | Gateway → Control Plane | | ✓ | ✓ | | | ✓ | Postgres authoritative + `FORCE RLS` on all app tables, `active_case_authority` (DB-resolved, never env/pointer), append-only audit via `AuditEnvelopeMiddleware`, audit writer has no `BYPASSRLS` |
 | 5 | Gateway/Add-ons → Data Plane | | ✓ | | ✓ | | ✓ | OpenSearch never authoritative (Postgres is the source of truth), per-consumer scoped roles, provenance stamping on all indexed documents, case-scoped mediated search (`case-*` index prefix isolation) |
@@ -302,7 +302,7 @@ Verified against code at commit `eadb92b`. Each invariant includes its enforceme
 |---|---|---|---|
 | 1 | **Postgres authoritative, OpenSearch derived** | Control plane queries always read Postgres; OpenSearch is a rebuildable derived index. OpenSearch never authorizes tool access, case context, or evidence status. | `policy_middleware.py:756` (CaseContext reads Postgres), `evidence_gate.py:62` (DB-authority gate), `OPENSEARCH-INTEGRATION-SPEC.md` |
 | 2 | **Single policy boundary** | Every REST call and every MCP tool call passes through the gateway HTTP middleware stack + 10-stage policy chain. No backend is reachable directly. Per-backend `/mcp` routes are disabled. | `server.py`, `mcp_server.py`, `mcp_endpoint.py:305` (MCPAuthASGIApp) |
-| 3 | **Evidence append-only** | `evidence_chain.py`: SHA-256 hash chain with ledger.jsonl append-only writes; manifest versioning; `chattr +i` on seal; `EvidenceGateMiddleware` blocks tools if chain is unsealed/violated. | `evidence_chain.py`, `evidence_gate.py:62`, `policy_middleware.py:580` |
+| 3 | **Evidence custody append-only** | Postgres is the sole custody authority: immutable versions, hash-linked events, storage generations, and Full Verify receipts. `EvidenceGateMiddleware` blocks on unsealed, unavailable, drifted, or violated state. Local storage uses protected posture; external storage is descriptor-pinned and must be read-only. | custody migrations, `portal_services.py`, `evidence_gate.py`, `policy_middleware.py` |
 | 4 | **Supabase sole credential (SEC-6)** | Supabase JWT is the sole auth authority. No PR02 hash/api_key fallback. Outage fails closed (503). The `mcp:*` superuser scope exists but must be explicitly assigned, never default-granted. | `mcp_endpoint.py:155` (SiftTokenVerifier), `supabase_auth.py` (is_tool_allowed), `SECURITY-MODEL.md` SEC-6 |
 | 5 | **Mutating tools fail-closed on audit failure** | `AuditEnvelopeMiddleware` pre-dispatch DB audit write for mutating tools; if the write fails, the tool call is rejected before execution. | `policy_middleware.py:979` |
 | 6 | **Agent TTL >= 48h (AUT2-B0)** | Agent sessions (supabase JWT) have a minimum 48-hour TTL. Implementation: JWT expiry set to 48h from issuance. | `supabase_auth.py`, `token_gen.py` |

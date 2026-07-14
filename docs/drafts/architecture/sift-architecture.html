@@ -425,9 +425,9 @@
       <text x="624" y="794" class="t-zone" font-size="12" fill="var(--evid)">⑧ EVIDENCE &amp; REPORTS</text>
       <rect x="626" y="804" width="216" height="88" rx="6" fill="var(--surface)" stroke="var(--evid)" stroke-width="1.4"/>
       <text x="734" y="828" text-anchor="middle" font-size="12" class="t-title">Evidence Vault</text>
-      <text x="734" y="846" text-anchor="middle" font-size="9" fill="var(--ink-soft)">immutable raw bytes + sha256</text>
-      <text x="734" y="859" text-anchor="middle" font-size="9" fill="var(--ink-soft)">chattr +i · manifest + ledger</text>
-      <text x="734" y="878" text-anchor="middle" font-size="9" fill="var(--evid)">operator-mounted only</text>
+      <text x="734" y="846" text-anchor="middle" font-size="9" fill="var(--ink-soft)">profile-bound bytes + sha256</text>
+      <text x="734" y="859" text-anchor="middle" font-size="9" fill="var(--ink-soft)">local protected · external read-only · DB custody</text>
+      <text x="734" y="878" text-anchor="middle" font-size="9" fill="var(--evid)">Portal-authorized profile only</text>
       <rect x="854" y="804" width="222" height="88" rx="6" fill="var(--surface)" stroke="var(--evid)" stroke-width="1.4"/>
       <text x="965" y="828" text-anchor="middle" font-size="12" class="t-title">Reports / Exports</text>
       <text x="965" y="846" text-anchor="middle" font-size="9" fill="var(--ink-soft)">HTML / PDF / JSON bundles</text>
@@ -452,7 +452,7 @@
       <line x1="556" y1="848" x2="624" y2="848" stroke="var(--ink)" stroke-width="1.3" marker-end="url(#c2arrow)"/>
     </svg>
   </div>
-  <p class="cap"><span class="lead">Reading it:</span> the gold band is the only thing both clients can reach, and everything below it is reachable <em>only</em> from inside that band. Authority flows one way: <b>Postgres (blue) is the source of truth</b>; OpenSearch (teal) is a derived projection that is rebuilt from artifacts and is never trusted as the system of record. Heavy work doesn't block the agent — the gateway enqueues a durable job, least-privilege workers <b>claim</b> it under a lease, and confined execution writes results back up to Postgres and out to the derived index. Evidence (green) is operator-mounted and immutable; reports only ever contain approved material.</p>
+  <p class="cap"><span class="lead">Reading it:</span> the gold band is the only thing both clients can reach, and everything below it is reachable <em>only</em> from inside that band. Authority flows one way: <b>Postgres (blue) is the source of truth</b>; OpenSearch (teal) is a derived projection that is rebuilt from artifacts and is never trusted as the system of record. Heavy work doesn't block the agent — the gateway enqueues a durable job, least-privilege workers <b>claim</b> it under a lease, and confined execution writes results back up to Postgres and out to the derived index. Evidence (green) uses a Portal-authorized closed profile: protected local posture or descriptor-pinned external read-only posture; reports only ever contain approved material.</p>
 </section>
 <section class="vp wrap" id="vp3">
   <div class="vp-head">
@@ -668,7 +668,7 @@
       <line x1="816" y1="520" x2="1024" y2="520" stroke="var(--evid)" stroke-width="1.8"/>
       <line x1="816" y1="424" x2="816" y2="520" stroke="var(--evid)" stroke-width="1.8" opacity="0.4"/>
       <text x="920" y="462" text-anchor="middle" class="t-title" font-size="12" fill="var(--ink)">Evidence Vault</text>
-      <text x="920" y="480" text-anchor="middle" font-size="9" fill="var(--evid)">immutable · chattr +i</text>
+      <text x="920" y="480" text-anchor="middle" font-size="9" fill="var(--evid)">profile-bound · descriptor-pinned</text>
       <text x="920" y="494" text-anchor="middle" font-size="9" fill="var(--evid)">append-only custody chain</text>
 
       <!-- boundary tags -->
@@ -691,7 +691,7 @@
     </thead>
     <tbody>
       <tr><td>1</td><td>Client → Gateway <span class="sub">single policy boundary; per-backend /mcp routes disabled</span></td><td><span class="s s-s">S</span><span class="s s-t">T</span><span class="s s-r">R</span><span class="s s-e">E</span></td><td><code>AuthMiddleware</code> + <code>SiftTokenVerifier</code> (Supabase JWT); <code>ToolAuthorization</code> fail-closed on no identity / out-of-scope</td></tr>
-      <tr><td>2</td><td>Execution / Core → Evidence Vault <span class="sub">immutability boundary</span></td><td><span class="s s-t">T</span><span class="s s-r">R</span><span class="s s-i">I</span></td><td><code>EvidenceGate</code> (sealed + chain OK before any tool runs); <code>chattr +i</code>; append-only custody chains</td></tr>
+      <tr><td>2</td><td>Execution / Core → Evidence Vault <span class="sub">custody boundary</span></td><td><span class="s s-t">T</span><span class="s s-r">R</span><span class="s s-i">I</span></td><td><code>EvidenceGate</code> (Postgres-authoritative sealed state); descriptor-pinned final-open validation; local-protected or external-read-only posture; append-only custody chains and Full Verify receipts</td></tr>
       <tr><td>3</td><td>Worker → OS Sandbox <span class="sub">privilege confinement</span></td><td><span class="s s-e">E</span><span class="s s-d">D</span><span class="s s-t">T</span></td><td>Landlock v4 + seccomp=kill + AppArmor=enforce + no-new-privs; cgroup <code>MemoryMax/TasksMax</code>, <code>IPAddressDeny=any</code>; runtime-user fail-closed</td></tr>
       <tr><td>4</td><td>Gateway → Control Plane <span class="sub">authority boundary</span></td><td><span class="s s-t">T</span><span class="s s-r">R</span><span class="s s-e">E</span></td><td>Postgres authoritative + <code>FORCE RLS</code>; <code>active_case_authority</code> (no env/pointer state); append-only audit</td></tr>
       <tr><td>5</td><td>Gateway / Add-ons → Data Plane <span class="sub">derived-data boundary</span></td><td><span class="s s-t">T</span><span class="s s-i">I</span><span class="s s-e">E</span></td><td>OpenSearch never authoritative; per-consumer scoped roles; provenance tracking; case-scoped mediated search</td></tr>
@@ -810,7 +810,7 @@
     <div class="lg"><span class="sw" style="background:var(--ctrl-tint);border:2px solid var(--ctrl)"></span><div><span class="nm">Control plane</span><span class="ds">Postgres — authoritative source of truth, RLS-forced.</span></div></div>
     <div class="lg"><span class="sw" style="background:var(--data-tint);border:2px solid var(--data)"></span><div><span class="nm">Data plane</span><span class="ds">OpenSearch — derived, never authoritative.</span></div></div>
     <div class="lg"><span class="sw" style="background:var(--exec-tint);border:2px solid var(--exec)"></span><div><span class="nm">Execution</span><span class="ds">Confined sandbox plane on the SIFT VM.</span></div></div>
-    <div class="lg"><span class="sw" style="background:var(--evid-tint);border:2px solid var(--evid)"></span><div><span class="nm">Evidence / reports</span><span class="ds">Immutable bytes; approved-only outputs.</span></div></div>
+    <div class="lg"><span class="sw" style="background:var(--evid-tint);border:2px solid var(--evid)"></span><div><span class="nm">Evidence / reports</span><span class="ds">Profile-bound bytes; approved-only outputs.</span></div></div>
     <div class="lg"><span class="sw" style="background:var(--client-tint);border:2px solid var(--client)"></span><div><span class="nm">Client</span><span class="ds">Human operator and AI agent. Untrusted by default.</span></div></div>
 
     <h3 style="margin-top:14px">Shapes &amp; lines</h3>

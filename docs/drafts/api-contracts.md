@@ -224,6 +224,12 @@ file-backed mutation fallback. All mutations require examiner role,
   operator action: the gateway re-hashes every sealed mounted object and compares it
   with Postgres custody authority; no password-derived key or file ledger participates. Records the DB
   verification timestamp and returns `{ok, verified, issues, verified_at, verified_by}`.
+### POST `/api/evidence/storage/profile` (`post_evidence_storage_profile`)
+- Portal-only storage authority transition or re-authorization. Exact request
+  `{password, profile, reason, idempotency_key}` where `profile` is the closed enum
+  `LOCAL_IMMUTABLE | EXTERNALLY_READ_ONLY`; fresh scoped re-authentication is required.
+  Postgres records the generation/source authority and idempotent result. External
+  evidence must remain descriptor-pinned and read-only; reconnect requires Full Verify.
 ### POST `/api/evidence/chain/anchor`, `/proof-export`
 - Solana anchor / DB proof export of the sealed manifest (operator examiner; proof is
   external/optional and never blocks the seal).
@@ -351,8 +357,9 @@ expose the backend.
   `examiner`/`role`) and from REST tool execution (403). Their only path is `/mcp`.
 - Sensitive-action re-auth is checked against the authenticated session identity and
   never accepts a client-supplied email or a local password/HMAC fallback.
-- DB authority is preferred for evidence/investigation/reports; file-backed paths are
-  legacy fallbacks. Absolute case/mount paths are never returned to any caller; only
+- Postgres is the sole authority for evidence custody, investigation records, and
+  reports; file artifacts are exports/proof inputs and never an authority fallback.
+  Absolute case/mount paths are never returned to any caller; only
   relative display paths and opaque ids.
 
 ## Suggested interaction-model.md additions (owned by PDOC1 — for the conductor)

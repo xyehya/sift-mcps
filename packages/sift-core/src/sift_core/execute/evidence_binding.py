@@ -6,8 +6,11 @@ import hashlib
 import json
 import os
 import stat
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import NotRequired, Required, TypedDict
+from typing import Any, NotRequired, Required, TypedDict
 
 from sift_core.evidence_chain import get_immutable_flag_fd
 from sift_core.evidence_storage import (
@@ -42,6 +45,31 @@ class AdmittedEvidenceBinding(TypedDict, total=False):
 
 
 InventoryIdentity = tuple[str, int, int, int, int, int, int, int]
+StorageExecutionAuthority = dict[str, Any]
+FinalOpenAuthorityValidator = Callable[[StorageExecutionAuthority], None]
+_FINAL_OPEN_AUTHORITY_VALIDATOR: ContextVar[
+    FinalOpenAuthorityValidator | None
+] = ContextVar("sift_final_open_authority_validator", default=None)
+
+
+@contextmanager
+def use_final_open_authority_validator(
+    validator: FinalOpenAuthorityValidator,
+) -> Iterator[None]:
+    """Bind the DB-owning final-open check without giving core DB credentials."""
+    token = _FINAL_OPEN_AUTHORITY_VALIDATOR.set(validator)
+    try:
+        yield
+    finally:
+        _FINAL_OPEN_AUTHORITY_VALIDATOR.reset(token)
+
+
+def validate_final_open_authority(expected: StorageExecutionAuthority) -> None:
+    """Revalidate storage authority at the last parent-side evidence open."""
+    validator = _FINAL_OPEN_AUTHORITY_VALIDATOR.get()
+    if validator is None:
+        raise ValueError("storage authority final-open validator unavailable")
+    validator(dict(expected))
 
 
 def inventory_identity_rows(case_dir: str) -> list[InventoryIdentity]:

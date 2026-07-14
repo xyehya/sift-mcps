@@ -32,7 +32,7 @@ execution runs in an **OS-sandboxed `run_command`** plane.
 | 5 | **Add-on MCP backends** | `opensearch-mcp`, `forensic-rag-mcp`, `opencti-mcp` | — | Registered in `app.mcp_backends`; reached only via Gateway |
 | 6 | **Data plane — DERIVED** | OpenSearch 3.5.0 + N ingest workers | never authoritative | case-* indices, full-text/vector/timeline; a gated OpenCTI shared target may use `opencti_*` only under its dedicated role and never through case-search tooling (see ⑤/§6) |
 | 7 | **Execution plane** | `sift-job-worker`, `sift-opensearch-worker@` | — | Claim durable jobs; sandboxed exec; ingest/parse/report |
-| 8 | **Evidence & Reports** | Evidence Vault (filesystem), Reports | immutable / approved-only | Raw sealed bytes + hashes; HTML/PDF/JSON bundles |
+| 8 | **Evidence & Reports** | Evidence storage, Reports | profile-bound / approved-only | `LOCAL_IMMUTABLE` or descriptor-pinned `EXTERNALLY_READ_ONLY`; Postgres custody; HTML/PDF/JSON bundles |
 
 ---
 
@@ -97,7 +97,7 @@ flowchart TB
 
   %% ---------- EVIDENCE & REPORTS ----------
   subgraph EVR["⑧ EVIDENCE & REPORTS"]
-    Vault[("Evidence Vault<br/>immutable raw bytes + hashes<br/>FS immutable flag (ioctl, ≡chattr +i) · manifest + ledger")]
+    Vault[("Evidence Storage<br/>profile-bound bytes + hashes<br/>LOCAL_IMMUTABLE or descriptor-pinned EXTERNALLY_READ_ONLY<br/>Postgres custody + Full Verify receipt")]
     Bundle[("Reports / Exports<br/>HTML / PDF / JSON<br/>APPROVED findings + data only")]
   end
 
@@ -116,7 +116,7 @@ flowchart TB
   EXEC -- "parsed artifacts · timeline · IOC index (+provenance)" --> OS
   OSMCP -. "spawns" .-> OSW
   OSW -- "bulk index" --> OS
-  EXEC -- "read immutable · verify · register" --> Vault
+  EXEC -- "read admitted descriptor · verify current authority" --> Vault
   CORE -- "read sealed evidence" --> Vault
   EXEC -- "generate" --> Bundle
   Bundle -- "review / download (via Gateway)" --> Portal
@@ -272,7 +272,7 @@ OpenSearch ingest specifically fans out to **N least-privilege opensearch worker
 | `execute/job_worker_cli.py` | durable worker bootstrap, `build_handlers`, claim loop |
 | `execute/run_command_job.py` / `ingest_job` | job handlers |
 | `case_manager.py` / `case_io.py` / `active_case_context.py` | case lifecycle + path resolution |
-| `evidence_chain.py` | `chain_status`, manifest, seal/verify, append-only |
+| Postgres custody service | chain status, versions/events, profile authority, Verify Ledger / Full Verify receipts |
 | `reporting.py` / `verification.py` / `backup_ops.py` | report build, re-auth, backups |
 
 ### ⑤ Add-on backends
@@ -327,7 +327,7 @@ variants; the authoritative surface is the golden snapshot `test_opensearch_mcp_
 | **Audit** | Pre-dispatch DB audit, fail-closed for write tools; append-only | AuditEnvelopeMiddleware |
 | **Re-auth (humans)** | case activation, evidence seal/ignore/retire, finding approval, report inclusion/export, credential issuance → Supabase fail-closed re-verify | CL3a/b, approval_ledger_db |
 | **DB authority** | Postgres authoritative; OpenSearch derived; no env/pointer active-case | active_case_authority, RLS |
-| **Evidence immutability** | Operator-mounted only; FS immutable flag via in-process `ioctl(FS_IOC_SETFLAGS)` (≡ `chattr +i`); append-only custody chains | evidence_chain, audit rules |
+| **Evidence custody** | Portal-authorized closed profile: protected local posture or descriptor-pinned external read-only posture; Postgres-only versions/events/receipts; MCP has no mutation authority | custody service, evidence gate, audit rules |
 | **Execution confinement** | Landlock v4 + seccomp=kill + cgroup + AppArmor=enforce (hardened posture; code default is seccomp=log / AppArmor=complain, flipped by `--apparmor-enforce` / `harden.sh`); runtime-user fail-closed | dfir_exec_launcher, worker |
 | **Knowledge isolation** | Shared pgvector = knowledge/reference only; case evidence never auto-embedded | rag_knowledge_only |
 ```

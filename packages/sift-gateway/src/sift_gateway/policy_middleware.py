@@ -23,7 +23,11 @@ from sift_core.active_case_context import (
 )
 from sift_core.agent_tools import core_tool_names
 from sift_core.evidence_chain import ChainStatus
-from sift_core.execute.evidence_binding import AdmittedEvidenceBinding, inventory_token
+from sift_core.execute.evidence_binding import (
+    AdmittedEvidenceBinding,
+    inventory_token,
+    use_final_open_authority_validator,
+)
 
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
 from sift_gateway.audit_helpers import (
@@ -738,7 +742,13 @@ class EvidenceGateMiddleware(Middleware):
                             "manifest_version": gate["manifest_version"],
                         }
                     else:
-                        return await call_next(context)
+                        def final_open_revalidate(expected: dict[str, Any]) -> None:
+                            revalidate(case.case_id, expected)
+
+                        with use_final_open_authority_validator(
+                            final_open_revalidate
+                        ):
+                            return await call_next(context)
                     finally:
                         reset_admitted_refs(token)
 

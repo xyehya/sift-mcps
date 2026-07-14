@@ -20,6 +20,7 @@ from sift_core.active_case_context import ActiveCaseContext, use_active_case_con
 from sift_core.agent_tools import _run_command
 from sift_core.evidence_chain import init_evidence_chain, seal_manifest
 from sift_core.execute.catalog import clear_catalog_cache
+from sift_core.execute.evidence_binding import use_final_open_authority_validator
 from sift_core.execute.security import (
     EvidenceRefError,
     resolve_evidence_ref,
@@ -33,6 +34,17 @@ from sift_core.execute.security_policy import (
     matches_allowed_binary,
 )
 from sift_core.execute.tools import generic
+
+_STORAGE_AUTHORITY = {
+    "storage_profile": "LOCAL_IMMUTABLE",
+    "storage_source_identity": "",
+    "mount_instance_identity": "",
+    "storage_generation": 1,
+    "storage_verified_generation": 1,
+    "storage_manifest_version": 1,
+    "storage_manifest_hash": "sha256:manifest",
+    "storage_verification_receipt_id": "receipt-1",
+}
 
 _KEY = b"i1-run-command-uplift-derived-key32"
 
@@ -320,7 +332,10 @@ def test_run_command_accepts_gateway_resolved_db_evidence_ref_without_manifest(
         db_active=True,
     )
 
-    with use_active_case_context(ctx):
+    with (
+        use_active_case_context(ctx),
+        use_final_open_authority_validator(lambda _expected: None),
+    ):
         out = _run_command(
             {
                 "command": "cat evidence/db.txt",
@@ -338,6 +353,7 @@ def test_run_command_accepts_gateway_resolved_db_evidence_ref_without_manifest(
                         "st_ino": ev.stat().st_ino,
                         "st_mtime_ns": ev.stat().st_mtime_ns,
                         "st_ctime_ns": ev.stat().st_ctime_ns,
+                        **_STORAGE_AUTHORITY,
                     }
                 ],
             },
@@ -408,6 +424,7 @@ def test_gateway_admitted_provenance_uses_bound_db_sha_without_path_reopen(
         "st_mtime_ns": admitted_stat.st_mtime_ns,
         "st_ctime_ns": admitted_stat.st_ctime_ns,
         "immutable_required": False,
+        **_STORAGE_AUTHORITY,
     }
     context = ActiveCaseContext(
         case_id="11111111-1111-1111-1111-111111111112",
@@ -416,7 +433,10 @@ def test_gateway_admitted_provenance_uses_bound_db_sha_without_path_reopen(
         db_active=True,
     )
 
-    with use_active_case_context(context):
+    with (
+        use_active_case_context(context),
+        use_final_open_authority_validator(lambda _expected: None),
+    ):
         result = _run_command(
             {
                 "command": "cat evidence/sealed.raw",
@@ -431,6 +451,71 @@ def test_gateway_admitted_provenance_uses_bound_db_sha_without_path_reopen(
     assert result["success"] is True
     assert result["provenance"]["input_sha256s"] == [admitted_sha]
     assert evidence.read_bytes() == b"replacement bytes"
+
+
+def test_run_command_final_open_revalidates_db_authority_before_process_start(
+    tmp_path, monkeypatch
+):
+    case_dir = tmp_path / "case-db-final-open"
+    (case_dir / "evidence").mkdir(parents=True)
+    evidence = case_dir / "evidence" / "sealed.raw"
+    evidence.write_bytes(b"sealed bytes")
+    admitted_stat = evidence.stat()
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    started = []
+    monkeypatch.setattr(
+        agent_tools,
+        "_execute_command",
+        lambda *_args, **_kwargs: started.append(True),
+    )
+    current_authority = dict(_STORAGE_AUTHORITY)
+
+    def revalidate(expected):
+        if expected != current_authority:
+            raise ValueError("evidence authority changed at final open")
+
+    context = ActiveCaseContext(
+        case_id="11111111-1111-1111-1111-111111111114",
+        case_key="DB-FINAL",
+        artifact_path=str(case_dir),
+        db_active=True,
+    )
+    resolved = {
+        "evidence_id": "ev-final",
+        "version_id": "ver-final",
+        "display_path": "evidence/sealed.raw",
+        "path": str(evidence),
+        "sha256": "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+        "bytes": admitted_stat.st_size,
+        "st_dev": admitted_stat.st_dev,
+        "st_ino": admitted_stat.st_ino,
+        "st_mtime_ns": admitted_stat.st_mtime_ns,
+        "st_ctime_ns": admitted_stat.st_ctime_ns,
+        **_STORAGE_AUTHORITY,
+    }
+
+    # The earlier gateway check passed, then DB authority changed before core's
+    # final parent-side evidence open.
+    assert current_authority == _STORAGE_AUTHORITY
+    current_authority["storage_generation"] = 2
+    with (
+        use_active_case_context(context),
+        use_final_open_authority_validator(revalidate),
+    ):
+        result = _run_command(
+            {
+                "command": "cat evidence/sealed.raw",
+                "purpose": "prove final-open authority denial",
+                "evidence_refs": ["ev-final"],
+                "_resolved_evidence_refs": [resolved],
+            },
+            examiner="analyst",
+            audit=AuditWriter(mcp_name="sift-core"),
+        )
+
+    assert result["success"] is False
+    assert result["error"] == "evidence authority changed at final open"
+    assert started == []
 
 
 def test_run_command_saved_output_uses_db_active_case_not_stale_env(

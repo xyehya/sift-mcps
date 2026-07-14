@@ -22,7 +22,7 @@ The SIFT MCP runtime is a portable, single-policy-boundary MCP gateway for auton
 | ⑤ | **Add-on MCP Backends** | **opensearch-mcp** (14 tools, ns `opensearch_`) · **forensic-rag-mcp** (3 tools, ns `kb_`, pgvector) · **opencti-mcp** (8 tools, ns `cti_`, query-only) · **windows-triage-mcp** (6 tools, ns `wintriage_`, offline SQLite). All read-only except opensearch (3 mutating ingest/enrich tools). |
 | ⑥ | **Data Plane — DERIVED** (OpenSearch, per-consumer scoped roles) | `case-*` indices (case-key prefixed, never cluster-wide) · `opencti_*` / timeline indices · Ingest provenance stamped on every doc (`sift.case_id`, `sift.evidence_id`, `sift.provenance_id`, `sift.job_id`). |
 | ⑦ | **Execution Plane** | `sift-job-worker` (claims `run_command` jobs, lease 300s, poll 1s) · `sift-opensearch-worker@N` (claims ingest/enrich jobs, FUSE-mount capable, CAP_SYS_ADMIN) · `run_command` sandbox (ceiling: MVP allowlist policy; floor: Landlock v4 + seccomp=kill + cgroup + AppArmor=enforce, no-new-privs). |
-| ⑧ | **Evidence & Reports** | Evidence Vault (immutable raw bytes + SHA-256, `chattr +i`, hash-linked manifest+ledger, operator-mounted only) · Reports/Exports (APPROVED findings & data only). |
+| ⑧ | **Evidence & Reports** | Evidence storage under one closed profile: `LOCAL_IMMUTABLE` (operator-authorized protected local bytes) or `EXTERNALLY_READ_ONLY` (descriptor-pinned read-only source/mount identity) · Postgres-authoritative versions and append-only custody events · Reports/Exports (APPROVED findings & data only). |
 
 ## 3. Component Inventory
 
@@ -190,15 +190,13 @@ sequenceDiagram
     W-->>MCP: job_id
     
     Note over Op,Agent: Evidence Custody Chain
-    Op->>P: Seal evidence file
-    P->>Core: seal_manifest()
-    Core->>Core: SHA-256 hashing
-    Core->>Core: Append to evidence-ledger.jsonl
-    Core->>Core: +i immutable flag
-    Core->>PG: evidence_seal RPC
-    PG->>PG: evidence_custody_events (append-only)
-    PG-->>Core: Chain head
-    Core-->>P: Sealed
+    Op->>P: Seal evidence (fresh scoped re-auth)
+    P->>Core: Pin descriptors; verify selected storage profile
+    Core->>Core: SHA-256 mounted bytes
+    P->>PG: evidence_seal RPC
+    PG->>PG: Commit version/head + append custody event atomically
+    P->>Core: Apply/read back local protection, or verify external read-only posture
+    PG-->>P: Postgres-authoritative sealed state
 ```
 
 ## 5. Data Flow
@@ -242,14 +240,18 @@ The active case is the singleton `app.active_case_state` row — never an env va
 ### Evidence Flow
 
 ```
-Operator mounts forensic image read-only → Portal detects/registers objects → Portal seals
+Operator mounts evidence → Portal selects one closed storage profile and detects/registers objects → Portal seals
 
 Register/Seal: canonical path + posture checks → SHA-256 each file → service-only
     Postgres RPC creates the version/manifest/head transition and appends a hash-linked
     app.evidence_custody_events row (UPDATE/DELETE blocked at DB trigger level)
-    → apply and verify protected filesystem posture
+    → for `LOCAL_IMMUTABLE`, apply and read back protected local posture; for
+      `EXTERNALLY_READ_ONLY`, verify descriptor/VFS/mount read-only agreement without
+      changing bytes, names, ownership, modes, flags, links, or xattrs
 
-Admission/Full Verify: inspect mounted bytes, identity, posture, and mount availability
+Admission: inspect identity/posture/availability and require the exact current successful
+    verification receipt. Full Verify Evidence: hash every ACTIVE mounted object and verify
+    the selected storage posture against Postgres authority
     → compare with Postgres object/version/head authority → fail closed on drift,
     interrupted operation, unavailable external evidence, or persisted violation
 ```

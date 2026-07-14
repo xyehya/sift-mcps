@@ -13,7 +13,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sift_common.audit import AuditWriter, resolve_examiner
 
@@ -513,7 +513,21 @@ def _trusted_internal_evidence_refs(
     paths: list[str] = []
     public_refs: list[str] = []
     bindings: list[dict[str, Any]] = []
-    from sift_core.execute.evidence_binding import validate_binding_fd
+    from sift_core.execute.evidence_binding import (
+        validate_binding_fd,
+        validate_final_open_authority,
+    )
+
+    authority_keys = (
+        "storage_profile",
+        "storage_source_identity",
+        "mount_instance_identity",
+        "storage_generation",
+        "storage_verified_generation",
+        "storage_manifest_version",
+        "storage_manifest_hash",
+        "storage_verification_receipt_id",
+    )
 
     for item in refs:
         if not isinstance(item, dict):
@@ -553,17 +567,20 @@ def _trusted_internal_evidence_refs(
                     item.get("mount_instance_identity") or ""
                 ),
                 "read_only_required": bool(item.get("read_only_required", False)),
+                "storage_generation": int(item["storage_generation"]),
+                "storage_verified_generation": int(
+                    item["storage_verified_generation"]
+                ),
+                "storage_manifest_version": int(item["storage_manifest_version"]),
+                "storage_manifest_hash": str(item["storage_manifest_hash"]),
+                "storage_verification_receipt_id": str(
+                    item["storage_verification_receipt_id"]
+                ),
             }
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("internal evidence ref has an invalid binding") from exc
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, flags)
-        try:
-            validate_binding_fd(fd, binding)
-        finally:
-            os.close(fd)
-        paths.append(str(path))
         bindings.append(dict(binding))
+        paths.append(str(path))
         public_refs.append(
             str(
                 item.get("evidence_id")
@@ -572,6 +589,23 @@ def _trusted_internal_evidence_refs(
                 or ""
             )
         )
+
+    expected_authority = {key: bindings[0][key] for key in authority_keys}
+    if any(
+        any(binding.get(key) != value for key, value in expected_authority.items())
+        for binding in bindings
+    ):
+        raise ValueError("internal evidence refs have inconsistent storage authority")
+    validate_final_open_authority(expected_authority)
+
+    for path_text, binding_data in zip(paths, bindings, strict=True):
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        path = Path(path_text)
+        fd = os.open(path, flags)
+        try:
+            validate_binding_fd(fd, cast(AdmittedEvidenceBinding, binding_data))
+        finally:
+            os.close(fd)
     return paths, [ref for ref in public_refs if ref], bindings
 
 

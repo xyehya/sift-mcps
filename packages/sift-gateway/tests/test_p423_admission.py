@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
 from sift_core.evidence_chain import ChainStatus
 from sift_gateway.active_case import ActiveCase
@@ -462,6 +463,52 @@ async def test_storage_authorization_change_after_admission_denies_before_handle
 
     assert result.is_error is True
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_storage_authority_change_inside_handler_denies_at_final_open(
+    tmp_path,
+):
+    from sift_core.execute.evidence_binding import validate_final_open_authority
+
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "sealed.raw").write_bytes(b"sealed")
+    service = _AdmissionService(case_dir=tmp_path, known={"evidence/sealed.raw"})
+    gateway = _gateway(tmp_path, service)
+    mcp = FastMCP("aggregate", middleware=gateway_policy_middlewares(gateway))
+    process_starts = []
+
+    @mcp.tool(name="run_command")
+    async def run_command(command: str):
+        del command
+        expected = dict(service.execution_authority)
+        # The middleware pre-dispatch check has passed. Model a DB authority
+        # generation change immediately before core's final evidence open.
+        service.execution_authority["storage_generation"] += 1
+        validate_final_open_authority(expected)
+        process_starts.append(True)
+        return "must-not-run"
+
+    opened = {
+        "blocked": False,
+        "status": ChainStatus.OK,
+        "issues": [],
+        "manifest_version": 2,
+    }
+    with (
+        patch(
+            "sift_gateway.policy_middleware.check_evidence_gate_db",
+            return_value=opened,
+        ),
+        patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=None),
+    ):
+        with pytest.raises(ToolError, match="authority changed"):
+            await mcp.call_tool(
+                "run_command", {"command": "cat evidence/sealed.raw"}
+            )
+
+    assert process_starts == []
 
 
 @pytest.mark.asyncio

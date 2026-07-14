@@ -18,7 +18,12 @@ from sift_core.evidence_storage import (
     StorageProfile,
     external_storage_facts,
 )
-from sift_core.execute.evidence_binding import inventory_token as _inventory_token
+from sift_core.execute.evidence_binding import (
+    inventory_token as _inventory_token,
+)
+from sift_core.execute.evidence_binding import (
+    use_final_open_authority_validator,
+)
 from sift_core.execute.job_worker import (
     ClaimedJob,
     FatalJobError,
@@ -296,7 +301,12 @@ def run_command_job_handler(job: ClaimedJob, ctx: JobContext) -> JobResult:
     # Claim/execution validation protects the durable queue boundary; repeat
     # once more immediately before the command handler can create a process.
     ctx.validate_custody("preexec")
-    with use_active_case_context(context):
+    with (
+        use_active_case_context(context),
+        use_final_open_authority_validator(
+            lambda _expected: ctx.validate_custody("final_open")
+        ),
+    ):
         result = _run_command(args, examiner, audit)
 
     receipt = _build_receipt(job, args, result)

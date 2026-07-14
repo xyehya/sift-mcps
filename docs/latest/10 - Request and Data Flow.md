@@ -102,19 +102,23 @@ sequenceDiagram
     participant Auth as Auth
     participant Supabase as Supabase
     participant Postgres as Postgres
-    participant FS as Local FS
+    participant FS as Evidence Storage
 
     Operator->>Portal: POST /evidence/chain/seal (re-auth)
     Portal->>Auth: _supabase_reverify(password)
     Auth->>Supabase: password_grant()
     Supabase-->>Auth: OK
-    Portal->>Postgres: evidence_seal(file_specs)
+    Portal->>FS: pin descriptors; verify LOCAL_IMMUTABLE or EXTERNALLY_READ_ONLY
+    Portal->>Postgres: evidence_seal(file_specs, storage authority)
     Postgres->>Postgres: INSERT INTO evidence_objects
     Postgres->>Postgres: INSERT INTO evidence_versions
     Postgres->>Postgres: INSERT INTO evidence_custody_events (append-only)
     Postgres->>Postgres: UPDATE evidence_chain_heads
-    Portal->>FS: chattr +i (immutable flag)
-    Portal->>FS: apply and read back protected evidence posture
+    alt LOCAL_IMMUTABLE
+        Portal->>FS: apply and read back protected local posture
+    else EXTERNALLY_READ_ONLY
+        Portal->>FS: verify descriptor/VFS/mount read-only posture; mutate nothing
+    end
     Portal->>Postgres: commit version/manifest/head atomically
     Operator-->>Portal: {sealed, manifest_version}
 ```

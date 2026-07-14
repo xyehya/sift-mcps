@@ -18,10 +18,13 @@ import hashlib
 import io
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
+import sift_core.agent_tools as agent_tools
 from sift_core.evidence_chain import init_evidence_chain, seal_manifest
 from sift_core.execute.catalog import clear_catalog_cache
+from sift_core.execute.job_worker import FatalJobError
 from sift_core.execute.run_command_job import run_command_job_handler
 from sift_core.execute.runtime_acl import (
     assert_no_authority_write_target,
@@ -47,6 +50,16 @@ from .test_job_worker import (
 )
 
 _KEY = b"k5-run-command-isolation-derived-key32"
+_STORAGE_AUTHORITY = {
+    "storage_profile": "LOCAL_IMMUTABLE",
+    "storage_source_identity": "",
+    "mount_instance_identity": "",
+    "storage_generation": 1,
+    "storage_verified_generation": 1,
+    "storage_manifest_version": 1,
+    "storage_manifest_hash": "sha256:manifest",
+    "storage_verification_receipt_id": "receipt-1",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -304,7 +317,11 @@ def db():
 def _enqueue_run_command(db, case_dir, *, command, purpose, evidence_refs=None,
                          output_ref=None, save_output=False):
     spec_public = {"command": command, "purpose": purpose}
-    spec_internal = {"case_dir": str(case_dir), "case_key": "K5-001", "examiner": "analyst"}
+    spec_internal: dict[str, Any] = {
+        "case_dir": str(case_dir),
+        "case_key": "K5-001",
+        "examiner": "analyst",
+    }
     if evidence_refs is not None:
         resolved_refs = []
         public_refs = []
@@ -327,11 +344,13 @@ def _enqueue_run_command(db, case_dir, *, command, purpose, evidence_refs=None,
                     "st_ino": candidate.stat().st_ino,
                     "st_mtime_ns": candidate.stat().st_mtime_ns,
                     "st_ctime_ns": candidate.stat().st_ctime_ns,
+                    **_STORAGE_AUTHORITY,
                 }
             )
             public_refs.append(display_path)
         spec_public["evidence_refs"] = public_refs
         spec_internal["resolved_evidence_refs"] = resolved_refs
+        spec_internal["storage_execution_authority"] = dict(_STORAGE_AUTHORITY)
     if output_ref is not None:
         spec_public["output_ref"] = output_ref
     if save_output:
@@ -345,6 +364,43 @@ def _enqueue_run_command(db, case_dir, *, command, purpose, evidence_refs=None,
             spec_internal=spec_internal,
         )
     )
+
+
+def test_durable_final_open_authority_change_denies_before_process_start(
+    db, sealed_case, monkeypatch
+):
+    job = _enqueue_run_command(
+        db,
+        sealed_case,
+        command="cat evidence/disk.txt",
+        purpose="deny changed authority at final open",
+        evidence_refs=["disk.txt"],
+    )
+    phases = []
+    started = []
+    monkeypatch.setattr(
+        agent_tools,
+        "_execute_command",
+        lambda *_args, **_kwargs: started.append(True),
+    )
+
+    def validator(_job, phase):
+        phases.append(phase)
+        if phase == "final_open":
+            raise FatalJobError("custody_admission_denied")
+
+    worker = _worker(
+        db,
+        {"run_command": run_command_job_handler},
+        custody_validator=validator,
+    )
+    worker.run_once(job_types=["run_command"])
+
+    stored = db.get(job.id)
+    assert phases == ["claim", "execution", "preexec", "final_open"]
+    assert stored.status == "failed"
+    assert stored.error_summary == "custody_admission_denied"
+    assert started == []
 
 
 def test_allowed_run_command_persists_receipt_and_no_paths(db, sealed_case):
@@ -640,6 +696,7 @@ def test_b_mvp_027_evidence_ref_command_reaches_exec_via_worker_loop(db, sealed_
                 "case_dir": str(sealed_case),
                 "case_key": "K5-001",
                 "examiner": "analyst",
+                "storage_execution_authority": dict(_STORAGE_AUTHORITY),
                     "resolved_evidence_refs": [
                         {
                             "ref": "disk.txt",
@@ -653,6 +710,7 @@ def test_b_mvp_027_evidence_ref_command_reaches_exec_via_worker_loop(db, sealed_
                             "st_ino": Path(ev_path).stat().st_ino,
                                 "st_mtime_ns": Path(ev_path).stat().st_mtime_ns,
                                 "st_ctime_ns": Path(ev_path).stat().st_ctime_ns,
+                            **_STORAGE_AUTHORITY,
                         }
                 ],
             },
