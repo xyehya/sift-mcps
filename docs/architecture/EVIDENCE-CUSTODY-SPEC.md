@@ -240,7 +240,14 @@ Wrong-scope, previously consumed, and post-completion receipts are denied.
 The finalizer independently rechecks action, receipt, case/object, current-version identity,
 original digest, verified facts, phase, and runner. Exact Restore requires the original digest and
 byte count, appends a canonical restoration event, and preserves Evidence Version and Manifest
-Version identity and row counts. Replace/Reacquire requires a different digest, appends exactly one
+Version identity and row counts. It appends a dedicated per-object posture receipt bound to the
+case, operation, completion re-authentication, runner, current Evidence Version, Local Immutable
+storage generation, canonical recovery event, digest, byte count, and verified descriptor facts.
+Reconciliation uses that append-only receipt only while every current binding still matches;
+historical Evidence Version metadata remains immutable, and later posture drift requires Full
+Verify. The full reconciliation scan and classification hold the same exclusive case transaction
+lease as custody finalizers, so a scan begun before Restore cannot re-latch stale findings after the
+finalizer opens the gate. Replace/Reacquire requires a different digest, appends exactly one
 Evidence Version and Manifest Version, preserves the prior version and immutable siblings, and opens
 the gate atomically. Portal history is path-free and keyed by opaque Evidence Object ID.
 

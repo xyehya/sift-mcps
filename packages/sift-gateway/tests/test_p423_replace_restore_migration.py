@@ -10,6 +10,7 @@ UNPUBLISHED_CUSTODY_MIGRATIONS = tuple(
         "202607142100_replace_restore_operations.sql",
         "202607143000_drift_disposition.sql",
         "202607144000_external_read_only_storage.sql",
+        "202607145000_exact_restore_posture_receipt.sql",
     )
 )
 

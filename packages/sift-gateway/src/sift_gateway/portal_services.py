@@ -618,6 +618,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
 
         with self._connect() as conn:
             with conn.cursor() as cur:
+                # Hold the same case-scoped transaction lease as every custody
+                # finalizer across authority reads, filesystem scan, and the
+                # persisted classification. A scan begun before Restore cannot
+                # commit stale findings after Restore opens the gate.
+                cur.execute(
+                    "select pg_advisory_xact_lock(hashtextextended(%s,0))",
+                    (case_id,),
+                )
                 cur.execute(
                     """select seal_status,issues,manifest_version,manifest_hash
                        from app.evidence_chain_heads where case_id=%s""",
@@ -678,7 +686,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     if receipt_row and isinstance(receipt_row[1], list)
                     else []
                 )
-                receipt_by_object = {
+                storage_receipt_by_object = {
                     str(item.get("evidence_object_id")): item
                     for item in receipt_items
                     if isinstance(item, dict)
@@ -686,7 +694,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 cur.execute(
                     """
                     select o.id::text, o.display_path, o.current_sha256, o.current_bytes,
-                           o.sealed_at, v.metadata, o.status
+                           o.sealed_at, v.metadata, o.status, v.id::text
                     from app.evidence_objects o
                     left join app.evidence_versions v on v.id=o.current_version_id
                     where o.case_id = %s and o.status in ('sealed','violated')
@@ -704,6 +712,39 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         if len(row) > 5 and isinstance(row[5], dict)
                         else {},
                         "authority_status": str(row[6]) if len(row) > 6 else "sealed",
+                        "version_id": str(row[7]) if len(row) > 7 and row[7] else "",
+                    }
+                    for row in cur.fetchall()
+                }
+                cur.execute(
+                    """select distinct on (r.evidence_object_id)
+                              r.evidence_object_id::text,r.evidence_version_id::text,
+                              r.sha256,r.bytes,r.st_dev,r.st_ino,r.st_mtime_ns,
+                              r.st_ctime_ns,r.st_nlink,r.owner_name,r.mode,r.immutable
+                       from app.evidence_exact_restore_posture_receipts r
+                       join app.evidence_storage_authorities a on a.case_id=r.case_id
+                         and a.profile=r.storage_profile
+                         and a.generation=r.storage_generation
+                       join app.evidence_objects o on o.id=r.evidence_object_id
+                         and o.case_id=r.case_id and o.current_version_id=r.evidence_version_id
+                       where r.case_id=%s
+                       order by r.evidence_object_id,r.created_at desc,r.id desc""",
+                    (case_id,),
+                )
+                restore_receipt_by_object = {
+                    str(row[0]): {
+                        "evidence_object_id": str(row[0]),
+                        "evidence_version_id": str(row[1]),
+                        "sha256": str(row[2]),
+                        "bytes": row[3],
+                        "st_dev": row[4],
+                        "st_ino": row[5],
+                        "st_mtime_ns": row[6],
+                        "st_ctime_ns": row[7],
+                        "st_nlink": row[8],
+                        "owner": str(row[9]),
+                        "mode": str(row[10]),
+                        "immutable": bool(row[11]),
                     }
                     for row in cur.fetchall()
                 }
@@ -912,8 +953,17 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 expected_facts: list[AuthorityEvidence] = []
                 for known in sealed.values():
                     posture = known["metadata"].get("posture", {})
-                    receipt = receipt_by_object.get(known["id"], {})
-                    if storage_profile is StorageProfile.EXTERNALLY_READ_ONLY:
+                    receipt = (
+                        storage_receipt_by_object.get(known["id"], {})
+                        if storage_profile is StorageProfile.EXTERNALLY_READ_ONLY
+                        else restore_receipt_by_object.get(known["id"], {})
+                    )
+                    receipt_matches_current = (
+                        receipt.get("evidence_version_id") == known["version_id"]
+                        and receipt.get("sha256") == known["sha256"]
+                        and receipt.get("bytes") == known["bytes"]
+                    )
+                    if receipt_matches_current:
                         posture = receipt
                     identity = None
                     if (

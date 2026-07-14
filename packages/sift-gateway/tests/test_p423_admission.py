@@ -752,6 +752,8 @@ class _Cursor:
         self.sql = " ".join(sql.split())
 
     def fetchall(self):
+        if "evidence_exact_restore_posture_receipts" in self.sql:
+            return []
         return [self.row]
 
     def fetchone(self):
@@ -987,7 +989,36 @@ class _SealedObservationCursor(_ObservationCursor):
         self.sealed = sealed
 
     def fetchall(self):
+        if "evidence_exact_restore_posture_receipts" in self.last_sql:
+            return []
         return self.sealed
+
+
+class _ReceiptObservationCursor(_SealedObservationCursor):
+    def __init__(self, sealed, receipt):
+        super().__init__(sealed)
+        self.receipt = receipt
+
+    def fetchall(self):
+        if "evidence_exact_restore_posture_receipts" in self.last_sql:
+            return [
+                (
+                    item["evidence_object_id"],
+                    item["evidence_version_id"],
+                    item["sha256"],
+                    item["bytes"],
+                    item["st_dev"],
+                    item["st_ino"],
+                    item["st_mtime_ns"],
+                    item["st_ctime_ns"],
+                    item["st_nlink"],
+                    item["owner"],
+                    item["mode"],
+                    item["immutable"],
+                )
+                for item in self.receipt
+            ]
+        return super().fetchall()
 
 
 class _LatchEnforcingObservationCursor(_SealedObservationCursor):
@@ -1324,6 +1355,116 @@ def test_posture_drift_requires_full_verify_without_generic_content_violation(
     assert not any(
         "evidence_mark_admission_violation" in call[0] for call in cursor.calls
     )
+
+
+def test_exact_restore_receipt_rebinds_current_posture_without_new_version(
+    tmp_path, monkeypatch
+):
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    image = evidence / "sealed.raw"
+    image.write_bytes(b"restored-exact")
+    st = image.stat()
+    sha256 = "sha256:" + hashlib.sha256(b"restored-exact").hexdigest()
+    receipt = [
+        {
+            "evidence_object_id": "sealed-object",
+            "evidence_version_id": "version-7",
+            "sha256": sha256,
+            "bytes": st.st_size,
+            "st_dev": st.st_dev,
+            "st_ino": st.st_ino,
+            "st_mtime_ns": st.st_mtime_ns,
+            "st_ctime_ns": st.st_ctime_ns,
+            "st_nlink": st.st_nlink,
+            "owner": "sift-service",
+            "mode": "0644",
+            "immutable": True,
+        }
+    ]
+    cursor = _ReceiptObservationCursor(
+        [
+            (
+                "sealed-object",
+                "evidence/sealed.raw",
+                sha256,
+                st.st_size,
+                datetime.now(timezone.utc) - timedelta(days=1),
+                {
+                    "posture": {
+                        "st_dev": st.st_dev,
+                        "st_ino": st.st_ino - 1,
+                        "st_mtime_ns": st.st_mtime_ns - 1,
+                        "st_ctime_ns": st.st_ctime_ns - 1,
+                        "st_nlink": st.st_nlink,
+                    }
+                },
+                "sealed",
+                "version-7",
+            )
+        ],
+        receipt,
+    )
+    service = EvidenceAuthorityService("postgresql://unused")
+    connection = _ObservationConnection(cursor)
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(service, "_connect", lambda: connection)
+    monkeypatch.setattr(
+        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True
+    )
+
+    result = service.reconcile_for_admission(
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert result["gate_state"] == "OPEN"
+    classification_call = next(
+        call
+        for call in cursor.calls
+        if "evidence_record_inventory_classification" in call[0]
+    )
+    findings = getattr(
+        classification_call[1][3], "obj", classification_call[1][3]
+    )
+    assert findings == []
+
+    assert cursor.calls[0][0].startswith(
+        "select pg_advisory_xact_lock(hashtextextended(%s,0))"
+    )
+    restore_query = next(
+        sql
+        for sql, _params in cursor.calls
+        if "evidence_exact_restore_posture_receipts" in sql
+    )
+    assert "a.generation=r.storage_generation" in restore_query
+    assert "o.current_version_id=r.evidence_version_id" in restore_query
+    assert connection.commits == 1
+
+    drift_cursor = _ReceiptObservationCursor(cursor.sealed, receipt)
+    drift_service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(
+        drift_service, "_case_artifact_path", lambda _case_id: case_dir
+    )
+    monkeypatch.setattr(
+        drift_service, "_connect", lambda: _ObservationConnection(drift_cursor)
+    )
+    monkeypatch.setattr(
+        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: False
+    )
+    drift = drift_service.reconcile_for_admission(
+        "11111111-1111-1111-1111-111111111111"
+    )
+    assert drift["gate_state"] == "BLOCKED_VIOLATION"
+    drift_call = next(
+        call
+        for call in drift_cursor.calls
+        if "evidence_record_inventory_classification" in call[0]
+    )
+    drift_findings = getattr(drift_call[1][3], "obj", drift_call[1][3])
+    assert [finding["code"] for finding in drift_findings] == [
+        "FULL_VERIFY_REQUIRED"
+    ]
 
 
 def test_persisted_violation_is_returned_and_recorded_when_mount_matches(

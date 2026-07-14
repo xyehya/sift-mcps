@@ -149,7 +149,10 @@ the Postgres custody gate and binds an opaque Evidence Object/current Evidence V
 immutable flag is cleared. Completion requires a new single-use operation-bound re-authentication,
 full-hashes server-resolved bytes, restores and verifies Local Immutable posture, and invokes a
 closed action-specific database finalizer. Exact Restore preserves Evidence and Manifest Version
-identity; changed-byte Replace/Reacquire appends exactly one of each while retaining prior versions
+identity and appends a narrowly scoped, Local Immutable generation-bound current-posture receipt;
+reconciliation never rewrites historical version facts and holds the case transaction lease through
+its scan/classification so stale scans cannot re-latch a completed recovery. Changed-byte
+Replace/Reacquire appends exactly one of each while retaining prior versions
 and siblings. A completion failure can rotate to another fresh receipt only from a recorded
 applying/verified recoverable phase; every receipt remains globally consumed in a FORCE-RLS
 append-only history and a replaced runner is retired. Legacy standalone Unseal and one-shot

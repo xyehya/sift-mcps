@@ -102,6 +102,8 @@ def _complete(conn, setup, operation_id: str, action: str, sha: str):
 
 def test_exact_restore_preserves_version_and_manifest_counts():
     psycopg = pytest.importorskip("psycopg")
+    from psycopg.types.json import Jsonb
+
     with psycopg.connect(_dsn()) as conn:
         setup = _setup(conn, "RESTORE_EXACT")
         with conn.cursor() as cur:
@@ -118,6 +120,43 @@ def test_exact_restore_preserves_version_and_manifest_counts():
             assert cur.fetchone()[0] == manifests_before
             cur.execute("select current_version_id::text from app.evidence_objects where id=%s", (setup[2],))
             assert cur.fetchone()[0] == str(setup[3])
+            cur.execute(
+                """select storage_generation,storage_profile,evidence_version_id::text,
+                          st_ctime_ns,custody_event_id::text
+                   from app.evidence_exact_restore_posture_receipts
+                   where case_id=%s and custody_operation_id=%s""",
+                (setup[0], operation_id),
+            )
+            receipt = cur.fetchone()
+            assert receipt is not None
+            assert receipt[1] == "LOCAL_IMMUTABLE"
+            assert receipt[2] == str(setup[3])
+            assert receipt[3] == 4
+            assert receipt[4]
+            cur.execute(
+                """select count(*) from app.evidence_custody_events
+                   where custody_operation_id=%s""",
+                (operation_id,),
+            )
+            events_before_replay = cur.fetchone()[0]
+            assert events_before_replay == 1
+            cur.execute(
+                "select result from app.custody_operation_commit_verified_recovery(%s,%s,'examiner','recovery-runner')",
+                (operation_id, Jsonb({})),
+            )
+            assert cur.fetchone()[0] == result
+            cur.execute(
+                """select count(*) from app.evidence_exact_restore_posture_receipts
+                   where case_id=%s and custody_operation_id=%s""",
+                (setup[0], operation_id),
+            )
+            assert cur.fetchone()[0] == 1
+            cur.execute(
+                """select count(*) from app.evidence_custody_events
+                   where custody_operation_id=%s""",
+                (operation_id,),
+            )
+            assert cur.fetchone()[0] == events_before_replay
         assert result["restored_exact"] is True
 
 
