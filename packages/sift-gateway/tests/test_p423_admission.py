@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -677,6 +678,64 @@ def test_unavailable_storage_is_not_recorded_as_a_violation(tmp_path, monkeypatc
     )
 
 
+def test_posture_drift_requires_full_verify_without_generic_content_violation(
+    tmp_path, monkeypatch
+):
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    image = evidence / "sealed.raw"
+    image.write_bytes(b"sealed")
+    st = image.stat()
+    cursor = _SealedObservationCursor(
+        [
+            (
+                "sealed-object",
+                "evidence/sealed.raw",
+                "sha256:" + hashlib.sha256(b"sealed").hexdigest(),
+                st.st_size,
+                datetime.now(timezone.utc),
+                {
+                    "posture": {
+                        "st_dev": st.st_dev,
+                        "st_ino": st.st_ino,
+                        "st_mtime_ns": st.st_mtime_ns,
+                        "st_ctime_ns": st.st_ctime_ns,
+                        "st_nlink": st.st_nlink,
+                    }
+                },
+            )
+        ]
+    )
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
+    monkeypatch.setattr(
+        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: False
+    )
+
+    result = service.reconcile_for_admission(
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert result["gate_state"] == "BLOCKED_VIOLATION"
+    classification_call = next(
+        call
+        for call in cursor.calls
+        if "evidence_record_inventory_classification" in call[0]
+    )
+    classification_findings = getattr(
+        classification_call[1][3], "obj", classification_call[1][3]
+    )
+    assert [finding["code"] for finding in classification_findings] == [
+        "FULL_VERIFY_REQUIRED"
+    ]
+    assert classification_findings[0]["full_verification_required"] is True
+    assert not any(
+        "evidence_mark_admission_violation" in call[0] for call in cursor.calls
+    )
+
+
 def test_inventory_reconciliation_does_not_hash_large_unchanged_sibling(tmp_path, monkeypatch):
     case_dir = tmp_path / "case"
     evidence = case_dir / "evidence"
@@ -693,14 +752,14 @@ def test_inventory_reconciliation_does_not_hash_large_unchanged_sibling(tmp_path
         "sift_gateway.portal_services._admission_fingerprint",
         lambda _path: pytest.fail("aggregate inventory scan must not hash sealed siblings"),
     )
+    monkeypatch.setattr("sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True)
 
     result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
-    assert result == {
-        "state": "available",
-        "observed": 1,
-        "issues": [],
-        "correlation_id": None,
-    }
+    assert result["state"] == "available"
+    assert result["gate_state"] == "OPEN"
+    assert result["observed"] == 1
+    assert result["issues"] == []
+    assert result["correlation_id"].startswith("portal-")
     assert image.stat().st_size == 19 * 1024 * 1024 * 1024
 
 

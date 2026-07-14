@@ -5,6 +5,7 @@ import os
 import pwd
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 from sift_gateway.custody_operations import (
@@ -12,6 +13,7 @@ from sift_gateway.custody_operations import (
     CustodyOperationError,
     CustodyOperationPhase,
     CustodyOperationRecord,
+    CustodyOperationRepositoryProtocol,
     DispositionCustodyOperation,
     LocalImmutablePostureAdapter,
     ObjectCustodyCommand,
@@ -153,7 +155,9 @@ def seal_service(monkeypatch, tmp_path):
     repo = FakeRepository()
     posture = FakePosture()
     service = EvidenceAuthorityService(
-        "postgresql://unused", custody_repository=repo, posture_adapter=posture
+        "postgresql://unused",
+        custody_repository=cast(CustodyOperationRepositoryProtocol, repo),
+        posture_adapter=posture,
     )
     monkeypatch.setattr(service, "_scan_evidence", lambda case_id: [])
     monkeypatch.setattr(service, "_case_artifact_path", lambda case_id: tmp_path)
@@ -257,7 +261,7 @@ def test_delete_stray_blocks_gate_before_descriptor_pinned_unlink(tmp_path):
 
     repo.advance = advance
     runner = DispositionCustodyOperation(
-        repo,
+        cast(CustodyOperationRepositoryProtocol, repo),
         lambda _case_id: tmp_path,
         lambda _case_id, _object_id: {
             "evidence_object_id": "44444444-4444-4444-8444-444444444444",
@@ -278,6 +282,29 @@ def test_delete_stray_blocks_gate_before_descriptor_pinned_unlink(tmp_path):
     ]
 
 
+def test_delete_stray_rejects_missing_initial_item_without_committing(tmp_path):
+    (tmp_path / "evidence").mkdir()
+    repo = FakeDispositionRepository(CustodyAction.DELETE_STRAY)
+    runner = DispositionCustodyOperation(
+        cast(CustodyOperationRepositoryProtocol, repo),
+        lambda _case_id: tmp_path,
+        lambda _case_id, _object_id: {
+            "evidence_object_id": "44444444-4444-4444-8444-444444444444",
+            "display_path": "evidence/missing.bin",
+            "status": "detected",
+            "seal_status": "unsealed",
+        },
+    )
+
+    with pytest.raises(CustodyOperationError, match="delete_requires_readable_pending_item"):
+        runner.execute(
+            _disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner"
+        )
+
+    assert not (tmp_path / "evidence" / "missing.bin").exists()
+    assert "commit_verified_disposition" not in [name for name, _ in repo.calls]
+
+
 @pytest.mark.parametrize("action", [CustodyAction.IGNORE, CustodyAction.RETIRE])
 def test_non_delete_disposition_never_mutates_evidence_bytes(tmp_path, action):
     evidence = tmp_path / "evidence"
@@ -286,7 +313,7 @@ def test_non_delete_disposition_never_mutates_evidence_bytes(tmp_path, action):
     target.write_bytes(b"preserved evidence")
     repo = FakeDispositionRepository(action)
     runner = DispositionCustodyOperation(
-        repo,
+        cast(CustodyOperationRepositoryProtocol, repo),
         lambda _case_id: tmp_path,
         lambda _case_id, _object_id: {
             "evidence_object_id": "44444444-4444-4444-8444-444444444444",
@@ -325,7 +352,7 @@ def test_delete_resume_after_unlink_commits_stored_pre_unlink_facts(tmp_path):
         prepared_facts={"item": item},
     )
     runner = DispositionCustodyOperation(
-        repo,
+        cast(CustodyOperationRepositoryProtocol, repo),
         lambda _case_id: tmp_path,
         lambda *_args: pytest.fail("resume must use stored facts"),
     )

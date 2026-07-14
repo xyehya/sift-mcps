@@ -286,6 +286,14 @@ class CustodyOperationRepositoryProtocol(Protocol):
         examiner: str,
     ) -> CustodyOperationRecord: ...
 
+    def resume_disposition(
+        self,
+        operation_id: str,
+        *,
+        actor_user_id: str,
+        resume_reauth_audit_event_id: str,
+    ) -> CustodyOperationRecord: ...
+
     def get_incomplete(self, case_id: str) -> CustodyOperationRecord | None: ...
 
 
@@ -524,6 +532,29 @@ class CustodyOperationRepository:
                            %s, %s, %s, %s
                          )""",
                     (operation_id, _jsonb(item), examiner, _RUNNER_INSTANCE_ID),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return _record(row)
+
+    def resume_disposition(
+        self,
+        operation_id: str,
+        *,
+        actor_user_id: str,
+        resume_reauth_audit_event_id: str,
+    ) -> CustodyOperationRecord:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""select {_OP_COLUMNS}
+                         from app.custody_operation_resume_disposition(%s,%s,%s,%s)""",
+                    (
+                        operation_id,
+                        actor_user_id,
+                        resume_reauth_audit_event_id,
+                        _RUNNER_INSTANCE_ID,
+                    ),
                 )
                 row = cur.fetchone()
             conn.commit()
@@ -1151,6 +1182,10 @@ class DispositionCustodyOperation:
                 raise CustodyOperationError(
                     "ignore_requires_readable_pending_item", http_status=409
                 ) from exc
+            if command.action is CustodyAction.DELETE_STRAY:
+                raise CustodyOperationError(
+                    "delete_requires_readable_pending_item", http_status=409
+                ) from exc
             item.update({"present": False, "file_removed": False})
             return item, None, None
         st = os.fstat(fd)
@@ -1165,10 +1200,16 @@ class DispositionCustodyOperation:
         )
         return item, root_fd, fd
 
-    def execute(self, command: ObjectCustodyCommand, *, examiner: str) -> dict[str, Any]:
+    def execute(
+        self,
+        command: ObjectCustodyCommand,
+        *,
+        examiner: str,
+        resumed_operation: CustodyOperationRecord | None = None,
+    ) -> dict[str, Any]:
         if command.action not in self._ACTIONS:
             raise CustodyOperationError("disposition_action_required", http_status=400)
-        operation = self._repository.begin_or_resume(command)
+        operation = resumed_operation or self._repository.begin_or_resume(command)
         if operation.phase is CustodyOperationPhase.COMPLETED:
             return dict(operation.result or {})
         if operation.phase not in (

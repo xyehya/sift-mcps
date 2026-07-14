@@ -57,7 +57,7 @@ Five tables:
 - `app.evidence_chain_heads` — per-case chain head + aggregate seal status (gate read model)
 - `app.evidence_proof_exports` — non-authoritative export metadata
 
-Security-Definer RPCs: `evidence_detect`, `evidence_register`, `evidence_seal` (re-auth required), `evidence_verify`, `evidence_ignore` (re-auth), `evidence_retire` (re-auth), `evidence_mark_violation`, `evidence_gate_status`, `evidence_record_proof_export`. Internal: `evidence_append_custody_event`, `evidence_recompute_seal_status`.
+Security-Definer RPCs include evidence detection, sealing, verification, closed drift classification, and durable operator dispositions. Portal routes do not invoke legacy one-shot ignore/retire mutations: Ignore, Delete Stray, and Retire begin a custody operation with an idempotency key and fresh re-authentication, block the gate, persist phase facts, and commit exactly once. Delete Stray is limited to readable pending files and records pinned pre-unlink identity/digest/size; Retire preserves protected bytes and every prior version. Service-only RPC grants and forced RLS keep browser roles out of this authority path. Internal chain helpers append custody events and recompute the aggregate gate.
 
 **Durable Jobs (`202606081200`):**
 - `app.jobs`, `app.job_steps`, `app.job_logs`, `app.worker_heartbeats`

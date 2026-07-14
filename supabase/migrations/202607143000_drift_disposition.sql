@@ -24,22 +24,53 @@ create function app.evidence_record_inventory_classification(
 ) returns app.evidence_inventory_observations
 language plpgsql security definer set search_path=pg_catalog,app as $$
 declare v_row app.evidence_inventory_observations;
+  v_expected_gate text;
 begin
   perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
   if length(coalesce(p_correlation_id,'')) not between 1 and 128
      or p_gate_state not in ('OPEN','BLOCKED_PENDING','BLOCKED_VIOLATION','BLOCKED_UNAVAILABLE')
-     or jsonb_typeof(p_findings)<>'array'
+     or p_findings is null or jsonb_typeof(p_findings)<>'array'
      or exists(select 1 from jsonb_array_elements(p_findings) f where
        jsonb_typeof(f)<>'object'
+       or not (f ?& array['code','gate_state','recovery','evidence_object_id',
+         'observation_id','full_verification_required'])
+       or jsonb_typeof(f->'code')<>'string'
+       or jsonb_typeof(f->'gate_state')<>'string'
+       or jsonb_typeof(f->'recovery')<>'string'
        or f->>'code' not in ('STORAGE_UNAVAILABLE','INVENTORY_SCAN_FAILED','MOUNT_IDENTITY_CHANGED',
          'LEDGER_INVALID','CONFLICTING_AUTHORITY','CONFLICTING_OBSERVATION','UNKNOWN_OBJECT_BINDING',
          'DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM','SEALED_EVIDENCE_MISSING','UNSAFE_SEALED_ENTRY',
          'CONTENT_CHANGED','IDENTITY_CHANGED','FULL_VERIFY_REQUIRED','POSTURE_DRIFT')
        or f->>'gate_state' not in ('BLOCKED_PENDING','BLOCKED_VIOLATION','BLOCKED_UNAVAILABLE')
+       or f->>'recovery' not in ('INVESTIGATE_AVAILABILITY','RECONNECT_AND_VERIFY',
+         'REPAIR_LEDGER','OPERATOR_DISPOSITION','RESTORE_REACQUIRE_RETIRE','FULL_VERIFY_AND_REPAIR')
+       or (f ? 'evidence_object_id' and f->'evidence_object_id'<>'null'::jsonb
+         and coalesce(f->>'evidence_object_id','') !~
+           '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$')
+       or (f ? 'observation_id' and f->'observation_id'<>'null'::jsonb
+         and coalesce(f->>'observation_id','') !~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$')
+       or not (f ? 'full_verification_required')
+       or jsonb_typeof(f->'full_verification_required')<>'boolean'
+       or f->>'gate_state' is distinct from case
+         when f->>'code' in ('DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM') then 'BLOCKED_PENDING'
+         when f->>'code' in ('STORAGE_UNAVAILABLE','INVENTORY_SCAN_FAILED','MOUNT_IDENTITY_CHANGED')
+           then 'BLOCKED_UNAVAILABLE'
+         else 'BLOCKED_VIOLATION' end
        or exists(select 1 from jsonb_object_keys(f) k where k not in
          ('code','gate_state','recovery','evidence_object_id','observation_id','full_verification_required'))
      ) then
     raise exception 'invalid_inventory_classification' using errcode='invalid_parameter_value';
+  end if;
+  select case
+    when exists(select 1 from jsonb_array_elements(p_findings) f
+      where f->>'gate_state'='BLOCKED_UNAVAILABLE') then 'BLOCKED_UNAVAILABLE'
+    when exists(select 1 from jsonb_array_elements(p_findings) f
+      where f->>'gate_state'='BLOCKED_VIOLATION') then 'BLOCKED_VIOLATION'
+    when exists(select 1 from jsonb_array_elements(p_findings) f
+      where f->>'gate_state'='BLOCKED_PENDING') then 'BLOCKED_PENDING'
+    else 'OPEN' end into v_expected_gate;
+  if p_gate_state is distinct from v_expected_gate then
+    raise exception 'inventory_gate_findings_mismatch' using errcode='invalid_parameter_value';
   end if;
   insert into app.evidence_inventory_observations(case_id,correlation_id,gate_state,findings)
     values(p_case_id,p_correlation_id,p_gate_state,p_findings)
@@ -55,6 +86,65 @@ begin
       when p_gate_state='BLOCKED_PENDING' then 'unsealed' else 'violated' end,
     issues=p_findings,updated_at=now() where case_id=p_case_id;
   return v_row;
+end $$;
+
+create function app.custody_operation_resume_disposition(
+  p_operation_id uuid,p_actor_user_id uuid,p_resume_reauth_audit_event_id uuid,
+  p_runner_instance_id text
+) returns app.custody_operations
+language plpgsql security definer set search_path=pg_catalog,app as $$
+declare v_case_id uuid; v_op app.custody_operations; v_reauth app.audit_events;
+  v_target_phase text; v_expected_event text; v_previous_runner text;
+begin
+  select case_id into v_case_id from app.custody_operations where id=p_operation_id;
+  if not found then raise exception 'custody_operation_missing' using errcode='no_data_found'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(v_case_id::text,0));
+  select * into v_op from app.custody_operations where id=p_operation_id for update;
+  if v_op.action not in ('IGNORE','DELETE_STRAY','RETIRE')
+     or v_op.phase not in ('GATE_BLOCKED','FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED','FAILED_RECOVERABLE')
+     or v_op.actor_user_id is distinct from p_actor_user_id
+     or v_op.actor_service_identity_id is not null
+     or length(btrim(coalesce(p_runner_instance_id,'')))=0 then
+    raise exception 'disposition_not_resumable' using errcode='invalid_authorization_specification';
+  end if;
+  v_expected_event:=app.custody_operation_reauth_event(v_op.action,'RESUME');
+  select * into v_reauth from app.audit_events where id=p_resume_reauth_audit_event_id for share;
+  if not found or v_reauth.case_id is distinct from v_op.case_id
+     or v_reauth.event_type is distinct from v_expected_event
+     or v_reauth.source<>'portal_reauth' or v_reauth.status<>'success'
+     or v_reauth.actor_type<>'user'
+     or v_reauth.actor_user_id is distinct from v_op.actor_user_id
+     or v_reauth.actor_service_identity_id is not null
+     or v_reauth.details->'binding' is distinct from
+       jsonb_build_object('operation_id',v_op.id::text) then
+    raise exception 'resume_reauth_scope_mismatch' using errcode='invalid_authorization_specification';
+  end if;
+  begin
+    insert into app.custody_operation_history(
+      operation_id,phase,facts,resume_reauth_audit_event_id
+    ) values(v_op.id,v_op.phase,jsonb_build_object('resume_authorized',true),
+      p_resume_reauth_audit_event_id);
+  exception when unique_violation then
+    raise exception 'resume_reauth_reused' using errcode='invalid_authorization_specification';
+  end;
+  v_previous_runner:=v_op.runner_instance_id;
+  v_target_phase:=case when v_op.phase='FAILED_RECOVERABLE'
+    then coalesce(v_op.failed_from_phase,'GATE_BLOCKED') else v_op.phase end;
+  if v_target_phase not in ('GATE_BLOCKED','FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED') then
+    raise exception 'disposition_resume_phase_invalid' using errcode='invalid_authorization_specification';
+  end if;
+  update app.custody_operations set phase=v_target_phase,failed_from_phase=null,
+    failure_code=null,runner_instance_id=p_runner_instance_id,
+    retired_runner_instance_ids=case
+      when v_previous_runner is null or v_previous_runner=p_runner_instance_id
+        then retired_runner_instance_ids
+      else retired_runner_instance_ids||jsonb_build_array(v_previous_runner) end,
+    updated_at=now() where id=v_op.id returning * into v_op;
+  insert into app.custody_operation_history(operation_id,phase,facts)
+    values(v_op.id,v_op.phase,jsonb_build_object(
+      'resumed',true,'preserved_prepared_facts',v_op.prepared_facts<>'{}'::jsonb,
+      'preserved_verified_facts',v_op.verified_facts<>'{}'::jsonb));
+  return v_op;
 end $$;
 
 create function app.custody_operation_commit_verified_disposition(
@@ -91,7 +181,10 @@ begin
     if (v_op.action='IGNORE' and v_obj.status<>'detected')
        or (v_op.action='DELETE_STRAY' and v_obj.status not in ('detected','registered','ignored'))
        or v_obj.seal_status<>'unsealed'
-       or p_item->>'sha256' !~ '^sha256:[0-9a-f]{64}$' or (p_item->>'bytes')::bigint<0
+       or coalesce(p_item->>'sha256','') !~ '^sha256:[0-9a-f]{64}$'
+       or (case when coalesce(p_item->>'bytes','') ~ '^[0-9]+$'
+         then (p_item->>'bytes')::numeric between 0 and 9223372036854775807
+         else false end) is not true
        or (v_op.action='IGNORE' and coalesce((p_item->>'present')::boolean,false) is false)
        or (v_op.action='DELETE_STRAY' and coalesce((p_item->>'present')::boolean,false)
            and coalesce((p_item->>'file_removed')::boolean,false) is false) then
@@ -148,6 +241,8 @@ revoke execute on function app.evidence_record_inventory_classification(uuid,tex
   from public,anon,authenticated;
 revoke execute on function app.custody_operation_commit_verified_disposition(uuid,jsonb,text,text)
   from public,anon,authenticated;
+revoke execute on function app.custody_operation_resume_disposition(uuid,uuid,uuid,text)
+  from public,anon,authenticated;
 revoke execute on function app.evidence_ignore(uuid,text,uuid,uuid,uuid)
   from public,anon,authenticated;
 revoke execute on function app.evidence_retire(uuid,text,uuid,uuid,uuid)
@@ -158,5 +253,7 @@ do $$ begin if exists(select 1 from pg_roles where rolname='service_role') then
   grant select on app.evidence_inventory_observations to service_role;
   grant execute on function app.evidence_record_inventory_classification(uuid,text,text,jsonb) to service_role;
   grant execute on function app.custody_operation_commit_verified_disposition(uuid,jsonb,text,text)
+    to service_role;
+  grant execute on function app.custody_operation_resume_disposition(uuid,uuid,uuid,text)
     to service_role;
 end if; end $$;

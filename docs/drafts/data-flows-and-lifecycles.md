@@ -65,7 +65,7 @@ invited -> forced reset -> active session
 - Authority: Supabase Auth (identity) + Postgres (`app` identity/membership from
   `202606070101_identity_foundation.sql`,
   `202606070300_unified_jwt_principals.sql`).
-- Sensitive mutations within the session require a fresh password/HMAC re-auth
+- Sensitive mutations within the session require fresh Supabase password re-auth
   (see lifecycle 10).
 
 ---
@@ -115,19 +115,18 @@ Per-object `status` enum (`202606081000_evidence_custody.sql`,
 retired | violated`. Per-object `seal_status`: `unsealed | sealed | violated`.
 Per-version `entry_status`: `ACTIVE | IGNORED | RETIRED`.
 
-The `violated -> sealed` recovery is the operator re-acquisition transition
-(`app.evidence_reacquire`, `202606101000_evidence_reacquire.sql`): when an item's
-bytes legitimately change (a corrupted acquisition is re-imaged), the operator
-re-seals it under password/HMAC re-auth with a mandatory reason. The broker
+The `violated -> sealed` recovery is the operator re-acquisition transition:
+when an item's bytes legitimately change (a corrupted acquisition is re-imaged),
+the operator re-seals it under fresh password re-authentication with a mandatory
+reason. The broker
 re-hashes the mounted replacement and the RPC writes an append-only supersession
 (a `MANIFEST_SEALED` custody event with `reacquired:true`, the superseded
 sha/bytes, the new sha/bytes, and the reason), advances the manifest version, and
 clears the violation. The prior sealed hash is superseded, never deleted, so the
-custody chain stays court-defensible. A `violated` item whose bytes are gone has
-no replacement to hash and is instead retired (`app.evidence_retire`). Both paths
-are surfaced as per-file Re-seal / Retire actions on the Evidence-tab "Modified
-Files" block; without them a single post-seal drift would latch the agent
-evidence gate closed with no operator remedy (the pre-`202606101000` dead-end).
+custody chain stays court-defensible. Exact Restore recovers missing bytes; Retire
+excludes an object from the next manifest while preserving its protected bytes and
+version history. These operator-only workflows use durable custody operations with
+object-bound re-authentication and idempotency rather than direct mutation RPCs.
 
 ```mermaid
 sequenceDiagram
@@ -330,7 +329,7 @@ stateDiagram-v2
   `PostgresInvestigationStore`. Agents record proposals via `record_finding`,
   `record_timeline_event`, `manage_todo`, `list_existing_findings`
   (`sift_core/agent_tools.py`).
-- Live proof: agent staged `F-hermes-v1-gate-001`; portal HMAC re-auth approved
+- Historical live proof: agent staged `F-hermes-v1-gate-001`; the then-current portal re-auth approved
   it (`authority=db, approved=1`) (`Session-Notes.md` 2026-06-08).
 
 ---
@@ -338,25 +337,18 @@ stateDiagram-v2
 ## 10. Approval / Re-Auth Lifecycle
 
 ```
-operator initiates sensitive action -> portal challenges password/HMAC ->
-verify -> record reauth_audit_event_id (append-only) -> proceed -> deny on failure/lockout
+operator initiates sensitive action -> portal verifies password against the
+authenticated Supabase identity -> record scoped reauth_audit_event_id
+(append-only) -> proceed -> deny on any verification/audit failure
 ```
 
 - Sensitive actions requiring re-auth (`AGENTS.md`; `Migration-Spec.md`
   section 4): case activation, evidence seal/ignore/retire, finding approval,
   report inclusion/export, agent credential issuance.
-- MVP mechanism is the local HMAC bridge (`_MVP_REAUTH_METHOD =
-  "local_hmac_mvp_bridge"` in `routes.py`); password hashes are stored 0o600 and
-  domain-separated keys derive login vs ledger HMAC
-  (`packages/sift-core/src/sift_core/approval_auth.py`). Lockout on repeated
-  failures (`LockoutError`).
-- Migrating re-auth fully to Supabase password verification is an improvement
-  area. Status: `needs live proof` that the MVP HMAC bridge is the final demo
-  mechanism vs Supabase re-auth (track in
-  `known-limitations-and-improvements.md`).
+- The verifier uses the session principal's email, never a request-body identity.
+  It discards returned grant tokens and has no local password/HMAC fallback.
 - Authority: Postgres append-only re-auth/audit events; the
   `reauth_audit_event_id` is required by C1 seal RPCs. Test:
-  `packages/sift-core/tests/test_approval_auth.py`,
   `packages/case-dashboard/tests/test_j1_report_reauth_custody.py`.
 
 ---

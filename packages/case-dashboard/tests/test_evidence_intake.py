@@ -97,12 +97,14 @@ class FakeEvidenceDB:
         self.resume_calls.append((case_id, operation_id, examiner, resume_reauth_audit_event_id))
         return {"seal_status": "sealed", "manifest_version": 2, "operation_id": operation_id}
 
-    def ignore(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
+    def ignore(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner, idempotency_key):
         assert reauth_audit_event_id
+        assert idempotency_key
         self.ignore_calls.append((display_path, reason, reauth_audit_event_id))
 
-    def retire(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
+    def retire(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner, idempotency_key):
         assert reauth_audit_event_id
+        assert idempotency_key
         self.retire_calls.append((display_path, reason, reauth_audit_event_id))
 
     def reacquire(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
@@ -159,10 +161,11 @@ class FakeEvidenceDB:
             "events": [{"event_id": "e1", "seq": 1, "event_type": "MANIFEST_SEALED"}],
         }
 
-    def delete_object(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
+    def delete_object(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner, idempotency_key):
         # Endpoint-level stub. Sealed-evidence protection is enforced in the real
         # EvidenceAuthorityService.delete_object (service-layer test).
         assert reauth_audit_event_id, "delete must receive a re-auth audit event id"
+        assert idempotency_key
         self.delete_calls.append((display_path, reason, reauth_audit_event_id))
         return {
             "evidence_id": "ev-del",
@@ -581,6 +584,43 @@ class TestEvidenceChainDelete:
         resp = authed_client.post("/api/evidence/chain/delete", json={})
         assert resp.status_code == 400
 
+    @pytest.mark.parametrize("endpoint", ["ignore", "delete", "retire"])
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"idempotency_key": ""},
+            {"unknown": True},
+        ],
+    )
+    def test_disposition_rejects_empty_intent_or_unknown_fields(
+        self, authed_client, endpoint, change
+    ):
+        body = {
+            "password": GOOD_PASSWORD,
+            "path": "evidence/stray.bin",
+            "reason": "operator disposition",
+            "idempotency_key": "intent-1",
+        }
+        body.update(change)
+        response = authed_client.post(f"/api/evidence/chain/{endpoint}", json=body)
+        assert response.status_code == 400
+
+    def test_disposition_fails_closed_without_object_resolver(
+        self, authed_client, evidence_db, monkeypatch
+    ):
+        monkeypatch.setattr(evidence_db, "recovery_object_id", None)
+        response = authed_client.post(
+            "/api/evidence/chain/delete",
+            json={
+                "password": GOOD_PASSWORD,
+                "path": "evidence/stray.bin",
+                "reason": "operator disposition",
+                "idempotency_key": "resolver-required",
+            },
+        )
+        assert response.status_code == 503
+        assert not evidence_db.delete_calls
+
     def test_delete_stray_file(self, authed_client, evidence_db):
         """Deleting a stray file reaches the DB delete with a re-auth id and reports
         the bytes were removed."""
@@ -590,6 +630,7 @@ class TestEvidenceChainDelete:
                 "password": GOOD_PASSWORD,
                 "path": "evidence/.planted-hidden",
                 "reason": "Unauthorized hidden file, not part of acquisition",
+                "idempotency_key": "delete-hidden-1",
             },
         )
         assert resp.status_code == 200
@@ -608,6 +649,7 @@ class TestEvidenceChainDelete:
                 "password": "wrong-password",
                 "path": "evidence/.planted-hidden",
                 "reason": "x",
+                "idempotency_key": "delete-hidden-2",
             },
         )
         assert resp.status_code == 401
@@ -618,7 +660,7 @@ class TestEvidenceChainDelete:
         c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
         resp = c.post(
             "/api/evidence/chain/delete",
-            json={"password": GOOD_PASSWORD, "path": "evidence/f", "reason": "r"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/f", "reason": "r", "idempotency_key": "delete-fresh"},
         )
         assert resp.status_code == 404
         assert "active case" in resp.json()["error"].lower()
@@ -641,6 +683,7 @@ class TestEvidenceChainIgnore:
                 "password": GOOD_PASSWORD,
                 "path": "evidence/stray.txt",
                 "reason": "Accidentally copied, not evidence",
+                "idempotency_key": "ignore-stray-1",
             },
         )
         assert resp.status_code == 200
@@ -659,6 +702,7 @@ class TestEvidenceChainIgnore:
                 "password": "wrong-password",
                 "path": "evidence/stray.txt",
                 "reason": "not needed",
+                "idempotency_key": "ignore-stray-2",
             },
         )
         assert resp.status_code == 401
@@ -682,7 +726,7 @@ class TestEvidenceChainIgnore:
         fake_auth.control_plane_down = True
         resp = authed_client.post(
             "/api/evidence/chain/ignore",
-            json={"password": GOOD_PASSWORD, "path": "evidence/x.txt", "reason": "test"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/x.txt", "reason": "test", "idempotency_key": "ignore-down"},
         )
         assert resp.status_code == 503
         assert not evidence_db.ignore_calls
@@ -691,7 +735,7 @@ class TestEvidenceChainIgnore:
         c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
         resp = c.post(
             "/api/evidence/chain/ignore",
-            json={"password": GOOD_PASSWORD, "path": "evidence/x.txt", "reason": "r"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/x.txt", "reason": "r", "idempotency_key": "ignore-fresh"},
         )
         assert resp.status_code == 404
 
@@ -735,7 +779,7 @@ class TestEvidenceChainRetire:
         fake_auth.control_plane_down = True
         resp = authed_client.post(
             "/api/evidence/chain/retire",
-            json={"password": GOOD_PASSWORD, "path": "evidence/x.bin", "reason": "test"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/x.bin", "reason": "test", "idempotency_key": "retire-down"},
         )
         assert resp.status_code == 503
         assert not evidence_db.retire_calls
@@ -744,7 +788,7 @@ class TestEvidenceChainRetire:
         resp = authed_client.post(
             "/api/evidence/chain/retire",
             json={"password": GOOD_PASSWORD,
-                  "path": "evidence/sample.E01", "reason": "corrupt acquisition"},
+                  "path": "evidence/sample.E01", "reason": "corrupt acquisition", "idempotency_key": "retire-active"},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -760,7 +804,7 @@ class TestEvidenceChainRetire:
         resp = authed_client.post(
             "/api/evidence/chain/retire",
             json={"password": "wrong-password",
-                  "path": "evidence/x.bin", "reason": "test"},
+                  "path": "evidence/x.bin", "reason": "test", "idempotency_key": "retire-wrong"},
         )
         assert resp.status_code == 401
         assert not evidence_db.retire_calls
@@ -769,7 +813,7 @@ class TestEvidenceChainRetire:
         c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
         resp = c.post(
             "/api/evidence/chain/retire",
-            json={"password": GOOD_PASSWORD, "path": "evidence/x.bin", "reason": "r"},
+            json={"password": GOOD_PASSWORD, "path": "evidence/x.bin", "reason": "r", "idempotency_key": "retire-fresh"},
         )
         assert resp.status_code == 404
 

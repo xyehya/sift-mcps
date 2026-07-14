@@ -16,12 +16,14 @@ import os
 import stat
 import sys
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from sift_gateway.custody_drift import (
     AuthorityEvidence,
+    DriftCode,
     EntryKind,
     FileIdentity,
     InventorySnapshot,
@@ -540,7 +542,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
                            o.sealed_at, v.metadata
                     from app.evidence_objects o
                     left join app.evidence_versions v on v.id=o.current_version_id
-                    where o.case_id = %s and o.status = 'sealed' and o.seal_status = 'sealed'
+                    where o.case_id = %s and o.status in ('sealed','violated')
+                      and o.current_version_id is not null
                     """,
                     (case_id,),
                 )
@@ -550,7 +553,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         "sha256": str(row[2] or ""),
                         "bytes": row[3],
                         "sealed_at": row[4],
-                        "metadata": row[5] if isinstance(row[5], dict) else {},
+                        "metadata": row[5] if len(row) > 5 and isinstance(row[5], dict) else {},
                     }
                     for row in cur.fetchall()
                 }
@@ -563,7 +566,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 live: set[str] = set()
                 unsafe: list[str] = []
                 storage_available = True
-                correlation_id = _admission_correlation_id()
+                correlation_id = _admission_correlation_id() or f"portal-{uuid.uuid4().hex}"
                 observed_facts: list[MountedEvidence] = []
                 if not evidence_dir.is_dir():
                     storage_available = False
@@ -597,19 +600,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                 entry_kind=kind,byte_count=st.st_size if st else None,
                                 hidden=entry.name.startswith("."),
                             ))
-                            obj_id = self._record_detected_observation(
+                            self._record_detected_observation(
                                 cur,
                                 case_id,
                                 rel,
                                 entry.name,
                                 st.st_size if st else None,
-                                correlation_id,
-                            )
-                            self._record_admission_violation(
-                                cur,
-                                case_id,
-                                obj_id,
-                                "unsafe_evidence_inventory_entry",
                                 correlation_id,
                             )
                             unsafe.append("unsafe_evidence_inventory_entry")
@@ -644,36 +640,6 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                 st.st_mtime_ns,st.st_ctime_ns,st.st_nlink),
                             immutable=immutable,
                         ))
-                        sealed_at = known["sealed_at"]
-                        sealed_ns = (
-                            int(sealed_at.timestamp() * 1_000_000_000)
-                            if isinstance(sealed_at, datetime)
-                            else 0
-                        )
-                        if (
-                            known["bytes"] is not None
-                            and st.st_size != int(known["bytes"])
-                        ) or (sealed_ns and st.st_ctime_ns > sealed_ns):
-                            self._record_admission_violation(
-                                cur,
-                                case_id,
-                                known["id"],
-                                "sealed_evidence_changed",
-                                correlation_id,
-                            )
-                            unsafe.append("sealed_evidence_changed")
-
-                if storage_available:
-                    for rel, known in sealed.items():
-                        if rel not in live:
-                            self._record_admission_violation(
-                                cur,
-                                case_id,
-                                known["id"],
-                                "sealed_evidence_missing",
-                                correlation_id,
-                            )
-                            unsafe.append("sealed_evidence_missing")
                 expected_facts: list[AuthorityEvidence] = []
                 for known in sealed.values():
                     posture = known["metadata"].get("posture", {})
@@ -686,6 +652,29 @@ class EvidenceAuthorityService(_BasePortalDbService):
                             int(posture["st_mtime_ns"]),int(posture["st_ctime_ns"]),
                             int(posture["st_nlink"]),
                         )
+                    if identity is None:
+                        observed = next(
+                            (
+                                item
+                                for item in observed_facts
+                                if item.evidence_object_id == known["id"]
+                            ),
+                            None,
+                        )
+                        sealed_at = known.get("sealed_at")
+                        sealed_ns = (
+                            int(sealed_at.timestamp() * 1_000_000_000)
+                            if isinstance(sealed_at, datetime)
+                            else 0
+                        )
+                        if (
+                            observed is not None
+                            and observed.identity is not None
+                            and known["bytes"] is not None
+                            and observed.identity.byte_count == int(known["bytes"])
+                            and sealed_ns >= observed.identity.ctime_ns
+                        ):
+                            identity = observed.identity
                     sha = str(known["sha256"] or "").removeprefix("sha256:")
                     if len(sha) == 64 and known["bytes"] is not None:
                         expected_facts.append(AuthorityEvidence(
@@ -705,6 +694,22 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     "observation_id": finding.observation_id,
                     "full_verification_required": finding.full_verification_required,
                 } for finding in classification.findings]
+                violation_reasons = {
+                    DriftCode.CONTENT_CHANGED: "sealed_evidence_changed",
+                    DriftCode.SEALED_EVIDENCE_MISSING: "sealed_evidence_missing",
+                    DriftCode.UNSAFE_SEALED_ENTRY: "unsafe_evidence_inventory_entry",
+                }
+                for finding in classification.findings:
+                    reason = violation_reasons.get(finding.code)
+                    if reason and finding.evidence_object_id:
+                        self._record_admission_violation(
+                            cur,
+                            case_id,
+                            finding.evidence_object_id,
+                            reason,
+                            correlation_id,
+                        )
+                        unsafe.append(reason)
                 cur.execute(
                     "select app.evidence_record_inventory_classification(%s,%s,%s,%s)",
                     (case_id,correlation_id,classification.gate_state.value,_jsonb(findings)),
@@ -712,6 +717,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
             conn.commit()
         return {
             "state": "available" if storage_available else "unavailable",
+            "gate_state": classification.gate_state.value,
             "observed": len(live),
             "issues": sorted(set(unsafe)),
             "correlation_id": correlation_id,
@@ -750,7 +756,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
         )
 
     def gate_status(self, case_id: str) -> dict[str, Any]:
-        self.reconcile_for_admission(case_id)
+        reconciliation = self.reconcile_for_admission(case_id)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -783,6 +789,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 "last_verified_at": None,
                 "unregistered": unregistered,
                 "incomplete_operation": incomplete,
+                "gate_state": reconciliation["gate_state"],
             }
         return {
             "seal_status": row[0],
@@ -793,10 +800,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "last_verified_at": _iso(row[5]),
             "unregistered": unregistered,
             "incomplete_operation": incomplete,
+            "gate_state": reconciliation["gate_state"],
         }
 
     def list_evidence(self, case_id: str) -> list[dict[str, Any]]:
-        self._scan_evidence(case_id)
+        self.reconcile_for_admission(case_id)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1322,6 +1330,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
         evidence_object_id = str(stored.get("evidence_object_id") or "")
         try:
             action = CustodyAction(str(row[6]))
+            if action not in (
+                CustodyAction.IGNORE,
+                CustodyAction.DELETE_STRAY,
+                CustodyAction.RETIRE,
+            ):
+                raise ValueError("stored disposition action invalid")
             command = ObjectCustodyCommand(
                 action=action,case_id=case_id,evidence_object_id=evidence_object_id,
                 actor_user_id=actor_user,actor_service_identity_id=None,
@@ -1329,9 +1343,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 idempotency_key=str(row[2] or ""),
                 resume_reauth_audit_event_id=resume_reauth_audit_event_id,
             )
+            resumed = self._custody_repository.resume_disposition(
+                operation_id,
+                actor_user_id=actor_user,
+                resume_reauth_audit_event_id=resume_reauth_audit_event_id,
+            )
             return DispositionCustodyOperation(
                 self._custody_repository,self._case_artifact_path,self._recovery_object_for_id,
-            ).execute(command, examiner=examiner)
+            ).execute(command, examiner=examiner, resumed_operation=resumed)
         except (CustodyOperationError, ValueError) as exc:
             reason = exc.reason if isinstance(exc, CustodyOperationError) else "custody_operation_command_invalid"
             status = exc.http_status if isinstance(exc, CustodyOperationError) else 409
@@ -1492,18 +1511,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
         examiner: str,
         idempotency_key: str = "",
     ) -> dict[str, Any]:
-        """Operator-delete a non-sealed stray file: physically unlink the bytes
-        and record an auditable disposition.
+        """Delete a non-sealed stray through the durable custody operation.
 
-        This exists because ``ignore``/``retire`` only change DB status — the file
-        bytes stay on disk and remain readable by the AI agent (which can ``cat``
-        any relative path under ``evidence/`` once the gate is OK). To actually
-        prevent agent access to a planted/stray/hidden file the operator must be
-        able to remove the bytes. Sealed evidence can never be deleted here
-        (custody integrity); use the retire path for that.
-
-        Forensic record: the file's sha256 + size are captured before unlink and
-        embedded in the append-only custody event via ``evidence_ignore``.
+        The operation blocks admission before pinning and hashing the directory
+        entry, then unlinks only that same inode. The recorded pre-unlink digest,
+        size, and identity are committed append-only. Sealed evidence is never
+        eligible; Retire preserves its bytes and version history.
         """
         return self._execute_disposition(
             case_id=case_id,display_path=display_path,action=CustodyAction.DELETE_STRAY,
@@ -1512,7 +1525,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
         )
 
     def _scan_evidence(self, case_id: str) -> None:
-        """Reconcile the mounted evidence tree against DB custody authority.
+        """Legacy full-tree reconciliation used by operator verification paths.
 
         Two responsibilities, both DB-first:
 
@@ -1520,11 +1533,9 @@ class EvidenceAuthorityService(_BasePortalDbService):
           ``app.evidence_detect`` (idempotent). A new ``detected`` row keeps the
           aggregate seal status non-OK until the operator registers/ignores and
           reseals, so a post-seal addition fails the gate closed.
-        - Sealed files that have gone missing or changed bytes on disk are a
-          tamper event. We escalate the case chain to ``violated`` via
-          ``app.evidence_mark_violation`` so the DB gate fails closed. File
-          manifests/ledgers are never consulted for this decision — only the
-          mounted bytes vs. the sealed DB version metadata.
+        - Sealed files that have gone missing or changed bytes on disk are
+          escalated through the DB violation authority. Admission uses
+          ``reconcile_for_admission`` and the closed drift classifier instead.
 
         File proofs (manifest/ledger/anchor JSON) are not read here; tampering
         with them cannot change the DB-active gate state.
@@ -1538,13 +1549,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
         live: dict[str, int] = {}
         with self._connect() as conn:
             with conn.cursor() as cur:
-                # Detection MUST surface every real file under evidence/, including
-                # hidden/dotfiles. The AI agent can read any file in this tree via
-                # run_command (relative paths) once the gate is OK, so operator
-                # visibility must be a superset of agent access — hiding a file here
-                # would make a planted hidden file agent-readable yet operator-
-                # invisible (a backdoor). Transient copy temps are handled instead
-                # by letting the operator delete stray files from the portal.
+                # Detection includes hidden entries so operator inventory remains
+                # a superset of the gateway's evidence-reference admission surface.
                 for path in sorted(evidence_dir.rglob("*")):
                     if path.is_symlink() or not path.is_file():
                         continue

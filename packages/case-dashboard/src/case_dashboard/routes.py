@@ -91,15 +91,15 @@ _ACTIVE_CASES = None
 # BATCH-E1 — portal DB-authority seams. The Gateway injects these (same DI
 # pattern as _ACTIVE_CASES / _SUPABASE_AUTH); case_dashboard NEVER imports
 # sift_gateway. Each is an object exposing plain-dict-returning methods. When a
-# slot is None the route falls back to the legacy file-backed path so existing
-# suites and non-gateway deployments keep working. None of these ever surface
+# slot is None, read-only legacy routes may retain compatibility behavior, but
+# custody mutations fail closed without DB authority. None of these ever surface
 # absolute case/evidence/mount paths or secret material to the response.
 #
 #   _EVIDENCE_DB  -> DB evidence authority over the C1 custody RPCs
-#                    (list_evidence / custody_events / seal / ignore / retire /
-#                    verify_chain / gate_status). seal/ignore/retire/verify
+#                    (list_evidence / custody_events / durable custody operations /
+#                    verify_chain / gate_status). Custody mutations and verify
 #                    require a reauth_audit_event_id produced by the portal's
-#                    existing password/HMAC re-auth.
+#                    fresh Supabase password re-authentication.
 #   _INVESTIGATION_DB -> DB authority for findings/timeline/todos/iocs read +
 #                    todo mutations (list_findings / list_timeline / list_todos /
 #                    list_iocs / create_todo / update_todo / delete_todo).
@@ -144,9 +144,9 @@ def _db_investigation_active() -> bool:
 def _reauth_event_id(request: Request) -> str | None:
     """Read the re-auth audit event id stamped on request.state by the re-auth path.
 
-    The portal's password/HMAC re-auth helpers record an audit event id (when a DB
+    The portal's password re-auth helper records an audit event id (when a DB
     audit sink is wired) and attach it to request.state.reauth_audit_event_id. The
-    C1 seal/ignore/retire RPCs require this id; this is the single read point.
+    custody operation RPCs require this id; this is the single read point.
     """
     eid = getattr(request.state, "reauth_audit_event_id", None)
     return str(eid) if eid else None
@@ -689,9 +689,10 @@ def _session_operator_email(request: Request) -> str | None:
 async def _supabase_reverify(request: Request, body: dict) -> JSONResponse | None:
     """Fail-closed Supabase re-verification of an operator-submitted password.
 
-    The single sensitive-action re-auth verifier (B-MVP-017 / CL3a). Replaces the
-    local file-HMAC challenge for evidence seal/ignore/retire/reacquire/verify,
-    commit, report inclusion/export, case-activate, and backend/service control.
+    The single sensitive-action re-auth verifier (B-MVP-017 / CL3a). It covers
+    evidence custody/recovery/verification, commit, report inclusion/export,
+    case activation, and backend/service control; no local credential fallback
+    participates in the decision.
 
     Contract:
       - Email comes from the AUTHENTICATED SESSION (``_session_operator_email``),
@@ -1219,7 +1220,7 @@ async def post_evidence_chain_seal_resume(request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-    if not isinstance(body, dict) or set(body) - {"password", "operation_id"}:
+    if not isinstance(body, dict) or set(body) != {"password", "operation_id"}:
         return JSONResponse({"error": "Unknown resume request field"}, status_code=400)
     operation_id = str(body.get("operation_id") or "").strip()
     try:
@@ -1255,10 +1256,10 @@ async def post_evidence_chain_seal_resume(request: Request) -> JSONResponse:
 
 
 async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
-    """Mark an unregistered evidence file as intentionally ignored with HMAC confirmation.
+    """Mark an unregistered evidence file as intentionally ignored.
 
-    Body: {challenge_id, response, path, reason}
-    Requires: session examiner + role examiner + must_reset_password=false + HMAC.
+    Body: {password, path, reason, idempotency_key}.
+    Requires a fresh operator re-authentication bound to the resolved Evidence Object.
     """
     role_err = _require_examiner_role(request)
     if role_err:
@@ -1276,6 +1277,10 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(body, dict) or set(body) != {
+        "password", "path", "reason", "idempotency_key"
+    }:
+        return JSONResponse({"error": "Invalid ignore request fields"}, status_code=400)
 
     rel_path = str(body.get("path", "")).strip()
     reason = str(body.get("reason", "")).strip()
@@ -1283,10 +1288,10 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
 
     if not rel_path:
         return JSONResponse({"error": "Missing path"}, status_code=400)
-    if not reason:
-        return JSONResponse({"error": "Missing reason"}, status_code=400)
-    if len(idempotency_key) > 128:
-        return JSONResponse({"error": "idempotency_key is too long (max 128 characters)"}, status_code=400)
+    if not reason or len(reason) > 1000:
+        return JSONResponse({"error": "reason is required (max 1000 characters)"}, status_code=400)
+    if not idempotency_key or len(idempotency_key) > 128:
+        return JSONResponse({"error": "idempotency_key is required (max 128 characters)"}, status_code=400)
 
     # CL3a: re-verify the operator's password against Supabase (fail closed).
     reauth_err = await _supabase_reverify(request, body)
@@ -1298,12 +1303,12 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     if not callable(ignorer):
         return _no_case_response()
     resolver = getattr(_EVIDENCE_DB, "recovery_object_id", None)
-    evidence_object_id = "00000000-0000-4000-8000-000000000000"
-    if callable(resolver):
-        try:
-            evidence_object_id = resolver(case_id=_active_case_id(), display_path=rel_path)
-        except Exception as exc:
-            return _active_case_error_response(exc, default=500)
+    if not callable(resolver):
+        return JSONResponse({"error": "Evidence object resolver unavailable"}, status_code=503)
+    try:
+        evidence_object_id = resolver(case_id=_active_case_id(), display_path=rel_path)
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
 
     reauth_id = _record_reauth_event(request, examiner, "evidence_ignore", binding={
         "action": "IGNORE", "evidence_object_id": evidence_object_id,
@@ -1314,19 +1319,16 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
             {"error": "Re-auth audit event required for ignore"},
             status_code=403,
         )
-    effective_idempotency_key = idempotency_key or f"ignore:{reauth_id}"
     try:
-        ignore_args = dict(
+        ignorer(
             case_id=_active_case_id(),
             display_path=rel_path,
             reason=reason,
             reauth_audit_event_id=reauth_id,
             actor=_request_principal(request),
             examiner=examiner,
+            idempotency_key=idempotency_key,
         )
-        if idempotency_key:
-            ignore_args["idempotency_key"] = effective_idempotency_key
-        ignorer(**ignore_args)
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
 
@@ -1346,16 +1348,11 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
 
 
 async def post_evidence_chain_delete(request: Request) -> JSONResponse:
-    """Physically delete a non-sealed stray evidence file with HMAC confirmation.
+    """Durably delete a non-sealed stray after gate block and pre-unlink proof.
 
-    Body: {challenge_id, response, path, reason}
-    Requires: session examiner + role examiner + must_reset_password=false + HMAC.
-
-    Unlike ignore (which only marks the DB object dispositioned, leaving the bytes
-    on disk and still readable by the AI agent via run_command), delete removes the
-    file bytes so a planted/stray/hidden file can no longer be parsed or indexed by
-    the agent. Sealed evidence cannot be deleted (custody integrity). The removed
-    file's sha256 + size are recorded in an append-only custody event.
+    Body: {password, path, reason, idempotency_key}. The server resolves the object,
+    binds fresh re-authentication, blocks the gate, records pinned hash/size/identity,
+    and only then unlinks the same directory entry. Sealed evidence is ineligible.
     """
     role_err = _require_examiner_role(request)
     if role_err:
@@ -1373,6 +1370,10 @@ async def post_evidence_chain_delete(request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(body, dict) or set(body) != {
+        "password", "path", "reason", "idempotency_key"
+    }:
+        return JSONResponse({"error": "Invalid delete request fields"}, status_code=400)
 
     rel_path = str(body.get("path", "")).strip()
     reason = str(body.get("reason", "")).strip()
@@ -1380,10 +1381,10 @@ async def post_evidence_chain_delete(request: Request) -> JSONResponse:
 
     if not rel_path:
         return JSONResponse({"error": "Missing path"}, status_code=400)
-    if not reason:
-        return JSONResponse({"error": "Missing reason"}, status_code=400)
-    if len(idempotency_key) > 128:
-        return JSONResponse({"error": "idempotency_key is too long (max 128 characters)"}, status_code=400)
+    if not reason or len(reason) > 1000:
+        return JSONResponse({"error": "reason is required (max 1000 characters)"}, status_code=400)
+    if not idempotency_key or len(idempotency_key) > 128:
+        return JSONResponse({"error": "idempotency_key is required (max 128 characters)"}, status_code=400)
 
     # CL3a: re-verify the operator's password against Supabase (fail closed).
     reauth_err = await _supabase_reverify(request, body)
@@ -1395,12 +1396,12 @@ async def post_evidence_chain_delete(request: Request) -> JSONResponse:
     if not callable(deleter):
         return _no_case_response()
     resolver = getattr(_EVIDENCE_DB, "recovery_object_id", None)
-    evidence_object_id = "00000000-0000-4000-8000-000000000000"
-    if callable(resolver):
-        try:
-            evidence_object_id = resolver(case_id=_active_case_id(), display_path=rel_path)
-        except Exception as exc:
-            return _active_case_error_response(exc, default=500)
+    if not callable(resolver):
+        return JSONResponse({"error": "Evidence object resolver unavailable"}, status_code=503)
+    try:
+        evidence_object_id = resolver(case_id=_active_case_id(), display_path=rel_path)
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
 
     reauth_id = _record_reauth_event(request, examiner, "evidence_delete", binding={
         "action": "DELETE_STRAY", "evidence_object_id": evidence_object_id,
@@ -1411,19 +1412,16 @@ async def post_evidence_chain_delete(request: Request) -> JSONResponse:
             {"error": "Re-auth audit event required for delete"},
             status_code=403,
         )
-    effective_idempotency_key = idempotency_key or f"delete:{reauth_id}"
     try:
-        delete_args = dict(
+        result = deleter(
             case_id=_active_case_id(),
             display_path=rel_path,
             reason=reason,
             reauth_audit_event_id=reauth_id,
             actor=_request_principal(request),
             examiner=examiner,
+            idempotency_key=idempotency_key,
         )
-        if idempotency_key:
-            delete_args["idempotency_key"] = effective_idempotency_key
-        result = deleter(**delete_args)
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
     result = result if isinstance(result, dict) else {}
@@ -1447,15 +1445,10 @@ async def post_evidence_chain_delete(request: Request) -> JSONResponse:
 
 
 async def post_evidence_chain_retire(request: Request) -> JSONResponse:
-    """Retire a registered evidence file with HMAC confirmation.
+    """Durably retire versioned evidence while retaining protected bytes/history.
 
-    Documents the deliberate removal of an ACTIVE evidence file.
-    Distinct from ignore (which is for unregistered files).
-    Clears the immutable flag and deletes the file from disk after
-    recording the FILE_RETIRED ledger event.
-
-    Body: {challenge_id, response, path, reason}
-    Requires: session examiner + role examiner + must_reset_password=false + HMAC.
+    Body: {password, path, reason, idempotency_key}. Retire creates one manifest
+    excluding the object; it does not unlink bytes or clear immutable protection.
     """
     role_err = _require_examiner_role(request)
     if role_err:
@@ -1473,6 +1466,10 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(body, dict) or set(body) != {
+        "password", "path", "reason", "idempotency_key"
+    }:
+        return JSONResponse({"error": "Invalid retire request fields"}, status_code=400)
 
     rel_path = str(body.get("path", "")).strip()
     reason = str(body.get("reason", "")).strip()
@@ -1480,10 +1477,10 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
 
     if not rel_path:
         return JSONResponse({"error": "Missing path"}, status_code=400)
-    if not reason:
-        return JSONResponse({"error": "Missing reason"}, status_code=400)
-    if len(idempotency_key) > 128:
-        return JSONResponse({"error": "idempotency_key is too long (max 128 characters)"}, status_code=400)
+    if not reason or len(reason) > 1000:
+        return JSONResponse({"error": "reason is required (max 1000 characters)"}, status_code=400)
+    if not idempotency_key or len(idempotency_key) > 128:
+        return JSONResponse({"error": "idempotency_key is required (max 128 characters)"}, status_code=400)
 
     # CL3a: re-verify the operator's password against Supabase (fail closed).
     reauth_err = await _supabase_reverify(request, body)
@@ -1495,12 +1492,12 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
     if not callable(retirer):
         return _no_case_response()
     resolver = getattr(_EVIDENCE_DB, "recovery_object_id", None)
-    evidence_object_id = "00000000-0000-4000-8000-000000000000"
-    if callable(resolver):
-        try:
-            evidence_object_id = resolver(case_id=_active_case_id(), display_path=rel_path)
-        except Exception as exc:
-            return _active_case_error_response(exc, default=500)
+    if not callable(resolver):
+        return JSONResponse({"error": "Evidence object resolver unavailable"}, status_code=503)
+    try:
+        evidence_object_id = resolver(case_id=_active_case_id(), display_path=rel_path)
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
 
     reauth_id = _record_reauth_event(request, examiner, "evidence_retire", binding={
         "action": "RETIRE", "evidence_object_id": evidence_object_id,
@@ -1511,19 +1508,16 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
             {"error": "Re-auth audit event required for retire"},
             status_code=403,
         )
-    effective_idempotency_key = idempotency_key or f"retire:{reauth_id}"
     try:
-        retire_args = dict(
+        retirer(
             case_id=_active_case_id(),
             display_path=rel_path,
             reason=reason,
             reauth_audit_event_id=reauth_id,
             actor=_request_principal(request),
             examiner=examiner,
+            idempotency_key=idempotency_key,
         )
-        if idempotency_key:
-            retire_args["idempotency_key"] = effective_idempotency_key
-        retirer(**retire_args)
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
 
@@ -1555,8 +1549,8 @@ async def post_evidence_chain_disposition_resume(request: Request) -> JSONRespon
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-    if not isinstance(body, dict) or set(body) - {"password", "operation_id"}:
-        return JSONResponse({"error": "Unknown disposition resume field"}, status_code=400)
+    if not isinstance(body, dict) or set(body) != {"password", "operation_id"}:
+        return JSONResponse({"error": "Invalid disposition resume fields"}, status_code=400)
     try:
         operation_id = str(uuid.UUID(str(body.get("operation_id") or "")))
     except (ValueError, AttributeError):
@@ -1568,12 +1562,17 @@ async def post_evidence_chain_disposition_resume(request: Request) -> JSONRespon
     if not callable(action_getter) or not callable(resumer):
         return _no_case_response()
     try:
-        action = action_getter(case_id=_active_case_id(), operation_id=operation_id)
-        event = {
+        action = str(
+            action_getter(case_id=_active_case_id(), operation_id=operation_id)
+        )
+        events = {
             "IGNORE": "evidence_ignore_resume",
             "DELETE_STRAY": "evidence_delete_resume",
             "RETIRE": "evidence_retire_resume",
-        }[action]
+        }
+        if action not in events:
+            return JSONResponse({"error": "Stored disposition action is invalid"}, status_code=409)
+        event = events[action]
         reauth_id = _record_reauth_event(
             request, examiner, event, binding={"operation_id": operation_id}
         )
@@ -1726,7 +1725,7 @@ async def post_evidence_recovery_complete(request: Request) -> JSONResponse:
 
 
 async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
-    """Re-verify sealed evidence against DB custody authority with HMAC confirmation.
+    """Full-verify sealed evidence against DB custody authority after fresh re-auth.
 
     DB custody authority only (C1): ``_EVIDENCE_DB.verify`` re-hashes the sealed
     objects and records the outcome (escalating to ``violated`` on failure); the
@@ -1734,8 +1733,8 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
     portal can remind the examiner. No ledger/manifest file is read. Without DB
     authority there is no file-backed fallback — degrade gracefully to no_case.
 
-    Body: {challenge_id, response}
-    Requires: session examiner + role examiner + must_reset_password=false + HMAC.
+    Body: {password}
+    Requires: session examiner + role examiner + must_reset_password=false.
     Returns: {ok, verified, issues, verified_at, verified_by, authority}
     """
     role_err = _require_examiner_role(request)
@@ -1867,7 +1866,7 @@ async def post_evidence_chain_proof_export(request: Request) -> JSONResponse:
 
 
 async def get_response_guard_status(request: Request) -> JSONResponse:
-    """Return current response-guard override status. Session auth, no HMAC."""
+    """Return current response-guard override status; no fresh re-auth required."""
     role_err = _require_portal_role(request)
     if role_err:
         return role_err
@@ -1880,9 +1879,9 @@ async def get_response_guard_status(request: Request) -> JSONResponse:
 
 
 async def post_response_guard_override(request: Request) -> JSONResponse:
-    """Enable response-guard override with HMAC confirmation (default TTL: 10 min).
+    """Enable response-guard override after fresh password re-auth (default 10 min).
 
-    Body: {challenge_id, response, ttl_seconds?}
+    Body: {password, ttl_seconds?}
     """
     role_err = _require_examiner_role(request)
     if role_err:
@@ -1931,7 +1930,7 @@ async def post_response_guard_override(request: Request) -> JSONResponse:
 
 
 async def post_response_guard_override_cancel(request: Request) -> JSONResponse:
-    """Cancel an active response-guard override. Session auth only (no HMAC)."""
+    """Cancel an active response-guard override; no fresh re-auth required."""
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
@@ -5873,11 +5872,10 @@ def create_dashboard_v2_app(
         active_case_service: PR03B Gateway-injected DB active-case service. When
             present, case list/create/activate/metadata use Postgres authority
             and never write active-case env/config/pointer exports.
-        evidence_service: BATCH-E1 Gateway-injected DB evidence authority over the
-            C1 custody RPCs. When present, evidence read + seal/ignore/retire use
-            Postgres authority; seal/ignore/retire pass the re-auth audit event id
-            produced by the portal's password/HMAC re-auth. When None, the legacy
-            file-backed evidence-chain path is used.
+        evidence_service: Gateway-injected DB evidence authority. Evidence reads,
+            durable custody operations, and full verify use Postgres authority and
+            pass the audit id produced by fresh Supabase password re-auth. Without
+            it, custody mutations fail closed; no file-backed mutation path exists.
         investigation_service: BATCH-E1 Gateway-injected DB authority for
             findings/timeline/iocs/todos read + todo create/update/delete. Agent
             proposals stay proposed/draft until a human approves them. When None,

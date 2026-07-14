@@ -23,7 +23,7 @@ DSNs, or passwords appear here.
 | Portal route table | `case_dashboard/routes.py` `create_dashboard_v2_app()` `Route(...)` list (≈ lines 5983-6061) |
 | Portal session auth / principal resolution | `case_dashboard/auth.py` `PortalSessionMiddleware.dispatch` |
 | Portal RBAC (examiner vs readonly) | `routes.py` `_require_examiner_role` / `_require_portal_role` / `_require_owner_or_admin` |
-| Re-auth (password/HMAC) | `routes.py` `_verify_evidence_hmac`, `get_*_challenge`, `_record_reauth_event` |
+| Sensitive-action re-auth | `routes.py` `_supabase_reverify`, `_record_reauth_event` |
 | Gateway REST v1 route table | `sift_gateway/rest.py` `rest_routes()` |
 | Operator-only REST enforcement | `rest.py` `call_tool` + `sift_gateway/auth.py` `is_agent_principal` |
 | Health | `sift_gateway/health.py` `health_endpoint` / `health_routes` |
@@ -51,20 +51,15 @@ DSNs, or passwords appear here.
 becomes `examiner` (`auth.py` `_examiner_role_from_principal`). Owner/admin-only
 endpoints (principal issuance/revoke) use `_require_owner_or_admin`.
 
-### Re-auth (password/HMAC) gate
+### Re-auth gate
 
-Sensitive operator actions require a fresh password proof on top of the session. The
-pattern is a challenge/response HMAC: GET a `*/challenge` endpoint to obtain
-`{challenge_id, nonce, salt, iterations=600000, hash_algorithm="SHA-256",
-reauth_method="local_hmac_mvp_bridge"}`, then POST the action with
-`{challenge_id, response}` where `response = HMAC_SHA256(stored_pw_hash, nonce)`
-(`routes.py` `get_evidence_chain_challenge` / `_verify_evidence_hmac`). Challenges are
-single-use, TTL ≈ 30s, and IP-bound (`bound_ip`). In DB-active mode the re-auth also
-writes an audit event whose id (`_record_reauth_event` →
-`request.state.reauth_audit_event_id`) is **required** by the C1 seal/ignore/retire
-RPCs; absence ⇒ 403. Re-auth-gated actions: case activation, evidence
-seal/ignore/retire, ledger HMAC verify, finding approval (commit), and report
-generation/inclusion.
+Sensitive operator actions require fresh password verification against the authenticated
+session's own Supabase identity. The password is the only client-supplied secret; any
+returned grant tokens are discarded. Successful verification writes a DB audit event,
+and evidence dispositions bind that event to the server-resolved Evidence Object,
+fixed action, reason, and idempotency key. Missing verification or audit linkage fails
+closed. This applies to case activation, custody recovery/disposition, finding approval,
+report generation/inclusion, and the other sensitive operator controls.
 
 ## Operator-only REST (MVP, ground truth)
 
@@ -176,22 +171,20 @@ not a file pointer). Routes ≈6049-6052.
   and may activate it; per-case agent-runtime ACL configured
   (`_configure_agent_runtime_case_acl`). Live-proven (BATCH-V1 case create/activate).
 ### GET `/api/cases` (`get_cases`) — list cases.
-### GET `/api/case/activate/challenge` (`get_case_activate_challenge`, 4832)
-- Issues the activation re-auth challenge (legacy HMAC path).
 ### POST `/api/case/activate` (`post_case_activate`, 4891)
-- Re-auth required: yes (password/HMAC). In DB mode (`_ACTIVE_CASES` wired) it calls
-  `set_active_case(case_id, principal)` and returns the active case dict; legacy mode
-  validates the HMAC challenge (`activate:` lockout namespace).
+- Fresh Supabase password re-auth is required. It calls
+  `set_active_case(case_id, principal)` and returns the active case dict.
 - State transition: selected case → DB active case (`authority: postgres`).
-- Failure: 401 no examiner; 403 IP mismatch / non-examiner; 404 unknown case; 429
-  lockout. Live-proven BATCH-V1.
+- Failure: 401 invalid credentials/no examiner; 403 non-examiner; 404 unknown case.
+  Live-proven BATCH-V1.
 ### GET `/api/case` (`get_case`), POST `/api/case/metadata` — read/update case metadata.
 
 ## Group: Evidence chain (custody, re-auth gated)
 
-Authority: DB custody chain (C1 RPCs) with file-backed fallback; evidence gate
-authority. Routes ≈6011-6019. All mutations require examiner role + `must_reset=false`
-+ HMAC re-auth; DB-active mutations additionally require a `reauth_audit_event_id`.
+Authority: DB custody chain and durable custody-operation RPCs; there is no
+file-backed mutation fallback. All mutations require examiner role,
+`must_reset=false`, fresh Supabase password verification, and a scoped
+`reauth_audit_event_id`.
 
 ### GET `/api/evidence/chain/status` (`get_evidence_chain_status`, 993)
 - Read-only. Prefers DB authority (`_db_evidence_chain_status` → `app.evidence_gate_
@@ -200,32 +193,35 @@ authority. Routes ≈6011-6019. All mutations require examiner role + `must_rese
   Role: examiner or readonly.
 ### POST `/api/evidence/chain/rescan` (`post_evidence_chain_rescan`, 1014)
 - Examiner; drops the evidence gate cache and returns fresh status.
-### GET `/api/evidence/chain/challenge` (`get_evidence_chain_challenge`, 1034)
-- Issues the seal/ignore re-auth challenge `{challenge_id, nonce, salt,
-  iterations=600000, hash_algorithm, reauth_method}`. 403 if must-reset/no password;
-  429 lockout (`evidence:` namespace).
 ### POST `/api/evidence/chain/seal` (`post_evidence_chain_seal`, 1081)
-- Request: `{challenge_id, response, file_specs:[{path, source?, description?}]}`.
+- Exact request: `{password, reason, idempotency_key,
+  file_specs:[{path, source?, description?}]}`.
 - State transition: registers + seals a new manifest version (atomic
   `register_and_seal`, MVP), bumping `manifest_version`; flips the evidence gate to
   `sealed`/OK so MCP tools unblock. DB path then derives a proof export (and optional
   Solana anchor, non-blocking).
 - Response: `{sealed:true, authority, registration_mode, reauth_method,
   manifest_version, seal_status, files_added:[...], proof_export?, anchor?}`.
-- Re-auth: HMAC required; DB path requires a `reauth_audit_event_id` (403 if absent).
-- Failure: 401 bad HMAC / no examiner; 400 bad file_specs / FileNotFound; 500 seal
+- Re-auth: fresh password verification and a scoped `reauth_audit_event_id` are
+  required (403 if audit linkage is absent).
+- Failure: 401 invalid re-auth / no examiner; 400 invalid request or file; 500 seal
   error.
 - Audit: custody events `EVIDENCE_DETECTED → EVIDENCE_REGISTERED → MANIFEST_SEALED`,
   append-only, prev/event-hash linked (BATCH-V1).
 - Live proof: BATCH-V1 — sealed `evidence/v1-gate.log` + `evidence/v1-ingest.jsonl`,
   `manifest_version=2`, proof export ids + proof hash recorded.
 ### POST `/api/evidence/chain/ignore` (`post_evidence_chain_ignore`, 1215)
-- Marks an unregistered file intentionally ignored. Request `{challenge_id, response,
-  path, reason}`; HMAC + (DB) reauth event required. Response `{ignored:true,...}`.
+- Marks an unregistered file intentionally ignored. Exact request `{password, path,
+  reason, idempotency_key}`; the server resolves the Evidence Object and binds fresh
+  re-authentication to the action, object, reason, and key. Response `{ignored:true,...}`.
+### POST `/api/evidence/chain/delete` (`post_evidence_chain_delete`)
+- Deletes only a readable pending stray after the durable operation has blocked the
+  gate and recorded descriptor-pinned pre-unlink identity, digest, and size. The exact
+  request is `{password, path, reason, idempotency_key}`. Sealed evidence is ineligible.
 ### POST `/api/evidence/chain/retire` (`post_evidence_chain_retire`, 1310)
-- Retires an ACTIVE file (records `FILE_RETIRED`, clears immutable flag, deletes from
-  disk in file mode). Request `{challenge_id, response, path, reason}`; HMAC + reauth
-  event required.
+- Retires versioned evidence while preserving protected bytes, immutable posture, and
+  every prior version. It writes one excluding manifest/event. Exact request
+  `{password, path, reason, idempotency_key}` with object-bound fresh re-authentication.
 ### POST `/api/evidence/chain/verify-hmac` (`post_evidence_chain_verify_hmac`, 1426)
 - Full ledger HMAC re-verification; records `last_hmac_verified_at`. HMAC required.
   Returns `{ok, verified, failed, failed_indices, verified_at, verified_by}`.
@@ -251,14 +247,14 @@ until human approval. Routes ≈5991-6006.
 - The finding-review delta set (proposed approvals/modifications/rejections) staged
   before commit. `_VALID_DELTA_KEYS` / `_DELTA_EDITABLE_FIELDS` bound what an examiner
   may edit.
-### GET `/api/commit/challenge` (`get_commit_challenge`, 3206) + POST `/api/commit` (`post_commit`, 3259)
-- The human approval action. Re-auth: HMAC required (`commit` lockout namespace,
-  3 attempts / 900s). Applies the staged delta — approves/rejects findings/timeline/
+### POST `/api/commit` (`post_commit`)
+- The human approval action. Fresh Supabase password re-auth is required. Applies
+  the staged delta — approves/rejects findings/timeline/
   IOCs and writes approval records with `content_hash_at_review`, transitioning rows
   DRAFT → COMMITTED/REJECTED.
 - Security note: this is the operator gate that turns an agent's DRAFT finding into an
   approved, reportable finding. Live-proven: BATCH-V1 — `F-hermes-v1-gate-001`
-  approved via portal HMAC re-auth (`authority=db, approved=1`).
+  approved via the portal's then-current re-auth (`authority=db, approved=1`).
 
 ## Group: Reports (approved-only, re-auth gated)
 
@@ -352,7 +348,8 @@ expose the backend.
   401/403 itself — handlers do (`auth.py` docstring; `_require_*` helpers).
 - Agent/service principals are structurally barred from operator portal routes (no
   `examiner`/`role`) and from REST tool execution (403). Their only path is `/mcp`.
-- All re-auth challenges are single-use, TTL-bound (~30s), and IP-bound.
+- Sensitive-action re-auth is checked against the authenticated session identity and
+  never accepts a client-supplied email or a local password/HMAC fallback.
 - DB authority is preferred for evidence/investigation/reports; file-backed paths are
   legacy fallbacks. Absolute case/mount paths are never returned to any caller; only
   relative display paths and opaque ids.
@@ -360,12 +357,10 @@ expose the backend.
 ## Suggested interaction-model.md additions (owned by PDOC1 — for the conductor)
 
 These interaction-contract facts surfaced here but belong in `interaction-model.md`:
-1. The challenge→action re-auth handshake (GET `*/challenge` then POST with
-   `response=HMAC(stored_hash, nonce)`) as the canonical human re-auth loop, with the
-   gated action list (activate, seal/ignore/retire, verify-hmac, commit, report
-   generate).
+1. The fresh password re-verification and DB audit binding as the canonical human
+   re-auth loop for activate, custody recovery/disposition, commit, and report actions.
 2. The human-in-the-loop transition: agent stages a DRAFT finding via MCP →
-   operator approves via POST `/api/commit` (HMAC) → finding becomes reportable. This
+   operator approves via POST `/api/commit` after fresh re-auth → finding becomes reportable. This
    is the agent↔operator handoff edge.
 3. The operator redaction-override escape hatch (`/api/response-guard/override`) as the
    operator-side counterpart to the agent-facing response guard.
