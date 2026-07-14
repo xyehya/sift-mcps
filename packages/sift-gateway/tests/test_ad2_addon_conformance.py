@@ -194,6 +194,7 @@ def _available_admission_service():
             "state": "available",
             "observed": 0,
             "issues": [],
+            "execution_authority": {"storage_generation": 1},
         }
     )
 

@@ -1,7 +1,8 @@
 import re
 from pathlib import Path
 
-SQL = Path("supabase/migrations/202607142100_replace_restore_operations.sql").read_text()
+ROOT = Path(__file__).resolve().parents[3]
+SQL = (ROOT / "supabase/migrations/202607142100_replace_restore_operations.sql").read_text()
 
 
 def test_recovery_begin_validates_object_before_inner_operation_creation():
@@ -99,8 +100,8 @@ def test_current_docs_do_not_restore_removed_unseal_or_one_shot_reacquire_contra
         Path("docs/examples/03 - Contributor automation and AI-agent guidance.md"),
         Path("docs/examples/07 - Dashboard backend, auth, and static delivery.md"),
     ]
-    combined = "\n".join(path.read_text() for path in current_docs)
-    dashboard_example = current_docs[-1].read_text()
+    combined = "\n".join((ROOT / path).read_text() for path in current_docs)
+    dashboard_example = (ROOT / current_docs[-1]).read_text()
     assert "useCustodySealActions.js` for durable Add/Seal and resume" in dashboard_example
     assert "useCustodyLedgerActions.js` for Ignore/Delete/Retire" in dashboard_example
     assert "useEvidenceActions.js` for composing both action hooks" in dashboard_example

@@ -67,6 +67,7 @@ class _Gateway:
                 "state": "available",
                 "observed": 0,
                 "issues": [],
+                "execution_authority": {"storage_generation": 1},
             }
         )
 

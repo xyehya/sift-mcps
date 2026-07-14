@@ -15,7 +15,7 @@ The evidence gate is also asserted to be DB-authority only (no file branch).
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from contextlib import contextmanager
 
 import pytest
 from sift_core.evidence_chain import ChainStatus
@@ -42,13 +42,26 @@ class _Gateway:
     def __init__(self, dsn):
         self.control_plane_dsn = dsn
         self._audit = _Audit()
-        self.evidence_service = SimpleNamespace(
-            reconcile_for_admission=lambda _case_id: {
+        class AdmissionService:
+            @staticmethod
+            def reconcile_for_admission(_case_id):
+                return {
                 "state": "available",
                 "observed": 0,
                 "issues": [],
-            }
-        )
+                    "execution_authority": {"storage_generation": 1},
+                }
+
+            @staticmethod
+            def revalidate_execution_authority(_case_id, expected):
+                return expected
+
+            @staticmethod
+            @contextmanager
+            def hold_execution_authority(_case_id, _expected):
+                yield
+
+        self.evidence_service = AdmissionService()
 
 
 class _Message:

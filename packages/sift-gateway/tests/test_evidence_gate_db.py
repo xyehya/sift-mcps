@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 import types
+from contextlib import contextmanager
 
 from sift_core.evidence_chain import ChainStatus
 from sift_gateway.active_case import ActiveCase
@@ -193,7 +194,21 @@ async def test_mcp_evidence_gate_prefers_db_for_active_case(monkeypatch, tmp_pat
         class evidence_service:
             @staticmethod
             def reconcile_for_admission(_case_id):
-                return {"state": "available", "observed": 0, "issues": []}
+                return {
+                    "state": "available",
+                    "observed": 0,
+                    "issues": [],
+                    "execution_authority": {"storage_generation": 1},
+                }
+
+            @staticmethod
+            def revalidate_execution_authority(_case_id, expected):
+                return expected
+
+            @staticmethod
+            @contextmanager
+            def hold_execution_authority(_case_id, _expected):
+                yield
 
     class _Message:
         name = "run_command"

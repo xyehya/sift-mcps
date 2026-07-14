@@ -18,10 +18,14 @@ File manifests/ledgers/anchor JSON are never read for any gate decision here.
 from __future__ import annotations
 
 import hashlib
+import os
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 import sift_gateway.portal_services as ps
+from sift_gateway.custody_operations import PinnedEvidenceFile, PostureBatch
 from sift_gateway.portal_services import EvidenceAuthorityService
 
 _CASE = "11111111-1111-1111-1111-111111111111"
@@ -87,6 +91,43 @@ class _FakeDb:
 
     def router(self, sql, params):
         s = " ".join(sql.split())
+        if "select seal_status,issues,manifest_version,manifest_hash" in s:
+            return [(self.seal_status, [], self.manifest_version, self.manifest_hash)]
+        if "select profile,source_identity,verified_mount_instance,state,generation" in s:
+            return [("LOCAL_IMMUTABLE", None, None, "AVAILABLE", 1, 1, None, datetime.now(timezone.utc), "NONE")]
+        if "select v.id::text,v.item_facts" in s:
+            return [("storage-receipt-1", [])]
+        if "select a.profile,a.source_identity,a.verified_mount_instance" in s:
+            return [("LOCAL_IMMUTABLE", None, None, "AVAILABLE", 1, 1, None,
+                     self.manifest_version, self.manifest_hash, "storage-receipt-1",
+                     len(self.sealed_objects))]
+        if "select a.profile,a.generation,h.manifest_version,h.manifest_hash" in s:
+            return [("LOCAL_IMMUTABLE", 1, self.manifest_version, self.manifest_hash)]
+        if "select o.id::text,o.display_path,v.id::text,v.sha256,v.bytes" in s:
+            return [(o[0], o[1], f"version-{o[0]}", o[2], o[3]) for o in self.sealed_objects]
+        if "o.status in ('sealed','violated')" in s:
+            return [
+                (
+                    o[0],
+                    o[1],
+                    o[2],
+                    o[3],
+                    datetime.now(timezone.utc),
+                    {},
+                    "violated" if self.seal_status == "violated" else "sealed",
+                )
+                for o in self.sealed_objects
+            ]
+        if "status in ('ignored','retired')" in s:
+            return []
+        if "evidence_storage_commit_full_verify" in s:
+            self.verify_calls.append((True, params))
+            return [(None,)]
+        if "evidence_storage_record_verify_failure" in s:
+            self.verify_calls.append((False, params))
+            return [(None,)]
+        if "evidence_record_inventory_classification_v2" in s:
+            return [(None,)]
         if "evidence_gate_status" in s and "seal_status, manifest_version, head_hash" in s:
             return [(self.seal_status, self.manifest_version, self.head_hash, len(self.sealed_objects), [], None)]
         if "from app.evidence_gate_status" in s and "seal_status" in s and "head_hash" not in s:
@@ -95,7 +136,7 @@ class _FakeDb:
             return [(self.manifest_version,)]
         if "evidence_detect" in s:
             return [("obj-detect",)]
-        if "evidence_mark_violation" in s:
+        if "evidence_mark_violation" in s or "evidence_mark_admission_violation" in s:
             self.violation_calls.append(params)
             return [(self.seal_status, self.manifest_version, 1, self.head_hash, self.manifest_hash, "violated", 0, [], "CHAIN_VIOLATION", None)]
         if "evidence_verify" in s:
@@ -119,6 +160,51 @@ class _FakeDb:
         return []
 
 
+class _PostureAdapter:
+    def prepare(self, case_dir: Path, paths: list[str]) -> PostureBatch:
+        return PostureBatch(
+            root_fd=-1,
+            files=[
+                PinnedEvidenceFile(
+                    path=display_path,
+                    fd=os.open(case_dir / display_path, os.O_RDONLY),
+                    before={},
+                )
+                for display_path in paths
+            ],
+        )
+
+    def apply(self, batch: PostureBatch) -> None:
+        del batch
+        return None
+
+    def verify(self, batch: PostureBatch) -> list[dict[str, Any]]:
+        receipts = []
+        for pinned in batch.files:
+            st = os.fstat(pinned.fd)
+            content = os.pread(pinned.fd, st.st_size, 0)
+            receipts.append(
+                {
+                    "path": pinned.path,
+                    "sha256": "sha256:" + hashlib.sha256(content).hexdigest(),
+                    "bytes": len(content),
+                    "owner": f"{st.st_uid}:{st.st_gid}",
+                    "mode": oct(st.st_mode & 0o777),
+                    "immutable": True,
+                    "st_dev": st.st_dev,
+                    "st_ino": st.st_ino,
+                    "st_mtime_ns": st.st_mtime_ns,
+                    "st_ctime_ns": st.st_ctime_ns,
+                    "st_nlink": st.st_nlink,
+                }
+            )
+        return receipts
+
+    def close(self, batch: PostureBatch) -> None:
+        for pinned in batch.files:
+            os.close(pinned.fd)
+
+
 @pytest.fixture
 def service(monkeypatch, tmp_path):
     db = _FakeDb()
@@ -127,8 +213,12 @@ def service(monkeypatch, tmp_path):
         return _Connection(db.router, db.statements)
 
     monkeypatch.setattr(ps._BasePortalDbService, "_connect", fake_connect)
-    svc = EvidenceAuthorityService("postgresql://service@localhost/sift")
+    adapter = _PostureAdapter()
+    svc = EvidenceAuthorityService(
+        "postgresql://service@localhost/sift", posture_adapter=adapter
+    )
     monkeypatch.setattr(svc, "_case_artifact_path", lambda case_id: tmp_path)
+    monkeypatch.setattr("sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True)
     (tmp_path / "evidence").mkdir()
     return svc, db, tmp_path
 
@@ -177,7 +267,7 @@ class TestTamperDetection:
 
         assert not db.violation_calls
 
-    def test_already_violated_does_not_redetect(self, service):
+    def test_already_violated_remains_blocked_and_observation_is_correlated(self, service):
         svc, db, tmp_path = service
         sha, size = _make_sealed_file(tmp_path, "evidence/disk.bin", b"q" * 8)
         db.sealed_objects = [("obj-4", "evidence/disk.bin", sha, size)]
@@ -186,7 +276,11 @@ class TestTamperDetection:
 
         svc.gate_status(_CASE)
 
-        assert not db.violation_calls
+        assert db.violation_calls
+        assert db.violation_calls[-1][1:3] == (
+            "obj-4",
+            "sealed_evidence_missing",
+        )
 
 
 class TestProofExport:
@@ -265,7 +359,7 @@ class TestVerify:
 
         assert result["verified"] is True
         assert db.verify_calls
-        assert db.verify_calls[-1][1] is True  # ok flag
+        assert db.verify_calls[-1][0] is True
 
     def test_verify_records_failure_when_modified(self, service):
         svc, db, tmp_path = service
@@ -276,4 +370,4 @@ class TestVerify:
         result = svc.verify(case_id=_CASE)
 
         assert result["verified"] is False
-        assert db.verify_calls[-1][1] is False
+        assert db.verify_calls[-1][0] is False

@@ -597,6 +597,7 @@ def _gate_test_gateway(tmp_path):
             "state": "available",
             "observed": 0,
             "issues": [],
+            "execution_authority": {"storage_generation": 1},
         }
     )
     return gw
