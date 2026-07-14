@@ -212,8 +212,9 @@ the Add/Seal finalizer rejects every non-`ADD_SEAL` operation before replay or m
 begin and each action-specific finalizer acquire the per-case advisory transaction lock
 before the row locks they take. Each finalizer owns, documents, and tests its internal row order; the
 shared seam does not impose a universal order among those rows. The operation-local `advance` and
-`fail` phase-CAS helpers act on an already-authorized operation/runner and are explicitly outside the
-case-first contract. The action seam adds no Portal route, MCP tool, filesystem mutation path, or
+`fail` phase-CAS helpers derive the operation case and acquire the same case lock: `advance` serializes
+operation/history changes with the execution lease, while `fail` also protects its chain-head/gate
+mutation. The action seam adds no Portal route, MCP tool, filesystem mutation path, or
 `anon`/`authenticated` database authority.
 
 #### P4.23.3 Replace/Reacquire and exact Restore implementation

@@ -10,6 +10,10 @@ BASE_MIGRATION = (
     Path(__file__).parents[3]
     / "supabase/migrations/202607132100_custody_operations.sql"
 ).read_text(encoding="utf-8")
+EFFECTIVE_MIGRATION = (
+    Path(__file__).parents[3]
+    / "supabase/migrations/202607144000_external_read_only_storage.sql"
+).read_text(encoding="utf-8")
 SPEC = (
     Path(__file__).parents[3] / "docs/architecture/EVIDENCE-CUSTODY-SPEC.md"
 ).read_text(encoding="utf-8")
@@ -74,6 +78,11 @@ def test_case_advisory_precedes_begin_and_finalizer_row_locks():
     )[1].split("create or replace function app.evidence_append_canonical_event_v1", 1)[0]
     assert "pg_advisory_xact_lock" not in advance
     assert "pg_advisory_xact_lock" not in fail
+    for name in ("custody_operation_advance", "custody_operation_fail"):
+        effective = EFFECTIVE_MIGRATION.split(
+            f"create function app.{name}(", 1
+        )[1].split("end $$;", 1)[0]
+        assert "pg_advisory_xact_lock" in effective
 
     combined = "\n".join((MIGRATION, SPEC, ADR))
     for stale in (
@@ -85,8 +94,8 @@ def test_case_advisory_precedes_begin_and_finalizer_row_locks():
         "Custody transactions acquire",
     ):
         assert stale not in combined
-    assert "Generalized begin and each action-specific finalizer" in ADR
-    assert "Operation-local `advance`/`fail` phase-CAS helpers are outside" in ADR
+    assert "Generalized begin, each action-specific finalizer" in ADR
+    assert "Operation-local `advance` and `fail` derive the case" in ADR
     assert "operation-local `advance` and\n`fail` phase-CAS helpers" in SPEC
 
 

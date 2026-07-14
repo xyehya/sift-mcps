@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 import uuid
 
 import pytest
@@ -50,10 +52,95 @@ def _case_actor(conn):
     return case_id, actor_id
 
 
-def test_execution_shared_lock_blocks_concurrent_storage_authority_commit():
+def _blocked_operation(conn, case_id, actor_id):
+    from psycopg.types.json import Jsonb
+
+    key = "lock-operation-" + uuid.uuid4().hex
+    reason = "execution lease operation contention proof"
+    command = {
+        "schema_version": 3,
+        "action": "ADD_SEAL",
+        "storage_profile": "LOCAL_IMMUTABLE",
+        "files": [{"path": "evidence/lock-operation.raw"}],
+    }
+    reauth = _audit(
+        conn,
+        case_id=case_id,
+        actor_id=actor_id,
+        event_type="reauth.evidence_seal",
+        binding={
+            "idempotency_key": key,
+            "reason": reason,
+            "storage_profile": "LOCAL_IMMUTABLE",
+            "targets": ["evidence/lock-operation.raw"],
+        },
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            """select id from app.custody_operation_begin_or_resume_storage_v3(
+                 %s,%s,%s,%s,%s,%s,%s,%s,null)""",
+            (
+                case_id,
+                Jsonb(command),
+                "sha256:" + "a" * 64,
+                reason,
+                reauth,
+                key,
+                actor_id,
+                "lock-runner",
+            ),
+        )
+        return cur.fetchone()[0]
+
+
+@pytest.mark.parametrize(
+    "writer",
+    (
+        "evidence_observe_admission",
+        "evidence_mark_admission_violation",
+        "evidence_detect",
+        "evidence_mark_violation",
+    ),
+)
+def test_execution_shared_lock_blocks_actual_custody_writer_until_release(writer):
     psycopg = pytest.importorskip("psycopg")
     with psycopg.connect(_dsn()) as setup_conn:
         case_id, _actor_id = _case_actor(setup_conn)
+    started = threading.Event()
+    finished = threading.Event()
+    errors = []
+
+    def invoke_writer():
+        try:
+            with psycopg.connect(_dsn()) as transition_conn:
+                with transition_conn.cursor() as cur:
+                    started.set()
+                    correlation = "p423-lock-" + uuid.uuid4().hex
+                    if writer == "evidence_observe_admission":
+                        cur.execute(
+                            "select app.evidence_observe_admission(%s,%s,%s,0,%s,null,null)",
+                            (case_id, "evidence/lock-observe.raw", "lock-observe.raw", correlation),
+                        )
+                    elif writer == "evidence_mark_admission_violation":
+                        cur.execute(
+                            "select app.evidence_mark_admission_violation(%s,null,%s,'[]'::jsonb,%s,null,null)",
+                            (case_id, "lock contention proof", correlation),
+                        )
+                    elif writer == "evidence_detect":
+                        cur.execute(
+                            "select app.evidence_detect(%s,%s,%s,0,null,null)",
+                            (case_id, "evidence/lock-detect.raw", "lock-detect.raw"),
+                        )
+                    else:
+                        cur.execute(
+                            "select app.evidence_mark_violation(%s,null,%s,'[]'::jsonb,null,null)",
+                            (case_id, "lock contention proof"),
+                        )
+        except Exception as exc:  # pragma: no cover - reported by assertion
+            errors.append(exc)
+        finally:
+            finished.set()
+
     with psycopg.connect(_dsn()) as execution_conn:
         with execution_conn.cursor() as cur:
             cur.execute(
@@ -61,15 +148,82 @@ def test_execution_shared_lock_blocks_concurrent_storage_authority_commit():
                 "hashtextextended(%s::text, 0))",
                 (case_id,),
             )
-        with psycopg.connect(_dsn()) as transition_conn:
-            with transition_conn.cursor() as cur:
-                cur.execute("set local lock_timeout = '100ms'")
-                with pytest.raises(psycopg.errors.LockNotAvailable):
+        worker = threading.Thread(target=invoke_writer, daemon=True)
+        worker.start()
+        assert started.wait(timeout=2)
+        time.sleep(0.15)
+        assert not finished.is_set(), f"{writer} bypassed the shared execution lock"
+        execution_conn.commit()
+        worker.join(timeout=3)
+    assert finished.is_set(), f"{writer} did not proceed after lock release"
+    assert errors == []
+
+
+def test_execution_shared_lock_blocks_operation_derived_writer_until_release():
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as setup_conn:
+        case_id, actor_id = _case_actor(setup_conn)
+        operation_id = _blocked_operation(setup_conn, case_id, actor_id)
+    started = threading.Event()
+    finished = threading.Event()
+    errors = []
+
+    def advance_operation():
+        try:
+            with psycopg.connect(_dsn()) as transition_conn:
+                with transition_conn.cursor() as cur:
+                    started.set()
                     cur.execute(
-                        "select pg_advisory_xact_lock("
-                        "hashtextextended(%s::text, 0))",
-                        (case_id,),
+                        """select app.custody_operation_advance(
+                             %s,'GATE_BLOCKED','FILESYSTEM_APPLYING','{}'::jsonb,'lock-runner')""",
+                        (operation_id,),
                     )
+        except Exception as exc:  # pragma: no cover - reported by assertion
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    with psycopg.connect(_dsn()) as execution_conn:
+        with execution_conn.cursor() as cur:
+            cur.execute(
+                "select pg_advisory_xact_lock_shared(hashtextextended(%s::text,0))",
+                (case_id,),
+            )
+        worker = threading.Thread(target=advance_operation, daemon=True)
+        worker.start()
+        assert started.wait(timeout=2)
+        time.sleep(0.15)
+        assert not finished.is_set()
+        execution_conn.commit()
+        worker.join(timeout=3)
+    assert finished.is_set()
+    assert errors == []
+
+
+def test_service_role_cannot_execute_unlocked_custody_helpers():
+    psycopg = pytest.importorskip("psycopg")
+    helpers = (
+        "app.evidence_detect_impl_pre_execution_lock(uuid,text,text,bigint,uuid,uuid)",
+        "app.evidence_register_impl_pre_execution_lock(uuid,text,text,text,uuid,uuid)",
+        "app.evidence_seal_impl_pre_execution_lock(uuid,jsonb,integer,text,uuid,uuid,uuid)",
+        "app.evidence_verify_impl_pre_execution_lock(uuid,boolean,integer,jsonb,uuid,uuid)",
+        "app.evidence_mark_violation_impl_pre_execution_lock(uuid,uuid,text,jsonb,uuid,uuid)",
+        "app.evidence_observe_admission_impl_pre_execution_lock(uuid,text,text,bigint,text,uuid,uuid)",
+        "app.evidence_mark_admission_violation_impl_pre_execution_lock(uuid,uuid,text,jsonb,text,uuid,uuid)",
+        "app.evidence_record_proof_export_impl_pre_execution_lock(uuid,integer,text,text,text,boolean,uuid,jsonb)",
+        "app.custody_operation_advance_impl_pre_execution_lock(uuid,text,text,jsonb,text)",
+        "app.custody_operation_fail_impl_pre_execution_lock(uuid,text,text,text)",
+        "app.evidence_append_custody_event(uuid,uuid,text,integer,text,uuid,uuid,uuid,jsonb)",
+        "app.evidence_recompute_seal_status(uuid)",
+    )
+    with psycopg.connect(_dsn()) as conn:
+        with conn.cursor() as cur:
+            for helper in helpers:
+                cur.execute(
+                    "select has_function_privilege('service_role',%s,'EXECUTE')",
+                    (helper,),
+                )
+                assert cur.fetchone() == (False,), helper
 
 
 def test_v3_resume_rejects_every_retired_runner_and_profile_is_reauth_bound():

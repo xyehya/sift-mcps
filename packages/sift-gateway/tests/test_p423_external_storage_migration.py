@@ -188,3 +188,42 @@ def test_every_storage_authority_transition_takes_exclusive_case_lock() -> None:
         "evidence_storage_commit_full_verify",
     ):
         assert lock in _function(name), name
+
+
+def test_every_reachable_legacy_custody_writer_joins_execution_lock() -> None:
+    lock = "pg_advisory_xact_lock(hashtextextended("
+    for name in (
+        "evidence_detect",
+        "evidence_register",
+        "evidence_seal",
+        "evidence_verify",
+        "evidence_mark_violation",
+        "evidence_observe_admission",
+        "evidence_mark_admission_violation",
+        "evidence_record_proof_export",
+        "custody_operation_advance",
+        "custody_operation_fail",
+    ):
+        assert lock in _function(name), name
+
+
+def test_unlocked_implementations_and_internal_mutation_helpers_are_not_reachable() -> (
+    None
+):
+    for helper in (
+        "evidence_detect_impl_pre_execution_lock",
+        "evidence_register_impl_pre_execution_lock",
+        "evidence_seal_impl_pre_execution_lock",
+        "evidence_verify_impl_pre_execution_lock",
+        "evidence_mark_violation_impl_pre_execution_lock",
+        "evidence_observe_admission_impl_pre_execution_lock",
+        "evidence_mark_admission_violation_impl_pre_execution_lock",
+        "evidence_record_proof_export_impl_pre_execution_lock",
+        "custody_operation_advance_impl_pre_execution_lock",
+        "custody_operation_fail_impl_pre_execution_lock",
+        "evidence_append_custody_event",
+        "evidence_recompute_seal_status",
+    ):
+        assert f"revoke execute on function app.{helper}" in MIGRATION or (
+            f"revoke all on function app.{helper}" in MIGRATION
+        ), helper

@@ -733,6 +733,205 @@ begin
   return v_row;
 end $$;
 
+-- Every service-reachable RPC that can change evidence objects, the ledger
+-- head, gate state, or custody metadata participates in the same per-case
+-- execution lease.  Preserve the established RPC signatures and behavior by
+-- moving their current implementations behind service-inaccessible helpers;
+-- the public service surface acquires the exclusive transaction lock first.
+alter function app.evidence_detect(uuid,text,text,bigint,uuid,uuid)
+  rename to evidence_detect_impl_pre_execution_lock;
+alter function app.evidence_register(uuid,text,text,text,uuid,uuid)
+  rename to evidence_register_impl_pre_execution_lock;
+alter function app.evidence_seal(uuid,jsonb,integer,text,uuid,uuid,uuid)
+  rename to evidence_seal_impl_pre_execution_lock;
+alter function app.evidence_verify(uuid,boolean,integer,jsonb,uuid,uuid)
+  rename to evidence_verify_impl_pre_execution_lock;
+alter function app.evidence_mark_violation(uuid,uuid,text,jsonb,uuid,uuid)
+  rename to evidence_mark_violation_impl_pre_execution_lock;
+alter function app.evidence_observe_admission(uuid,text,text,bigint,text,uuid,uuid)
+  rename to evidence_observe_admission_impl_pre_execution_lock;
+alter function app.evidence_mark_admission_violation(uuid,uuid,text,jsonb,text,uuid,uuid)
+  rename to evidence_mark_admission_violation_impl_pre_execution_lock;
+alter function app.evidence_record_proof_export(uuid,integer,text,text,text,boolean,uuid,jsonb)
+  rename to evidence_record_proof_export_impl_pre_execution_lock;
+alter function app.custody_operation_fail(uuid,text,text,text)
+  rename to custody_operation_fail_impl_pre_execution_lock;
+alter function app.custody_operation_advance(uuid,text,text,jsonb,text)
+  rename to custody_operation_advance_impl_pre_execution_lock;
+
+revoke all on function app.evidence_detect_impl_pre_execution_lock(uuid,text,text,bigint,uuid,uuid)
+  from public,anon,authenticated;
+revoke all on function app.evidence_register_impl_pre_execution_lock(uuid,text,text,text,uuid,uuid)
+  from public,anon,authenticated;
+revoke all on function app.evidence_seal_impl_pre_execution_lock(uuid,jsonb,integer,text,uuid,uuid,uuid)
+  from public,anon,authenticated;
+revoke all on function app.evidence_verify_impl_pre_execution_lock(uuid,boolean,integer,jsonb,uuid,uuid)
+  from public,anon,authenticated;
+revoke all on function app.evidence_mark_violation_impl_pre_execution_lock(uuid,uuid,text,jsonb,uuid,uuid)
+  from public,anon,authenticated;
+revoke all on function app.evidence_observe_admission_impl_pre_execution_lock(uuid,text,text,bigint,text,uuid,uuid)
+  from public,anon,authenticated;
+revoke all on function app.evidence_mark_admission_violation_impl_pre_execution_lock(uuid,uuid,text,jsonb,text,uuid,uuid)
+  from public,anon,authenticated;
+revoke all on function app.evidence_record_proof_export_impl_pre_execution_lock(uuid,integer,text,text,text,boolean,uuid,jsonb)
+  from public,anon,authenticated;
+revoke all on function app.custody_operation_fail_impl_pre_execution_lock(uuid,text,text,text)
+  from public,anon,authenticated;
+revoke all on function app.custody_operation_advance_impl_pre_execution_lock(uuid,text,text,jsonb,text)
+  from public,anon,authenticated;
+-- These helpers are only valid inside an already locked authority transition.
+-- Remove execute inherited through broad schema/default grants.
+revoke execute on function app.evidence_append_custody_event(
+  uuid,uuid,text,integer,text,uuid,uuid,uuid,jsonb
+) from public,anon,authenticated;
+revoke execute on function app.evidence_recompute_seal_status(uuid)
+  from public,anon,authenticated;
+
+create function app.evidence_detect(
+  p_case_id uuid,p_display_path text,p_display_name text default null,
+  p_bytes bigint default null,p_actor_user_id uuid default null,
+  p_actor_service_identity_id uuid default null
+) returns uuid language plpgsql security definer set search_path=pg_catalog,app as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
+  return app.evidence_detect_impl_pre_execution_lock(
+    p_case_id,p_display_path,p_display_name,p_bytes,p_actor_user_id,p_actor_service_identity_id);
+end $$;
+
+create function app.evidence_register(
+  p_evidence_object_id uuid,p_display_name text,p_description text default null,
+  p_source text default null,p_actor_user_id uuid default null,
+  p_actor_service_identity_id uuid default null
+) returns app.evidence_objects language plpgsql security definer set search_path=pg_catalog,app as $$
+declare v_case_id uuid;
+begin
+  select case_id into v_case_id from app.evidence_objects where id=p_evidence_object_id;
+  if v_case_id is not null then
+    perform pg_advisory_xact_lock(hashtextextended(v_case_id::text,0));
+  end if;
+  return app.evidence_register_impl_pre_execution_lock(
+    p_evidence_object_id,p_display_name,p_description,p_source,p_actor_user_id,
+    p_actor_service_identity_id);
+end $$;
+
+create function app.evidence_seal(
+  p_case_id uuid,p_items jsonb,p_manifest_version integer,p_manifest_hash text,
+  p_reauth_audit_event_id uuid,p_actor_user_id uuid default null,
+  p_actor_service_identity_id uuid default null
+) returns app.evidence_chain_heads language plpgsql security definer set search_path=pg_catalog,app as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
+  return app.evidence_seal_impl_pre_execution_lock(
+    p_case_id,p_items,p_manifest_version,p_manifest_hash,p_reauth_audit_event_id,
+    p_actor_user_id,p_actor_service_identity_id);
+end $$;
+
+create function app.evidence_verify(
+  p_case_id uuid,p_ok boolean,p_manifest_version integer default null,
+  p_issues jsonb default '[]'::jsonb,p_actor_user_id uuid default null,
+  p_actor_service_identity_id uuid default null
+) returns app.evidence_chain_heads language plpgsql security definer set search_path=pg_catalog,app as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
+  return app.evidence_verify_impl_pre_execution_lock(
+    p_case_id,p_ok,p_manifest_version,p_issues,p_actor_user_id,p_actor_service_identity_id);
+end $$;
+
+create function app.evidence_mark_violation(
+  p_case_id uuid,p_evidence_object_id uuid,p_reason text,
+  p_issues jsonb default '[]'::jsonb,p_actor_user_id uuid default null,
+  p_actor_service_identity_id uuid default null
+) returns app.evidence_chain_heads language plpgsql security definer set search_path=pg_catalog,app as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
+  return app.evidence_mark_violation_impl_pre_execution_lock(
+    p_case_id,p_evidence_object_id,p_reason,p_issues,p_actor_user_id,
+    p_actor_service_identity_id);
+end $$;
+
+create function app.evidence_observe_admission(
+  p_case_id uuid,p_display_path text,p_display_name text default null,
+  p_bytes bigint default null,p_correlation_id text default null,
+  p_actor_user_id uuid default null,p_actor_service_identity_id uuid default null
+) returns uuid language plpgsql security definer set search_path=pg_catalog,app set row_security=off as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
+  return app.evidence_observe_admission_impl_pre_execution_lock(
+    p_case_id,p_display_path,p_display_name,p_bytes,p_correlation_id,p_actor_user_id,
+    p_actor_service_identity_id);
+end $$;
+
+create function app.evidence_mark_admission_violation(
+  p_case_id uuid,p_evidence_object_id uuid,p_reason text,
+  p_issues jsonb default '[]'::jsonb,p_correlation_id text default null,
+  p_actor_user_id uuid default null,p_actor_service_identity_id uuid default null
+) returns app.evidence_chain_heads language plpgsql security definer set search_path=pg_catalog,app set row_security=off as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
+  return app.evidence_mark_admission_violation_impl_pre_execution_lock(
+    p_case_id,p_evidence_object_id,p_reason,p_issues,p_correlation_id,p_actor_user_id,
+    p_actor_service_identity_id);
+end $$;
+
+create function app.evidence_record_proof_export(
+  p_case_id uuid,p_manifest_version integer,p_export_kind text,p_manifest_hash text,
+  p_ledger_tip_hash text,p_verified boolean,p_exported_by_user_id uuid default null,
+  p_metadata jsonb default '{}'::jsonb
+) returns uuid language plpgsql security definer set search_path=pg_catalog,app as $$
+begin
+  perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
+  return app.evidence_record_proof_export_impl_pre_execution_lock(
+    p_case_id,p_manifest_version,p_export_kind,p_manifest_hash,p_ledger_tip_hash,
+    p_verified,p_exported_by_user_id,p_metadata);
+end $$;
+
+create function app.custody_operation_fail(
+  p_operation_id uuid,p_expected text,p_failure_code text,p_runner_instance_id text
+) returns app.custody_operations language plpgsql security definer set search_path=pg_catalog,app as $$
+declare v_case_id uuid;
+begin
+  select case_id into v_case_id from app.custody_operations where id=p_operation_id;
+  if v_case_id is not null then
+    perform pg_advisory_xact_lock(hashtextextended(v_case_id::text,0));
+  end if;
+  return app.custody_operation_fail_impl_pre_execution_lock(
+    p_operation_id,p_expected,p_failure_code,p_runner_instance_id);
+end $$;
+
+create function app.custody_operation_advance(
+  p_operation_id uuid,p_expected text,p_target text,p_facts jsonb,p_runner_instance_id text
+) returns app.custody_operations language plpgsql security definer set search_path=pg_catalog,app as $$
+declare v_case_id uuid;
+begin
+  select case_id into v_case_id from app.custody_operations where id=p_operation_id;
+  if v_case_id is not null then
+    perform pg_advisory_xact_lock(hashtextextended(v_case_id::text,0));
+  end if;
+  return app.custody_operation_advance_impl_pre_execution_lock(
+    p_operation_id,p_expected,p_target,p_facts,p_runner_instance_id);
+end $$;
+
+revoke execute on function app.evidence_detect(uuid,text,text,bigint,uuid,uuid)
+  from public,anon,authenticated;
+revoke execute on function app.evidence_register(uuid,text,text,text,uuid,uuid)
+  from public,anon,authenticated;
+revoke execute on function app.evidence_seal(uuid,jsonb,integer,text,uuid,uuid,uuid)
+  from public,anon,authenticated;
+revoke execute on function app.evidence_verify(uuid,boolean,integer,jsonb,uuid,uuid)
+  from public,anon,authenticated;
+revoke execute on function app.evidence_mark_violation(uuid,uuid,text,jsonb,uuid,uuid)
+  from public,anon,authenticated;
+revoke execute on function app.evidence_observe_admission(uuid,text,text,bigint,text,uuid,uuid)
+  from public,anon,authenticated;
+revoke execute on function app.evidence_mark_admission_violation(uuid,uuid,text,jsonb,text,uuid,uuid)
+  from public,anon,authenticated;
+revoke execute on function app.evidence_record_proof_export(uuid,integer,text,text,text,boolean,uuid,jsonb)
+  from public,anon,authenticated;
+revoke execute on function app.custody_operation_fail(uuid,text,text,text)
+  from public,anon,authenticated;
+revoke execute on function app.custody_operation_advance(uuid,text,text,jsonb,text)
+  from public,anon,authenticated;
+
 revoke execute on function app.evidence_storage_change_profile(uuid,text,text,text,uuid,uuid)
   from public,anon,authenticated;
 revoke execute on function app.evidence_storage_record_observation(uuid,text,boolean,text,text,boolean)
@@ -746,6 +945,42 @@ revoke execute on function app.evidence_record_inventory_classification_v2(uuid,
 revoke execute on function app.evidence_storage_authority_for_new_case()
   from public,anon,authenticated;
 do $$ begin if exists(select 1 from pg_roles where rolname='service_role') then
+  revoke execute on function app.evidence_detect_impl_pre_execution_lock(uuid,text,text,bigint,uuid,uuid)
+    from service_role;
+  revoke execute on function app.evidence_register_impl_pre_execution_lock(uuid,text,text,text,uuid,uuid)
+    from service_role;
+  revoke execute on function app.evidence_seal_impl_pre_execution_lock(uuid,jsonb,integer,text,uuid,uuid,uuid)
+    from service_role;
+  revoke execute on function app.evidence_verify_impl_pre_execution_lock(uuid,boolean,integer,jsonb,uuid,uuid)
+    from service_role;
+  revoke execute on function app.evidence_mark_violation_impl_pre_execution_lock(uuid,uuid,text,jsonb,uuid,uuid)
+    from service_role;
+  revoke execute on function app.evidence_observe_admission_impl_pre_execution_lock(uuid,text,text,bigint,text,uuid,uuid)
+    from service_role;
+  revoke execute on function app.evidence_mark_admission_violation_impl_pre_execution_lock(uuid,uuid,text,jsonb,text,uuid,uuid)
+    from service_role;
+  revoke execute on function app.evidence_record_proof_export_impl_pre_execution_lock(uuid,integer,text,text,text,boolean,uuid,jsonb)
+    from service_role;
+  revoke execute on function app.custody_operation_fail_impl_pre_execution_lock(uuid,text,text,text)
+    from service_role;
+  revoke execute on function app.custody_operation_advance_impl_pre_execution_lock(uuid,text,text,jsonb,text)
+    from service_role;
+  revoke execute on function app.evidence_append_custody_event(
+    uuid,uuid,text,integer,text,uuid,uuid,uuid,jsonb
+  ) from service_role;
+  revoke execute on function app.evidence_recompute_seal_status(uuid) from service_role;
+  grant execute on function app.evidence_detect(uuid,text,text,bigint,uuid,uuid) to service_role;
+  grant execute on function app.evidence_register(uuid,text,text,text,uuid,uuid) to service_role;
+  grant execute on function app.evidence_seal(uuid,jsonb,integer,text,uuid,uuid,uuid) to service_role;
+  grant execute on function app.evidence_verify(uuid,boolean,integer,jsonb,uuid,uuid) to service_role;
+  grant execute on function app.evidence_mark_violation(uuid,uuid,text,jsonb,uuid,uuid) to service_role;
+  grant execute on function app.evidence_observe_admission(uuid,text,text,bigint,text,uuid,uuid) to service_role;
+  grant execute on function app.evidence_mark_admission_violation(uuid,uuid,text,jsonb,text,uuid,uuid)
+    to service_role;
+  grant execute on function app.evidence_record_proof_export(uuid,integer,text,text,text,boolean,uuid,jsonb)
+    to service_role;
+  grant execute on function app.custody_operation_fail(uuid,text,text,text) to service_role;
+  grant execute on function app.custody_operation_advance(uuid,text,text,jsonb,text) to service_role;
   grant select on app.evidence_storage_authorities,app.evidence_storage_verifications,
     app.evidence_storage_profile_transitions to service_role;
   grant execute on function app.evidence_storage_change_profile(uuid,text,text,text,uuid,uuid) to service_role;
