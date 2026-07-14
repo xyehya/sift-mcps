@@ -4,6 +4,9 @@ MIGRATION = Path(
     "supabase/migrations/202607145500_external_bootstrap_projection.sql"
 ).read_text(encoding="utf-8")
 NORMALIZED = "".join(MIGRATION.lower().split())
+DETECTED_BYTES_MIGRATION = Path(
+    "supabase/migrations/202607145600_external_bootstrap_detected_bytes.sql"
+).read_text(encoding="utf-8")
 
 
 def _function(name: str) -> str:
@@ -89,3 +92,22 @@ def test_new_functions_are_service_only_and_add_no_agent_surface() -> None:
     assert "mcp" not in MIGRATION.lower()
     assert "authenticated" in MIGRATION.lower()
     assert "to authenticated" not in MIGRATION.lower()
+
+
+def test_forward_predicate_allows_only_detected_observed_bytes() -> None:
+    predicate = DETECTED_BYTES_MIGRATION.split(
+        "create or replace function app.evidence_is_virgin_external_bootstrap(", 1
+    )[1].split("\n$$;", 1)[0]
+    assert "o.current_bytes is not null" not in predicate
+    for forbidden_authority in (
+        "o.current_version_id is not null",
+        "o.current_sha256 is not null",
+        "o.sealed_at is not null",
+        "issue->>'code'='UNSAFE_PENDING_ITEM'",
+        "outcome='SUCCESS'",
+    ):
+        assert forbidden_authority in predicate
+    assert "update app.evidence_chain_heads h" in DETECTED_BYTES_MIGRATION
+    assert "where issue->>'code'<>'PERSISTED_VIOLATION'" in DETECTED_BYTES_MIGRATION
+    assert "grant execute" not in DETECTED_BYTES_MIGRATION.lower()
+    assert "from service_role" in DETECTED_BYTES_MIGRATION.lower()

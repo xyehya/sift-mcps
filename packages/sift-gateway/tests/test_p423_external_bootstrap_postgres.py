@@ -11,7 +11,7 @@ MIGRATION = (
     Path(__file__).resolve().parents[3]
     / "supabase"
     / "migrations"
-    / "202607145500_external_bootstrap_projection.sql"
+    / "202607145600_external_bootstrap_detected_bytes.sql"
 )
 
 
@@ -331,6 +331,14 @@ def _append_only_counts(cur, case_id):
     return cur.fetchone()
 
 
+def _success_count(cur, case_id):
+    cur.execute(
+        "select count(*) from app.evidence_storage_verifications where case_id=%s and outcome='SUCCESS'",
+        (case_id,),
+    )
+    return cur.fetchone()[0]
+
+
 def test_backfill_repairs_only_projection_and_synthetic_latch():
     psycopg = pytest.importorskip("psycopg")
     with psycopg.connect(_dsn()) as conn, conn.cursor() as cur:
@@ -426,6 +434,7 @@ def test_backfill_never_repairs_nonvirgin_or_unsafe_head(poison):
                 ("negative-" + uuid.uuid4().hex, actor_id, case_id),
             )
         before = _append_only_counts(cur, case_id)
+        before_success = _success_count(cur, case_id)
 
         cur.execute(MIGRATION.read_text(encoding="utf-8"))
 
@@ -463,7 +472,7 @@ def test_backfill_never_repairs_nonvirgin_or_unsafe_head(poison):
                     where case_id=%s and outcome='SUCCESS')""",
             (case_id, case_id, case_id),
         )
-        assert cur.fetchone() == (0, 0, 0)
+        assert cur.fetchone() == (0, 0, before_success)
         cur.execute("rollback to savepoint external_bootstrap_negative")
 
 
