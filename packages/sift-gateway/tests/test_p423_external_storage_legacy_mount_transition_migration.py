@@ -93,6 +93,19 @@ def test_transition_appends_observation_and_updates_only_chain_head_projection()
     )
 
 
+def test_correlation_replay_precedes_mutated_state_and_conflicts_fail_closed() -> None:
+    wrapper = _wrapper()
+    replay = wrapper.split(
+        "perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));", 1
+    )[1].split("select * into v_head", 1)[0]
+    assert "length(coalesce(p_correlation_id,'')) not between 1 and 128" in replay
+    assert "from app.evidence_inventory_observations" in replay
+    assert "v_row.gate_state is distinct from p_gate_state" in replay
+    assert "v_row.findings is distinct from p_findings" in replay
+    assert "inventory_correlation_reused" in replay
+    assert "return v_row" in replay
+
+
 def test_every_other_state_delegates_and_predecessor_is_private() -> None:
     wrapper = _wrapper()
     delegate = (

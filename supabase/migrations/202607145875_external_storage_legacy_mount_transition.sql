@@ -28,6 +28,19 @@ declare
   v_transition boolean := false;
 begin
   perform pg_advisory_xact_lock(hashtextextended(p_case_id::text,0));
+  if length(coalesce(p_correlation_id,'')) not between 1 and 128 then
+    raise exception 'invalid_inventory_classification'
+      using errcode='invalid_parameter_value';
+  end if;
+  select * into v_row from app.evidence_inventory_observations
+    where case_id=p_case_id and correlation_id=p_correlation_id;
+  if found then
+    if v_row.gate_state is distinct from p_gate_state
+       or v_row.findings is distinct from p_findings then
+      raise exception 'inventory_correlation_reused' using errcode='unique_violation';
+    end if;
+    return v_row;
+  end if;
   select * into v_head from app.evidence_chain_heads
     where case_id=p_case_id for update;
   select * into v_storage from app.evidence_storage_authorities
@@ -156,10 +169,6 @@ begin
   end if;
 
   if v_transition then
-    if length(coalesce(p_correlation_id,'')) not between 1 and 128 then
-      raise exception 'invalid_inventory_classification'
-        using errcode='invalid_parameter_value';
-    end if;
     insert into app.evidence_inventory_observations(
       case_id,correlation_id,gate_state,findings
     ) values(p_case_id,p_correlation_id,p_gate_state,p_findings)

@@ -144,6 +144,18 @@ def _set_legacy_posture_recovery_state(
             receipt_items = receipt_items[:-1]
         elif receipt_defect == "item_source":
             receipt_items[0]["storage_source_identity"] = "f" * 64
+        elif receipt_defect == "item_version":
+            receipt_items[0]["evidence_version_id"] = str(uuid.uuid4())
+        elif receipt_defect == "item_sha256":
+            receipt_items[0]["sha256"] = "sha256:" + "f" * 64
+        elif receipt_defect == "item_bytes":
+            receipt_items[0]["bytes"] = 9
+        elif receipt_defect == "item_mount":
+            receipt_items[0]["mount_instance_identity"] = "f" * 64
+        elif receipt_defect == "item_read_only":
+            receipt_items[0]["read_only"] = False
+        elif receipt_defect == "item_nlink":
+            receipt_items[0]["st_nlink"] = 2
         posture = [
             {
                 "code": "POSTURE_DRIFT",
@@ -237,6 +249,7 @@ def _counts(conn, case_id):
     with conn.cursor() as cur:
         counts = []
         for table in (
+            "evidence_storage_authorities",
             "evidence_versions",
             "evidence_manifests",
             "evidence_custody_events",
@@ -443,11 +456,16 @@ def test_legacy_posture_drift_with_new_stable_mount_enters_full_verify_lane() ->
         )
         before_counts = _counts(conn, case_id)
 
-        _classify(
+        correlation = "legacy-stable-mount:" + uuid.uuid4().hex
+        observation_id = _classify(
             conn,
             case_id,
-            "legacy-stable-mount:" + uuid.uuid4().hex,
+            correlation,
             _full_verify_finding(),
+        )
+        assert (
+            _classify(conn, case_id, correlation, _full_verify_finding())
+            == observation_id
         )
 
         assert _counts(conn, case_id) == before_counts
@@ -487,6 +505,25 @@ def test_legacy_posture_drift_with_new_stable_mount_enters_full_verify_lane() ->
                 (case_id,),
             )
             assert cur.fetchone() == (version_mount,)
+            cur.execute(
+                """select count(*) from app.evidence_inventory_observations
+                   where case_id=%s and correlation_id=%s""",
+                (case_id, correlation),
+            )
+            assert cur.fetchone() == (1,)
+
+        with pytest.raises(
+            psycopg.errors.UniqueViolation,
+            match="inventory_correlation_reused",
+        ):
+            with conn.transaction():
+                _classify(
+                    conn,
+                    case_id,
+                    correlation,
+                    _full_verify_finding(),
+                    gate_state="BLOCKED_VIOLATION",
+                )
 
 
 @pytest.mark.parametrize(
@@ -498,6 +535,12 @@ def test_legacy_posture_drift_with_new_stable_mount_enters_full_verify_lane() ->
         "receipt_manifest",
         "incomplete_receipt",
         "item_source",
+        "item_version",
+        "item_sha256",
+        "item_bytes",
+        "item_mount",
+        "item_read_only",
+        "item_nlink",
         "version_source",
         "storage_source",
         "writable",
@@ -536,6 +579,12 @@ def test_legacy_mount_transition_rejects_unbound_or_unsafe_state(defect: str) ->
                     "receipt_manifest",
                     "incomplete_receipt",
                     "item_source",
+                    "item_version",
+                    "item_sha256",
+                    "item_bytes",
+                    "item_mount",
+                    "item_read_only",
+                    "item_nlink",
                 }
                 else None
             ),
