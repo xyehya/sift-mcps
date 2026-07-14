@@ -194,7 +194,9 @@ including generic advance and finalizer paths. Absent-file restart recovery requ
 excluding the retired object. A completed Retire discharges only missing/content/identity causes bound
 to that object; it preserves append-only observations and unrelated, ledger, conflict, and unsafe-entry
 causes, and removes the synthetic persisted marker only when no substantive cause or violated object
-remains. Inventory observations are path-free, append-only, FORCE-RLS, and
+remains. The forward migration applies the same discharge to already-completed retirements only when
+the completed operation, retired target, canonical `FILE_RETIRED` event, and operation-owned manifest
+all match; it changes only the chain-head read model. Inventory observations are path-free, append-only, FORCE-RLS, and
 service-role-only. Neither the browser DB role nor MCP receives custody mutation authority.
 The broker keeps its caller/Portal failure generic and writes only an allowlisted, path-free failure
 code to the privileged local journal. Unknown exceptions are reduced to a bounded input, dependency,

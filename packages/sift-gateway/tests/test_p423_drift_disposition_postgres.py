@@ -1450,3 +1450,123 @@ def test_retire_recovery_wrapper_is_service_only_and_hardened():
         )
         assert cur.fetchone()[0] is False
         cur.execute("rollback to savepoint retire_recovery_acl")
+
+
+def _legacy_retire_counts(cur, *, case_id, operation_id):
+    cur.execute(
+        """select
+             (select count(*) from app.evidence_inventory_observations where case_id=%s),
+             (select count(*) from app.evidence_custody_events where custody_operation_id=%s),
+             (select count(*) from app.evidence_manifests where operation_id=%s),
+             (select count(*) from app.custody_operation_history where operation_id=%s),
+             (select count(*) from app.evidence_versions where case_id=%s)""",
+        (case_id, operation_id, operation_id, operation_id, case_id),
+    )
+    return cur.fetchone()
+
+
+def _commit_with_pre_repair_finalizer(cur, *, operation_id, item):
+    from psycopg.types.json import Jsonb
+
+    cur.execute(
+        """select to_regprocedure(
+             'app.custody_operation_commit_disposition_pre_retire_recovery(uuid,jsonb,text,text)')
+             is not null"""
+    )
+    if cur.fetchone()[0]:
+        cur.execute(
+            """select phase from
+               app.custody_operation_commit_disposition_pre_retire_recovery(
+                 %s,%s,'examiner','runner-before')""",
+            (operation_id, Jsonb(item)),
+        )
+    else:
+        cur.execute(
+            """select phase from
+               app.custody_operation_commit_verified_disposition(
+                 %s,%s,'examiner','runner-before')""",
+            (operation_id, Jsonb(item)),
+        )
+    return cur.fetchone()[0]
+
+
+def test_retire_recovery_migration_backfills_completed_legacy_operation_without_replay():
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_admin_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("savepoint legacy_retire_backfill")
+        case_id, retired_id, operation_id, item = _prepare_retire_recovery_fixture(conn)
+        assert _commit_with_pre_repair_finalizer(
+            cur, operation_id=operation_id, item=item
+        ) == "COMPLETED"
+        cur.execute(
+            "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+            (case_id,),
+        )
+        broken_status, broken_issues = cur.fetchone()
+        assert broken_status == "sealed"
+        assert {issue["code"] for issue in broken_issues} == {
+            "PERSISTED_VIOLATION",
+            "SEALED_EVIDENCE_MISSING",
+        }
+        before_counts = _legacy_retire_counts(
+            cur, case_id=case_id, operation_id=operation_id
+        )
+
+        cur.execute(RETIRE_RECOVERY_MIGRATION.read_text(encoding="utf-8"))
+
+        cur.execute(
+            "select status,seal_status from app.evidence_objects where id=%s",
+            (retired_id,),
+        )
+        assert cur.fetchone() == ("retired", "unsealed")
+        cur.execute(
+            "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+            (case_id,),
+        )
+        assert cur.fetchone() == ("sealed", [])
+        assert _legacy_retire_counts(
+            cur, case_id=case_id, operation_id=operation_id
+        ) == before_counts
+        cur.execute("rollback to savepoint legacy_retire_backfill")
+
+
+def test_retire_recovery_backfill_retains_sibling_and_global_violations():
+    psycopg = pytest.importorskip("psycopg")
+    unrelated_id = uuid.uuid4()
+    extra_issues = (
+        {"code": "CONTENT_CHANGED", "evidence_object_id": str(unrelated_id)},
+        {"code": "LEDGER_INVALID", "evidence_object_id": None},
+        {"code": "CONFLICTING_AUTHORITY", "evidence_object_id": None},
+        {"code": "UNSAFE_SEALED_ENTRY", "evidence_object_id": None},
+    )
+    with psycopg.connect(_admin_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("savepoint legacy_retire_backfill_negative")
+        case_id, _retired_id, operation_id, item = _prepare_retire_recovery_fixture(
+            conn, extra_issues=extra_issues, other_violated=True
+        )
+        assert _commit_with_pre_repair_finalizer(
+            cur, operation_id=operation_id, item=item
+        ) == "COMPLETED"
+        before_counts = _legacy_retire_counts(
+            cur, case_id=case_id, operation_id=operation_id
+        )
+
+        cur.execute(RETIRE_RECOVERY_MIGRATION.read_text(encoding="utf-8"))
+
+        cur.execute(
+            "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+            (case_id,),
+        )
+        seal_status, issues = cur.fetchone()
+        assert seal_status == "violated"
+        assert {issue["code"] for issue in issues} == {
+            "PERSISTED_VIOLATION",
+            "CONTENT_CHANGED",
+            "LEDGER_INVALID",
+            "CONFLICTING_AUTHORITY",
+            "UNSAFE_SEALED_ENTRY",
+        }
+        assert _legacy_retire_counts(
+            cur, case_id=case_id, operation_id=operation_id
+        ) == before_counts
+        cur.execute("rollback to savepoint legacy_retire_backfill_negative")

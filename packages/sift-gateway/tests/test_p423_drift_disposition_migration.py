@@ -86,6 +86,7 @@ def test_retire_recovery_is_object_scoped_and_preserves_security_causes() -> Non
         "alter function app.custody_operation_commit_verified_disposition("
         in sql
     )
+    assert "create or replace function app.custody_operation_commit_verified_disposition" in sql
     assert "rename to custody_operation_commit_disposition_pre_retire_recovery" in sql
     assert "pg_advisory_xact_lock" in sql
     assert "v_op.action='retire'" in sql
@@ -98,3 +99,11 @@ def test_retire_recovery_is_object_scoped_and_preserves_security_causes() -> Non
     assert "status='violated' or seal_status='violated'" in sql
     assert "revoke execute on function app.custody_operation_commit_disposition_pre_retire_recovery" in sql
     assert "grant execute on function app.custody_operation_commit_verified_disposition(" in sql
+    assert "for v_candidate in" in sql
+    assert "v_event.custody_operation_id=v_candidate.operation_id" in sql
+    assert "v_event.event_type='file_retired'" in sql
+    assert "v_event.canonical_schema='canonical_event_v1'" in sql
+    assert "v_manifest.operation_id=v_candidate.operation_id" in sql
+    assert "v_op.result->>'evidence_object_id'=v_object.id::text" in sql
+    assert "v_op.result->>'status'='retired'" in sql
+    assert "perform pg_advisory_xact_lock" in sql

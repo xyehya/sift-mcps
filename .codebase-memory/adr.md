@@ -87,7 +87,9 @@ absent file is never credited without the prior claim. Ignore and Retire never m
 manifest while preserving prior versions and siblings. Retire discharges only missing/content/identity
 causes bound to the retired object, retains every unrelated or security cause and append-only
 observation, and removes a synthetic persisted marker only when no substantive cause or violated
-object remains. Posture-only verification cannot create an
+object remains. Upgrade repair uses the same predicate only for a completed operation whose retired
+target, canonical `FILE_RETIRED` event, and operation-owned manifest all match, and mutates only the
+chain-head read model. Posture-only verification cannot create an
 Evidence Version. These seams add no MCP tool or authenticated-browser database grant.
 
 12. **Bind external read-only storage by source, mount instance, and exact receipt.**
