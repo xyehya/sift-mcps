@@ -183,14 +183,17 @@ def committed_broker_fixture_cleanup():
 
 def _case_and_actor(conn):
     case_id, actor_id = uuid.uuid4(), uuid.uuid4()
+    case_key = "p423-drift-" + uuid.uuid4().hex
     with conn.cursor() as cur:
         cur.execute(
             "insert into app.operator_profiles(id,display_name,status) values(%s,'P423 drift operator','active')",
             (actor_id,),
         )
         cur.execute(
-            "insert into app.cases(id,case_key,title,status) values(%s,%s,'P423 drift case','active')",
-            (case_id, "p423-drift-" + uuid.uuid4().hex),
+            """insert into app.cases(
+                 id,case_key,title,status,legacy_case_dir)
+               values(%s,%s,'P423 drift case','active',%s)""",
+            (case_id, case_key, f"/cases/{case_key}"),
         )
     return case_id, actor_id
 
