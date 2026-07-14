@@ -38,6 +38,7 @@ def test_interface_is_pathless_and_profile_bound() -> None:
     assert 'REQUEST_KEYS = {"schema_version", "operation_id", "runner_instance_id"}' in source
     assert 'EXPECTED_PROFILE = "sift-custody-delete-broker (enforce)"' in source
     assert "shell=True" not in source
+    assert "exact sudoers rule" not in source
     assert "sudoers" not in setup.lower()
     assert "install -o root -g root -m 0755" in setup
     assert "sift-custody-delete-broker px -> sift-custody-delete-broker" in gateway

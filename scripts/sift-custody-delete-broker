@@ -2,10 +2,11 @@
 """Delete one descriptor-verified pending evidence entry for a Portal operation.
 
 The command accepts no argv and a bounded JSON request on stdin. It is installed
-root-owned, admitted through an exact sudoers rule, and must execute in its
-dedicated AppArmor profile. It independently resolves the configured cases root,
-reopens the direct entry without following links, rejects immutable/linked files,
-and rechecks all prepared facts before unlink. It is not an MCP tool.
+root-owned and enters its dedicated same-UID AppArmor profile only through the
+Gateway's exact ``px`` transition. It independently resolves the configured
+cases root, reopens the direct entry without following links, rejects
+immutable/linked files, and rechecks all prepared facts before unlink. It is not
+an MCP tool.
 """
 
 from __future__ import annotations
