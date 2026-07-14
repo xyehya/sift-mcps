@@ -67,17 +67,17 @@ def test_dfir_exec_keeps_proc_narrow_while_allowing_dotnet_runtime_metadata() ->
         "/proc/meminfo                            r,",
         "/proc/stat                               r,",
         "/proc/[0-9]*/mountinfo                   r,",
-        "/proc/[0-9]*/fdinfo/[0-9]*               r,",
-        "/proc/[0-9]*/fd/                         r,",
-        "/proc/[0-9]*/fd/[0-9]*                   r,",
+        "owner /proc/@{pid}/fdinfo/[0-9]*         r,",
+        "owner /proc/@{pid}/fd/                   r,",
+        "owner /proc/@{pid}/fd/[0-9]*             r,",
         "/sys/devices/system/**                   r,",
     ):
         assert rule in source
     assert "\n  /proc/**" not in source
     assert "\n  /proc/self/**" not in source
     assert "\n  /proc/[0-9]*/**" not in source
-    assert "\n  /proc/[0-9]*/fdinfo/**" not in source
-    assert "\n  /proc/[0-9]*/fd/**" not in source
+    assert "\n  /proc/[0-9]*/fdinfo/" not in source
+    assert "\n  /proc/[0-9]*/fd/" not in source
 
 
 def test_dfir_exec_external_final_open_grants_do_not_weaken_confinement() -> None:
@@ -88,11 +88,11 @@ def test_dfir_exec_external_final_open_grants_do_not_weaken_confinement() -> Non
     assert {
         rule
         for rule in rules
-        if rule.startswith("/proc/[0-9]*/fd")
+        if "/proc/" in rule and "/fd" in rule and rule.endswith(" r,")
     } == {
-        "/proc/[0-9]*/fdinfo/[0-9]* r,",
-        "/proc/[0-9]*/fd/ r,",
-        "/proc/[0-9]*/fd/[0-9]* r,",
+        "owner /proc/@{pid}/fdinfo/[0-9]* r,",
+        "owner /proc/@{pid}/fd/ r,",
+        "owner /proc/@{pid}/fd/[0-9]* r,",
     }
     assert {
         "deny @@SIFT_CASES_ROOT@@/*/evidence/** wklmx,",

@@ -114,9 +114,9 @@ profile dfir-exec @@DFIR_EXEC_LAUNCHER@@ {
   # enumerates inherited descriptors for its close pass, and rewrites admitted
   # evidence operands to inherited /proc/self/fd/<fd> paths. Keep these grants
   # read-only and at numeric FD leaves; never grant a recursive proc subtree.
-  /proc/[0-9]*/fdinfo/[0-9]*               r,
-  /proc/[0-9]*/fd/                         r,
-  /proc/[0-9]*/fd/[0-9]*                   r,
+  owner /proc/@{pid}/fdinfo/[0-9]*         r,
+  owner /proc/@{pid}/fd/                   r,
+  owner /proc/@{pid}/fd/[0-9]*             r,
   /sys/devices/system/                     r,
   /sys/devices/system/**                   r,
   deny @{PROC}/sys/kernel/**               w,
