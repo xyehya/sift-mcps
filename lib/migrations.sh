@@ -316,8 +316,12 @@ with psycopg.connect(os.environ["BROKER_DSN"]) as conn:
           has_function_privilege(current_user,'sift_custody_broker.authorize(uuid,text)','EXECUTE'),
           has_function_privilege(current_user,'sift_custody_broker.claim(uuid,text,text)','EXECUTE'),
           has_function_privilege(current_user,'sift_custody_broker.complete(uuid,text,text)','EXECUTE'),
-          has_table_privilege(current_user,'app.custody_operations','SELECT'),
-          has_table_privilege(current_user,'app.custody_delete_broker_receipts','SELECT'),
+          coalesce((select has_table_privilege(current_user,c.oid,'SELECT')
+            from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
+            where n.nspname='app' and c.relname='custody_operations'),true),
+          coalesce((select has_table_privilege(current_user,c.oid,'SELECT')
+            from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
+            where n.nspname='app' and c.relname='custody_delete_broker_receipts'),true),
           (select rolsuper or rolbypassrls or rolinherit from pg_roles where rolname=current_user),
           not exists(select 1 from pg_auth_members m join pg_roles r on r.oid=m.member
             where r.rolname=current_user)"""

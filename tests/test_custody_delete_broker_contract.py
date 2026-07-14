@@ -65,7 +65,13 @@ def test_interface_is_pathless_and_profile_bound() -> None:
     assert "sift_custody_delete_broker" in migrations_lib
     assert 'install -o root -g root -m 0600 "$tmp" "$destination"' in migrations_lib
     assert "has_schema_privilege(current_user,'app','USAGE')" in migrations_lib
-    assert "has_table_privilege(current_user,'app.custody_operations','SELECT')" in migrations_lib
+    assert "has_table_privilege(current_user,'app.custody_operations','SELECT')" not in migrations_lib
+    assert "has_table_privilege(current_user,'app.custody_delete_broker_receipts','SELECT')" not in migrations_lib
+    assert migrations_lib.count("from pg_catalog.pg_class c") == 2
+    assert migrations_lib.count("join pg_catalog.pg_namespace n") == 2
+    assert migrations_lib.count("has_table_privilege(current_user,c.oid,'SELECT')") == 2
+    assert "c.relname='custody_operations'" in migrations_lib
+    assert "c.relname='custody_delete_broker_receipts'" in migrations_lib
     assert migrations_lib.count("select current_user='sift_custody_delete_broker'") == 1
     assert migrations_lib.count("_custody_delete_broker_scope_valid") == 3
     assert "stale or mis-scoped; rotating" in migrations_lib

@@ -686,8 +686,12 @@ def test_delete_verified_transition_requires_scoped_completed_broker_receipt():
                 """select rolsuper,rolinherit,rolbypassrls,
                      has_schema_privilege('sift_custody_delete_broker','sift_custody_broker','USAGE'),
                      has_schema_privilege('sift_custody_delete_broker','app','USAGE'),
-                     has_table_privilege('sift_custody_delete_broker','app.custody_operations','SELECT'),
-                     has_table_privilege('sift_custody_delete_broker','app.custody_delete_broker_receipts','SELECT'),
+                     coalesce((select has_table_privilege('sift_custody_delete_broker',c.oid,'SELECT')
+                       from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
+                       where n.nspname='app' and c.relname='custody_operations'),true),
+                     coalesce((select has_table_privilege('sift_custody_delete_broker',c.oid,'SELECT')
+                       from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
+                       where n.nspname='app' and c.relname='custody_delete_broker_receipts'),true),
                      has_function_privilege('sift_custody_delete_broker','sift_custody_broker.authorize(uuid,text)','EXECUTE'),
                      has_function_privilege('sift_custody_delete_broker','sift_custody_broker.claim(uuid,text,text)','EXECUTE'),
                      has_function_privilege('sift_custody_delete_broker','sift_custody_broker.complete(uuid,text,text)','EXECUTE'),
