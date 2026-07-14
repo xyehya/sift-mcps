@@ -161,7 +161,9 @@ begin
   select exists(select 1 from jsonb_array_elements(v_original_issues) issue
       where issue->>'code'='INVENTORY_SCAN_FAILED')
     and not exists(select 1 from jsonb_array_elements(v_original_issues) issue
-      where issue->>'code' not in ('INVENTORY_SCAN_FAILED','PERSISTED_VIOLATION'))
+      where issue->>'code' not in (
+        'INVENTORY_SCAN_FAILED','PERSISTED_VIOLATION',
+        'DETECTED_NEW_ITEM','UNSAFE_PENDING_ITEM'))
     into v_scan_failure_only;
   v_row := app.evidence_record_inventory_classification_v2_pre_causal_preservation(
     p_case_id,p_correlation_id,p_gate_state,p_findings);

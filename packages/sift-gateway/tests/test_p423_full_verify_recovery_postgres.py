@@ -103,23 +103,41 @@ def _verify(conn, setup, *, generation=1, profile="LOCAL_IMMUTABLE", items=None,
     return state, correlation
 
 
-def _reconcile_persisted_only(conn, setup) -> None:
-    from psycopg.types.json import Jsonb
-
-    findings = [{
+def _persisted_finding() -> dict[str, object]:
+    return {
         "code": "PERSISTED_VIOLATION",
         "gate_state": "BLOCKED_VIOLATION",
         "recovery": "RESTORE_REACQUIRE_RETIRE",
         "evidence_object_id": None,
         "observation_id": None,
         "full_verification_required": False,
-    }]
+    }
+
+
+def _pending_finding() -> dict[str, object]:
+    return {
+        "code": "DETECTED_NEW_ITEM",
+        "gate_state": "BLOCKED_PENDING",
+        "recovery": "OPERATOR_DISPOSITION",
+        "evidence_object_id": None,
+        "observation_id": None,
+        "full_verification_required": False,
+    }
+
+
+def _reconcile_findings(conn, setup, findings) -> None:
+    from psycopg.types.json import Jsonb
+
     with conn.cursor() as cur:
         cur.execute(
             "select id from app.evidence_record_inventory_classification_v2(%s,%s,%s,%s)",
             (setup[0], "reconcile:" + uuid.uuid4().hex, "BLOCKED_VIOLATION", Jsonb(findings)),
         )
         assert cur.fetchone() is not None
+
+
+def _reconcile_persisted_only(conn, setup) -> None:
+    _reconcile_findings(conn, setup, [_persisted_finding()])
 
 
 def test_posture_only_success_opens_and_writes_one_receipt() -> None:
@@ -152,6 +170,11 @@ def test_posture_only_success_opens_and_writes_one_receipt() -> None:
         with conn.cursor() as cur:
             cur.execute(
                 "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+                (setup[0],),
+            )
+            assert cur.fetchone() == ("sealed", [])
+            cur.execute(
+                "select seal_status,issues from app.evidence_gate_status(%s)",
                 (setup[0],),
             )
             assert cur.fetchone() == ("sealed", [])
@@ -260,6 +283,7 @@ def test_reconciliation_and_second_verify_cannot_launder_cause(blocking_code: st
         {"code": "PERSISTED_VIOLATION"},
         {"code": "FULL_VERIFY_REQUIRED"},
         {"code": "INVENTORY_SCAN_FAILED"},
+        {"code": "DETECTED_NEW_ITEM"},
         {"code": blocking_code},
     ]
     with psycopg.connect(_dsn()) as conn:
@@ -290,6 +314,59 @@ def test_complete_reconciliation_clears_transient_inventory_scan_failure() -> No
                 (setup[0],),
             )
             assert cur.fetchone() == ("sealed", [])
+
+
+def test_resolved_scan_failure_and_pending_item_open_the_gate() -> None:
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as conn:
+        setup = _setup(
+            conn,
+            [
+                {"code": "INVENTORY_SCAN_FAILED"},
+                {"code": "DETECTED_NEW_ITEM"},
+            ],
+        )
+        _reconcile_persisted_only(conn, setup)
+        with conn.cursor() as cur:
+            cur.execute(
+                "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+                (setup[0],),
+            )
+            assert cur.fetchone() == ("sealed", [])
+            cur.execute(
+                "select seal_status,issues from app.evidence_gate_status(%s)",
+                (setup[0],),
+            )
+            assert cur.fetchone() == ("sealed", [])
+
+
+def test_resolved_scan_failure_with_current_pending_item_remains_unsealed() -> None:
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as conn:
+        setup = _setup(
+            conn,
+            [
+                {"code": "INVENTORY_SCAN_FAILED"},
+                {"code": "DETECTED_NEW_ITEM"},
+            ],
+        )
+        _reconcile_findings(conn, setup, [_persisted_finding(), _pending_finding()])
+        with conn.cursor() as cur:
+            cur.execute(
+                "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+                (setup[0],),
+            )
+            seal_status, remaining = cur.fetchone()
+        assert seal_status == "unsealed"
+        assert {issue["code"] for issue in remaining} == {"DETECTED_NEW_ITEM"}
+        with conn.cursor() as cur:
+            cur.execute(
+                "select seal_status,issues from app.evidence_gate_status(%s)",
+                (setup[0],),
+            )
+            gate_seal_status, gate_issues = cur.fetchone()
+        assert gate_seal_status == "unsealed"
+        assert {issue["code"] for issue in gate_issues} == {"DETECTED_NEW_ITEM"}
 
 
 def test_pending_only_issue_remains_unsealed_after_full_verify() -> None:
