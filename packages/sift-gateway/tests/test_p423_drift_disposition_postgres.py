@@ -54,7 +54,9 @@ def _app_table_counts(dsn: str) -> dict[str, int]:
                     sql.Identifier(table_name)
                 )
             )
-            counts[table_name] = cur.fetchone()[0]
+            count_row = cur.fetchone()
+            assert count_row is not None
+            counts[table_name] = count_row[0]
     return counts
 
 
@@ -107,20 +109,20 @@ def _cleanup_committed_broker_fixture(
             if clauses:
                 predicate = sql.SQL(" or ").join(clauses)
                 cur.execute(
-                    sql.SQL("delete from app.{} where ").format(
-                        sql.Identifier(table_name)
-                    )
-                    + predicate,
+                    sql.SQL("delete from app.{table} where {predicate}").format(
+                        table=sql.Identifier(table_name), predicate=predicate
+                    ),
                     params,
                 )
                 cur.execute(
-                    sql.SQL("select count(*) from app.{} where ").format(
-                        sql.Identifier(table_name)
-                    )
-                    + predicate,
+                    sql.SQL(
+                        "select count(*) from app.{table} where {predicate}"
+                    ).format(table=sql.Identifier(table_name), predicate=predicate),
                     params,
                 )
-                assert cur.fetchone()[0] == 0
+                remaining_row = cur.fetchone()
+                assert remaining_row is not None
+                assert remaining_row[0] == 0
         cur.execute("delete from app.cases where id=%s", (case_id,))
         cur.execute("delete from app.operator_profiles where id=%s", (actor_id,))
         cur.execute(
@@ -132,7 +134,9 @@ def _cleanup_committed_broker_fixture(
         assert cur.fetchone() == (0, 0)
         cur.execute("set local session_replication_role=origin")
         cur.execute("select current_setting('session_replication_role')")
-        assert cur.fetchone()[0] == "origin"
+        replication_role_row = cur.fetchone()
+        assert replication_role_row is not None
+        assert replication_role_row[0] == "origin"
     assert _app_table_counts(dsn) == before_counts
 
 
