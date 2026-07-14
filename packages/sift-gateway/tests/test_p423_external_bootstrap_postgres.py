@@ -357,7 +357,7 @@ def test_backfill_repairs_only_projection_and_synthetic_latch():
 
 @pytest.mark.parametrize(
     "poison",
-    ("prior_manifest", "prior_source", "violated_object", "unsafe_cause", "stale_generation", "successful_verification"),
+    ("prior_manifest", "prior_source", "violated_object", "unsafe_cause", "unsafe_pending", "stale_generation", "successful_verification"),
 )
 def test_backfill_never_repairs_nonvirgin_or_unsafe_head(poison):
     psycopg = pytest.importorskip("psycopg")
@@ -388,6 +388,25 @@ def test_backfill_never_repairs_nonvirgin_or_unsafe_head(poison):
             )
             issues = cur.fetchone()[0]
             issues.append({"code": "LEDGER_INVALID", "gate_state": "BLOCKED_VIOLATION"})
+            cur.execute(
+                "update app.evidence_chain_heads set issues=%s where case_id=%s",
+                (Jsonb(issues), case_id),
+            )
+        elif poison == "unsafe_pending":
+            cur.execute(
+                "select issues from app.evidence_chain_heads where case_id=%s", (case_id,)
+            )
+            issues = cur.fetchone()[0]
+            issues.append(
+                {
+                    "code": "UNSAFE_PENDING_ITEM",
+                    "gate_state": "BLOCKED_PENDING",
+                    "recovery": "OPERATOR_DISPOSITION",
+                    "evidence_object_id": None,
+                    "observation_id": "unsafe-sibling",
+                    "full_verification_required": False,
+                }
+            )
             cur.execute(
                 "update app.evidence_chain_heads set issues=%s where case_id=%s",
                 (Jsonb(issues), case_id),
@@ -436,7 +455,80 @@ def test_backfill_never_repairs_nonvirgin_or_unsafe_head(poison):
                         actor_id,
                     ),
                 )
+        cur.execute(
+            """select
+                 (select count(*) from app.evidence_manifests where case_id=%s),
+                 (select count(*) from app.evidence_versions where case_id=%s),
+                 (select count(*) from app.evidence_storage_verifications
+                    where case_id=%s and outcome='SUCCESS')""",
+            (case_id, case_id, case_id),
+        )
+        assert cur.fetchone() == (0, 0, 0)
         cur.execute("rollback to savepoint external_bootstrap_negative")
+
+
+def test_finalizer_rejects_detected_entry_raced_after_begin_without_authority():
+    psycopg = pytest.importorskip("psycopg")
+    from psycopg.types.json import Jsonb
+
+    with psycopg.connect(_dsn()) as conn, conn.cursor() as cur:
+        case_id, actor_id, object_ids, paths, source, mount = _virgin_external(
+            conn, paths=("evidence/alpha.raw",)
+        )
+        command, reason, key, receipt = _seal_command(
+            conn, case_id=case_id, actor_id=actor_id, paths=paths
+        )
+        items = _verified_items(
+            object_ids=object_ids, paths=paths, source=source, mount=mount
+        )
+        cur.execute(
+            """select id from app.custody_operation_begin_or_resume_storage_v3(
+                 %s,%s,%s,%s,%s,%s,%s,'race-runner',null)""",
+            (
+                case_id,
+                Jsonb(command),
+                "sha256:" + "7" * 64,
+                reason,
+                receipt,
+                key,
+                actor_id,
+            ),
+        )
+        operation_id = cur.fetchone()[0]
+        cur.execute(
+            "select phase from app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'race-runner')",
+            (operation_id, Jsonb({"items": items})),
+        )
+        cur.execute(
+            "select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'race-runner')",
+            (operation_id, Jsonb({"items": items})),
+        )
+        cur.execute(
+            "select app.evidence_detect(%s,'evidence/raced.raw','raced.raw',10,null,null)",
+            (case_id,),
+        )
+
+        with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+            with conn.transaction():
+                cur.execute(
+                    "select app.custody_operation_commit_verified_seal_storage_v3(%s,%s,'examiner','race-runner')",
+                    (operation_id, Jsonb(items)),
+                )
+
+        cur.execute(
+            """select
+                 (select count(*) from app.evidence_manifests where case_id=%s),
+                 (select count(*) from app.evidence_versions where case_id=%s),
+                 (select count(*) from app.evidence_storage_verifications
+                    where case_id=%s and outcome='SUCCESS')""",
+            (case_id, case_id, case_id),
+        )
+        assert cur.fetchone() == (0, 0, 0)
+        cur.execute(
+            "select seal_status from app.evidence_chain_heads where case_id=%s",
+            (case_id,),
+        )
+        assert cur.fetchone()[0] in ("unsealed", "violated")
 
 
 def test_external_bootstrap_database_surface_is_service_role_only():

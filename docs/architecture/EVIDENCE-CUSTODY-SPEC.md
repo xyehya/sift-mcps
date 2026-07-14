@@ -130,6 +130,7 @@ stateDiagram-v2
 - Local pending files are service-owned, mode `0644`, and mutable until Seal. Local sealed files require the immutable flag; mode bits alone are not custody protection.
 - Externally read-only evidence requires a stable mount identity and verified read-only posture. Local ownership repair and immutable flags do not apply.
 - A virgin external intake has no sealed active set for Full Verify to verify. After profile authorization, read-only mount observation, and complete inventory classification, the exact v0 projection remains `unsealed` with its current-generation `STORAGE_FULL_VERIFY_REQUIRED` cause. Add & Seal is the only bootstrap action: it must target every DETECTED pending object and atomically establishes Manifest Version 1, the first full hashes, and the source/mount receipt. Admission stays blocked throughout bootstrap.
+- `VERIFICATION_REQUIRED` never suppresses structural inventory truth: symlink, directory, nested, non-regular, and multi-link observations remain explicit unsafe findings and keep the gate blocked. External Add & Seal enumerates the pinned evidence root without following links before hashing and again at final posture verification; the complete safe direct-entry set must exactly equal the selected targets. An omitted or raced entry prevents manifest, version, event, and verification-receipt commit.
 - Symlinks, hardlinks, traversal, nested unexpected entries, non-regular files, cross-case targets, and unsafe mount transitions fail closed.
 
 ### Reconciliation and verification
@@ -407,6 +408,11 @@ Add & Seal revalidates the complete DETECTED target set and the predicate under 
 the existing v3 finalizer atomically creates the first versions/manifest/event and binds source,
 mount, generation, hashes, bytes, and read-only posture. No append-only row is rewritten by upgrade
 repair; unsafe, stale, or previously authoritative cases remain violated.
+The filesystem seam independently requires exact equality between selected targets and a no-follow
+enumeration of the pinned evidence root both before hashing and immediately before the final receipt.
+Unsafe or extra siblings, including entries introduced after begin, fail closed without custody
+authority. Inventory classification retains `UNSAFE_PENDING_ITEM` while storage verification is
+required, so the bootstrap predicate cannot reinterpret that head as virgin.
 
 Profile/source transition idempotency is Postgres-authoritative: an exact retry with the original
 scoped receipt returns the stored result without advancing generation or appending another event;

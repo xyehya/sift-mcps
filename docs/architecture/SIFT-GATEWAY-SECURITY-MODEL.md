@@ -72,6 +72,10 @@ lane is enabled only by an exact v0/source-less/current-generation predicate, ta
 pending object, and keeps admission blocked until the existing finalizer atomically establishes the
 first manifest, hashes, and source/mount receipt. Upgrade repair changes only the chain-head read
 model; append-only authority is never rewritten.
+Structural scan findings survive `VERIFICATION_REQUIRED`. At the filesystem proof seam, the Gateway
+no-follow enumerates the pinned evidence root before hashing and again before returning verified
+receipts; every direct entry must be regular, single-link, and exactly one selected target. Extra,
+unsafe, omitted, or raced siblings therefore fail before the database finalizer can create authority.
 
 | Plane | What it is |
 | --- | --- |

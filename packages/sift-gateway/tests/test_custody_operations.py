@@ -131,7 +131,8 @@ class FakePosture:
         self.fail_verify = fail_verify
         self.calls: list[tuple[str, list[str]]] = []
 
-    def prepare(self, case_dir: Path, paths: list[str]):
+    def prepare(self, case_dir: Path, paths: list[str], *, expected_root_paths=None):
+        del expected_root_paths
         self.calls.append(("prepare", paths))
         self.receipts = []
         for path in paths:
@@ -680,6 +681,157 @@ def test_external_adapter_observes_without_local_mutation(monkeypatch, tmp_path)
         assert "immutable" not in receipt
     finally:
         adapter.close(batch)
+
+
+@pytest.mark.parametrize("unsafe_kind", ("symlink", "directory", "hardlink", "extra"))
+def test_external_adapter_requires_exact_safe_root_inventory(
+    monkeypatch, tmp_path, unsafe_kind
+):
+    from sift_core.evidence_storage import ExternalStorageFacts
+
+    facts = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
+    monkeypatch.setattr(
+        "sift_gateway.custody_operations.external_storage_facts", lambda _fd: facts
+    )
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    target = evidence / "disk.raw"
+    target.write_bytes(b"external evidence")
+    sibling = evidence / "unsafe"
+    if unsafe_kind == "symlink":
+        sibling.symlink_to(target)
+    elif unsafe_kind == "directory":
+        sibling.mkdir()
+    elif unsafe_kind == "hardlink":
+        os.link(target, sibling)
+    else:
+        sibling.write_bytes(b"omitted regular evidence")
+
+    with pytest.raises(CustodyOperationError, match="external_inventory_target_set_mismatch"):
+        ExternalReadOnlyPostureAdapter().prepare(tmp_path, ["evidence/disk.raw"])
+
+
+def test_external_adapter_rechecks_exact_root_inventory_before_receipt(
+    monkeypatch, tmp_path
+):
+    from sift_core.evidence_storage import ExternalStorageFacts
+
+    facts = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
+    monkeypatch.setattr(
+        "sift_gateway.custody_operations.external_storage_facts", lambda _fd: facts
+    )
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "disk.raw").write_bytes(b"external evidence")
+    adapter = ExternalReadOnlyPostureAdapter()
+    batch = adapter.prepare(tmp_path, ["evidence/disk.raw"])
+    try:
+        (evidence / "raced.raw").write_bytes(b"appeared after prepare")
+        with pytest.raises(
+            CustodyOperationError, match="external_inventory_target_set_mismatch"
+        ):
+            adapter.verify(batch)
+    finally:
+        adapter.close(batch)
+
+
+def test_external_seal_race_never_reaches_commit(monkeypatch, tmp_path):
+    from sift_core.evidence_storage import ExternalStorageFacts
+
+    facts = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
+    monkeypatch.setattr(
+        "sift_gateway.custody_operations.external_storage_facts", lambda _fd: facts
+    )
+
+    class RacingExternalAdapter(ExternalReadOnlyPostureAdapter):
+        def apply(self, batch):
+            super().apply(batch)
+            (tmp_path / "evidence" / "raced.raw").write_bytes(b"raced")
+
+    repo = FakeRepository()
+    service = EvidenceAuthorityService(
+        "postgresql://unused",
+        custody_repository=cast(CustodyOperationRepositoryProtocol, repo),
+        external_posture_adapter=RacingExternalAdapter(),
+    )
+    monkeypatch.setattr(service, "_scan_evidence", lambda _case_id: [])
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: tmp_path)
+    monkeypatch.setattr(
+        service, "_seal_expected_root_paths", lambda _case_id, paths: paths
+    )
+    monkeypatch.setattr(
+        service,
+        "_seal_object_for_path",
+        lambda _case_id, _path: {
+            "evidence_object_id": "44444444-4444-4444-4444-444444444444",
+            "status": "detected",
+        },
+    )
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "disk.raw").write_bytes(b"external evidence")
+
+    with pytest.raises(
+        PortalServiceError, match="external_inventory_target_set_mismatch"
+    ):
+        service.seal(
+            case_id=CASE_ID,
+            file_specs=[{"path": "evidence/disk.raw"}],
+            reason="external intake",
+            idempotency_key="external-race",
+            reauth_audit_event_id=REAUTH_ID,
+            actor={"principal_type": "operator", "principal_id": ACTOR_ID},
+            examiner="examiner",
+            storage_profile=StorageProfile.EXTERNALLY_READ_ONLY.value,
+        )
+
+    assert all(call[0] != "commit_verified_seal" for call in repo.calls)
+    assert repo.record.phase is CustodyOperationPhase.FAILED_RECOVERABLE
+
+
+def test_external_root_authority_excludes_retired_paths():
+    class Cursor:
+        sql = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, _params):
+            self.sql = " ".join(sql.split())
+
+        def fetchall(self):
+            return [("evidence/sealed.raw",), ("evidence/ignored.raw",)]
+
+    class Connection:
+        def __init__(self):
+            self.cursor_instance = Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def cursor(self):
+            return self.cursor_instance
+
+    connection = Connection()
+    service = cast(EvidenceAuthorityService, object.__new__(EvidenceAuthorityService))
+    service._connect = lambda: connection  # type: ignore[method-assign]
+
+    expected = service._seal_expected_root_paths(
+        CASE_ID, ["evidence/new.raw"]
+    )
+
+    assert expected == [
+        "evidence/ignored.raw",
+        "evidence/new.raw",
+        "evidence/sealed.raw",
+    ]
+    assert "'retired'" not in connection.cursor_instance.sql
 
 
 def test_external_adapter_fails_closed_when_mount_instance_changes(monkeypatch, tmp_path):

@@ -19,7 +19,12 @@ export function FullVerifyBar({ chainStatus, onVerifyClick }) {
   const hasActiveManifest =
     Number(chainStatus.manifest_version || 0) > 0 && Number(chainStatus.active_count || 0) > 0
   const virginExternalBootstrap =
-    chainStatus.storage_profile === 'EXTERNALLY_READ_ONLY' && !hasActiveManifest
+    chainStatus.storage_profile === 'EXTERNALLY_READ_ONLY' &&
+    Number(chainStatus.manifest_version) === 0 &&
+    Number(chainStatus.active_count) === 0 &&
+    chainStatus.storage_source_identity == null &&
+    chainStatus.storage_verified_mount_instance == null &&
+    chainStatus.storage_verified_generation == null
   const Icon = needed ? AlertTriangle : CheckCircle2
 
   return (

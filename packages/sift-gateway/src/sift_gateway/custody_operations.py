@@ -372,7 +372,13 @@ class CustodyOperationRepositoryProtocol(Protocol):
 
 
 class LocalImmutablePostureProtocol(Protocol):
-    def prepare(self, case_dir: Path, paths: list[str]) -> PostureBatch: ...
+    def prepare(
+        self,
+        case_dir: Path,
+        paths: list[str],
+        *,
+        expected_root_paths: list[str] | None = None,
+    ) -> PostureBatch: ...
 
     def apply(self, batch: PostureBatch) -> None: ...
 
@@ -392,6 +398,7 @@ class PinnedEvidenceFile:
 class PostureBatch:
     root_fd: int
     files: list[PinnedEvidenceFile]
+    expected_root_paths: tuple[str, ...] = ()
 
 
 class CustodyOperationError(Exception):
@@ -704,7 +711,14 @@ class LocalImmutablePostureAdapter:
         os.lseek(fd, 0, os.SEEK_SET)
         return "sha256:" + digest.hexdigest(), size
 
-    def prepare(self, case_dir: Path, paths: list[str]) -> PostureBatch:
+    def prepare(
+        self,
+        case_dir: Path,
+        paths: list[str],
+        *,
+        expected_root_paths: list[str] | None = None,
+    ) -> PostureBatch:
+        del expected_root_paths
         nofollow = getattr(os, "O_NOFOLLOW", None)
         if nofollow is None:
             raise CustodyOperationError("o_nofollow_required", http_status=500)
@@ -832,27 +846,92 @@ class ExternalReadOnlyPostureAdapter:
     def _hash_fd(fd: int) -> tuple[str, int]:
         return LocalImmutablePostureAdapter._hash_fd(fd)
 
-    def prepare(self, case_dir: Path, paths: list[str]) -> PostureBatch:
+    @staticmethod
+    def _target_names(paths: list[str]) -> tuple[str, ...]:
+        names: list[str] = []
+        for rel_path in paths:
+            parts = Path(rel_path).parts
+            if (
+                len(parts) != 2
+                or parts[0] != "evidence"
+                or parts[1] in ("", ".", "..")
+            ):
+                raise CustodyOperationError("invalid_evidence_path", http_status=400)
+            names.append(parts[1])
+        if len(names) != len(set(names)):
+            raise CustodyOperationError("duplicate_evidence_path", http_status=400)
+        return tuple(sorted(names))
+
+    @staticmethod
+    def _require_exact_safe_root(
+        root_fd: int,
+        target_names: tuple[str, ...],
+        root_facts: Any,
+        *,
+        pinned_names: tuple[str, ...] = (),
+    ) -> None:
+        """No-follow inventory proof over the already-pinned evidence root."""
+        observed_names = tuple(sorted(os.listdir(root_fd)))
+        if observed_names != target_names:
+            raise CustodyOperationError(
+                "external_inventory_target_set_mismatch", http_status=409
+            )
+        for name in observed_names:
+            st = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                raise CustodyOperationError(
+                    "external_inventory_target_set_mismatch", http_status=409
+                )
+            if name in pinned_names:
+                # Selected entries are opened and checked against root_facts by
+                # their long-lived descriptor immediately after enumeration.
+                continue
+            fd = os.open(
+                name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=root_fd,
+            )
+            try:
+                opened = os.fstat(fd)
+                if (
+                    opened.st_dev != st.st_dev
+                    or opened.st_ino != st.st_ino
+                    or opened.st_nlink != 1
+                    or external_storage_facts(fd) != root_facts
+                ):
+                    raise CustodyOperationError(
+                        "external_inventory_target_set_mismatch", http_status=409
+                    )
+            finally:
+                os.close(fd)
+
+    def prepare(
+        self,
+        case_dir: Path,
+        paths: list[str],
+        *,
+        expected_root_paths: list[str] | None = None,
+    ) -> PostureBatch:
         nofollow = getattr(os, "O_NOFOLLOW", None)
         if nofollow is None:
             raise CustodyOperationError("o_nofollow_required", http_status=500)
+        root_paths = expected_root_paths if expected_root_paths is not None else paths
+        target_names = self._target_names(root_paths)
+        pinned_names = self._target_names(paths)
         root_fd = os.open(
             case_dir / "evidence",
             os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | nofollow,
         )
-        batch = PostureBatch(root_fd=root_fd, files=[])
+        batch = PostureBatch(
+            root_fd=root_fd, files=[], expected_root_paths=tuple(root_paths)
+        )
         try:
             root_facts = external_storage_facts(root_fd)
+            self._require_exact_safe_root(
+                root_fd, target_names, root_facts, pinned_names=pinned_names
+            )
             for rel_path in paths:
                 parts = Path(rel_path).parts
-                if (
-                    len(parts) != 2
-                    or parts[0] != "evidence"
-                    or parts[1] in ("", ".", "..")
-                ):
-                    raise CustodyOperationError(
-                        "invalid_evidence_path", http_status=400
-                    )
                 fd = os.open(
                     parts[1], os.O_RDONLY | os.O_CLOEXEC | nofollow, dir_fd=root_fd
                 )
@@ -929,6 +1008,11 @@ class ExternalReadOnlyPostureAdapter:
         receipts: list[dict[str, Any]] = []
         try:
             root_facts = external_storage_facts(batch.root_fd)
+            target_names = self._target_names(list(batch.expected_root_paths))
+            pinned_names = self._target_names([item.path for item in batch.files])
+            self._require_exact_safe_root(
+                batch.root_fd, target_names, root_facts, pinned_names=pinned_names
+            )
             for item in batch.files:
                 st = os.fstat(item.fd)
                 sha256, size = self._hash_fd(item.fd)
@@ -949,8 +1033,14 @@ class ExternalReadOnlyPostureAdapter:
                         "external_evidence_posture_verification_failed", http_status=409
                     )
                 receipts.append({**item.before, "read_only": True})
+            # Catch entries introduced while the selected files were hashed.
+            # A real external source is required to remain read-only; this
+            # second enumeration makes that assumption fail closed if violated.
+            self._require_exact_safe_root(
+                batch.root_fd, target_names, root_facts, pinned_names=pinned_names
+            )
             return receipts
-        except StorageAuthorityError as exc:
+        except (StorageAuthorityError, OSError) as exc:
             raise CustodyOperationError(
                 "external_storage_unavailable", http_status=409
             ) from exc
@@ -977,11 +1067,13 @@ class SealCustodyOperation:
         posture: LocalImmutablePostureProtocol,
         case_dir: Callable[[str], Path | None],
         object_for_path: Callable[[str, str], dict[str, Any]],
+        expected_root_paths: Callable[[str, list[str]], list[str]],
     ) -> None:
         self._repository = repository
         self._posture = posture
         self._case_dir = case_dir
         self._object_for_path = object_for_path
+        self._expected_root_paths = expected_root_paths
 
     def execute(self, command: SealCommand, *, examiner: str) -> dict[str, Any]:
         try:
@@ -1018,7 +1110,14 @@ class SealCustodyOperation:
                     "case_artifact_path_unavailable", http_status=404
                 )
             paths = [str(spec["path"]) for spec in command.file_specs]
-            batch = self._posture.prepare(case_dir, paths)
+            root_paths = (
+                self._expected_root_paths(command.case_id, paths)
+                if command.storage_profile is StorageProfile.EXTERNALLY_READ_ONLY
+                else paths
+            )
+            batch = self._posture.prepare(
+                case_dir, paths, expected_root_paths=root_paths
+            )
             specs = {str(spec["path"]): spec for spec in command.file_specs}
             prepared_items: list[dict[str, Any]] = []
             for pinned in batch.files:

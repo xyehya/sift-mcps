@@ -1907,6 +1907,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 ),
                 self._case_artifact_path,
                 self._seal_object_for_path,
+                self._seal_expected_root_paths,
             ).execute(command, examiner=examiner)
         except CustodyOperationError as exc:
             raise PortalServiceError(exc.reason, http_status=exc.http_status) from exc
@@ -1988,6 +1989,21 @@ class EvidenceAuthorityService(_BasePortalDbService):
         if not row:
             raise PortalServiceError("evidence_object_not_found", http_status=404)
         return {"evidence_object_id": str(row[0]), "status": str(row[1])}
+
+    def _seal_expected_root_paths(
+        self, case_id: str, selected_paths: list[str]
+    ) -> list[str]:
+        """Resolve the complete operator/DB-authorized external root set."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select display_path from app.evidence_objects
+                       where case_id=%s and status in ('sealed','ignored')
+                       order by display_path""",
+                    (case_id,),
+                )
+                retained_paths = [str(row[0]) for row in cur.fetchall()]
+        return sorted(set(selected_paths) | set(retained_paths))
 
     def _harden_sealed_files(
         self, case_id: str, file_specs: list[dict[str, Any]]

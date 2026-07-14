@@ -37,6 +37,10 @@ as $$
       )
       and not exists(
         select 1 from jsonb_array_elements(coalesce(h.issues,'[]'::jsonb)) issue
+        where issue->>'code'='UNSAFE_PENDING_ITEM'
+      )
+      and not exists(
+        select 1 from jsonb_array_elements(coalesce(h.issues,'[]'::jsonb)) issue
         where issue->>'code' not in ('STORAGE_PROFILE_CHANGED','STORAGE_FULL_VERIFY_REQUIRED','PERSISTED_VIOLATION')
           or (
             issue->>'code' in ('STORAGE_PROFILE_CHANGED','STORAGE_FULL_VERIFY_REQUIRED')

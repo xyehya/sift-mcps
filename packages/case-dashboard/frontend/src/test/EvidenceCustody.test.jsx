@@ -427,6 +427,27 @@ describe('Full Verify Evidence flow', () => {
     expect(screen.getByRole('button', { name: /Seal Manifest \(1 file\)/i })).toBeEnabled()
     expect(endpoints.postFullVerifyEvidence).not.toHaveBeenCalled()
   })
+
+  it('does not label a nonvirgin zero-active manifest as first external intake', async () => {
+    seed({
+      status: 'violated',
+      seal_status: 'violated',
+      storage_profile: 'EXTERNALLY_READ_ONLY',
+      storage_source_identity: 'already-established-source',
+      storage_verified_mount_instance: 'prior-mount',
+      storage_verified_generation: 1,
+      manifest_version: 2,
+      active_count: 0,
+      hmac_verify_needed: true,
+      unregistered: [],
+    })
+
+    render(<EvidenceTab />)
+
+    expect(await screen.findByText(/Evidence has not yet been fully verified/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Add & Seal establishes the first full-hash source and mount receipt/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Full Verify Evidence' })).toBeDisabled()
+  })
 })
 
 describe('Evidence storage profile flow', () => {

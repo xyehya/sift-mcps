@@ -358,6 +358,43 @@ def test_authorized_unverified_storage_generation_is_not_a_custody_violation() -
     assert result.findings[0].full_verification_required is True
 
 
+@pytest.mark.parametrize(
+    ("entry_kind", "link_count"),
+    ((EntryKind.SYMLINK, None), (EntryKind.DIRECTORY, None), (EntryKind.REGULAR, 2)),
+)
+def test_verification_required_preserves_observed_unsafe_inventory(
+    entry_kind: EntryKind, link_count: int | None
+) -> None:
+    identity = (
+        FileIdentity(11, 99, 1, 33, 44, link_count)
+        if link_count is not None
+        else None
+    )
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.VERIFICATION_REQUIRED,
+            observed=(
+                _mounted(
+                    observation_id="unsafe-sibling",
+                    evidence_object_id=None,
+                    entry_kind=entry_kind,
+                    identity=identity,
+                    sha256=None,
+                    immutable=None,
+                ),
+            ),
+            persisted_head_violation=True,
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_UNAVAILABLE
+    assert [finding.code for finding in result.findings] == [
+        DriftCode.PERSISTED_VIOLATION,
+        DriftCode.STORAGE_FULL_VERIFY_REQUIRED,
+        DriftCode.UNSAFE_PENDING_ITEM,
+    ]
+
+
 def test_external_source_change_requires_explicit_source_authorization() -> None:
     expected = AuthorityEvidence(
         evidence_object_id="object-1",

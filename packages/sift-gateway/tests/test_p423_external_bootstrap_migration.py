@@ -35,6 +35,7 @@ def test_virgin_external_predicate_is_exact_and_current_generation_bound() -> No
     assert "app.evidence_versions" in predicate
     assert "outcome='SUCCESS'" in predicate
     assert "not in ('STORAGE_PROFILE_CHANGED','STORAGE_FULL_VERIFY_REQUIRED','PERSISTED_VIOLATION')" in predicate
+    assert "issue->>'code'='UNSAFE_PENDING_ITEM'" in predicate
 
 
 def test_projection_preserves_storage_causes_and_removes_only_synthetic_latch() -> None:

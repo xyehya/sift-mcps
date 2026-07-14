@@ -280,6 +280,23 @@ def classify_inventory(snapshot: InventorySnapshot) -> InventoryClassification:
                 full_verification_required=True,
             )
         )
+        # Storage verification state is aggregate authority, but it must not
+        # erase concrete unsafe inventory already observed by the same complete
+        # scan. Preserve only structural findings here; byte/identity recovery
+        # remains deferred until storage authority is verified.
+        for item in set(snapshot.observed):
+            if not item.unsafe_shape:
+                continue
+            findings.append(
+                _classify_pending(item)
+                if item.evidence_object_id is None
+                else _finding(
+                    DriftCode.UNSAFE_SEALED_ENTRY,
+                    CustodyGateState.BLOCKED_VIOLATION,
+                    evidence_object_id=item.evidence_object_id,
+                    observation_id=item.observation_id,
+                )
+            )
         return _result(tuple(findings))
     if snapshot.availability is not StorageAvailability.AVAILABLE:
         code = (

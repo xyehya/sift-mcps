@@ -124,6 +124,11 @@ creating Manifest Version 1 and binding the first hashes/source/mount receipt. F
 sanitized 409 before adapter or receipt work until that manifest exists. Upgrade repair never edits
 append-only rows, and prior authority, stale generation, unsafe causes, or violated objects remain
 blocked.
+The bootstrap filesystem proof enumerates the pinned external evidence root without following links
+both before hashing and at receipt completion. Its complete direct-entry set must exactly equal the
+selected targets, with every entry regular and single-link. `VERIFICATION_REQUIRED` classification
+retains structural unsafe findings, and the SQL predicate rejects them; an omitted or raced sibling
+cannot create a manifest, version, event, or successful receipt.
 
 **Change routing:** policy/auth/scoping → `sift-gateway`; evidence/findings/reports/execution → `sift-core` + migrations; derived search/ingest → `opensearch-mcp`; human UX → `case-dashboard`; confinement → configs/systemd/AppArmor with the code change.
 
