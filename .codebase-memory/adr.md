@@ -125,10 +125,13 @@ sanitized 409 before adapter or receipt work until that manifest exists. Upgrade
 append-only rows, and prior authority, stale generation, unsafe causes, or violated objects remain
 blocked.
 The bootstrap filesystem proof enumerates the pinned external evidence root without following links
-both before hashing and at receipt completion. Its complete direct-entry set must exactly equal the
-selected targets, with every entry regular and single-link. `VERIFICATION_REQUIRED` classification
-retains structural unsafe findings, and the SQL predicate rejects them; an omitted or raced sibling
-cannot create a manifest, version, event, or successful receipt.
+both before hashing and at receipt completion. Selected/sealed/ignored paths are required; retired
+history is optional because disposition-only Retire may leave protected bytes or represent already
+missing bytes. Every present entry must be authorized, regular, single-link, and on the same
+source/mount. Selected names are reopened and rebound to their long-lived descriptor device/inode at
+both receipt checks, defeating namespace swaps and replacements. Retired presence is never selected
+or written into the new receipt. `VERIFICATION_REQUIRED` retains structural unsafe findings, and the
+SQL predicate rejects them.
 
 **Change routing:** policy/auth/scoping → `sift-gateway`; evidence/findings/reports/execution → `sift-core` + migrations; derived search/ingest → `opensearch-mcp`; human UX → `case-dashboard`; confinement → configs/systemd/AppArmor with the code change.
 

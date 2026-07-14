@@ -74,8 +74,11 @@ first manifest, hashes, and source/mount receipt. Upgrade repair changes only th
 model; append-only authority is never rewritten.
 Structural scan findings survive `VERIFICATION_REQUIRED`. At the filesystem proof seam, the Gateway
 no-follow enumerates the pinned evidence root before hashing and again before returning verified
-receipts; every direct entry must be regular, single-link, and exactly one selected target. Extra,
-unsafe, omitted, or raced siblings therefore fail before the database finalizer can create authority.
+receipts. Selected/sealed/ignored names are required; retired names are optional historical entries,
+but every present name must be authorized, regular, single-link, and on the same source/mount. Each
+selected pathname is reopened and rebound to its pinned descriptor identity at both receipt checks,
+so swaps, replacements, extra/unsafe names, and omitted required siblings fail before the database
+finalizer can create authority. Optional retired bytes never enter the selected receipt or manifest.
 
 | Plane | What it is |
 | --- | --- |

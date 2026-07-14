@@ -378,6 +378,7 @@ class LocalImmutablePostureProtocol(Protocol):
         paths: list[str],
         *,
         expected_root_paths: list[str] | None = None,
+        optional_root_paths: list[str] | None = None,
     ) -> PostureBatch: ...
 
     def apply(self, batch: PostureBatch) -> None: ...
@@ -399,6 +400,7 @@ class PostureBatch:
     root_fd: int
     files: list[PinnedEvidenceFile]
     expected_root_paths: tuple[str, ...] = ()
+    optional_root_paths: tuple[str, ...] = ()
 
 
 class CustodyOperationError(Exception):
@@ -717,8 +719,9 @@ class LocalImmutablePostureAdapter:
         paths: list[str],
         *,
         expected_root_paths: list[str] | None = None,
+        optional_root_paths: list[str] | None = None,
     ) -> PostureBatch:
-        del expected_root_paths
+        del expected_root_paths, optional_root_paths
         nofollow = getattr(os, "O_NOFOLLOW", None)
         if nofollow is None:
             raise CustodyOperationError("o_nofollow_required", http_status=500)
@@ -865,27 +868,30 @@ class ExternalReadOnlyPostureAdapter:
     @staticmethod
     def _require_exact_safe_root(
         root_fd: int,
-        target_names: tuple[str, ...],
+        required_names: tuple[str, ...],
+        optional_names: tuple[str, ...],
         root_facts: Any,
         *,
-        pinned_names: tuple[str, ...] = (),
+        pinned_by_name: dict[str, PinnedEvidenceFile] | None = None,
     ) -> None:
         """No-follow inventory proof over the already-pinned evidence root."""
         observed_names = tuple(sorted(os.listdir(root_fd)))
-        if observed_names != target_names:
+        observed_set = set(observed_names)
+        required_set = set(required_names)
+        allowed_set = required_set | set(optional_names)
+        if not required_set.issubset(observed_set) or not observed_set.issubset(
+            allowed_set
+        ):
             raise CustodyOperationError(
                 "external_inventory_target_set_mismatch", http_status=409
             )
+        pinned_by_name = pinned_by_name or {}
         for name in observed_names:
             st = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
             if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
                 raise CustodyOperationError(
                     "external_inventory_target_set_mismatch", http_status=409
                 )
-            if name in pinned_names:
-                # Selected entries are opened and checked against root_facts by
-                # their long-lived descriptor immediately after enumeration.
-                continue
             fd = os.open(
                 name,
                 os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -893,15 +899,33 @@ class ExternalReadOnlyPostureAdapter:
             )
             try:
                 opened = os.fstat(fd)
+                opened_facts = external_storage_facts(fd)
                 if (
                     opened.st_dev != st.st_dev
                     or opened.st_ino != st.st_ino
                     or opened.st_nlink != 1
-                    or external_storage_facts(fd) != root_facts
+                    or opened_facts != root_facts
                 ):
                     raise CustodyOperationError(
                         "external_inventory_target_set_mismatch", http_status=409
                     )
+                pinned = pinned_by_name.get(name)
+                if pinned is not None:
+                    pinned_st = os.fstat(pinned.fd)
+                    pinned_facts = external_storage_facts(pinned.fd)
+                    if (
+                        opened.st_dev != pinned_st.st_dev
+                        or opened.st_ino != pinned_st.st_ino
+                        or pinned_st.st_nlink != 1
+                        or pinned_facts != root_facts
+                        or pinned.before.get("storage_source_identity")
+                        != root_facts.source_identity
+                        or pinned.before.get("mount_instance_identity")
+                        != root_facts.mount_instance_identity
+                    ):
+                        raise CustodyOperationError(
+                            "external_inventory_namespace_changed", http_status=409
+                        )
             finally:
                 os.close(fd)
 
@@ -911,24 +935,33 @@ class ExternalReadOnlyPostureAdapter:
         paths: list[str],
         *,
         expected_root_paths: list[str] | None = None,
+        optional_root_paths: list[str] | None = None,
     ) -> PostureBatch:
         nofollow = getattr(os, "O_NOFOLLOW", None)
         if nofollow is None:
             raise CustodyOperationError("o_nofollow_required", http_status=500)
         root_paths = expected_root_paths if expected_root_paths is not None else paths
-        target_names = self._target_names(root_paths)
-        pinned_names = self._target_names(paths)
+        required_names = self._target_names(root_paths)
+        optional_paths = optional_root_paths or []
+        optional_names = self._target_names(optional_paths)
+        if set(required_names) & set(optional_names):
+            raise CustodyOperationError(
+                "external_inventory_authority_overlap", http_status=409
+            )
         root_fd = os.open(
             case_dir / "evidence",
             os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | nofollow,
         )
         batch = PostureBatch(
-            root_fd=root_fd, files=[], expected_root_paths=tuple(root_paths)
+            root_fd=root_fd,
+            files=[],
+            expected_root_paths=tuple(root_paths),
+            optional_root_paths=tuple(optional_paths),
         )
         try:
             root_facts = external_storage_facts(root_fd)
             self._require_exact_safe_root(
-                root_fd, target_names, root_facts, pinned_names=pinned_names
+                root_fd, required_names, optional_names, root_facts
             )
             for rel_path in paths:
                 parts = Path(rel_path).parts
@@ -989,6 +1022,16 @@ class ExternalReadOnlyPostureAdapter:
                 except Exception:
                     os.close(fd)
                     raise
+            pinned_by_name = {
+                Path(item.path).name: item for item in batch.files
+            }
+            self._require_exact_safe_root(
+                root_fd,
+                required_names,
+                optional_names,
+                root_facts,
+                pinned_by_name=pinned_by_name,
+            )
             return batch
         except (StorageAuthorityError, OSError) as exc:
             self.close(batch)
@@ -1008,10 +1051,17 @@ class ExternalReadOnlyPostureAdapter:
         receipts: list[dict[str, Any]] = []
         try:
             root_facts = external_storage_facts(batch.root_fd)
-            target_names = self._target_names(list(batch.expected_root_paths))
-            pinned_names = self._target_names([item.path for item in batch.files])
+            required_names = self._target_names(list(batch.expected_root_paths))
+            optional_names = self._target_names(list(batch.optional_root_paths))
+            pinned_by_name = {
+                Path(item.path).name: item for item in batch.files
+            }
             self._require_exact_safe_root(
-                batch.root_fd, target_names, root_facts, pinned_names=pinned_names
+                batch.root_fd,
+                required_names,
+                optional_names,
+                root_facts,
+                pinned_by_name=pinned_by_name,
             )
             for item in batch.files:
                 st = os.fstat(item.fd)
@@ -1037,7 +1087,11 @@ class ExternalReadOnlyPostureAdapter:
             # A real external source is required to remain read-only; this
             # second enumeration makes that assumption fail closed if violated.
             self._require_exact_safe_root(
-                batch.root_fd, target_names, root_facts, pinned_names=pinned_names
+                batch.root_fd,
+                required_names,
+                optional_names,
+                root_facts,
+                pinned_by_name=pinned_by_name,
             )
             return receipts
         except (StorageAuthorityError, OSError) as exc:
@@ -1067,7 +1121,9 @@ class SealCustodyOperation:
         posture: LocalImmutablePostureProtocol,
         case_dir: Callable[[str], Path | None],
         object_for_path: Callable[[str, str], dict[str, Any]],
-        expected_root_paths: Callable[[str, list[str]], list[str]],
+        expected_root_paths: Callable[
+            [str, list[str]], tuple[list[str], list[str]]
+        ],
     ) -> None:
         self._repository = repository
         self._posture = posture
@@ -1110,13 +1166,16 @@ class SealCustodyOperation:
                     "case_artifact_path_unavailable", http_status=404
                 )
             paths = [str(spec["path"]) for spec in command.file_specs]
-            root_paths = (
+            required_root_paths, optional_root_paths = (
                 self._expected_root_paths(command.case_id, paths)
                 if command.storage_profile is StorageProfile.EXTERNALLY_READ_ONLY
-                else paths
+                else (paths, [])
             )
             batch = self._posture.prepare(
-                case_dir, paths, expected_root_paths=root_paths
+                case_dir,
+                paths,
+                expected_root_paths=required_root_paths,
+                optional_root_paths=optional_root_paths,
             )
             specs = {str(spec["path"]): spec for spec in command.file_specs}
             prepared_items: list[dict[str, Any]] = []

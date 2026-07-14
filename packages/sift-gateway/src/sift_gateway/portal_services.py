@@ -1992,18 +1992,23 @@ class EvidenceAuthorityService(_BasePortalDbService):
 
     def _seal_expected_root_paths(
         self, case_id: str, selected_paths: list[str]
-    ) -> list[str]:
-        """Resolve the complete operator/DB-authorized external root set."""
+    ) -> tuple[list[str], list[str]]:
+        """Resolve required current paths and optional retired history."""
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """select display_path from app.evidence_objects
-                       where case_id=%s and status in ('sealed','ignored')
+                    """select display_path,status from app.evidence_objects
+                       where case_id=%s and status in ('sealed','ignored','retired')
                        order by display_path""",
                     (case_id,),
                 )
-                retained_paths = [str(row[0]) for row in cur.fetchall()]
-        return sorted(set(selected_paths) | set(retained_paths))
+                rows = [(str(row[0]), str(row[1])) for row in cur.fetchall()]
+        required = set(selected_paths)
+        required.update(path for path, status in rows if status in ("sealed", "ignored"))
+        optional = {
+            path for path, status in rows if status == "retired" and path not in required
+        }
+        return sorted(required), sorted(optional)
 
     def _harden_sealed_files(
         self, case_id: str, file_specs: list[dict[str, Any]]

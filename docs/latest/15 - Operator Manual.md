@@ -115,11 +115,12 @@ verification receipt. The storage warning and MCP admission block remain until A
 Seal commits the full target set atomically. A violation with prior custody authority,
 an unsafe finding, a stale mount generation, or a violated object is recovery work and
 must not be treated as virgin bootstrap.
-Add & Seal also requires the mounted evidence root to contain exactly the selected direct
-regular files, each with one link. Symlinks, directories, hardlinks, omitted regular files,
-or entries appearing during verification keep the gate blocked and create no custody version
-or successful storage receipt. Remove or disposition unsafe pending entries through the
-supported operator workflow, then Rescan before retrying.
+Add & Seal also requires every current selected, sealed, and ignored path to remain present as a
+direct regular single-link entry on the authorized source/mount. Retired historical bytes may remain
+or be absent, but are never selected or added to the new receipt. Symlinks, directories, hardlinks,
+unknown names, omitted required files, pathname swaps, replacements, or entries appearing during
+verification keep the gate blocked and create no custody version or successful storage receipt.
+Remove or disposition unsafe pending entries through the supported operator workflow, then Rescan.
 
 If external storage disconnects, the gate reports it as unavailable rather than
 tampering. Reconnecting the same authorized source requires **Full Verify Evidence**;
