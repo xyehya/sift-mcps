@@ -28,6 +28,133 @@ def _broker_dsn() -> str:
     return dsn
 
 
+def _admin_dsn() -> str:
+    dsn = os.environ.get("SIFT_CUSTODY_TEST_ADMIN_DSN", "").strip()
+    if not dsn:
+        pytest.skip(
+            "SIFT_CUSTODY_TEST_ADMIN_DSN is required to clean committed broker fixtures"
+        )
+    return dsn
+
+
+def _app_table_counts(dsn: str) -> dict[str, int]:
+    import psycopg
+    from psycopg import sql
+
+    counts: dict[str, int] = {}
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """select c.relname from pg_catalog.pg_class c
+               join pg_catalog.pg_namespace n on n.oid=c.relnamespace
+               where n.nspname='app' and c.relkind in ('r','p') order by c.relname"""
+        )
+        for (table_name,) in cur.fetchall():
+            cur.execute(
+                sql.SQL("select count(*) from app.{}").format(
+                    sql.Identifier(table_name)
+                )
+            )
+            counts[table_name] = cur.fetchone()[0]
+    return counts
+
+
+def _cleanup_committed_broker_fixture(
+    dsn: str, *, case_id, actor_id, before_counts: dict[str, int]
+) -> None:
+    import psycopg
+    from psycopg import sql
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "select id from app.custody_operations where case_id=%s", (case_id,)
+        )
+        operation_ids = [row[0] for row in cur.fetchall()]
+        cur.execute(
+            "select id from app.evidence_objects where case_id=%s", (case_id,)
+        )
+        object_ids = [row[0] for row in cur.fetchall()]
+        cur.execute(
+            """select c.relname,array_agg(a.attname order by a.attname)
+               from pg_catalog.pg_class c
+               join pg_catalog.pg_namespace n on n.oid=c.relnamespace
+               join pg_catalog.pg_attribute a on a.attrelid=c.oid
+               where n.nspname='app' and c.relkind in ('r','p')
+                 and a.attnum>0 and not a.attisdropped
+                 and a.attname in ('case_id','operation_id','custody_operation_id',
+                   'evidence_object_id','actor_user_id')
+               group by c.relname order by c.relname"""
+        )
+        targets = cur.fetchall()
+        # Test-only superuser cleanup. LOCAL confines the trigger bypass to this
+        # transaction; every predicate uses freshly generated UUIDs from one test.
+        cur.execute("set local session_replication_role=replica")
+        for table_name, columns in targets:
+            clauses = []
+            params = []
+            for column in columns:
+                if column == "case_id":
+                    clauses.append(sql.SQL("{}=%s").format(sql.Identifier(column)))
+                    params.append(case_id)
+                elif column == "actor_user_id":
+                    clauses.append(sql.SQL("{}=%s").format(sql.Identifier(column)))
+                    params.append(actor_id)
+                elif column in {"operation_id", "custody_operation_id"} and operation_ids:
+                    clauses.append(sql.SQL("{}=any(%s)").format(sql.Identifier(column)))
+                    params.append(operation_ids)
+                elif column == "evidence_object_id" and object_ids:
+                    clauses.append(sql.SQL("{}=any(%s)").format(sql.Identifier(column)))
+                    params.append(object_ids)
+            if clauses:
+                predicate = sql.SQL(" or ").join(clauses)
+                cur.execute(
+                    sql.SQL("delete from app.{} where ").format(
+                        sql.Identifier(table_name)
+                    )
+                    + predicate,
+                    params,
+                )
+                cur.execute(
+                    sql.SQL("select count(*) from app.{} where ").format(
+                        sql.Identifier(table_name)
+                    )
+                    + predicate,
+                    params,
+                )
+                assert cur.fetchone()[0] == 0
+        cur.execute("delete from app.cases where id=%s", (case_id,))
+        cur.execute("delete from app.operator_profiles where id=%s", (actor_id,))
+        cur.execute(
+            """select
+                 (select count(*) from app.cases where id=%s),
+                 (select count(*) from app.operator_profiles where id=%s)""",
+            (case_id, actor_id),
+        )
+        assert cur.fetchone() == (0, 0)
+        cur.execute("set local session_replication_role=origin")
+        cur.execute("select current_setting('session_replication_role')")
+        assert cur.fetchone()[0] == "origin"
+    assert _app_table_counts(dsn) == before_counts
+
+
+@pytest.fixture
+def committed_broker_fixture_cleanup():
+    admin_dsn = _admin_dsn()
+    before_counts = _app_table_counts(admin_dsn)
+    identities: list[tuple[object, object]] = []
+
+    def track(case_id, actor_id) -> None:
+        identities.append((case_id, actor_id))
+
+    yield track
+    for case_id, actor_id in reversed(identities):
+        _cleanup_committed_broker_fixture(
+            admin_dsn,
+            case_id=case_id,
+            actor_id=actor_id,
+            before_counts=before_counts,
+        )
+
+
 def _case_and_actor(conn):
     case_id, actor_id = uuid.uuid4(), uuid.uuid4()
     with conn.cursor() as cur:
@@ -348,13 +475,16 @@ def test_disposition_resume_rejects_scope_replay_and_runner_reuse():
         conn.rollback()
 
 
-def test_delete_post_unlink_resume_preserves_facts_and_commits_one_event():
+def test_delete_post_unlink_resume_preserves_facts_and_commits_one_event(
+    committed_broker_fixture_cleanup,
+):
     from psycopg.types.json import Jsonb
 
     psycopg = pytest.importorskip("psycopg")
     broker_dsn = _broker_dsn()
     with psycopg.connect(_dsn()) as conn:
         case_id, actor_id = _case_and_actor(conn)
+        committed_broker_fixture_cleanup(case_id, actor_id)
         object_id = uuid.uuid4()
         operation_id, _key, _reason = _begin(
             conn,
@@ -446,6 +576,7 @@ def test_delete_post_unlink_resume_preserves_facts_and_commits_one_event():
 
 def test_delete_broker_completed_receipt_is_idempotent_across_new_runner(
     tmp_path: Path,
+    committed_broker_fixture_cleanup,
 ):
     """A lost response/advance reuses exact completion without rewriting it."""
     from psycopg.types.json import Jsonb
@@ -463,6 +594,7 @@ def test_delete_broker_completed_receipt_is_idempotent_across_new_runner(
 
     with psycopg.connect(_dsn()) as conn:
         case_id, actor_id = _case_and_actor(conn)
+        committed_broker_fixture_cleanup(case_id, actor_id)
         object_id, sibling_id, sibling_version = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
         operation_id, *_ = _begin(
             conn,
@@ -659,13 +791,16 @@ def test_delete_missing_or_unsubstantiated_facts_are_rejected():
         conn.rollback()
 
 
-def test_delete_verified_transition_requires_scoped_completed_broker_receipt():
+def test_delete_verified_transition_requires_scoped_completed_broker_receipt(
+    committed_broker_fixture_cleanup,
+):
     from psycopg.types.json import Jsonb
 
     psycopg = pytest.importorskip("psycopg")
     broker_dsn = _broker_dsn()
     with psycopg.connect(_dsn()) as conn:
         case_id, actor_id = _case_and_actor(conn)
+        committed_broker_fixture_cleanup(case_id, actor_id)
         object_id = uuid.uuid4()
         operation_id, *_ = _begin(
             conn,
@@ -785,13 +920,16 @@ def test_delete_verified_transition_requires_scoped_completed_broker_receipt():
         "receipt_runner_instance_id",
     ],
 )
-def test_broker_authorize_rejects_extra_or_reserved_prepared_item_keys(extra_key: str):
+def test_broker_authorize_rejects_extra_or_reserved_prepared_item_keys(
+    extra_key: str, committed_broker_fixture_cleanup
+):
     from psycopg.types.json import Jsonb
 
     psycopg = pytest.importorskip("psycopg")
     broker_dsn = _broker_dsn()
     with psycopg.connect(_dsn()) as conn:
         case_id, actor_id = _case_and_actor(conn)
+        committed_broker_fixture_cleanup(case_id, actor_id)
         object_id = uuid.uuid4()
         operation_id, *_ = _begin(
             conn,
