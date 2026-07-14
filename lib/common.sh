@@ -145,6 +145,7 @@ MATERIALS_FILE="${MATERIALS_FILE:-$SIFT_TOKENS_DIR/installer-handoff.txt}"
 SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-/etc/systemd/system}"
 GATEWAY_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-gateway.service"
 JOB_WORKER_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-job-worker.service"
+MOUNT_OBSERVER_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-mount-observer.service"
 # feat/opensearch-workers: dedicated least-privilege OpenSearch ingest/enrich
 # worker template + how many instances to start (N parallel workers claim
 # ingest/enrich jobs via FOR UPDATE SKIP LOCKED). Default 2; override with

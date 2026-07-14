@@ -1,6 +1,7 @@
 [Unit]
 Description=sift-mcps Durable Job Worker
-After=network.target sift-gateway.service
+Requires=sift-mount-observer.service
+After=network.target sift-mount-observer.service sift-gateway.service
 
 [Service]
 Type=simple

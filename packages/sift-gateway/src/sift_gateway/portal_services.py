@@ -703,7 +703,9 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     str(item.get("evidence_object_id")): {
                         **item,
                         "_authority_created_at": (
-                            receipt_row[2] if receipt_row and len(receipt_row) > 2 else None
+                            receipt_row[2]
+                            if receipt_row and len(receipt_row) > 2
+                            else None
                         ),
                     }
                     for item in receipt_items
@@ -1016,12 +1018,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
                             and candidate.get("bytes") == known["bytes"]
                         ]
                         if len(candidates) == 2:
-                            first_created = candidates[0].get(
-                                "_authority_created_at"
-                            )
-                            second_created = candidates[1].get(
-                                "_authority_created_at"
-                            )
+                            first_created = candidates[0].get("_authority_created_at")
+                            second_created = candidates[1].get("_authority_created_at")
                             # Equal or missing receipt time cannot establish
                             # which complete verification superseded which
                             # per-object restore. Fail closed to the historical
@@ -1154,9 +1152,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         storage_profile=storage_profile,
                         expected=tuple(expected_facts),
                         observed=tuple(observed_facts),
-                        persisted_violation_object_ids=(
-                            persisted_violation_object_ids
-                        ),
+                        persisted_violation_object_ids=(persisted_violation_object_ids),
                         persisted_head_violation=persisted_head_violation,
                     )
                 )
@@ -1292,7 +1288,9 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     | os.O_DIRECTORY
                     | getattr(os, "O_NOFOLLOW", 0),
                 )
-                facts = external_storage_facts(root_fd)
+                facts = external_storage_facts(
+                    root_fd, expected_mount_path=case_dir / "evidence"
+                )
             except (OSError, StorageAuthorityError) as exc:
                 raise PortalServiceError(
                     "evidence_storage_unavailable", http_status=409
@@ -1421,7 +1419,9 @@ class EvidenceAuthorityService(_BasePortalDbService):
         storage_public = {
             "storage_profile": str(storage[0]) if storage else "UNKNOWN",
             "storage_availability": str(storage[3]) if storage else "UNAVAILABLE",
-            "storage_source_identity": str(storage[1]) if storage and storage[1] else None,
+            "storage_source_identity": str(storage[1])
+            if storage and storage[1]
+            else None,
             "storage_verified_mount_instance": (
                 str(storage[2]) if storage and storage[2] else None
             ),
@@ -2031,9 +2031,13 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 )
                 rows = [(str(row[0]), str(row[1])) for row in cur.fetchall()]
         required = set(selected_paths)
-        required.update(path for path, status in rows if status in ("sealed", "ignored"))
+        required.update(
+            path for path, status in rows if status in ("sealed", "ignored")
+        )
         optional = {
-            path for path, status in rows if status == "retired" and path not in required
+            path
+            for path, status in rows
+            if status == "retired" and path not in required
         }
         return sorted(required), sorted(optional)
 
@@ -2690,7 +2694,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 | os.O_DIRECTORY
                 | getattr(os, "O_NOFOLLOW", 0),
             )
-            facts = external_storage_facts(root_fd, require_read_only=False)
+            facts = external_storage_facts(
+                root_fd,
+                require_read_only=False,
+                expected_mount_path=case_dir / "evidence",
+            )
             return "FULL_VERIFY_FAILED" if facts.read_only else "READ_WRITE_DRIFT"
         except (OSError, StorageAuthorityError):
             return "STORAGE_UNAVAILABLE"
@@ -3457,9 +3465,7 @@ class InvestigationService(_BasePortalDbService):
             self._mirror_todos(case_id)
         return deleted
 
-    def _payload_rows(
-        self, sql: LiteralString, case_id: str
-    ) -> list[dict[str, Any]]:
+    def _payload_rows(self, sql: LiteralString, case_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (case_id,))

@@ -1,0 +1,34 @@
+[Unit]
+Description=SIFT read-only host mount identity observer
+After=local-fs.target
+Before=sift-gateway.service sift-job-worker.service
+
+[Service]
+Type=simple
+AppArmorProfile=sift-mount-observer
+User=${SIFT_GATEWAY_SERVICE_USER}
+Group=${SIFT_GATEWAY_SERVICE_USER}
+ExecStart=${SIFT_MCPS_ROOT}/.venv/bin/sift-mount-observer
+WorkingDirectory=${SIFT_MCPS_ROOT}
+Restart=on-failure
+RestartSec=2
+UMask=0077
+RuntimeDirectory=sift-mount-observer
+RuntimeDirectoryMode=0700
+Environment=SIFT_CASES_ROOT=${SIFT_CASES_ROOT}
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# This service must observe the host mount namespace. Do not add filesystem
+# namespacing directives such as ProtectSystem, PrivateTmp, ReadOnlyPaths, or
+# PrivateMounts. AppArmor provides its directory-only evidence boundary.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

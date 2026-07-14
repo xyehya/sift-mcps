@@ -23,11 +23,12 @@ def test_gateway_can_read_only_its_exact_external_storage_kernel_facts() -> None
         for rule in rules
         if "/proc/" in rule and ("fdinfo" in rule or "mountinfo" in rule)
     } == {
-        "/proc/1/mountinfo r,",
         "owner /proc/@{pid}/fdinfo/[0-9]* r,",
         "owner /proc/@{pid}/mountinfo r,",
     }
-    assert "/proc/sys/kernel/random/boot_id r," in rules
+    assert not any(rule.startswith("/proc/1/") for rule in rules)
+    assert not any("boot_id" in rule for rule in rules)
+    assert "/run/sift-mount-observer/observer.sock rw," in rules
 
     assert not any(rule.startswith("/proc/** ") for rule in rules)
     assert not any(rule.startswith("owner /proc/** ") for rule in rules)

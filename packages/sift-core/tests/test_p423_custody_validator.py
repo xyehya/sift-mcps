@@ -247,9 +247,14 @@ def test_durable_revalidation_denies_live_external_storage_drift_before_gate(
         filesystem_type="nfs4",
         read_only=drift != "read_write",
     )
+
+    def exact_root_facts(_fd, **kwargs):
+        assert kwargs.get("expected_mount_path") == case_dir / "evidence"
+        return facts
+
     monkeypatch.setattr(
         "sift_core.execute.run_command_job.external_storage_facts",
-        lambda _fd: facts,
+        exact_root_facts,
     )
     job = _job(case_dir, token)
     job.spec_internal["storage_execution_authority"] = {

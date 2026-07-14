@@ -401,6 +401,7 @@ class PostureBatch:
     files: list[PinnedEvidenceFile]
     expected_root_paths: tuple[str, ...] = ()
     optional_root_paths: tuple[str, ...] = ()
+    root_path: Path | None = None
 
 
 class CustodyOperationError(Exception):
@@ -854,11 +855,7 @@ class ExternalReadOnlyPostureAdapter:
         names: list[str] = []
         for rel_path in paths:
             parts = Path(rel_path).parts
-            if (
-                len(parts) != 2
-                or parts[0] != "evidence"
-                or parts[1] in ("", ".", "..")
-            ):
+            if len(parts) != 2 or parts[0] != "evidence" or parts[1] in ("", ".", ".."):
                 raise CustodyOperationError("invalid_evidence_path", http_status=400)
             names.append(parts[1])
         if len(names) != len(set(names)):
@@ -957,9 +954,12 @@ class ExternalReadOnlyPostureAdapter:
             files=[],
             expected_root_paths=tuple(root_paths),
             optional_root_paths=tuple(optional_paths),
+            root_path=case_dir / "evidence",
         )
         try:
-            root_facts = external_storage_facts(root_fd)
+            root_facts = external_storage_facts(
+                root_fd, expected_mount_path=batch.root_path
+            )
             self._require_exact_safe_root(
                 root_fd, required_names, optional_names, root_facts
             )
@@ -1022,9 +1022,7 @@ class ExternalReadOnlyPostureAdapter:
                 except Exception:
                     os.close(fd)
                     raise
-            pinned_by_name = {
-                Path(item.path).name: item for item in batch.files
-            }
+            pinned_by_name = {Path(item.path).name: item for item in batch.files}
             self._require_exact_safe_root(
                 root_fd,
                 required_names,
@@ -1050,12 +1048,16 @@ class ExternalReadOnlyPostureAdapter:
     def verify(self, batch: PostureBatch) -> list[dict[str, Any]]:
         receipts: list[dict[str, Any]] = []
         try:
-            root_facts = external_storage_facts(batch.root_fd)
+            if batch.root_path is None:
+                raise CustodyOperationError(
+                    "external_storage_root_authority_missing", http_status=409
+                )
+            root_facts = external_storage_facts(
+                batch.root_fd, expected_mount_path=batch.root_path
+            )
             required_names = self._target_names(list(batch.expected_root_paths))
             optional_names = self._target_names(list(batch.optional_root_paths))
-            pinned_by_name = {
-                Path(item.path).name: item for item in batch.files
-            }
+            pinned_by_name = {Path(item.path).name: item for item in batch.files}
             self._require_exact_safe_root(
                 batch.root_fd,
                 required_names,
@@ -1121,9 +1123,7 @@ class SealCustodyOperation:
         posture: LocalImmutablePostureProtocol,
         case_dir: Callable[[str], Path | None],
         object_for_path: Callable[[str, str], dict[str, Any]],
-        expected_root_paths: Callable[
-            [str, list[str]], tuple[list[str], list[str]]
-        ],
+        expected_root_paths: Callable[[str, list[str]], tuple[list[str], list[str]]],
     ) -> None:
         self._repository = repository
         self._posture = posture

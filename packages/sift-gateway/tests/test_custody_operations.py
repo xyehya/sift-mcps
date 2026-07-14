@@ -122,7 +122,11 @@ class FakeRepository:
         return self.record
 
     def get_incomplete(self, case_id: str) -> CustodyOperationRecord | None:
-        return self.record if self.record.phase != CustodyOperationPhase.COMPLETED else None
+        return (
+            self.record
+            if self.record.phase != CustodyOperationPhase.COMPLETED
+            else None
+        )
 
 
 class FakePosture:
@@ -146,11 +150,19 @@ class FakePosture:
             target = case_dir / path
             st = target.stat()
             data = target.read_bytes()
-            self.receipts.append({
-                "path": path, "owner": "sift-service", "mode": "0644", "immutable": True,
-                "st_dev": st.st_dev, "st_ino": st.st_ino, "st_nlink": st.st_nlink,
-                "sha256": "sha256:" + hashlib.sha256(data).hexdigest(), "bytes": len(data),
-            })
+            self.receipts.append(
+                {
+                    "path": path,
+                    "owner": "sift-service",
+                    "mode": "0644",
+                    "immutable": True,
+                    "st_dev": st.st_dev,
+                    "st_ino": st.st_ino,
+                    "st_nlink": st.st_nlink,
+                    "sha256": "sha256:" + hashlib.sha256(data).hexdigest(),
+                    "bytes": len(data),
+                }
+            )
         return PostureBatch(
             root_fd=-1,
             files=[PinnedEvidenceFile(r["path"], -1, dict(r)) for r in self.receipts],
@@ -184,10 +196,14 @@ def seal_service(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(service, "_scan_evidence", lambda case_id: [])
     monkeypatch.setattr(service, "_case_artifact_path", lambda case_id: tmp_path)
-    monkeypatch.setattr(service, "_seal_object_for_path", lambda case_id, path: {
-        "evidence_object_id": "44444444-4444-4444-4444-444444444444",
-        "status": "detected",
-    })
+    monkeypatch.setattr(
+        service,
+        "_seal_object_for_path",
+        lambda case_id, path: {
+            "evidence_object_id": "44444444-4444-4444-4444-444444444444",
+            "status": "detected",
+        },
+    )
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     (evidence / "disk.raw").write_bytes(b"forensic bytes")
@@ -228,8 +244,16 @@ class FakeDispositionRepository:
     def advance(self, operation_id, expected, target, *, facts=None):
         self.calls.append(("advance", (expected, target, facts)))
         assert self.record.phase == expected
-        prepared = facts if target is CustodyOperationPhase.FILESYSTEM_APPLYING else self.record.prepared_facts
-        verified = facts if target is CustodyOperationPhase.FILESYSTEM_VERIFIED else self.record.verified_facts
+        prepared = (
+            facts
+            if target is CustodyOperationPhase.FILESYSTEM_APPLYING
+            else self.record.prepared_facts
+        )
+        verified = (
+            facts
+            if target is CustodyOperationPhase.FILESYSTEM_VERIFIED
+            else self.record.verified_facts
+        )
         self.record = replace(
             self.record, phase=target, prepared_facts=prepared, verified_facts=verified
         )
@@ -295,14 +319,22 @@ def test_delete_stray_blocks_gate_before_descriptor_pinned_unlink(tmp_path):
         FakeDeleteBroker(target.unlink),
     )
 
-    result = runner.execute(_disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner")
+    result = runner.execute(
+        _disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner"
+    )
 
     assert seen[0] is True
     assert target.exists() is False
     assert result["file_removed"] is True
-    assert result["sha256"] == "sha256:" + hashlib.sha256(b"untrusted stray bytes").hexdigest()
+    assert (
+        result["sha256"]
+        == "sha256:" + hashlib.sha256(b"untrusted stray bytes").hexdigest()
+    )
     assert [name for name, _ in repo.calls] == [
-        "begin_or_resume", "advance", "advance", "commit_verified_disposition"
+        "begin_or_resume",
+        "advance",
+        "advance",
+        "commit_verified_disposition",
     ]
 
 
@@ -321,7 +353,9 @@ def test_delete_stray_rejects_missing_initial_item_without_committing(tmp_path):
         FakeDeleteBroker(),
     )
 
-    with pytest.raises(CustodyOperationError, match="delete_requires_readable_pending_item"):
+    with pytest.raises(
+        CustodyOperationError, match="delete_requires_readable_pending_item"
+    ):
         runner.execute(
             _disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner"
         )
@@ -345,11 +379,14 @@ def test_non_delete_disposition_never_mutates_evidence_bytes(tmp_path, action):
             "display_path": "evidence/disk.raw",
             "status": "detected" if action is CustodyAction.IGNORE else "sealed",
             "seal_status": "unsealed" if action is CustodyAction.IGNORE else "sealed",
-            "current_sha256": "sha256:" + hashlib.sha256(b"preserved evidence").hexdigest(),
+            "current_sha256": "sha256:"
+            + hashlib.sha256(b"preserved evidence").hexdigest(),
             "current_bytes": len(b"preserved evidence"),
             "current_version_id": "77777777-7777-4777-8777-777777777777",
         },
-        FakeDeleteBroker(lambda: pytest.fail("non-delete action reached delete broker")),
+        FakeDeleteBroker(
+            lambda: pytest.fail("non-delete action reached delete broker")
+        ),
     )
 
     runner.execute(_disposition_command(action), examiner="examiner")
@@ -385,7 +422,9 @@ def test_delete_resume_after_unlink_commits_stored_pre_unlink_facts(tmp_path):
         broker,
     )
 
-    result = runner.execute(_disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner")
+    result = runner.execute(
+        _disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner"
+    )
 
     assert result["file_removed"] is True
     assert result["sha256"] == item["sha256"]
@@ -425,7 +464,9 @@ def test_delete_resume_missing_without_broker_receipt_is_rejected(tmp_path):
     )
 
     with pytest.raises(CustodyOperationError, match="delete_broker_rejected"):
-        runner.execute(_disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner")
+        runner.execute(
+            _disposition_command(CustodyAction.DELETE_STRAY), examiner="examiner"
+        )
 
     assert broker.operation_ids == [repo.record.operation_id]
     assert "commit_verified_disposition" not in [name for name, _ in repo.calls]
@@ -437,7 +478,11 @@ def test_local_delete_broker_sends_only_operation_authority(monkeypatch):
     def run(argv, **kwargs):
         seen["argv"] = argv
         seen["request"] = json.loads(kwargs["input"])
-        return type("Completed", (), {"returncode": 0, "stdout": '{"removed":true,"schema_version":1}'})()
+        return type(
+            "Completed",
+            (),
+            {"returncode": 0, "stdout": '{"removed":true,"schema_version":1}'},
+        )()
 
     monkeypatch.setattr("sift_gateway.custody_operations.subprocess.run", run)
     LocalCustodyDeleteBroker().delete(
@@ -445,11 +490,16 @@ def test_local_delete_broker_sends_only_operation_authority(monkeypatch):
     )
 
     assert seen["argv"] == [
-        "/usr/bin/sudo", "-n", "-u", "root",
+        "/usr/bin/sudo",
+        "-n",
+        "-u",
+        "root",
         "/usr/local/sbin/sift-custody-delete-broker",
     ]
     assert set(cast(dict, seen["request"])) == {
-        "schema_version", "operation_id", "runner_instance_id"
+        "schema_version",
+        "operation_id",
+        "runner_instance_id",
     }
 
 
@@ -566,9 +616,14 @@ def test_exact_retry_returns_completed_result_without_filesystem_replay(seal_ser
         (CustodyOperationPhase.LEDGER_COMMITTED, False),
     ],
 )
-def test_public_operation_marks_only_server_resumable_phases(phase, recoverable, seal_service):
+def test_public_operation_marks_only_server_resumable_phases(
+    phase, recoverable, seal_service
+):
     _service, repo, _posture = seal_service
-    assert public_operation(replace(repo.record, phase=phase))["recoverable"] is recoverable
+    assert (
+        public_operation(replace(repo.record, phase=phase))["recoverable"]
+        is recoverable
+    )
 
 
 @pytest.mark.parametrize(
@@ -628,19 +683,29 @@ def test_seal_requires_reason_idempotency_and_reauth(seal_service):
 def test_seal_rejects_unknown_file_spec_fields_and_traversal(seal_service):
     service, _repo, _posture = seal_service
     common = dict(
-        case_id=CASE_ID, reason="reason", idempotency_key="key",
-        reauth_audit_event_id=REAUTH_ID, actor=None, examiner="examiner",
+        case_id=CASE_ID,
+        reason="reason",
+        idempotency_key="key",
+        reauth_audit_event_id=REAUTH_ID,
+        actor=None,
+        examiner="examiner",
     )
     with pytest.raises(PortalServiceError):
-        service.seal(file_specs=[{"path": "evidence/disk.raw", "unexpected": True}], **common)
+        service.seal(
+            file_specs=[{"path": "evidence/disk.raw", "unexpected": True}], **common
+        )
     with pytest.raises(PortalServiceError):
         service.seal(file_specs=[{"path": "../disk.raw"}], **common)
 
 
 def _adapter(monkeypatch):
     user = pwd.getpwuid(os.getuid()).pw_name
-    monkeypatch.setattr("sift_core.evidence_chain.set_immutable_flag_fd", lambda fd, enabled: True)
-    monkeypatch.setattr("sift_core.evidence_chain.get_immutable_flag_fd", lambda fd: True)
+    monkeypatch.setattr(
+        "sift_core.evidence_chain.set_immutable_flag_fd", lambda fd, enabled: True
+    )
+    monkeypatch.setattr(
+        "sift_core.evidence_chain.get_immutable_flag_fd", lambda fd: True
+    )
     return LocalImmutablePostureAdapter(service_user=user)
 
 
@@ -668,7 +733,15 @@ def test_external_adapter_observes_without_local_mutation(monkeypatch, tmp_path)
     from sift_core.evidence_storage import ExternalStorageFacts
 
     facts = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
-    monkeypatch.setattr("sift_gateway.custody_operations.external_storage_facts", lambda _fd: facts)
+    observed_roots = []
+
+    def storage_facts(_fd, **kwargs):
+        observed_roots.append(kwargs.get("expected_mount_path"))
+        return facts
+
+    monkeypatch.setattr(
+        "sift_gateway.custody_operations.external_storage_facts", storage_facts
+    )
     monkeypatch.setattr(
         "sift_core.evidence_chain.set_immutable_flag_fd",
         lambda *_args: pytest.fail("external storage must never invoke local mutation"),
@@ -686,6 +759,10 @@ def test_external_adapter_observes_without_local_mutation(monkeypatch, tmp_path)
         assert receipt["read_only"] is True
         assert "owner" not in receipt and "mode" not in receipt
         assert "immutable" not in receipt
+        assert [root for root in observed_roots if root is not None] == [
+            evidence,
+            evidence,
+        ]
     finally:
         adapter.close(batch)
 
@@ -698,7 +775,8 @@ def test_external_adapter_requires_exact_safe_root_inventory(
 
     facts = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
     monkeypatch.setattr(
-        "sift_gateway.custody_operations.external_storage_facts", lambda _fd: facts
+        "sift_gateway.custody_operations.external_storage_facts",
+        lambda _fd, **_kwargs: facts,
     )
     evidence = tmp_path / "evidence"
     evidence.mkdir()
@@ -714,7 +792,9 @@ def test_external_adapter_requires_exact_safe_root_inventory(
     else:
         sibling.write_bytes(b"omitted regular evidence")
 
-    with pytest.raises(CustodyOperationError, match="external_inventory_target_set_mismatch"):
+    with pytest.raises(
+        CustodyOperationError, match="external_inventory_target_set_mismatch"
+    ):
         ExternalReadOnlyPostureAdapter().prepare(tmp_path, ["evidence/disk.raw"])
 
 
@@ -725,7 +805,8 @@ def test_external_adapter_rechecks_exact_root_inventory_before_receipt(
 
     facts = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
     monkeypatch.setattr(
-        "sift_gateway.custody_operations.external_storage_facts", lambda _fd: facts
+        "sift_gateway.custody_operations.external_storage_facts",
+        lambda _fd, **_kwargs: facts,
     )
     evidence = tmp_path / "evidence"
     evidence.mkdir()
@@ -747,7 +828,8 @@ def test_external_seal_race_never_reaches_commit(monkeypatch, tmp_path):
 
     facts = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
     monkeypatch.setattr(
-        "sift_gateway.custody_operations.external_storage_facts", lambda _fd: facts
+        "sift_gateway.custody_operations.external_storage_facts",
+        lambda _fd, **_kwargs: facts,
     )
 
     class RacingExternalAdapter(ExternalReadOnlyPostureAdapter):
@@ -854,7 +936,8 @@ def test_external_adapter_allows_retired_history_without_selecting_it(
 
     facts = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
     monkeypatch.setattr(
-        "sift_gateway.custody_operations.external_storage_facts", lambda _fd: facts
+        "sift_gateway.custody_operations.external_storage_facts",
+        lambda _fd, **_kwargs: facts,
     )
     evidence = tmp_path / "evidence"
     evidence.mkdir()
@@ -881,7 +964,8 @@ def test_external_adapter_rejects_unsafe_retired_entry(monkeypatch, tmp_path):
 
     facts = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
     monkeypatch.setattr(
-        "sift_gateway.custody_operations.external_storage_facts", lambda _fd: facts
+        "sift_gateway.custody_operations.external_storage_facts",
+        lambda _fd, **_kwargs: facts,
     )
     evidence = tmp_path / "evidence"
     evidence.mkdir()
@@ -906,7 +990,8 @@ def test_external_adapter_rejects_selected_and_ignored_namespace_swap(
 
     facts = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
     monkeypatch.setattr(
-        "sift_gateway.custody_operations.external_storage_facts", lambda _fd: facts
+        "sift_gateway.custody_operations.external_storage_facts",
+        lambda _fd, **_kwargs: facts,
     )
     evidence = tmp_path / "evidence"
     evidence.mkdir()
@@ -940,7 +1025,8 @@ def test_external_adapter_rejects_selected_path_replaced_by_outside_inode(
 
     facts = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
     monkeypatch.setattr(
-        "sift_gateway.custody_operations.external_storage_facts", lambda _fd: facts
+        "sift_gateway.custody_operations.external_storage_facts",
+        lambda _fd, **_kwargs: facts,
     )
     evidence = tmp_path / "evidence"
     evidence.mkdir()
@@ -962,24 +1048,30 @@ def test_external_adapter_rejects_selected_path_replaced_by_outside_inode(
         adapter.close(batch)
 
 
-def test_external_adapter_fails_closed_when_mount_instance_changes(monkeypatch, tmp_path):
+def test_external_adapter_fails_closed_when_mount_instance_changes(
+    monkeypatch, tmp_path
+):
     from sift_core.evidence_storage import ExternalStorageFacts
 
     initial = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
     changed = ExternalStorageFacts("a" * 64, "c" * 64, "ext4", True)
     calls = 0
 
-    def mount_facts(_fd):
+    def mount_facts(_fd, **_kwargs):
         nonlocal calls
         calls += 1
         return initial if calls < 4 else changed
 
-    monkeypatch.setattr("sift_gateway.custody_operations.external_storage_facts", mount_facts)
+    monkeypatch.setattr(
+        "sift_gateway.custody_operations.external_storage_facts", mount_facts
+    )
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     (evidence / "disk.raw").write_bytes(b"external evidence")
     adapter = ExternalReadOnlyPostureAdapter()
-    with pytest.raises(CustodyOperationError, match="external_evidence_changed_while_hashing"):
+    with pytest.raises(
+        CustodyOperationError, match="external_evidence_changed_while_hashing"
+    ):
         adapter.prepare(tmp_path, ["evidence/disk.raw"])
 
 
@@ -987,34 +1079,57 @@ def test_full_verify_failure_records_path_free_append_only_outcome():
     class Cursor:
         sql = ""
         params = None
-        def __enter__(self): return self
-        def __exit__(self, *_args): return None
-        def execute(self, sql, params): self.sql, self.params = sql, params
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, params):
+            self.sql, self.params = sql, params
 
     class Connection:
         def __init__(self):
             self.cursor_instance, self.committed = Cursor(), False
-        def __enter__(self): return self
-        def __exit__(self, *_args): return None
-        def cursor(self): return self.cursor_instance
-        def commit(self): self.committed = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def commit(self):
+            self.committed = True
 
     connection = Connection()
     service = cast(EvidenceAuthorityService, object.__new__(EvidenceAuthorityService))
     service._connect = lambda: connection  # type: ignore[method-assign]
     service._record_storage_verify_failure(
-        case_id=CASE_ID, generation=3, profile=StorageProfile.EXTERNALLY_READ_ONLY,
-        manifest_version=4, manifest_hash="sha256:" + "a" * 64,
-        failure_code="READ_WRITE_DRIFT", correlation_id="full-verify:test",
+        case_id=CASE_ID,
+        generation=3,
+        profile=StorageProfile.EXTERNALLY_READ_ONLY,
+        manifest_version=4,
+        manifest_hash="sha256:" + "a" * 64,
+        failure_code="READ_WRITE_DRIFT",
+        correlation_id="full-verify:test",
         actor_user_id=ACTOR_ID,
     )
     assert "evidence_storage_record_verify_failure" in connection.cursor_instance.sql
-    assert connection.cursor_instance.params[5:7] == ("READ_WRITE_DRIFT", "full-verify:test")
+    assert connection.cursor_instance.params[5:7] == (
+        "READ_WRITE_DRIFT",
+        "full-verify:test",
+    )
     assert connection.committed is True
 
 
 @pytest.mark.parametrize("kind", ["entry_symlink", "hardlink", "nonregular"])
-def test_posture_adapter_rejects_unsafe_entries_before_apply(monkeypatch, tmp_path, kind):
+def test_posture_adapter_rejects_unsafe_entries_before_apply(
+    monkeypatch, tmp_path, kind
+):
     adapter = _adapter(monkeypatch)
     evidence = tmp_path / "evidence"
     evidence.mkdir()
@@ -1032,7 +1147,9 @@ def test_posture_adapter_rejects_unsafe_entries_before_apply(monkeypatch, tmp_pa
         adapter.prepare(tmp_path, ["evidence/target"])
 
 
-def test_posture_adapter_rejects_symlink_root_and_missing_nofollow(monkeypatch, tmp_path):
+def test_posture_adapter_rejects_symlink_root_and_missing_nofollow(
+    monkeypatch, tmp_path
+):
     adapter = _adapter(monkeypatch)
     real = tmp_path / "real"
     real.mkdir()
@@ -1056,12 +1173,16 @@ def test_posture_adapter_fails_on_ioctl_and_digest_drift(monkeypatch, tmp_path):
     target.write_bytes(b"before")
     target.chmod(0o644)
     batch = adapter.prepare(tmp_path, ["evidence/disk.raw"])
-    monkeypatch.setattr("sift_core.evidence_chain.set_immutable_flag_fd", lambda fd, enabled: False)
+    monkeypatch.setattr(
+        "sift_core.evidence_chain.set_immutable_flag_fd", lambda fd, enabled: False
+    )
     with pytest.raises(CustodyOperationError):
         adapter.apply(batch)
     adapter.close(batch)
 
-    monkeypatch.setattr("sift_core.evidence_chain.set_immutable_flag_fd", lambda fd, enabled: True)
+    monkeypatch.setattr(
+        "sift_core.evidence_chain.set_immutable_flag_fd", lambda fd, enabled: True
+    )
     batch = adapter.prepare(tmp_path, ["evidence/disk.raw"])
     try:
         target.write_bytes(b"after!")

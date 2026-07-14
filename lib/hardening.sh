@@ -107,9 +107,19 @@ configure_apparmor() {
     return 0
   fi
   [[ -x "$VENV_PYTHON" ]] || return 0
-  local profile_src="${REPO_DIR}/configs/apparmor/sift-custody-delete-broker.template"
-  local profile_dst="/etc/apparmor.d/sift-custody-delete-broker"
+  local profile_src="${REPO_DIR}/configs/apparmor/sift-mount-observer.template"
+  local profile_dst="/etc/apparmor.d/sift-mount-observer"
   local tmp
+  [[ -f "$profile_src" ]] || die "Missing required mount observer AppArmor profile."
+  tmp="$(mktemp)"
+  sed -e "s|@@SIFT_CASES_ROOT@@|${SIFT_CASES_ROOT}|g" "$profile_src" > "$tmp"
+  sudo_if_needed cp "$tmp" "$profile_dst"
+  rm -f "$tmp"
+  sudo_if_needed chmod 644 "$profile_dst"
+  _apparmor_load_profile "$profile_dst"
+
+  profile_src="${REPO_DIR}/configs/apparmor/sift-custody-delete-broker.template"
+  profile_dst="/etc/apparmor.d/sift-custody-delete-broker"
   [[ -f "$profile_src" ]] || die "Missing required custody delete broker AppArmor profile."
   tmp="$(mktemp)"
   sed -e "s|@@SIFT_CASES_ROOT@@|${SIFT_CASES_ROOT}|g" "$profile_src" > "$tmp"
@@ -147,6 +157,8 @@ configure_apparmor() {
       "Required sift-gateway AppArmor profile is not loaded."
     sudo_if_needed aa-status 2>/dev/null | grep -Fq 'sift-custody-delete-broker' || die \
       "Required sift-custody-delete-broker AppArmor profile is not loaded."
+    sudo_if_needed aa-status 2>/dev/null | grep -Fq 'sift-mount-observer' || die \
+      "Required sift-mount-observer AppArmor profile is not loaded."
     log "AppArmor profiles installed (ENFORCE mode)."
   else
     log "AppArmor profiles installed (complain mode). Re-run ./install.sh"
@@ -173,6 +185,13 @@ verify_gateway_apparmor_attachment() {
   [[ "$label" == "sift-gateway (enforce)" ]] || die \
     "sift-gateway AppArmor attachment failed (observed: ${label:-unreadable})."
   log "sift-gateway is attached to AppArmor profile sift-gateway (ENFORCE)."
+  pid="$(sudo_if_needed systemctl show -p MainPID --value sift-mount-observer.service)"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || die \
+    "sift-mount-observer has no live MainPID for AppArmor verification."
+  label="$(sudo_if_needed cat "/proc/${pid}/attr/current" 2>/dev/null || true)"
+  [[ "$label" == "sift-mount-observer (enforce)" ]] || die \
+    "sift-mount-observer AppArmor attachment failed (observed: ${label:-unreadable})."
+  log "sift-mount-observer is attached to AppArmor profile sift-mount-observer (ENFORCE)."
 }
 
 configure_run_command_systemd_scope() {

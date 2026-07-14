@@ -562,9 +562,7 @@ def test_execution_authority_guard_holds_shared_case_lock_through_dispatch(
     monkeypatch.setattr(
         service,
         "revalidate_execution_authority",
-        lambda case_id, expected: calls.append(
-            ("revalidate", case_id, dict(expected))
-        ),
+        lambda case_id, expected: calls.append(("revalidate", case_id, dict(expected))),
     )
     expected = {"storage_generation": 7}
 
@@ -1056,7 +1054,9 @@ class _LatchEnforcingObservationCursor(_SealedObservationCursor):
             and self.violation_latched
         ):
             findings = getattr(params[3], "obj", params[3])
-            if not any(finding["code"] == "PERSISTED_VIOLATION" for finding in findings):
+            if not any(
+                finding["code"] == "PERSISTED_VIOLATION" for finding in findings
+            ):
                 raise RuntimeError("persisted_custody_violation_requires_recovery")
         super().execute(sql, params)
         if "evidence_mark_admission_violation" in normalized:
@@ -1130,9 +1130,7 @@ def test_reconciliation_violation_uses_request_correlation(
     assert result["state"] == "available"
 
 
-def test_classification_failure_never_marks_or_commits_violation(
-    tmp_path, monkeypatch
-):
+def test_classification_failure_never_marks_or_commits_violation(tmp_path, monkeypatch):
     class RejectingClassificationCursor(_SealedObservationCursor):
         def execute(self, sql, params):
             if "evidence_record_inventory_classification_v2" in sql:
@@ -1168,9 +1166,7 @@ def test_classification_failure_never_marks_or_commits_violation(
     )
 
 
-def test_violation_failure_rolls_back_successful_classification(
-    tmp_path, monkeypatch
-):
+def test_violation_failure_rolls_back_successful_classification(tmp_path, monkeypatch):
     class TransactionConnection(_ObservationConnection):
         def __init__(self):
             self.pending: list[str] = []
@@ -1273,10 +1269,7 @@ def test_external_mount_loss_never_scans_same_named_writable_underlay(
         def execute(self, sql, params):
             normalized = " ".join(sql.split())
             super().execute(sql, params)
-            if (
-                "from app.evidence_storage_authorities where case_id=%s"
-                in normalized
-            ):
+            if "from app.evidence_storage_authorities where case_id=%s" in normalized:
                 self._one = (
                     "EXTERNALLY_READ_ONLY",
                     "a" * 64,
@@ -1322,9 +1315,7 @@ def test_external_mount_loss_never_scans_same_named_writable_underlay(
         ),
     )
 
-    def missing_exact_mount(
-        _fd, *, require_read_only=True, expected_mount_path=None
-    ):
+    def missing_exact_mount(_fd, *, require_read_only=True, expected_mount_path=None):
         assert require_read_only is False
         assert expected_mount_path == evidence
         raise StorageAuthorityError("external evidence root is not the mounted source")
@@ -1339,9 +1330,7 @@ def test_external_mount_loss_never_scans_same_named_writable_underlay(
         lambda _path: pytest.fail("writable underlay must not be enumerated"),
     )
 
-    result = service.reconcile_for_admission(
-        "11111111-1111-1111-1111-111111111111"
-    )
+    result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
 
     assert result["state"] == "unavailable"
     assert result["gate_state"] == "BLOCKED_UNAVAILABLE"
@@ -1352,9 +1341,7 @@ def test_external_mount_loss_never_scans_same_named_writable_underlay(
         for call in cursor.calls
         if "evidence_record_inventory_classification" in call[0]
     )
-    findings = getattr(
-        classification_call[1][3], "obj", classification_call[1][3]
-    )
+    findings = getattr(classification_call[1][3], "obj", classification_call[1][3])
     assert findings == [
         {
             "code": "STORAGE_UNAVAILABLE",
@@ -1423,10 +1410,7 @@ def test_external_read_only_reconnect_classifies_returned_full_verify_authority(
                     1,
                     "sha256:" + "d" * 64,
                 )
-            elif (
-                "from app.evidence_storage_authorities where case_id=%s"
-                in normalized
-            ):
+            elif "from app.evidence_storage_authorities where case_id=%s" in normalized:
                 self._one = (
                     "EXTERNALLY_READ_ONLY",
                     source,
@@ -1453,9 +1437,7 @@ def test_external_read_only_reconnect_classifies_returned_full_verify_authority(
             elif "evidence_record_inventory_classification_v2" in normalized:
                 findings = getattr(params[3], "obj", params[3])
                 if findings != [full_verify_finding]:
-                    raise RuntimeError(
-                        "persisted_custody_violation_requires_recovery"
-                    )
+                    raise RuntimeError("persisted_custody_violation_requires_recovery")
 
     cursor = ReconnectObservationCursor(
         [
@@ -1498,9 +1480,7 @@ def test_external_read_only_reconnect_classifies_returned_full_verify_authority(
         ),
     )
 
-    result = service.reconcile_for_admission(
-        "11111111-1111-1111-1111-111111111111"
-    )
+    result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
 
     assert result["gate_state"] == "BLOCKED_UNAVAILABLE"
     assert result["state"] == "unavailable"
@@ -1701,9 +1681,7 @@ def test_exact_restore_receipt_rebinds_current_posture_without_new_version(
         "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True
     )
 
-    result = service.reconcile_for_admission(
-        "11111111-1111-1111-1111-111111111111"
-    )
+    result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
 
     assert result["gate_state"] == "OPEN"
     classification_call = next(
@@ -1711,9 +1689,7 @@ def test_exact_restore_receipt_rebinds_current_posture_without_new_version(
         for call in cursor.calls
         if "evidence_record_inventory_classification" in call[0]
     )
-    findings = getattr(
-        classification_call[1][3], "obj", classification_call[1][3]
-    )
+    findings = getattr(classification_call[1][3], "obj", classification_call[1][3])
     assert findings == []
 
     assert cursor.calls[0][0].startswith(
@@ -1730,9 +1706,7 @@ def test_exact_restore_receipt_rebinds_current_posture_without_new_version(
 
     drift_cursor = _ReceiptObservationCursor(cursor.sealed, receipt)
     drift_service = EvidenceAuthorityService("postgresql://unused")
-    monkeypatch.setattr(
-        drift_service, "_case_artifact_path", lambda _case_id: case_dir
-    )
+    monkeypatch.setattr(drift_service, "_case_artifact_path", lambda _case_id: case_dir)
     monkeypatch.setattr(
         drift_service, "_connect", lambda: _ObservationConnection(drift_cursor)
     )
@@ -1749,9 +1723,7 @@ def test_exact_restore_receipt_rebinds_current_posture_without_new_version(
         if "evidence_record_inventory_classification" in call[0]
     )
     drift_findings = getattr(drift_call[1][3], "obj", drift_call[1][3])
-    assert [finding["code"] for finding in drift_findings] == [
-        "FULL_VERIFY_REQUIRED"
-    ]
+    assert [finding["code"] for finding in drift_findings] == ["FULL_VERIFY_REQUIRED"]
 
 
 @pytest.mark.parametrize(
@@ -1828,8 +1800,12 @@ def test_local_posture_authority_uses_strictly_newest_complete_receipt(
                     "posture": {
                         "st_dev": st.st_dev,
                         "st_ino": st.st_ino if baseline_matches_live else st.st_ino - 1,
-                        "st_mtime_ns": st.st_mtime_ns if baseline_matches_live else st.st_mtime_ns - 1,
-                        "st_ctime_ns": st.st_ctime_ns if baseline_matches_live else st.st_ctime_ns - 1,
+                        "st_mtime_ns": st.st_mtime_ns
+                        if baseline_matches_live
+                        else st.st_mtime_ns - 1,
+                        "st_ctime_ns": st.st_ctime_ns
+                        if baseline_matches_live
+                        else st.st_ctime_ns - 1,
                         "st_nlink": st.st_nlink,
                     }
                 },
@@ -1843,16 +1819,12 @@ def test_local_posture_authority_uses_strictly_newest_complete_receipt(
     )
     service = EvidenceAuthorityService("postgresql://unused")
     monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
-    monkeypatch.setattr(
-        service, "_connect", lambda: _ObservationConnection(cursor)
-    )
+    monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
     monkeypatch.setattr(
         "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True
     )
 
-    result = service.reconcile_for_admission(
-        "11111111-1111-1111-1111-111111111111"
-    )
+    result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
 
     assert result["gate_state"] == expected_gate
     storage_query = next(
@@ -1861,7 +1833,9 @@ def test_local_posture_authority_uses_strictly_newest_complete_receipt(
         if "from app.evidence_storage_verifications v" in sql
     )
     assert "jsonb_array_length(v.item_facts)=(select count(*)" in storage_query
-    assert "not exists(select 1 from jsonb_array_elements(v.item_facts)" in storage_query
+    assert (
+        "not exists(select 1 from jsonb_array_elements(v.item_facts)" in storage_query
+    )
     assert storage_query.startswith(
         "select v.id::text,v.item_facts,v.created_at "
         "from app.evidence_storage_verifications v"
@@ -1946,9 +1920,7 @@ def test_persisted_changed_object_does_not_append_duplicate_violation(
     monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
     monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
 
-    result = service.reconcile_for_admission(
-        "11111111-1111-1111-1111-111111111111"
-    )
+    result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
 
     assert result["gate_state"] == "BLOCKED_VIOLATION"
     classification_call = next(
@@ -2140,9 +2112,16 @@ def test_external_reference_requires_exact_current_receipt_version(
     monkeypatch.setattr(service, "_connect", lambda: connection)
     monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: tmp_path)
     monkeypatch.setattr(service, "_resolve_evidence_path", lambda *_args: image)
+
+    observed_roots = []
+
+    def exact_root_facts(_fd, **kwargs):
+        observed_roots.append(kwargs.get("expected_mount_path"))
+        return ExternalStorageFacts(source, mount, "ext4", True)
+
     monkeypatch.setattr(
         "sift_gateway.portal_services.external_storage_facts",
-        lambda _fd: ExternalStorageFacts(source, mount, "ext4", True),
+        exact_root_facts,
     )
 
     if allowed:
@@ -2162,6 +2141,7 @@ def test_external_reference_requires_exact_current_receipt_version(
             PortalServiceError, match="external_storage_full_verify_required"
         ):
             service.resolve_evidence_reference("case-1", "evidence/sealed.raw")
+    assert tmp_path / "evidence" in observed_roots
 
 
 def test_reconciliation_custody_observation_uses_audit_envelope_request_id(

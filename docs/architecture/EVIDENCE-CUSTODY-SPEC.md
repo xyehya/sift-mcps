@@ -391,15 +391,17 @@ are suppressed from new-pending rediscovery. Missing/changed recovery delegates 
 verified posture-only drift does not authorize a new Evidence Version.
 
 P4.23.5 implements the `EXTERNALLY_READ_ONLY` storage profile. Gateway derives an opaque stable
-source identity from pinned descriptors and maps their exact source, filesystem, root, device, and
-mount-point facts to one read-only PID 1 mount-table row. The resulting versioned opaque host mount
-identity binds the host boot ID, that host mount object's Linux `STATX_MNT_ID_UNIQUE`, and its
-mount-table facts. It survives systemd service mount-namespace recreation while a host remount or
-reboot changes it. Per-service namespace mount IDs are deliberately not persisted because mount
-clones receive new IDs at every service restart. PID 1's mount namespace is the installation's host
-mount authority; if its exact row, boot ID, or descriptor cannot be read unambiguously, admission
-fails closed. Gateway requires descriptor, VFS, and local plus host mount/superblock read-only
-agreement, and never applies local
+source identity from pinned descriptors and cross-checks their exact source, filesystem, root,
+device, and mount-point facts with a fixed ancillary read-only observer running as the same service
+user in the host mount namespace. The resulting versioned opaque host identity binds the boot ID,
+the host mount object's Linux `STATX_MNT_ID_UNIQUE`, and its mount-table facts. It survives Gateway
+service mount-namespace recreation while a host remount or reboot changes it. Per-service namespace
+mount IDs are deliberately not persisted because mount clones receive new IDs at every restart.
+The observer has no database, network, capability, evidence-file read, or mutation authority; it
+opens only the exact evidence-root directory no-follow and returns bounded opaque facts over a
+peer-checked local socket. Missing, malformed, mismatched, or unavailable observer authority fails
+closed. Gateway requires descriptor, VFS, and local plus host mount/superblock read-only agreement,
+and never applies local
 ownership, mode, immutable-flag, or content mutation to external evidence. Profile and source
 authorization are Portal-only, reasoned, idempotent, and freshly re-authenticated. Reconnect of the
 same source requires Full Verify; a different source requires explicit operator authorization;

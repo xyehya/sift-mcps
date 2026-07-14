@@ -11,10 +11,13 @@ from __future__ import annotations
 import ctypes
 import fcntl
 import hashlib
+import json
 import os
 import platform
 import re
+import socket
 import stat
+import struct
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -33,6 +36,10 @@ class StorageProfile(StrEnum):
 
 _MOUNT_ESCAPE = re.compile(r"\\([0-7]{3})")
 _OPAQUE = re.compile(r"[0-9a-f]{64}\Z")
+_MOUNT_OBSERVER_SOCKET = "/run/sift-mount-observer/observer.sock"
+_MOUNT_OBSERVER_REQUEST_SCHEMA = "sift.mount-observer.request.v1"
+_MOUNT_OBSERVER_RESPONSE_SCHEMA = "sift.mount-observer.response.v1"
+_MOUNT_OBSERVER_LIMIT = 4096
 _SUPPORTED_EXTERNAL_FILESYSTEMS = frozenset(
     {
         "9p",
@@ -198,14 +205,12 @@ def _stable_mount_for(
     systemd filesystem hardening creates a fresh mount-namespace clone on each
     service start. Linux mount IDs, including ``STATX_MNT_ID_UNIQUE``, identify
     those clone objects and therefore cannot be persisted as restart-stable
-    custody authority. PID 1's mount table is the narrow read-only system seam:
-    its mount ID survives service restarts and changes on a real host remount.
+    custody authority. Production obtains this host-namespace observation from
+    the bounded ancillary observer; injected mountinfo is test authority only.
     """
-    stable_mountinfo = (
-        stable_mountinfo_text
-        if stable_mountinfo_text is not None
-        else _read_text(Path("/proc/1/mountinfo"))
-    )
+    if stable_mountinfo_text is None:
+        raise StorageAuthorityError("stable mount observer result is unavailable")
+    stable_mountinfo = stable_mountinfo_text
     matches = [
         row
         for row in parse_mountinfo(stable_mountinfo)
@@ -308,26 +313,6 @@ def _unique_mount_id_for_fd(fd: int) -> int:
     return int(result.mnt_id)
 
 
-def _stable_unique_mount_id(mount_point: str) -> int:
-    normalized = os.path.abspath(os.path.normpath(mount_point))
-    if mount_point != normalized or not normalized.startswith("/"):
-        raise StorageAuthorityError("stable mount path is invalid")
-    flags = (
-        os.O_RDONLY
-        | os.O_CLOEXEC
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
-    try:
-        fd = os.open(f"/proc/1/root{normalized}", flags)
-    except OSError as exc:
-        raise StorageAuthorityError("stable mount descriptor is unavailable") from exc
-    try:
-        return _unique_mount_id_for_fd(fd)
-    finally:
-        os.close(fd)
-
-
 @dataclass(frozen=True, slots=True)
 class ExternalStorageFacts:
     source_identity: str
@@ -342,6 +327,195 @@ class ExternalStorageFacts:
             raise ValueError("mount instance identity must be opaque")
 
 
+@dataclass(frozen=True, slots=True)
+class HostMountObservation:
+    source_identity: str
+    mount_instance_identity: str
+    mount_match_identity: str
+    filesystem_type: str
+    read_only: bool
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.source_identity,
+            self.mount_instance_identity,
+            self.mount_match_identity,
+        ):
+            if not _OPAQUE.fullmatch(value):
+                raise ValueError("host mount identity must be opaque")
+        if not self.filesystem_type or len(self.filesystem_type) > 64:
+            raise ValueError("host mount filesystem type is invalid")
+        if not isinstance(self.read_only, bool):
+            raise ValueError("host mount read-only posture is invalid")
+
+
+def _mount_match_identity(mount: MountInfo) -> str:
+    return _opaque_identity(
+        "mount-match-v1",
+        mount.major_minor,
+        mount.root,
+        mount.mount_point,
+        mount.filesystem_type,
+        mount.source,
+    )
+
+
+def host_mount_observation(
+    fd: int,
+    *,
+    expected_mount_path: str | os.PathLike[str],
+    fdinfo_text: str | None = None,
+    mountinfo_text: str | None = None,
+    statvfs_flags: int | None = None,
+    descriptor_flags: int | None = None,
+    unique_mount_id: int | None = None,
+    boot_id: str | None = None,
+    supported_filesystems: Iterable[str] = _SUPPORTED_EXTERNAL_FILESYSTEMS,
+) -> HostMountObservation:
+    """Observe one exact read-only mount from the observer's host namespace."""
+    mount = mount_for_fd(fd, fdinfo_text=fdinfo_text, mountinfo_text=mountinfo_text)
+    expected = os.path.abspath(os.path.normpath(os.fspath(expected_mount_path)))
+    if mount.mount_point != expected:
+        raise StorageAuthorityError("external evidence root is not the mounted source")
+    if mount.filesystem_type not in frozenset(supported_filesystems):
+        raise StorageAuthorityError("external filesystem semantics are unsupported")
+    host_unique_mount_id = (
+        unique_mount_id if unique_mount_id is not None else _unique_mount_id_for_fd(fd)
+    )
+    if (
+        not isinstance(host_unique_mount_id, int)
+        or isinstance(host_unique_mount_id, bool)
+        or host_unique_mount_id <= 0
+    ):
+        raise StorageAuthorityError("stable unique mount identity is unavailable")
+    host_boot_identity = _boot_identity(boot_id)
+    try:
+        flags = os.fstatvfs(fd).f_flag if statvfs_flags is None else statvfs_flags
+        open_flags = (
+            fcntl.fcntl(fd, fcntl.F_GETFL)
+            if descriptor_flags is None
+            else descriptor_flags
+        )
+    except OSError as exc:
+        raise StorageAuthorityError("host mount posture is unavailable") from exc
+    read_only = (
+        mount.read_only
+        and bool(flags & getattr(os, "ST_RDONLY", 1))
+        and open_flags & os.O_ACCMODE == os.O_RDONLY
+    )
+    return HostMountObservation(
+        source_identity=mount.source_identity,
+        mount_instance_identity=_opaque_identity(
+            "mount-host-v2",
+            host_boot_identity,
+            str(host_unique_mount_id),
+            str(mount.mount_id),
+            str(mount.parent_id),
+            mount.major_minor,
+            mount.filesystem_type,
+            mount.root,
+            mount.mount_point,
+            mount.source,
+        ),
+        mount_match_identity=_mount_match_identity(mount),
+        filesystem_type=mount.filesystem_type,
+        read_only=read_only,
+    )
+
+
+def _request_host_mount_observation(
+    mount_point: str,
+    *,
+    socket_path: str = _MOUNT_OBSERVER_SOCKET,
+) -> HostMountObservation:
+    request_id = os.urandom(16).hex()
+    request = (
+        json.dumps(
+            {
+                "schema": _MOUNT_OBSERVER_REQUEST_SCHEMA,
+                "request_id": request_id,
+                "mount_point": mount_point,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+        + b"\n"
+    )
+    try:
+        socket_stat = os.stat(socket_path, follow_symlinks=False)
+        if (
+            not stat.S_ISSOCK(socket_stat.st_mode)
+            or socket_stat.st_uid != os.geteuid()
+            or stat.S_IMODE(socket_stat.st_mode) != 0o600
+            or socket_stat.st_nlink != 1
+        ):
+            raise StorageAuthorityError("mount observer socket posture is invalid")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(1.0)
+            client.connect(socket_path)
+            peer_pid, peer_uid, _peer_gid = _observer_peer_credentials(client)
+            if peer_pid <= 0 or peer_uid != os.geteuid():
+                raise StorageAuthorityError("mount observer peer is unauthorized")
+            client.sendall(request)
+            response = bytearray()
+            while not response.endswith(b"\n"):
+                chunk = client.recv(
+                    min(1024, _MOUNT_OBSERVER_LIMIT + 1 - len(response))
+                )
+                if not chunk:
+                    raise StorageAuthorityError("mount observer response is incomplete")
+                response.extend(chunk)
+                if len(response) > _MOUNT_OBSERVER_LIMIT:
+                    raise StorageAuthorityError("mount observer response is oversized")
+    except (OSError, TimeoutError) as exc:
+        raise StorageAuthorityError("mount observer is unavailable") from exc
+    try:
+        payload = json.loads(response)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StorageAuthorityError("mount observer response is invalid") from exc
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema",
+        "request_id",
+        "source_identity",
+        "mount_instance_identity",
+        "mount_match_identity",
+        "filesystem_type",
+        "read_only",
+    }:
+        raise StorageAuthorityError("mount observer response schema is invalid")
+    if (
+        payload.get("schema") != _MOUNT_OBSERVER_RESPONSE_SCHEMA
+        or payload.get("request_id") != request_id
+    ):
+        raise StorageAuthorityError("mount observer response binding is invalid")
+    try:
+        return HostMountObservation(
+            source_identity=payload["source_identity"],
+            mount_instance_identity=payload["mount_instance_identity"],
+            mount_match_identity=payload["mount_match_identity"],
+            filesystem_type=payload["filesystem_type"],
+            read_only=payload["read_only"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise StorageAuthorityError(
+            "mount observer response facts are invalid"
+        ) from exc
+
+
+def _observer_peer_credentials(client: socket.socket) -> tuple[int, int, int]:
+    so_peercred = getattr(socket, "SO_PEERCRED", None)
+    if so_peercred is None:
+        raise StorageAuthorityError("mount observer peer credentials are unavailable")
+    try:
+        return struct.unpack(
+            "3i", client.getsockopt(socket.SOL_SOCKET, so_peercred, 12)
+        )
+    except (OSError, struct.error) as exc:
+        raise StorageAuthorityError(
+            "mount observer peer credentials are unavailable"
+        ) from exc
+
+
 def external_storage_facts(
     fd: int,
     *,
@@ -352,6 +526,7 @@ def external_storage_facts(
     stable_mountinfo_text: str | None = None,
     stable_unique_mount_id: int | None = None,
     boot_id: str | None = None,
+    host_observation: HostMountObservation | None = None,
     require_read_only: bool = True,
     expected_mount_path: str | os.PathLike[str] | None = None,
     supported_filesystems: Iterable[str] = _SUPPORTED_EXTERNAL_FILESYSTEMS,
@@ -367,19 +542,38 @@ def external_storage_facts(
             )
     if mount.filesystem_type not in frozenset(supported_filesystems):
         raise StorageAuthorityError("external filesystem semantics are unsupported")
-    stable_mount = _stable_mount_for(mount, stable_mountinfo_text=stable_mountinfo_text)
-    host_unique_mount_id = (
-        stable_unique_mount_id
-        if stable_unique_mount_id is not None
-        else _stable_unique_mount_id(stable_mount.mount_point)
-    )
-    if (
-        not isinstance(host_unique_mount_id, int)
-        or isinstance(host_unique_mount_id, bool)
-        or host_unique_mount_id <= 0
+    if host_observation is None and any(
+        value is not None
+        for value in (stable_mountinfo_text, stable_unique_mount_id, boot_id)
     ):
-        raise StorageAuthorityError("stable unique mount identity is unavailable")
-    host_boot_identity = _boot_identity(boot_id)
+        if (
+            stable_mountinfo_text is None
+            or stable_unique_mount_id is None
+            or boot_id is None
+        ):
+            raise StorageAuthorityError("stable mount test authority is incomplete")
+        stable_mount = _stable_mount_for(
+            mount, stable_mountinfo_text=stable_mountinfo_text
+        )
+        host_observation = host_mount_observation(
+            fd,
+            expected_mount_path=stable_mount.mount_point,
+            fdinfo_text=f"mnt_id:\t{stable_mount.mount_id}\n",
+            mountinfo_text=stable_mountinfo_text,
+            statvfs_flags=statvfs_flags,
+            descriptor_flags=descriptor_flags,
+            unique_mount_id=stable_unique_mount_id,
+            boot_id=boot_id,
+            supported_filesystems=supported_filesystems,
+        )
+    if host_observation is None:
+        host_observation = _request_host_mount_observation(mount.mount_point)
+    if (
+        host_observation.source_identity != mount.source_identity
+        or host_observation.mount_match_identity != _mount_match_identity(mount)
+        or host_observation.filesystem_type != mount.filesystem_type
+    ):
+        raise StorageAuthorityError("host and local mount authority disagree")
     try:
         flags = os.fstatvfs(fd).f_flag if statvfs_flags is None else statvfs_flags
     except OSError as exc:
@@ -398,7 +592,7 @@ def external_storage_facts(
     descriptor_read_only = open_flags & os.O_ACCMODE == os.O_RDONLY
     posture_read_only = (
         mount.read_only
-        and stable_mount.read_only
+        and host_observation.read_only
         and statvfs_read_only
         and descriptor_read_only
     )
@@ -406,18 +600,7 @@ def external_storage_facts(
         raise StorageAuthorityError("external storage is not consistently read-only")
     return ExternalStorageFacts(
         source_identity=mount.source_identity,
-        mount_instance_identity=_opaque_identity(
-            "mount-host-v2",
-            host_boot_identity,
-            str(host_unique_mount_id),
-            str(stable_mount.mount_id),
-            str(stable_mount.parent_id),
-            stable_mount.major_minor,
-            stable_mount.filesystem_type,
-            stable_mount.root,
-            stable_mount.mount_point,
-            stable_mount.source,
-        ),
+        mount_instance_identity=host_observation.mount_instance_identity,
         filesystem_type=mount.filesystem_type,
         read_only=posture_read_only,
     )

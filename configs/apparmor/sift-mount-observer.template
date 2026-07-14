@@ -1,0 +1,36 @@
+abi <abi/4.0>,
+
+#include <tunables/global>
+
+# Ancillary read-only host mount observer. It reads only directory/kernel facts;
+# it cannot read evidence entries, mutate mounts, or use network transports.
+profile sift-mount-observer flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/python>
+
+  /opt/sift-mcps/                            r,
+  /opt/sift-mcps/**                          r,
+  /opt/sift-mcps/.venv/lib/**                mr,
+
+  /run/sift-mount-observer/                  rw,
+  /run/sift-mount-observer/observer.sock     rw,
+
+  owner /proc/@{pid}/fdinfo/[0-9]*           r,
+  owner /proc/@{pid}/mountinfo               r,
+  /proc/sys/kernel/random/boot_id            r,
+
+  @@SIFT_CASES_ROOT@@/                       r,
+  @@SIFT_CASES_ROOT@@/*/                     r,
+  @@SIFT_CASES_ROOT@@/*/evidence/            r,
+  deny @@SIFT_CASES_ROOT@@/*/evidence/**     rw,
+
+  network unix stream,
+  deny network inet,
+  deny network inet6,
+  deny network udp,
+  deny network raw,
+  deny mount,
+  deny remount,
+  deny umount,
+  deny ptrace,
+}

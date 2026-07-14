@@ -107,14 +107,13 @@ def build_custody_validator(dsn: str):
             raise FatalJobError("custody_admission_denied")
 
     @contextmanager
-    def hold_execution_authority(
-        job: ClaimedJob, phase: str
-    ) -> Iterator[None]:
+    def hold_execution_authority(job: ClaimedJob, phase: str) -> Iterator[None]:
         del phase
         if not job.case_id:
             raise FatalJobError("custody_admission_denied")
         try:
             import psycopg
+
             conn_context = psycopg.connect(dsn)
         except Exception as exc:
             raise FatalJobError("custody_admission_denied") from exc
@@ -141,9 +140,7 @@ def _validate_custody_read_only(cur: Any, job: ClaimedJob) -> None:
     """Validate dispatch authority under the held lock without writing drift."""
     case_dir = str(job.spec_internal.get("case_dir") or "")
     _validate_storage_authority(cur, job, case_dir)
-    expected_inventory = str(
-        job.spec_internal.get("evidence_inventory_token") or ""
-    )
+    expected_inventory = str(job.spec_internal.get("evidence_inventory_token") or "")
     try:
         current_inventory = _inventory_token(case_dir)
     except OSError as exc:
@@ -228,7 +225,9 @@ def _validate_storage_authority(cur: Any, job: ClaimedJob, case_dir: str) -> Non
                 | os.O_DIRECTORY
                 | getattr(os, "O_NOFOLLOW", 0),
             )
-            facts = external_storage_facts(root_fd)
+            facts = external_storage_facts(
+                root_fd, expected_mount_path=Path(case_dir) / "evidence"
+            )
         except (OSError, StorageAuthorityError) as exc:
             raise FatalJobError("custody_admission_denied") from exc
         finally:

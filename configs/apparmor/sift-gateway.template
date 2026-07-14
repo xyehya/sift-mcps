@@ -114,8 +114,8 @@ profile sift-gateway flags=(attach_disconnected) {
   # process-wide procfs state.
   owner /proc/@{pid}/fdinfo/[0-9]*           r,
   owner /proc/@{pid}/mountinfo               r,
-  /proc/1/mountinfo                          r,
-  /proc/sys/kernel/random/boot_id            r,
+  /run/sift-mount-observer/                  r,
+  /run/sift-mount-observer/observer.sock     rw,
   /proc/sys/fs/inotify/**                    r,
   /sys/kernel/security/ima/**                r,
   # Python's mimetypes module reads the system registry during FastMCP import.

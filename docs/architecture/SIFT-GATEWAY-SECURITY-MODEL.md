@@ -69,13 +69,14 @@ and writable posture is a blocking custody violation. The canonical evidence roo
 the external mount point itself: mount loss that exposes a writable local underlay is unavailable,
 not read-write drift. Final worker open revalidates the exact
 current version receipt, source, mount instance, identity, link count, and read-only posture.
-The mount-instance value is derived by matching the descriptor's exact local mount facts to one
-read-only PID 1 mount-table row, then binding the host boot ID and that host mount object's Linux
-`STATX_MNT_ID_UNIQUE`. PID 1's mount namespace is the installation's host-mount authority. This
-identity survives systemd's per-service mount-namespace clones while changing on a host remount or
-reboot; per-service namespace mount IDs are not persisted as custody authority. The Gateway has
-read-only access only to its descriptor/mount tables, the exact PID 1 mountinfo/host-root evidence
-descriptor, and the kernel boot ID; mount, remount, and unmount remain AppArmor-denied. A legacy
+The mount-instance value requires exact agreement between the caller's pinned local descriptor facts
+and a fixed ancillary observer running as the same unprivileged service user in the host mount
+namespace. The observer binds the host boot ID and host mount object's Linux
+`STATX_MNT_ID_UNIQUE`, reads only the evidence-root directory and kernel mount facts, and returns only
+bounded opaque data over a peer-checked AF_UNIX socket. It has no DB, network, capability,
+evidence-file read, or mutation authority. This identity survives per-service mount clones while
+changing on a host remount or reboot; per-service namespace mount IDs are not persisted. Both
+profiles AppArmor-deny mount, remount, and unmount, and any observer failure blocks. A legacy
 opaque mount identity mismatches v2 and remains blocked until operator Full Verify; it is never
 auto-upgraded or used to open admission.
 For virgin external intake, there is no active sealed set to Full Verify. The Portal-only Add & Seal
