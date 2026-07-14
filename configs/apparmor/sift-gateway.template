@@ -108,6 +108,12 @@ profile sift-gateway flags=(attach_disconnected) {
 
   # System libs and proc (read)
   /proc/mounts                               r,
+  # External read-only custody resolves a descriptor against the gateway's
+  # own kernel mount tables.  AppArmor canonicalizes /proc/self to this PID;
+  # keep the grant descriptor-specific and read-only rather than exposing
+  # process-wide procfs state.
+  owner /proc/@{pid}/fdinfo/[0-9]*           r,
+  owner /proc/@{pid}/mountinfo               r,
   /proc/sys/fs/inotify/**                    r,
   /sys/kernel/security/ima/**                r,
   # Python's mimetypes module reads the system registry during FastMCP import.
@@ -218,6 +224,11 @@ profile sift-gateway flags=(attach_disconnected) {
   deny /usr/bin/bash                         x,
   deny /usr/bin/sh                           x,
   deny /bin/dash                             x,
+
+  # Custody may inspect an operator-managed mount but never control it.
+  deny mount,
+  deny remount,
+  deny umount,
 }
 
 
