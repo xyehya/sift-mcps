@@ -14,10 +14,27 @@ UNPUBLISHED_CUSTODY_MIGRATIONS = tuple(
 )
 
 
+def _skip_sql_trivia(sql: str, index: int) -> int:
+    """Return the first position after SQL whitespace and comments."""
+    while index < len(sql):
+        if sql[index].isspace():
+            index += 1
+            continue
+        if sql.startswith("--", index):
+            newline = sql.find("\n", index + 2)
+            index = len(sql) if newline < 0 else newline + 1
+            continue
+        if sql.startswith("/*", index):
+            end = sql.find("*/", index + 2)
+            index = len(sql) if end < 0 else end + 2
+            continue
+        break
+    return index
+
+
 def _jsonb_arrow_literal_errors(sql: str) -> list[str]:
-    """Lex quoted arrow operands and stray quote tokens in PL/pgSQL."""
+    """Lex only quoted operands belonging to JSONB arrow operators."""
     errors: list[str] = []
-    arrow_lines: set[int] = set()
     index = 0
     while index < len(sql):
         if sql.startswith("--", index):
@@ -30,18 +47,6 @@ def _jsonb_arrow_literal_errors(sql: str) -> list[str]:
             index = len(sql) if end < 0 else end + 2
             continue
         if sql[index] == "'":
-            line = sql.count("\n", 0, index) + 1
-            if line in arrow_lines and index > 0 and (
-                sql[index - 1].isalnum() or sql[index - 1] == "_"
-            ):
-                token_start = index - 1
-                while token_start > 0 and (
-                    sql[token_start - 1].isalnum()
-                    or sql[token_start - 1] == "_"
-                ):
-                    token_start -= 1
-                if sql[token_start:index].upper() not in {"B", "E", "N", "X"}:
-                    errors.append(f"line {line}: stray quote after identifier")
             index += 1
             while index < len(sql):
                 if sql.startswith("''", index):
@@ -54,21 +59,34 @@ def _jsonb_arrow_literal_errors(sql: str) -> list[str]:
             continue
         if sql.startswith("->", index):
             line = sql.count("\n", 0, index) + 1
-            arrow_lines.add(line)
-            operand = index + (3 if sql.startswith("->>", index) else 2)
-            while operand < len(sql) and sql[operand] in " \t":
-                operand += 1
+            operator_end = index + (3 if sql.startswith("->>", index) else 2)
+            operand = _skip_sql_trivia(sql, operator_end)
             if operand < len(sql) and sql[operand] == "'":
                 cursor = operand + 1
-                while cursor < len(sql) and sql[cursor] != "\n":
+                while cursor < len(sql) and sql[cursor] not in "\r\n":
                     if sql.startswith("''", cursor):
                         cursor += 2
                     elif sql[cursor] == "'":
                         break
                     else:
                         cursor += 1
-                if cursor >= len(sql) or sql[cursor] == "\n":
+                if cursor >= len(sql) or sql[cursor] in "\r\n":
                     errors.append(f"line {line}: unclosed quoted arrow operand")
+                    index = cursor
+                    continue
+                following = _skip_sql_trivia(sql, cursor + 1)
+                if following < len(sql) and (
+                    sql[following].isalpha() or sql[following] == "_"
+                ):
+                    token_end = following + 1
+                    while token_end < len(sql) and (
+                        sql[token_end].isalnum() or sql[token_end] in "_$"
+                    ):
+                        token_end += 1
+                    if token_end < len(sql) and sql[token_end] == "'":
+                        errors.append(
+                            f"line {line}: unexpected identifier after quoted arrow operand"
+                        )
                 index = cursor + 1
                 continue
         index += 1
@@ -80,10 +98,22 @@ def test_jsonb_arrow_literal_detector_vectors() -> None:
         ("select p->'st_dev,'st_ino';", True),
         ("select p->'st_nlink);", True),
         ("select p->'foo, 'bar';", True),
+        ("select p->'foo' bar';", True),
+        ("select p->'foo' /*fmt*/ bar';", True),
+        ("select p->\n'st_nlink", True),
+        ("select p->\r\n'st_nlink", True),
+        ("select p-> /*fmt*/ 'st_nlink", True),
         ("select p->'foo';", False),
         ("select p->>'foo';", False),
         ("select p->'foo,';", False),
         ("select p->'foo''bar';", False),
+        ("select p->\n'st_nlink';", False),
+        ("select p->\r\n'st_nlink';", False),
+        ("select p-> /*fmt*/ 'st_nlink';", False),
+        ("select p-> -- fmt\n 'foo';", False),
+        ("select p->'foo', date'2020-01-01';", False),
+        ("select p->'foo', jsonb'{}';", False),
+        ("select p->'foo', custom_type'value';", False),
         ("-- p->'broken\nselect p->'foo';", False),
         ("/* p->'broken */ select p->>'foo';", False),
         ("select 'unrelated p->''text';", False),
