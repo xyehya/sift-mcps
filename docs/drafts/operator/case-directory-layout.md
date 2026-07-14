@@ -10,12 +10,13 @@ case-directory-scoped companion and does not restate that table.
 
 In DB-active deployments the **Supabase/Postgres control plane is the sole
 authority** for case state. The files under a case directory fall into three
-classes: (1) **evidence bytes** (operator-owned, sealed, the only file class that
-is itself primary data); (2) **working data** the agent/tools produce
+classes: (1) **evidence bytes** (Portal-authorized under a closed local-protected
+or external-read-only profile, the only file class that is itself primary data);
+(2) **working data** the agent/tools produce
 (`agent/`, `tmp/`, `extractions/`, `reports/`); and (3) **mirrors/exports** of
 DB-authoritative state (`CASE.yaml`, `findings.json`, `evidence-ledger.jsonl`,
-`audit/*.jsonl`, …) kept for offline proof and legacy fallback. A mirror is never
-read as truth when the control plane is reachable.
+`audit/*.jsonl`, …) kept for offline proof or compatibility. Served operation never
+reads a mirror as authority; Postgres unavailability fails closed.
 
 ## Directory tree (live)
 
@@ -27,7 +28,7 @@ read as truth when the control plane is reachable.
 ├── iocs.json                 # mirror of app.investigation_iocs
 ├── todos.json                # mirror of app.investigation_todos
 ├── evidence.json             # mirror of app.evidence_objects
-├── evidence/                 # SEALED evidence bytes (operator-owned, read-only after seal)
+├── evidence/                 # profile-bound evidence bytes; Postgres owns custody state
 ├── extractions/              # tool-extracted artifacts (indexed copy is DB-authoritative)
 ├── reports/                  # generated report exports (PDF/MD)
 ├── tmp/                      # ephemeral tool scratch
@@ -49,7 +50,7 @@ file-audit path and stays empty when the DB is the audit authority.
 
 | Dir | Written by | Authority | Notes |
 |---|---|---|---|
-| `evidence/` | Operator (mount/copy on the SIFT VM) | **File = primary data** | Sealed with immutable `+i`, the disk write-protection boundary. Must be registered + sealed + chain-OK before any agent tool runs. |
+| `evidence/` | Operator-authorized Portal workflow; fixed local helper for local intake | **Bytes = primary data; Postgres = custody authority** | Closed profile: protected `LOCAL_IMMUTABLE` or descriptor-pinned `EXTERNALLY_READ_ONLY`. External bytes/metadata are never mutated. Registration, current Full Verify receipt, and chain-OK state are required before agent reads. |
 | `extractions/` | Ingest adapters / tools | DB (`app.opensearch_indices`) for the indexed copy | On-disk extraction is working data; the searchable copy lives in OpenSearch. |
 | `reports/` | Portal reporting | File = export | Generated artifacts only; report *contents/approvals* are DB-authoritative. |
 | `tmp/` | Core tools | Ephemeral | Safe to purge between runs. `vol-symbols/` is a shared Volatility cache. |
@@ -60,7 +61,7 @@ file-audit path and stays empty when the DB is the audit authority.
 
 | File | Authority (DB) | Class |
 |---|---|---|
-| `CASE.yaml` | `app.cases`, `app.active_case_state` | mirror / legacy fallback |
+| `CASE.yaml` | `app.cases`, `app.active_case_state` | compatibility mirror; never served authority |
 | `findings.json` | `app.investigation_findings` (`content_hash`) | mirror |
 | `timeline.json` | `app.investigation_timeline_events` | mirror |
 | `iocs.json` | `app.investigation_iocs` | mirror |

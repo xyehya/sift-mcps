@@ -30,9 +30,10 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,24 @@ class JobContext:
         validator = self._worker._custody_validator
         if validator is not None and self.job.job_type == "run_command":
             validator(self.job, phase)
+
+    @contextmanager
+    def hold_custody(self, phase: str = "dispatch_lock") -> Iterator[None]:
+        """Hold the DB-owned custody transition lock through process dispatch."""
+        validator = self._worker._custody_validator
+        if validator is None or self.job.job_type != "run_command":
+            yield
+            return
+        holder = getattr(validator, "hold_execution_authority", None)
+        if callable(holder):
+            lease = cast(AbstractContextManager[None], holder(self.job, phase))
+            with lease:
+                yield
+            return
+        # Test/custom validators retain a fail-closed validation immediately
+        # before dispatch even when they do not expose the production lock.
+        validator(self.job, phase)
+        yield
 
     def log(self, message: str, *, level: str = "info", step_id: str | None = None) -> str | None:
         return self._worker._append_log(self.job.job_id, message, level=level, step_id=step_id)

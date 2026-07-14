@@ -17,6 +17,8 @@ import stat
 import sys
 import tempfile
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, LiteralString
@@ -1152,6 +1154,34 @@ class EvidenceAuthorityService(_BasePortalDbService):
         if not expected or current != expected:
             raise PortalServiceError("evidence_authority_changed", http_status=403)
         return current
+
+    @contextmanager
+    def hold_execution_authority(
+        self, case_id: str, expected: dict[str, Any]
+    ) -> Iterator[None]:
+        """Hold the shared case custody lock through descriptor pin/dispatch.
+
+        Every custody/profile/source/Full Verify transition takes the matching
+        exclusive advisory transaction lock in its Postgres RPC. Holding the
+        shared form prevents such a transition from committing after the final
+        authority read but before the admitted process pins its descriptors.
+        """
+        with self._connect() as conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "select pg_advisory_xact_lock_shared("
+                        "hashtextextended(%s::text, 0))",
+                        (case_id,),
+                    )
+                self.revalidate_execution_authority(case_id, expected)
+            except PortalServiceError:
+                raise
+            except Exception as exc:
+                raise PortalServiceError(
+                    "evidence_authority_lock_unavailable", http_status=503
+                ) from exc
+            yield
 
     @staticmethod
     def _record_detected_observation(

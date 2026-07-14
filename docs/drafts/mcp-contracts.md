@@ -163,8 +163,9 @@ is not OK the agent gets:
  "remediation": "Open the Examiner Portal and use the Evidence tab to review and seal
  the evidence chain before proceeding with agent analysis."}
 ```
-DB authority is preferred (`check_evidence_gate_db` → `app.evidence_gate_status`),
-fail-closed on any DB error. **Recovery: the agent cannot self-remediate** — it must
+Postgres is the sole evidence-gate authority (`check_evidence_gate_db` →
+`app.evidence_gate_status`); any DB error fails closed with no filesystem fallback.
+**Recovery: the agent cannot self-remediate** — it must
 ask the operator to seal in the portal, then retry. Live-proven: BATCH-V1 pre-seal
 calls failed closed with `evidence_chain_unsealed`; post-seal calls allowed.
 

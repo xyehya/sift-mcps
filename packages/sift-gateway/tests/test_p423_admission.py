@@ -5,12 +5,12 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
 from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
 from sift_core.evidence_chain import ChainStatus
 from sift_gateway.active_case import ActiveCase
@@ -76,6 +76,7 @@ class _AdmissionService:
         self.observations = []
         self.known = set(known)
         self.unavailable = unavailable
+        self.execution_lock_held = False
         self.execution_authority = {
             "storage_profile": "LOCAL_IMMUTABLE",
             "storage_source_identity": "",
@@ -112,6 +113,21 @@ class _AdmissionService:
         if expected != self.execution_authority:
             raise RuntimeError("authority changed")
         return dict(self.execution_authority)
+
+    @contextmanager
+    def hold_execution_authority(self, case_id, expected):
+        self.revalidate_execution_authority(case_id, expected)
+        self.execution_lock_held = True
+        try:
+            yield
+        finally:
+            self.execution_lock_held = False
+
+    def attempt_storage_transition(self):
+        if self.execution_lock_held:
+            return False
+        self.execution_authority["storage_generation"] += 1
+        return True
 
     def resolve_evidence_reference(self, case_id, ref):
         self.resolved.append((case_id, ref))
@@ -466,7 +482,7 @@ async def test_storage_authorization_change_after_admission_denies_before_handle
 
 
 @pytest.mark.asyncio
-async def test_storage_authority_change_inside_handler_denies_at_final_open(
+async def test_storage_transition_after_final_check_cannot_commit_before_process(
     tmp_path,
 ):
     from sift_core.execute.evidence_binding import validate_final_open_authority
@@ -478,17 +494,19 @@ async def test_storage_authority_change_inside_handler_denies_at_final_open(
     gateway = _gateway(tmp_path, service)
     mcp = FastMCP("aggregate", middleware=gateway_policy_middlewares(gateway))
     process_starts = []
+    transition_commits = []
 
     @mcp.tool(name="run_command")
     async def run_command(command: str):
         del command
         expected = dict(service.execution_authority)
-        # The middleware pre-dispatch check has passed. Model a DB authority
-        # generation change immediately before core's final evidence open.
-        service.execution_authority["storage_generation"] += 1
+        # Final DB validation succeeds under the shared execution lease. The
+        # authority-changing transaction then cannot acquire its exclusive
+        # per-case lock before descriptor pin/process start.
         validate_final_open_authority(expected)
+        transition_commits.append(service.attempt_storage_transition())
         process_starts.append(True)
-        return "must-not-run"
+        return "started-under-stable-authority"
 
     opened = {
         "blocked": False,
@@ -503,12 +521,67 @@ async def test_storage_authority_change_inside_handler_denies_at_final_open(
         ),
         patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=None),
     ):
-        with pytest.raises(ToolError, match="authority changed"):
-            await mcp.call_tool(
-                "run_command", {"command": "cat evidence/sealed.raw"}
-            )
+        result = await mcp.call_tool(
+            "run_command", {"command": "cat evidence/sealed.raw"}
+        )
 
-    assert process_starts == []
+    assert result.is_error is False
+    assert transition_commits == [False]
+    assert process_starts == [True]
+
+
+def test_execution_authority_guard_holds_shared_case_lock_through_dispatch(
+    monkeypatch,
+):
+    calls = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, query, params):
+            calls.append(("sql", " ".join(query.split()), params))
+
+    class Connection:
+        def __enter__(self):
+            calls.append(("connection", "enter"))
+            return self
+
+        def __exit__(self, *_args):
+            calls.append(("connection", "exit"))
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_connect", lambda: Connection())
+    monkeypatch.setattr(
+        service,
+        "revalidate_execution_authority",
+        lambda case_id, expected: calls.append(
+            ("revalidate", case_id, dict(expected))
+        ),
+    )
+    expected = {"storage_generation": 7}
+
+    with service.hold_execution_authority("case-1", expected):
+        calls.append(("process", "start"))
+
+    lock_index = next(
+        index
+        for index, call in enumerate(calls)
+        if call[0] == "sql" and "pg_advisory_xact_lock_shared" in call[1]
+    )
+    revalidate_index = next(
+        index for index, call in enumerate(calls) if call[0] == "revalidate"
+    )
+    process_index = calls.index(("process", "start"))
+    exit_index = calls.index(("connection", "exit"))
+    assert lock_index < revalidate_index < process_index < exit_index
 
 
 @pytest.mark.asyncio

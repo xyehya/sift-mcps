@@ -518,6 +518,67 @@ def test_run_command_final_open_revalidates_db_authority_before_process_start(
     assert started == []
 
 
+def test_run_command_transition_after_successful_final_check_cannot_start_process(
+    tmp_path, monkeypatch
+):
+    case_dir = tmp_path / "case-db-final-lock"
+    (case_dir / "evidence").mkdir(parents=True)
+    evidence = case_dir / "evidence" / "sealed.raw"
+    evidence.write_bytes(b"sealed bytes")
+    admitted_stat = evidence.stat()
+    monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
+    started = []
+    monkeypatch.setattr(
+        agent_tools,
+        "_execute_command",
+        lambda *_args, **_kwargs: started.append(True),
+    )
+    context = ActiveCaseContext(
+        case_id="11111111-1111-1111-1111-111111111115",
+        case_key="DB-FINAL-LOCK",
+        artifact_path=str(case_dir),
+        db_active=True,
+    )
+    resolved = {
+        "evidence_id": "ev-final-lock",
+        "version_id": "ver-final-lock",
+        "display_path": "evidence/sealed.raw",
+        "path": str(evidence),
+        "sha256": "sha256:" + hashlib.sha256(evidence.read_bytes()).hexdigest(),
+        "bytes": admitted_stat.st_size,
+        "st_dev": admitted_stat.st_dev,
+        "st_ino": admitted_stat.st_ino,
+        "st_mtime_ns": admitted_stat.st_mtime_ns,
+        "st_ctime_ns": admitted_stat.st_ctime_ns,
+        **_STORAGE_AUTHORITY,
+    }
+
+    def validate_then_attempt_transition(expected):
+        assert expected == _STORAGE_AUTHORITY
+        # The DB read succeeded. The matching exclusive transition lock cannot
+        # commit while the execution lease is held through process dispatch.
+        raise ValueError("storage transition blocked by execution lock")
+
+    with (
+        use_active_case_context(context),
+        use_final_open_authority_validator(validate_then_attempt_transition),
+    ):
+        result = _run_command(
+            {
+                "command": "cat evidence/sealed.raw",
+                "purpose": "prove final-open transition serialization",
+                "evidence_refs": ["ev-final-lock"],
+                "_resolved_evidence_refs": [resolved],
+            },
+            examiner="analyst",
+            audit=AuditWriter(mcp_name="sift-core"),
+        )
+
+    assert result["success"] is False
+    assert result["error"] == "storage transition blocked by execution lock"
+    assert started == []
+
+
 def test_run_command_saved_output_uses_db_active_case_not_stale_env(
     tmp_path, monkeypatch
 ):

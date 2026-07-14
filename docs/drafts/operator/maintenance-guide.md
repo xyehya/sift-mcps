@@ -250,8 +250,8 @@ means RAG was never seeded — see `rag-and-search-maintenance.md` §1.
 
 ## 4. Backup and restore
 
-Authority lives in two places: **Supabase/Postgres** (the control plane — almost
-all mutable state) and **operator-managed evidence bytes** under `/cases`. The
+Postgres is the sole custody/control-plane authority; **operator-managed evidence
+bytes** under `/cases` are the primary forensic data it identifies and hashes. The
 file mirrors (`CASE.yaml`, `findings.json`, `evidence-manifest.json`,
 `evidence-ledger.jsonl`, per-case `audit/*.jsonl`) are **export/proof, not
 authority** — restoring them does not restore truth; restore the database.
@@ -324,18 +324,21 @@ and must be **registered and sealed before analysis.** The DB
 1. **Activate a case** (re-auth gated). In the portal: create/select a case and
    activate it. Activation requires password re-auth and is recorded in
    `app.audit_events`.
-2. **Place evidence bytes — prepare them service-owned.** Copy or mount the
-   disk/memory image into the active case's evidence directory
-   `/cases/<case>/evidence/`. This is a manual VM-side operation by the operator;
-   agents never place bytes. The portal does **not** upload bytes — it detects
-   files placed here in-place. The evidence directory is owned by the gateway
-   service user (`sift-service`, `0755`), and **seal requires each evidence file
-   to be owned by `sift-service`** (it sets the immutable flag in-process and
-   deliberately never chowns for you). A plain `sudo cp` lands the file
-   `root`-owned and the seal then fails closed with
-   `evidence_immutability_failed`.
+2. **Authorize a storage profile, then make the bytes available.** In the Portal,
+   choose exactly one closed profile with a reason, idempotency key, and fresh
+   scoped password re-authentication:
 
-   Choose one of these operator-only intake paths. Run the helper as
+   - `LOCAL_IMMUTABLE`: copy evidence into `/cases/<case>/evidence/` and prepare
+     eligible pending files for the service-owned local protection workflow.
+   - `EXTERNALLY_READ_ONLY`: mount the authorized source read-only at the evidence
+     path. SIFT pins descriptors and records opaque source/mount-instance identity;
+     it never chowns, chmods, sets flags/xattrs, renames, links, or changes bytes on
+     external storage. Do **not** run the local preparation helper on this profile.
+
+   Agents never place or mutate evidence bytes. The Portal detects mounted files
+   in place; profile/source authorization is Portal-only.
+
+   For `LOCAL_IMMUTABLE` only, choose one of these operator-only intake paths. Run the helper as
    `sansforensics` (or another sudo-capable operator), **not** as
    `sudo stage-evidence.sh`; the helper prompts for its narrow internal sudo
    operations itself.
@@ -373,17 +376,17 @@ and must be **registered and sealed before analysis.** The DB
 4. **Seal** the evidence through the re-auth-gated durable custody-operation
    workflow. The operation blocks the gate before filesystem work, verifies
    prepared bytes/posture, then atomically commits the Postgres version,
-   manifest, head, and custody events. On seal each byte file
-   retains its prepared `0644` mode and is made **immutable (`chattr +i`)**; the
-   immutable flag is the write-protection boundary and the custody-chain head
-   advances. Seal **fails closed** (`evidence_immutability_failed`) if a file is
-   not `sift-service`-owned or the interpreter lacks `CAP_LINUX_IMMUTABLE`
-   (granted to the venv interpreter by `install.sh`) — fix ownership per step 2 and
-   retry.
+   manifest, head, and custody events. `LOCAL_IMMUTABLE` retains prepared `0644`
+   service ownership, applies the filesystem immutable flag in process, and reads
+   it back; missing ownership/capability fails closed. `EXTERNALLY_READ_ONLY`
+   instead requires descriptor, VFS, and mount/superblock read-only agreement and
+   matching authorized source/mount identity, with no evidence mutation.
 
-Re-auth is required for **case activation, evidence seal/ignore/retire, finding
+Re-auth is required for **case activation, storage profile/source authorization,
+evidence seal/ignore/retire, finding
 approval, report inclusion/export, and agent credential issuance.** These are
-sensitive human actions and each records a re-auth audit event.
+sensitive human actions and each records a reasoned, scoped re-auth audit event;
+profile/source transitions are also idempotency-bound.
 
 ### 5.2 Verifying custody (read-only)
 
@@ -397,8 +400,11 @@ docker exec supabase_db_sift-mcps psql -U postgres -d postgres -tA -c \
 The exported `evidence-ledger.jsonl` (legacy HMAC-chained export format) and
 `evidence-anchor-v{N}.json` are offline proof artifacts only; the gate consults
 the DB (`app.evidence_gate_status` via `evidence_gate.check_evidence_gate_db`),
-not the files. Full Verify Evidence likewise re-hashes mounted objects against
-DB custody authority and does not verify this export file.
+not the files. **Full Verify Evidence** is a passwordless authenticated-examiner
+action (optional bounded note): it hashes every ACTIVE mounted object, verifies
+the selected storage posture, and records an append-only success/failure receipt
+bound to generation, profile, manifest, and version. Reconnect remains blocked
+until the current source has a successful receipt; it does not verify the export file.
 
 > **DANGER (seal/ignore/retire):** sealing makes bytes read-only and advances an
 > append-only custody chain; ignore/retire change evidence usability. These are

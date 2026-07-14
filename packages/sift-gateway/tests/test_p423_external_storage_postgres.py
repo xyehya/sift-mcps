@@ -50,6 +50,28 @@ def _case_actor(conn):
     return case_id, actor_id
 
 
+def test_execution_shared_lock_blocks_concurrent_storage_authority_commit():
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as setup_conn:
+        case_id, _actor_id = _case_actor(setup_conn)
+    with psycopg.connect(_dsn()) as execution_conn:
+        with execution_conn.cursor() as cur:
+            cur.execute(
+                "select pg_advisory_xact_lock_shared("
+                "hashtextextended(%s::text, 0))",
+                (case_id,),
+            )
+        with psycopg.connect(_dsn()) as transition_conn:
+            with transition_conn.cursor() as cur:
+                cur.execute("set local lock_timeout = '100ms'")
+                with pytest.raises(psycopg.errors.LockNotAvailable):
+                    cur.execute(
+                        "select pg_advisory_xact_lock("
+                        "hashtextextended(%s::text, 0))",
+                        (case_id,),
+                    )
+
+
 def test_v3_resume_rejects_every_retired_runner_and_profile_is_reauth_bound():
     psycopg = pytest.importorskip("psycopg")
     from psycopg.types.json import Jsonb

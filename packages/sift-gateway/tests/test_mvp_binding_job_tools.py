@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -116,6 +117,11 @@ class _EvidenceService:
         if expected != self.authority:
             raise RuntimeError("authority changed")
         return dict(self.authority)
+
+    @contextmanager
+    def hold_execution_authority(self, case_id, expected):
+        self.revalidate_execution_authority(case_id, expected)
+        yield
 
     def list_evidence(self, case_id):
         return [

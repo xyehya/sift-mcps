@@ -13,9 +13,9 @@ source, package tests, and the live BATCH-V1 cutover evidence in
 `docs/migration/Session-Notes.md` (2026-06-08). Items not yet proven on the live
 VM are labelled `Status: needs live proof` / `Status: TODO`.
 
-Authority rule (applies to every lifecycle below): in DB-active mode, Postgres
-`app.*` tables/RPCs are authoritative; case-local files are only legacy fallback,
-workspace/debug, parser-compat, or immutable export
+Authority rule (applies to every lifecycle below): Postgres `app.*` tables/RPCs
+are the sole served authority; an unavailable control plane fails closed. Case-local
+files are workspace/debug data, parser compatibility inputs, or non-authoritative exports
 (`Migration-Spec.md` section 4).
 
 ---
@@ -136,7 +136,8 @@ sequenceDiagram
   participant DB as Postgres
   participant W as Broker/Worker
   participant E as Evidence mount
-  O->>E: copy/mount evidence bytes
+  O->>P: authorize LOCAL_IMMUTABLE or EXTERNALLY_READ_ONLY (reason + re-auth + idempotency)
+  O->>E: copy local bytes or mount authorized external source read-only
   P->>G: detect evidence
   G->>W: scan mounted evidence (inotify/stat)
   W->>DB: record detected evidence_objects
@@ -155,6 +156,10 @@ sequenceDiagram
   `packages/sift-gateway/src/sift_gateway/evidence_watcher.py`).
 - Seal/ignore/retire require a `reauth_audit_event_id` from the portal re-auth
   path (`routes.py: _reauth_event_id`).
+- Storage profile/source changes are Portal-only, reasoned, scoped-re-authenticated,
+  and idempotency-bound. Full Verify Evidence is passwordless for an authenticated
+  examiner: it hashes every ACTIVE mounted object, verifies profile posture, and
+  appends a generation/profile/manifest/version-bound success or failure receipt.
 - Custody events and chain head are append-only; file manifest/ledger become
   exports only.
 - Authority: Postgres `app.evidence_objects`, `app.evidence_versions`,

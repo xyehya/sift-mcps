@@ -463,6 +463,16 @@ def _json_result(data: Any) -> str:
 _ARRAY_OPERATOR_TOKENS = frozenset(
     {"|", "&&", "||", ";", "&", ">", ">>", "<", "<<", "2>&1", "2>", "2>>", "&>", "&>>"}
 )
+_STORAGE_AUTHORITY_KEYS = (
+    "storage_profile",
+    "storage_source_identity",
+    "mount_instance_identity",
+    "storage_generation",
+    "storage_verified_generation",
+    "storage_manifest_version",
+    "storage_manifest_hash",
+    "storage_verification_receipt_id",
+)
 
 
 def _coerce_run_command(command: Any) -> tuple[str | None, str | None]:
@@ -515,18 +525,6 @@ def _trusted_internal_evidence_refs(
     bindings: list[dict[str, Any]] = []
     from sift_core.execute.evidence_binding import (
         validate_binding_fd,
-        validate_final_open_authority,
-    )
-
-    authority_keys = (
-        "storage_profile",
-        "storage_source_identity",
-        "mount_instance_identity",
-        "storage_generation",
-        "storage_verified_generation",
-        "storage_manifest_version",
-        "storage_manifest_hash",
-        "storage_verification_receipt_id",
     )
 
     for item in refs:
@@ -590,14 +588,14 @@ def _trusted_internal_evidence_refs(
             )
         )
 
-    expected_authority = {key: bindings[0][key] for key in authority_keys}
+    expected_authority = {
+        key: bindings[0][key] for key in _STORAGE_AUTHORITY_KEYS
+    }
     if any(
         any(binding.get(key) != value for key, value in expected_authority.items())
         for binding in bindings
     ):
         raise ValueError("internal evidence refs have inconsistent storage authority")
-    validate_final_open_authority(expected_authority)
-
     for path_text, binding_data in zip(paths, bindings, strict=True):
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         path = Path(path_text)
@@ -1081,6 +1079,16 @@ def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:
             if preview_lines_arg is None
             else min(max(int(preview_lines_arg), 0), 200)
         )
+        if execution_evidence_bindings:
+            from sift_core.execute.evidence_binding import (
+                validate_final_open_authority,
+            )
+
+            expected_authority = {
+                key: execution_evidence_bindings[0][key]
+                for key in _STORAGE_AUTHORITY_KEYS
+            }
+            validate_final_open_authority(expected_authority)
         exec_result = _execute_command(
             command,
             purpose=purpose,

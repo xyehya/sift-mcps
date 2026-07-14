@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -104,7 +106,76 @@ def build_custody_validator(dsn: str):
             # committed any DETECTED/VIOLATION custody observations.
             raise FatalJobError("custody_admission_denied")
 
+    @contextmanager
+    def hold_execution_authority(
+        job: ClaimedJob, phase: str
+    ) -> Iterator[None]:
+        del phase
+        if not job.case_id:
+            raise FatalJobError("custody_admission_denied")
+        try:
+            import psycopg
+            conn_context = psycopg.connect(dsn)
+        except Exception as exc:
+            raise FatalJobError("custody_admission_denied") from exc
+        with conn_context as conn:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "select pg_advisory_xact_lock_shared("
+                        "hashtextextended(%s::text, 0))",
+                        (job.case_id,),
+                    )
+                    _validate_custody_read_only(cur, job)
+            except FatalJobError:
+                raise
+            except Exception as exc:
+                raise FatalJobError("custody_admission_denied") from exc
+            yield
+
+    validate.hold_execution_authority = hold_execution_authority  # type: ignore[attr-defined]
     return validate
+
+
+def _validate_custody_read_only(cur: Any, job: ClaimedJob) -> None:
+    """Validate dispatch authority under the held lock without writing drift."""
+    case_dir = str(job.spec_internal.get("case_dir") or "")
+    _validate_storage_authority(cur, job, case_dir)
+    expected_inventory = str(
+        job.spec_internal.get("evidence_inventory_token") or ""
+    )
+    try:
+        current_inventory = _inventory_token(case_dir)
+    except OSError as exc:
+        raise FatalJobError("custody_admission_denied") from exc
+    if not expected_inventory or current_inventory != expected_inventory:
+        raise FatalJobError("custody_admission_denied")
+    cur.execute(
+        "select seal_status from app.evidence_gate_status(%s)",
+        (job.case_id,),
+    )
+    gate = cur.fetchone()
+    if not gate or gate[0] != "sealed":
+        raise FatalJobError("custody_admission_denied")
+    for item in job.spec_internal.get("resolved_evidence_refs") or []:
+        if not isinstance(item, dict):
+            raise FatalJobError("custody_admission_denied")
+        cur.execute(
+            """select 1
+               from app.evidence_objects o
+               join app.evidence_versions v on v.id=o.current_version_id
+               where o.case_id=%s and o.id=%s and v.id=%s
+                 and o.status='sealed' and o.seal_status='sealed'
+                 and v.entry_status='ACTIVE' and v.sha256=%s""",
+            (
+                job.case_id,
+                item.get("evidence_id"),
+                item.get("version_id"),
+                item.get("sha256"),
+            ),
+        )
+        if not cur.fetchone():
+            raise FatalJobError("custody_admission_denied")
 
 
 def _validate_storage_authority(cur: Any, job: ClaimedJob, case_dir: str) -> None:
@@ -301,13 +372,15 @@ def run_command_job_handler(job: ClaimedJob, ctx: JobContext) -> JobResult:
     # Claim/execution validation protects the durable queue boundary; repeat
     # once more immediately before the command handler can create a process.
     ctx.validate_custody("preexec")
-    with (
-        use_active_case_context(context),
-        use_final_open_authority_validator(
-            lambda _expected: ctx.validate_custody("final_open")
-        ),
-    ):
-        result = _run_command(args, examiner, audit)
+    with ctx.hold_custody("dispatch_lock"):
+        with (
+            use_active_case_context(context),
+            # The holder validated authority after acquiring the shared case
+            # lock and retains it through _run_command. Exclusive custody
+            # transitions therefore cannot commit before descriptor pinning.
+            use_final_open_authority_validator(lambda _expected: None),
+        ):
+            result = _run_command(args, examiner, audit)
 
     receipt = _build_receipt(job, args, result)
     ctx.record_step(

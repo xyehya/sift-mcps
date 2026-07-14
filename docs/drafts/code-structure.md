@@ -174,8 +174,9 @@ flowchart LR
 
 ## 7. Files That Are NOT Authority (do not treat as state)
 
-In DB-active mode these are legacy fallback / workspace / parser-compat / export
-only (`Migration-Spec.md` section 4): `SIFT_CASE_DIR`, `~/.sift/active_case`,
+In served operation these are workspace / parser-compat / compatibility mirror /
+export only (`Migration-Spec.md` section 4), never fallback authority:
+`SIFT_CASE_DIR`, `~/.sift/active_case`,
 `CASE.yaml`, `findings.json`, `timeline.json`, `todos.json`, `approvals.jsonl`,
 `evidence-manifest.json`, `evidence-ledger.jsonl`, local audit JSONL, ingest
 status JSON, `host-dictionary.yaml`. Postgres `app.*` is authority; file proofs

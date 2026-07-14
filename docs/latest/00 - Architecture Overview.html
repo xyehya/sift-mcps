@@ -461,9 +461,9 @@
       <text x="658" y="816" class="s-zone a2-evid-t" font-size="12">⑧ EVIDENCE &amp; REPORTS</text>
       <rect x="656" y="828" width="220" height="94" rx="6" class="a2-bg" style="stroke:#2F7D55" stroke-width="1.4" />
       <text x="766" y="854" text-anchor="middle" class="s-title a2-ink" font-size="12">Evidence Vault</text>
-      <text x="766" y="874" text-anchor="middle" font-size="9" class="a2-soft">immutable raw bytes + sha256</text>
-      <text x="766" y="888" text-anchor="middle" font-size="9" class="a2-soft">chattr +i · manifest + ledger</text>
-      <text x="766" y="906" text-anchor="middle" font-size="9" class="a2-evid-t">append-only custody chains</text>
+      <text x="766" y="874" text-anchor="middle" font-size="9" class="a2-soft">profile-bound bytes + sha256</text>
+      <text x="766" y="888" text-anchor="middle" font-size="9" class="a2-soft">local protected · external read-only</text>
+      <text x="766" y="906" text-anchor="middle" font-size="9" class="a2-evid-t">Postgres custody + verify receipt</text>
       <rect x="892" y="828" width="230" height="94" rx="6" class="a2-bg" style="stroke:#2F7D55" stroke-width="1.4" />
       <text x="1007" y="854" text-anchor="middle" class="s-title a2-ink" font-size="12">Reports / Exports</text>
       <text x="1007" y="874" text-anchor="middle" font-size="9" class="a2-soft">HTML / PDF / JSON bundles</text>
@@ -484,7 +484,7 @@
       <line x1="605" y1="864" x2="654" y2="864" class="a2-line" stroke-width="1.3" marker-end="url(#a2arr)" />
     </svg>
   </div>
-  <p class="cap">The gold band is the only thing both clients can reach, and everything below it is reachable <em>only</em> from inside that band. Authority flows one way: <strong>Postgres (blue) is the source of truth</strong>; OpenSearch (teal) is a derived projection rebuilt from artifacts and never trusted as the system of record. Heavy work doesn't block the agent — the gateway enqueues a durable job, least-privilege workers <strong>claim</strong> it under a lease, and confined execution writes results back up to Postgres and out to the derived index. Evidence (green) is immutable and operator-sealed; reports contain only approved material.</p>
+  <p class="cap">The gold band is the only thing both clients can reach, and everything below it is reachable <em>only</em> from inside that band. Authority flows one way: <strong>Postgres (blue) is the source of truth</strong>; OpenSearch (teal) is a derived projection rebuilt from artifacts and never trusted as the system of record. Heavy work doesn't block the agent — the gateway enqueues a durable job, least-privilege workers <strong>claim</strong> it under a lease, and confined execution writes results back up to Postgres and out to the derived index. Evidence (green) uses a Portal-authorized local-protected or descriptor-pinned external-read-only profile; reports contain only approved material.</p>
 </section>
 
 <!-- ======================== VP-3 POLICY CHAIN ======================== -->
@@ -730,8 +730,8 @@
       <line x1="816" y1="520" x2="1024" y2="520" stroke="#2F7D55" stroke-width="1.8" />
       <line x1="816" y1="424" x2="816" y2="520" stroke="#2F7D55" stroke-width="1.8" opacity="0.4" />
       <text x="920" y="462" text-anchor="middle" class="s-title a4-ink" font-size="12">Evidence Vault</text>
-      <text x="920" y="480" text-anchor="middle" font-size="9" fill="#2F7D55">immutable · chattr +i</text>
-      <text x="920" y="494" text-anchor="middle" font-size="9" fill="#2F7D55">append-only custody chain</text>
+      <text x="920" y="480" text-anchor="middle" font-size="9" fill="#2F7D55">profile-bound · descriptor-pinned</text>
+      <text x="920" y="494" text-anchor="middle" font-size="9" fill="#2F7D55">Postgres chain + Full Verify receipt</text>
 
       <!-- boundary numbers -->
       <g font-family="IBM Plex Mono" font-weight="600">
@@ -759,9 +759,9 @@
       <tr><td>1</td><td>Client → Gateway <span class="sub">single policy boundary</span></td>
         <td><span class="s s-s">S</span><span class="s s-t">T</span><span class="s s-r">R</span><span class="s s-e">E</span></td>
         <td><code>AuthMiddleware</code> + <code>SiftTokenVerifier</code> (Supabase JWT); <code>ToolAuthorization</code> fail-closed</td></tr>
-      <tr><td>2</td><td>Execution → Evidence Vault <span class="sub">immutability boundary</span></td>
+      <tr><td>2</td><td>Execution → Evidence Vault <span class="sub">custody boundary</span></td>
         <td><span class="s s-t">T</span><span class="s s-r">R</span><span class="s s-i">I</span></td>
-        <td><code>EvidenceGate</code> (sealed + chain OK); <code>chattr +i</code>; append-only custody chains</td></tr>
+        <td><code>EvidenceGate</code> (Postgres-authoritative); descriptor-pinned final-open validation; local-protected or external-read-only posture; append-only custody chain</td></tr>
       <tr><td>3</td><td>Worker → OS Sandbox <span class="sub">privilege confinement</span></td>
         <td><span class="s s-e">E</span><span class="s s-d">D</span><span class="s s-t">T</span></td>
         <td>Landlock v4 + seccomp=kill + AppArmor=enforce + no-new-privs; cgroup limits</td></tr>
@@ -779,7 +779,7 @@
         <td>Supabase fail-closed re-verify on case activation, evidence seal/retire, finding approval; <code>approval_ledger</code></td></tr>
     </tbody>
   </table>
-  <p class="cap">The two boundaries a forensic system lives or dies on are <strong>#2</strong> (evidence can never be silently mutated — physical immutability plus a verifying chain) and <strong>#6</strong> (tool output is treated as hostile and scrubbed before it re-enters the agent's context — the prompt-injection-from-evidence defense). Boundary #4 encodes the authority rule from VP-2: even a fully-authorized write lands in Postgres under RLS, never in the derived index.</p>
+  <p class="cap">The two boundaries a forensic system lives or dies on are <strong>#2</strong> (evidence mutation is Portal-only; Postgres custody plus profile-specific posture and Full Verify detect drift) and <strong>#6</strong> (tool output is treated as hostile and scrubbed before it re-enters the agent's context — the prompt-injection-from-evidence defense). Boundary #4 encodes the authority rule from VP-2: even a fully-authorized write lands in Postgres under RLS, never in the derived index.</p>
 </section>
 
 <!-- ======================== VP-5 SANDBOX ======================== -->

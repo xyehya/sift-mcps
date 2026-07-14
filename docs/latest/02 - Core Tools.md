@@ -77,13 +77,13 @@ Historical file-format enforcement points in `evidence_chain.py`:
 **class CaseManager**: `cases_dir` (Path), `active_case_dir` (Path|None), `examiner` (str).
 
 Key methods:
-- `get_case_status(case_id)` — Investigation summary from DB or file authority
+- `get_case_status(case_id)` — Postgres investigation summary in served operation; file mode is an offline compatibility helper only
 - `list_cases()` — File-mode only; raises in DB mode
 - `record_finding(finding, ...)` — Validate and stage finding as DRAFT. Validation pipeline: validate → allowlist fields → process supporting_commands → process artifacts → provenance scoring → confidence ceiling → persist
 - `record_timeline_event(event, ...)` — Stage timeline event as DRAFT
 - `add_todo(description, ...)` / `list_todos()` / `update_todo()` / `complete_todo()` — TODO lifecycle
 
-`_require_active_case()`: Resolves active case with strict precedence: DB AuthorityContext → SIFT_CASE_DIR env → ~/.sift/active_case file. REFUSES closed cases in both DB mode and file mode.
+`_require_active_case()`: Served operation requires the DB `AuthorityContext` and fails closed if it is absent. Environment/pointer lookup remains only for explicit offline compatibility mode and is never a served fallback. Closed cases are refused in either mode.
 `_persist_investigation(kind, item_id, record)`: DB-active mode writes to Postgres ONLY; raises if store unavailable. Never silently degrades to file-only.
 `_derive_confidence_ceiling()`: HIGH requires FULL grade + >=2 MCP ids + 0 NONE ids. Clamps agent-supplied confidence DOWN, never up.
 

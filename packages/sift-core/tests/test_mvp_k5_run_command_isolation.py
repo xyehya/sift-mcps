@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -386,8 +387,17 @@ def test_durable_final_open_authority_change_denies_before_process_start(
 
     def validator(_job, phase):
         phases.append(phase)
-        if phase == "final_open":
-            raise FatalJobError("custody_admission_denied")
+
+    @contextmanager
+    def hold_execution_authority(job, phase):
+        # The dispatch authority read succeeds, then a concurrent transition
+        # cannot acquire the exclusive case lock. Surface that denial before
+        # the handler can reach the actual process boundary.
+        validator(job, phase)
+        raise FatalJobError("custody_admission_denied")
+        yield  # pragma: no cover - contextmanager shape only
+
+    validator.hold_execution_authority = hold_execution_authority  # type: ignore[attr-defined]
 
     worker = _worker(
         db,
@@ -397,7 +407,12 @@ def test_durable_final_open_authority_change_denies_before_process_start(
     worker.run_once(job_types=["run_command"])
 
     stored = db.get(job.id)
-    assert phases == ["claim", "execution", "preexec", "final_open"]
+    assert phases == [
+        "claim",
+        "execution",
+        "preexec",
+        "dispatch_lock",
+    ]
     assert stored.status == "failed"
     assert stored.error_summary == "custody_admission_denied"
     assert started == []

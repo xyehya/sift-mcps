@@ -9,7 +9,7 @@ import os
 import time
 import uuid
 from collections.abc import Iterable, Mapping
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, ExitStack, contextmanager
 from contextvars import ContextVar
 from typing import Any, Protocol, cast
 
@@ -719,6 +719,7 @@ class EvidenceGateMiddleware(Middleware):
                         inventory_token=mounted_token,
                         storage_authority=execution_authority,
                     )
+                    authority_stack: ExitStack | None = None
                     try:
                         if name in {"run_command", "run_command_job"}:
                             expected_authority = current_storage_authority()
@@ -729,6 +730,33 @@ class EvidenceGateMiddleware(Middleware):
                                 raise RuntimeError("storage authority unavailable")
                             await asyncio.to_thread(
                                 revalidate, case.case_id, expected_authority
+                            )
+                            hold_authority = getattr(
+                                service, "hold_execution_authority", None
+                            )
+                            if not callable(hold_authority):
+                                raise RuntimeError(
+                                    "storage authority lock unavailable"
+                                )
+
+                            def final_open_revalidate(
+                                expected: dict[str, Any],
+                            ) -> None:
+                                revalidate(case.case_id, expected)
+
+                            authority_stack = ExitStack()
+                            authority_stack.enter_context(
+                                cast(
+                                    AbstractContextManager[None],
+                                    hold_authority(
+                                        case.case_id, expected_authority
+                                    ),
+                                )
+                            )
+                            authority_stack.enter_context(
+                                use_final_open_authority_validator(
+                                    final_open_revalidate
+                                )
                             )
                     except Exception:
                         logger.info(
@@ -742,13 +770,13 @@ class EvidenceGateMiddleware(Middleware):
                             "manifest_version": gate["manifest_version"],
                         }
                     else:
-                        def final_open_revalidate(expected: dict[str, Any]) -> None:
-                            revalidate(case.case_id, expected)
-
-                        with use_final_open_authority_validator(
-                            final_open_revalidate
-                        ):
+                        try:
+                            # Keep execution errors outside the custody-acquisition
+                            # handler so they retain their original semantics.
                             return await call_next(context)
+                        finally:
+                            if authority_stack is not None:
+                                authority_stack.close()
                     finally:
                         reset_admitted_refs(token)
 

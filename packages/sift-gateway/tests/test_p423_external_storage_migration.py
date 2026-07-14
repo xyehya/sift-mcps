@@ -175,3 +175,16 @@ def test_migration_exposes_no_mcp_storage_mutation_surface() -> None:
     assert "/mcp" not in lowered
     assert "tool_registry" not in lowered
     assert "mcp_tool" not in lowered
+
+
+def test_every_storage_authority_transition_takes_exclusive_case_lock() -> None:
+    lock = "pg_advisory_xact_lock(hashtextextended("
+    for name in (
+        "custody_operation_begin_or_resume_storage_v3",
+        "evidence_storage_record_verify_failure",
+        "custody_operation_commit_verified_seal_storage_v3",
+        "evidence_storage_change_profile",
+        "evidence_storage_record_observation",
+        "evidence_storage_commit_full_verify",
+    ):
+        assert lock in _function(name), name
