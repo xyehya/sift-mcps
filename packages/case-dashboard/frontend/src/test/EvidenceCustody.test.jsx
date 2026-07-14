@@ -455,6 +455,26 @@ describe('Evidence storage profile flow', () => {
     expect(screen.queryByText(/Last full verify: never/)).not.toBeInTheDocument()
   })
 
+  it('shows unavailable authority truth without profile mutation controls', async () => {
+    endpoints.getChainStatus.mockResolvedValue({
+      authority: 'db',
+      status: 'no_case',
+      storage_profile: 'UNKNOWN',
+      storage_availability: 'UNAVAILABLE',
+      storage_remediation: 'FULL_VERIFY',
+      storage_last_full_verified_at: null,
+    })
+
+    render(<EvidenceTab />)
+
+    expect(await screen.findByText('Storage profile unavailable')).toBeInTheDocument()
+    expect(screen.getByText(/State: UNAVAILABLE · Remediation: FULL_VERIFY/)).toBeInTheDocument()
+    expect(screen.getByText(/Last full verify: never/)).toBeInTheDocument()
+    expect(screen.queryByText('Local immutable')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Change profile' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Authorize current source' })).not.toBeInTheDocument()
+  })
+
   it('offers explicit source authorization without conflating it with a profile toggle', async () => {
     seed({
       status: 'violated',

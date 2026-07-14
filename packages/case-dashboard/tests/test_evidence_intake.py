@@ -432,6 +432,46 @@ class TestEvidenceChainStatus:
         assert body["storage_verified_generation"] is None
         assert body["storage_last_full_verified_at"] is None
 
+    def test_status_rejects_malformed_storage_authority_fields(
+        self, passwords_dir, tmp_path, monkeypatch
+    ):
+        ev = FakeEvidenceDB(
+            storage_status={
+                "storage_profile": "/mnt/evidence",
+                "storage_availability": ["AVAILABLE"],
+                "storage_remediation": {"value": "NONE"},
+                "storage_source_identity": "/private/source",
+                "storage_verified_mount_instance": "A" * 64,
+                "storage_read_only": 1,
+                "storage_generation": True,
+                "storage_verified_generation": 0,
+                "storage_last_full_verified_at": "/private/verified-at",
+            }
+        )
+        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET,
+            session_max_age=28800,
+            active_case_service=FakeActiveCases(),
+            evidence_service=ev,
+            supabase_auth=ReauthFakeSupabaseAuth(),
+        )
+        client = TestClient(app, raise_server_exceptions=True)
+        set_operator_session(client, _SECRET)
+
+        body = client.get("/api/evidence/chain/status").json()
+
+        assert body["storage_profile"] == "UNKNOWN"
+        assert body["storage_availability"] == "UNAVAILABLE"
+        assert body["storage_remediation"] == "FULL_VERIFY"
+        assert body["storage_source_identity"] is None
+        assert body["storage_verified_mount_instance"] is None
+        assert body["storage_read_only"] is None
+        assert body["storage_generation"] is None
+        assert body["storage_verified_generation"] is None
+        assert body["storage_last_full_verified_at"] is None
+        assert "/private/" not in json.dumps(body)
+
     def test_unregistered_file_shows_in_status(self, passwords_dir, tmp_path, monkeypatch):
         """A detected-but-unsealed object surfaces as unregistered."""
         ev = FakeEvidenceDB(

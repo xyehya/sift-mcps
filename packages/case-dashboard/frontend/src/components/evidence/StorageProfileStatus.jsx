@@ -2,9 +2,18 @@ import { HardDrive, Network } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 
+function profileLabel(profile) {
+  if (profile === 'LOCAL_IMMUTABLE') return 'Local immutable'
+  if (profile === 'EXTERNALLY_READ_ONLY') return 'Externally read-only'
+  return 'Storage profile unavailable'
+}
+
 export function StorageProfileStatus({ chainStatus, onChange }) {
   if (!chainStatus) return null
-  const external = chainStatus.storage_profile === 'EXTERNALLY_READ_ONLY'
+  const profile = chainStatus.storage_profile
+  const external = profile === 'EXTERNALLY_READ_ONLY'
+  const local = profile === 'LOCAL_IMMUTABLE'
+  const knownProfile = external || local
   const target = external ? 'LOCAL_IMMUTABLE' : 'EXTERNALLY_READ_ONLY'
   const authorizeSource = external && (
     chainStatus.storage_availability === 'IDENTITY_DRIFT'
@@ -21,7 +30,7 @@ export function StorageProfileStatus({ chainStatus, onChange }) {
               Storage profile
             </div>
             <div className="mt-1 text-sm font-semibold text-foreground">
-              {external ? 'Externally read-only' : 'Local immutable'}
+              {profileLabel(profile)}
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               State: {chainStatus.storage_availability || 'UNAVAILABLE'} · Remediation:{' '}
@@ -32,16 +41,18 @@ export function StorageProfileStatus({ chainStatus, onChange }) {
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 flex-col gap-2">
-          {authorizeSource && (
-            <Button type="button" variant="destructive" size="sm" onClick={() => onChange('EXTERNALLY_READ_ONLY')}>
-              Authorize current source
+        {knownProfile && (
+          <div className="flex shrink-0 flex-col gap-2">
+            {authorizeSource && (
+              <Button type="button" variant="destructive" size="sm" onClick={() => onChange('EXTERNALLY_READ_ONLY')}>
+                Authorize current source
+              </Button>
+            )}
+            <Button type="button" variant="outline" size="sm" onClick={() => onChange(target)}>
+              Change profile
             </Button>
-          )}
-          <Button type="button" variant="outline" size="sm" onClick={() => onChange(target)}>
-            Change profile
-          </Button>
-        </div>
+          </div>
+        )}
       </div>
     </section>
   )
