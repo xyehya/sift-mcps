@@ -21,6 +21,7 @@ from __future__ import annotations
 import secrets
 
 import case_dashboard.routes as routes_mod
+import pytest
 from _supabase_reauth_harness import (
     GOOD_PASSWORD,
     ReauthFakeSupabaseAuth,
@@ -231,12 +232,27 @@ class TestEvidenceDBAuthority:
         assert body["seal_status"] == "sealed"
         assert body["manifest_version"] == 2
 
-    def test_persisted_violation_remains_visible_for_recovery(self):
+    @pytest.mark.parametrize(
+        ("issue_code", "expected_missing", "expected_modified"),
+        [
+            ("SEALED_EVIDENCE_MISSING", ["evidence/disk.E01"], []),
+            ("CONTENT_CHANGED", [], ["evidence/disk.E01"]),
+        ],
+    )
+    def test_persisted_violation_remains_visible_for_recovery(
+        self, issue_code, expected_missing, expected_modified
+    ):
         class ViolatedEvidenceDB(FakeEvidenceDB):
             def gate_status(self, case_id):
                 status = super().gate_status(case_id)
                 status["gate_state"] = "BLOCKED_VIOLATION"
-                status["issues"] = [{"code": "PERSISTED_VIOLATION"}]
+                status["issues"] = [
+                    {
+                        "code": "PERSISTED_VIOLATION",
+                        "evidence_object_id": "ev-1",
+                    },
+                    {"code": issue_code, "evidence_object_id": "ev-1"},
+                ]
                 return status
 
             def list_evidence(self, case_id):
@@ -255,7 +271,8 @@ class TestEvidenceDBAuthority:
         body = resp.json()
         assert body["status"] == "violated"
         assert body["gate_state"] == "BLOCKED_VIOLATION"
-        assert body["modified"] == ["evidence/disk.E01"]
+        assert body["missing"] == expected_missing
+        assert body["modified"] == expected_modified
         assert body["requires_examiner_action"] is True
 
     def test_chain_status_surfaces_only_public_incomplete_operation(self):

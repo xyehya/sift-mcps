@@ -19,16 +19,64 @@ from __future__ import annotations
 
 import hashlib
 import os
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
 import sift_gateway.portal_services as ps
+from case_dashboard.routes import create_dashboard_v2_app
+from case_dashboard.session_jwt import (
+    SESSION_ENVELOPE_COOKIE_NAME,
+    generate_session_envelope,
+)
 from sift_gateway.custody_operations import PinnedEvidenceFile, PostureBatch
 from sift_gateway.portal_services import EvidenceAuthorityService
+from starlette.testclient import TestClient
 
 _CASE = "11111111-1111-1111-1111-111111111111"
+
+
+class _PortalAuth:
+    async def resolve(self, access_token: str, source_ip: str | None):
+        del source_ip
+        if access_token != "composed-test-token":
+            return None
+        return {
+            "principal_type": "operator",
+            "principal_id": "composed-operator",
+            "auth_user_id": "composed-auth-user",
+            "display_name": "composed examiner",
+            "email": "composed@example.invalid",
+            "system_role": "examiner",
+            "status": "active",
+            "case_memberships": [],
+        }
+
+    async def refresh(self, refresh_token: str, source_ip: str | None):
+        del refresh_token, source_ip
+        return None
+
+
+class _PortalActiveCase:
+    class _Case:
+        def __init__(self, artifact_path: Path):
+            self.artifact_path = artifact_path
+
+        def as_dict(self):
+            return {
+                "case_id": _CASE,
+                "case_key": "composed-case",
+                "artifact_path": str(self.artifact_path),
+            }
+
+    def __init__(self, artifact_path: Path):
+        self.case = self._Case(artifact_path)
+
+    def get_active_case(self, principal=None):
+        del principal
+        return self.case
 
 
 class _Cursor:
@@ -88,11 +136,12 @@ class _FakeDb:
         self.violation_calls: list = []
         self.verify_calls: list = []
         self.record_calls: list = []
+        self.issues: list[dict[str, Any]] = []
 
     def router(self, sql, params):
         s = " ".join(sql.split())
         if "select seal_status,issues,manifest_version,manifest_hash" in s:
-            return [(self.seal_status, [], self.manifest_version, self.manifest_hash)]
+            return [(self.seal_status, self.issues, self.manifest_version, self.manifest_hash)]
         if (
             "from app.evidence_storage_authorities" in s
             and "profile,source_identity,verified_mount_instance,state" in s
@@ -130,9 +179,15 @@ class _FakeDb:
             self.verify_calls.append((False, params))
             return [(None,)]
         if "evidence_record_inventory_classification_v2" in s:
+            findings = getattr(params[3], "obj", params[3])
+            if self.seal_status == "violated" and not any(
+                finding["code"] == "PERSISTED_VIOLATION" for finding in findings
+            ):
+                raise RuntimeError("persisted_custody_violation_requires_recovery")
+            self.issues = findings
             return [(None,)]
         if "evidence_gate_status" in s and "seal_status, manifest_version, head_hash" in s:
-            return [(self.seal_status, self.manifest_version, self.head_hash, len(self.sealed_objects), [], None)]
+            return [(self.seal_status, self.manifest_version, self.head_hash, len(self.sealed_objects), self.issues, None)]
         if "from app.evidence_gate_status" in s and "seal_status" in s and "head_hash" not in s:
             return [(self.seal_status,)]
         if "from app.evidence_gate_status" in s and "manifest_version" in s:
@@ -141,6 +196,8 @@ class _FakeDb:
             return [("obj-detect",)]
         if "evidence_mark_violation" in s or "evidence_mark_admission_violation" in s:
             self.violation_calls.append(params)
+            self.seal_status = "violated"
+            self.issues = getattr(params[3], "obj", params[3])
             return [(self.seal_status, self.manifest_version, 1, self.head_hash, self.manifest_hash, "violated", 0, [], "CHAIN_VIOLATION", None)]
         if "evidence_verify" in s:
             self.verify_calls.append(params)
@@ -156,6 +213,26 @@ class _FakeDb:
             return [(o[1], o[2], o[3]) for o in self.sealed_objects]
         if "from app.evidence_objects" in s and "status = 'sealed'" in s:
             return [(o[0], o[1], o[3]) for o in self.sealed_objects]
+        if (
+            "select id::text, display_name, display_path, description, source" in s
+            and "order by display_path" in s
+        ):
+            return [
+                (
+                    o[0],
+                    Path(o[1]).name,
+                    o[1],
+                    None,
+                    None,
+                    "violated" if self.seal_status == "violated" else "sealed",
+                    "violated" if self.seal_status == "violated" else "sealed",
+                    o[2],
+                    o[3],
+                    None,
+                    None,
+                )
+                for o in self.sealed_objects
+            ]
         if "from app.evidence_objects" in s and "order by display_path" in s and "display_path, status, seal_status" in s:
             return [(o[1], "sealed", "sealed", o[2], o[3]) for o in self.sealed_objects]
         if "evidence_custody_events" in s:
@@ -235,6 +312,57 @@ def _make_sealed_file(tmp_path: Path, rel: str, content: bytes):
 
 
 class TestTamperDetection:
+    @pytest.mark.parametrize("condition", ["changed", "missing"])
+    def test_dashboard_status_composes_double_reconciliation_without_no_case(
+        self, service, condition
+    ):
+        svc, db, tmp_path = service
+        sha, size = _make_sealed_file(tmp_path, "evidence/disk.bin", b"original")
+        db.sealed_objects = [("obj-composed", "evidence/disk.bin", sha, size)]
+        mounted = tmp_path / "evidence" / "disk.bin"
+        if condition == "changed":
+            mounted.write_bytes(b"changed-longer")
+        else:
+            mounted.unlink()
+        session_secret = secrets.token_hex(32)
+        client = TestClient(
+            create_dashboard_v2_app(
+                session_secret=session_secret,
+                supabase_auth=_PortalAuth(),
+                active_case_service=_PortalActiveCase(tmp_path),
+                evidence_service=svc,
+            )
+        )
+        client.cookies[SESSION_ENVELOPE_COOKIE_NAME] = generate_session_envelope(
+            access_token="composed-test-token",
+            refresh_token=secrets.token_hex(24),
+            expires_at=9_999_999_999,
+            sub="composed-auth-user",
+            fingerprint="composed-test",
+            secret=session_secret,
+        )
+
+        response = client.get("/api/evidence/chain/status")
+
+        assert response.status_code == 200
+        payload = response.json()
+
+        assert payload["status"] == "violated"
+        assert payload["gate_state"] == "BLOCKED_VIOLATION"
+        expected = ["evidence/disk.bin"]
+        assert payload["missing"] == (expected if condition == "missing" else [])
+        assert payload["modified"] == (expected if condition == "changed" else [])
+        classification_calls = [
+            params
+            for sql, params in db.statements
+            if "evidence_record_inventory_classification_v2" in sql
+        ]
+        assert len(classification_calls) == 2
+        second_findings = getattr(
+            classification_calls[1][3], "obj", classification_calls[1][3]
+        )
+        assert second_findings[0]["code"] == "PERSISTED_VIOLATION"
+
     def test_gate_status_surfaces_path_free_storage_authority(self, service):
         svc, _db, _tmp_path = service
 

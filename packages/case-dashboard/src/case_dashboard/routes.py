@@ -981,6 +981,21 @@ def _db_evidence_chain_status() -> dict | None:
     missing: list[str] = []
     modified: list[str] = []
     ok: list[str] = []
+    structured_issues = status.get("issues")
+    missing_object_ids = {
+        str(issue.get("evidence_object_id"))
+        for issue in structured_issues
+        if isinstance(issue, dict)
+        and issue.get("code") == "SEALED_EVIDENCE_MISSING"
+        and issue.get("evidence_object_id")
+    } if isinstance(structured_issues, list) else set()
+    modified_object_ids = {
+        str(issue.get("evidence_object_id"))
+        for issue in structured_issues
+        if isinstance(issue, dict)
+        and issue.get("code") in {"CONTENT_CHANGED", "IDENTITY_CHANGED", "UNSAFE_SEALED_ENTRY"}
+        and issue.get("evidence_object_id")
+    } if isinstance(structured_issues, list) else set()
     lister = getattr(_EVIDENCE_DB, "list_evidence", None)
     if callable(lister):
         try:
@@ -996,14 +1011,18 @@ def _db_evidence_chain_status() -> dict | None:
                 continue
             obj_status = item.get("status")
             obj_seal = item.get("seal_status")
+            evidence_object_id = str(item.get("evidence_id") or item.get("id") or "")
             # Operator-dispositioned objects are not actionable and must not appear
             # in the actionable Seal-Manifest set, even though their seal_status is
             # still "unsealed".
             if obj_status in ("ignored", "retired"):
                 continue
-            if obj_seal == "missing":
+            if evidence_object_id in missing_object_ids or obj_seal == "missing":
                 missing.append(dp)
-            elif obj_seal in ("modified", "violated"):
+            elif (
+                evidence_object_id in modified_object_ids
+                or obj_seal in ("modified", "violated")
+            ):
                 modified.append(dp)
             elif obj_status == "sealed" or obj_seal == "sealed":
                 ok.append(dp)

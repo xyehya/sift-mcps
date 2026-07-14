@@ -1116,6 +1116,68 @@ def test_classification_failure_never_marks_or_commits_violation(
     )
 
 
+def test_violation_failure_rolls_back_successful_classification(
+    tmp_path, monkeypatch
+):
+    class TransactionConnection(_ObservationConnection):
+        def __init__(self):
+            self.pending: list[str] = []
+            self.durable: list[str] = []
+            super().__init__(TransactionCursor(self))
+
+        def commit(self):
+            super().commit()
+            self.durable.extend(self.pending)
+            self.pending.clear()
+
+        def __exit__(self, *exc):
+            if exc and exc[0] is not None:
+                self.pending.clear()
+            return None
+
+    class TransactionCursor(_SealedObservationCursor):
+        def __init__(self, connection):
+            super().__init__(
+                [
+                    (
+                        "sealed-object",
+                        "evidence/sealed.raw",
+                        "sha256:" + "a" * 64,
+                        1,
+                        datetime.now(timezone.utc) + timedelta(seconds=5),
+                    )
+                ]
+            )
+            self.connection = connection
+
+        def execute(self, sql, params):
+            normalized = " ".join(sql.split())
+            if "evidence_record_inventory_classification_v2" in normalized:
+                assert self.connection.commits == 0
+                self.connection.pending.extend(["observation", "head"])
+            elif "evidence_mark_admission_violation" in normalized:
+                assert self.connection.pending == ["observation", "head"]
+                assert self.connection.commits == 0
+                raise RuntimeError("violation_write_failed")
+            super().execute(sql, params)
+
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    (evidence / "sealed.raw").write_bytes(b"changed")
+    connection = TransactionConnection()
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(service, "_connect", lambda: connection)
+
+    with pytest.raises(RuntimeError, match="violation_write_failed"):
+        service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
+
+    assert connection.commits == 0
+    assert connection.pending == []
+    assert connection.durable == []
+
+
 def test_unavailable_storage_is_not_recorded_as_a_violation(tmp_path, monkeypatch):
     case_dir = tmp_path / "case"
     case_dir.mkdir()
