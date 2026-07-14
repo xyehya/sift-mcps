@@ -300,24 +300,15 @@ PY
   trap - EXIT
 }
 
-# Provision the fixed custody-delete broker's only database credential. Unlike
-# the gateway control-plane DSN, this scoped DSN is root-owned 0600 and grants
-# only three SECURITY DEFINER broker RPCs. Failure is fatal: falling back to the
-# gateway/service-role DSN would collapse the independent authorization boundary.
-provision_custody_delete_broker() {
-  local destination="/etc/sift/custody-delete-dsn"
-  if sudo_if_needed test -f "$destination" 2>/dev/null; then
-    local metadata existing_dsn existing_valid=0
-    metadata="$(sudo_if_needed stat -c '%U:%G:%a' "$destination" 2>/dev/null || true)"
-    [[ "$metadata" == "root:root:600" ]] || die \
-      "Existing custody-delete broker credential has unsafe ownership/mode."
-    existing_dsn="$(sudo_if_needed cat "$destination")"
-    if BROKER_DSN="$existing_dsn" "$VENV_DIR/bin/python" - <<'PY'
+# Verify both a newly minted credential and a preserved credential through one
+# fail-closed readback contract so their privilege expectations cannot drift.
+_custody_delete_broker_scope_valid() {
+  local broker_dsn="$1"
+  BROKER_DSN="$broker_dsn" "$VENV_DIR/bin/python" - <<'PY'
 import os
 import psycopg
 
-dsn = os.environ["BROKER_DSN"]
-with psycopg.connect(dsn) as conn:
+with psycopg.connect(os.environ["BROKER_DSN"]) as conn:
     row = conn.execute(
         """select current_user='sift_custody_delete_broker',
           has_schema_privilege(current_user,'sift_custody_broker','USAGE'),
@@ -334,7 +325,21 @@ with psycopg.connect(dsn) as conn:
 if row != (True, True, False, True, True, True, False, False, False, True):
     raise SystemExit(1)
 PY
-    then
+}
+
+# Provision the fixed custody-delete broker's only database credential. Unlike
+# the gateway control-plane DSN, this scoped DSN is root-owned 0600 and grants
+# only three SECURITY DEFINER broker RPCs. Failure is fatal: falling back to the
+# gateway/service-role DSN would collapse the independent authorization boundary.
+provision_custody_delete_broker() {
+  local destination="/etc/sift/custody-delete-dsn"
+  if sudo_if_needed test -f "$destination" 2>/dev/null; then
+    local metadata existing_dsn existing_valid=0
+    metadata="$(sudo_if_needed stat -c '%U:%G:%a' "$destination" 2>/dev/null || true)"
+    [[ "$metadata" == "root:root:600" ]] || die \
+      "Existing custody-delete broker credential has unsafe ownership/mode."
+    existing_dsn="$(sudo_if_needed cat "$destination")"
+    if _custody_delete_broker_scope_valid "$existing_dsn"; then
       existing_valid=1
     fi
     unset existing_dsn
@@ -385,28 +390,8 @@ PY
   done <<< "$scoped_output"
   unset scoped_output
   [[ -n "$broker_dsn" ]] || die "Custody-delete broker provisioning returned no scoped DSN."
-  BROKER_DSN="$broker_dsn" "$VENV_DIR/bin/python" - <<'PY' || die \
+  _custody_delete_broker_scope_valid "$broker_dsn" || die \
     "New custody-delete broker credential failed least-privilege readback."
-import os
-import psycopg
-
-with psycopg.connect(os.environ["BROKER_DSN"]) as conn:
-    row = conn.execute(
-        """select current_user='sift_custody_delete_broker',
-          has_schema_privilege(current_user,'sift_custody_broker','USAGE'),
-          has_schema_privilege(current_user,'app','USAGE'),
-          has_function_privilege(current_user,'sift_custody_broker.authorize(uuid,text)','EXECUTE'),
-          has_function_privilege(current_user,'sift_custody_broker.claim(uuid,text,text)','EXECUTE'),
-          has_function_privilege(current_user,'sift_custody_broker.complete(uuid,text,text)','EXECUTE'),
-          has_table_privilege(current_user,'app.custody_operations','SELECT'),
-          has_table_privilege(current_user,'app.custody_delete_broker_receipts','SELECT'),
-          (select rolsuper or rolbypassrls or rolinherit from pg_roles where rolname=current_user),
-          not exists(select 1 from pg_auth_members m join pg_roles r on r.oid=m.member
-            where r.rolname=current_user)"""
-    ).fetchone()
-if row != (True, True, False, True, True, True, False, False, False, True):
-    raise SystemExit(1)
-PY
 
   local tmp
   tmp="$(mktemp)"

@@ -42,7 +42,7 @@ PY
 install -o root -g root -m 0644 "$config_tmp" "$CONFIG_FILE"
 printf '%s\n' \
   '# Managed by sift-mcps. Exact no-argument custody-delete broker only.' \
-  "${SERVICE_USER} ALL=(root) NOPASSWD: ${HELPER_DST}" >"$sudoers_tmp"
+  "${SERVICE_USER} ALL=(root) NOPASSWD: ${HELPER_DST} \"\"" >"$sudoers_tmp"
 chmod 0440 "$sudoers_tmp"
 "$VISUDO_BIN" -cf "$sudoers_tmp" >/dev/null
 install -o root -g root -m 0440 "$sudoers_tmp" "$SUDOERS_FILE"

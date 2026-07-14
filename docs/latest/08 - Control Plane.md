@@ -1,17 +1,18 @@
 ---
 title: Control Plane — Postgres/Supabase Schema and RLS
-source_commit: eadb92b
-generated: 2026-06-27
+class: live-reference
+source_of_truth: supabase/migrations/*.sql
+last_reconciled: 2026-07-14
 verified_against: code+tests+config
 invariants_checked: 9
-status: draft
+status: maintained
 ---
 
 ## Overview
 
-The Control Plane is the authoritative data layer running on Supabase (Postgres 15 with pgvector). All tables live in the `app` schema. RLS is enabled on all tables and `FORCE ROW LEVEL SECURITY` is applied to all 31 `app.*` tables. The Gateway's DB-authoritative mode uses this schema for: identity and JWT principals, active case authority, evidence custody chains, audit events, durable jobs, backends registry, investigation data, report metadata, approval ledger, OpenSearch provenance, and RAG vector storage. Schema versioning via 25 timestamped migrations.
+The Control Plane is the authoritative data layer running on Supabase (Postgres 15 with pgvector). Application tables live in the `app` schema. The baseline force-RLS migration covered the 31 tables that existed when it landed; later custody migrations explicitly enable and force RLS on each new authority table. The Gateway's DB-authoritative mode uses this schema for identity and JWT principals, active case authority, evidence custody chains, audit events, durable jobs, backends registry, investigation data, report metadata, approval ledger, OpenSearch provenance, and RAG vector storage. Schema evolution is the timestamp-ordered SQL set present in `supabase/migrations/` at the checked-out revision.
 
-**Key files**: `supabase/config.toml`, `supabase/migrations/*.sql` (25 migrations).
+**Key files**: `supabase/config.toml`, `supabase/migrations/*.sql`. The directory listing is the migration inventory; this live reference does not duplicate its count.
 
 ## How it works
 
@@ -23,7 +24,7 @@ The Gateway connects to Postgres via two DSNs: `control-plane-dsn` (read-write) 
 
 Supabase CLI v2.105.0 local dev config. Enabled: db (Postgres 15, port 54322), auth (GoTrue), api (Kong). Disabled: studio, inbucket, storage, realtime, edge_runtime, analytics. Auth: `jwt_expiry = 172800` (48h for agent sessions), `enable_refresh_token_rotation = true`, `enable_confirmations = false` (autoconfirm — no SMTP), `enable_signup = true`.
 
-### Migration Files (25 total)
+### Migration files
 
 **Foundation & Identity (`202606070101`):**
 Creates `app` schema, `pgcrypto` extension. Nine tables:
@@ -154,13 +155,13 @@ other: report_metadata, host_identity_decisions
 
 ## Gotchas & Edge Cases
 
-> [!danger] **Invariant drift**: The architecture doc references commit `156e810` (2026-06-14). Current HEAD is `eadb92b`. The architecture model, singleton-policy-boundary diagram, 8 planes, STRIDE model, and run_command sandbox diagram are all confirmed consistent with the current code; the specific commit metadata in the doc is stale.
+> [!important] This is a live reference, not a generated snapshot. Validate migration inventory and behavior against `supabase/migrations/*.sql` in the checked-out revision; code and migrations win on conflict.
 
 > [!important] RAG `kind='knowledge'` is enforced at both Python layer and DB trigger. `kind='derived'` inserts raise an exception. (`202606111200` migration, `_block_derived_rag_insert()`)
 
 > [!warning] `sift_audit_writer` role has no BYPASSRLS — it is governed by explicit INSERT/UPDATE policies. If the audit writer's INSERT fails (RLS violation), the call is not silently degraded — the fail-soft path logs at debug. (`202606242300` migration; `202606242100` migration lines 47-48, 53-56 note fail-soft behavior)
 
-> [!note] The 25 migrations are timestamp-ordered and idempotent. Running out of order fails on foreign key dependencies. All use `if not exists` / `drop if exists` guards.
+> [!note] Migrations are timestamp-ordered. Apply them through the canonical installer/migration runner, which records applied versions; do not infer safety from a duplicated document count or manually reorder files.
 
 > [!note] 31 `app.*` tables all carry `FORCE ROW LEVEL SECURITY` — repeated from the force_rls migration comment: "ALTER TABLE ... FORCE ROW LEVEL SECURITY is a no-op if the flag is already set."
 
@@ -190,4 +191,4 @@ other: report_metadata, host_identity_decisions
 
 ## Reconciliation log
 
-Architecture doc referenced commit `156e810` (2026-06-14). Current HEAD is `eadb92b`. No structural contradictions found between the architecture model and the current migration/code. The `FORCE RLS` invariant, `append-only evidence` invariant, `active_case_state` sole authority invariant, and `kind='knowledge'` RAG invariant are all verified in the migration SQL. The `sift_audit_writer` BYPASSRLS → explicit policies hardening is an improvement not captured in the architecture doc.
+Reconciled 2026-07-14 with the current custody-operation migrations. Migration SQL remains the authority for inventory, grants, RLS, append-only guards, and operation-state enforcement; this document deliberately avoids a source-commit or total-count snapshot that would become false on the next additive migration.

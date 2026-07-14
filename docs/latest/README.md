@@ -1,6 +1,9 @@
 # SIFT MCPs — Reference Documentation
 
-Generated from code at commit `eadb92b`. 14 documents covering the full monorepo.
+Maintained reference projection for the monorepo. Runtime code, committed configuration,
+and `supabase/migrations/*.sql` remain authoritative; this index intentionally carries no
+frozen source commit or migration count. A logical change updates affected live-reference
+sections in the same commit so provenance follows the change instead of a stale generation stamp.
 
 ## Reading Order
 
@@ -15,7 +18,7 @@ Generated from code at commit `eadb92b`. 14 documents covering the full monorepo
 | 05 | [Add-on Ecosystem](05%20-%20Add-on%20Ecosystem.md) | Subsystem | forensic-rag-mcp, opencti-mcp, windows-triage-mcp |
 | 06 | [Portal](06%20-%20Portal.md) | Subsystem | React frontend, Starlette backend, session auth, 86 REST endpoints |
 | 07 | [Forensic Knowledge](07%20-%20Forensic%20Knowledge.md) | Subsystem | 23 loader functions, YAML data, offline |
-| 08 | [Control Plane](08%20-%20Control%20Plane.md) | Subsystem | 25 migrations, FORCE RLS, append-only evidence chains |
+| 08 | [Control Plane](08%20-%20Control%20Plane.md) | Subsystem | Timestamp-ordered migrations, FORCE RLS, append-only evidence chains |
 | 09 | [API Contract](09%20-%20API%20Contract.md) | Reference | All 86 REST endpoints, MCP protocol contract, error codes |
 | 10 | [Request and Data Flow](10%20-%20Request%20and%20Data%20Flow.md) | Reference | Sequence diagrams for MCP calls, auth, evidence, ingest |
 | 11 | [Authentication](11%20-%20Authentication%20for%20API%20and%20MCP.md) | Reference | Token formats, identity resolution, 3 auth surfaces, scope grammar, error codes |
@@ -27,7 +30,7 @@ All 17 declared invariants from `docs/drafts/architecture/sift-architecture.html
 
 ## Coverage
 - 9 Python packages across 8 subsystem docs
-- 25 Supabase migrations
+- Timestamp-ordered Supabase migrations discovered from `supabase/migrations/*.sql`
 - 1 React frontend (Vite + Tailwind + shadcn/ui)
 - 42 MCP tools across 6 backends
 - 86 REST API endpoints

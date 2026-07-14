@@ -21,6 +21,8 @@ UNINSTALLER = REPO_ROOT / "scripts" / "uninstall.sh"
 GATEWAY_PROFILE = REPO_ROOT / "configs" / "apparmor" / "sift-gateway.template"
 BROKER_PROFILE = REPO_ROOT / "configs" / "apparmor" / "sift-custody-delete-broker.template"
 MIGRATION = REPO_ROOT / "supabase" / "migrations" / "202607145200_custody_delete_broker_receipts.sql"
+LATEST_INDEX = REPO_ROOT / "docs" / "latest" / "README.md"
+CONTROL_PLANE_DOC = REPO_ROOT / "docs" / "latest" / "08 - Control Plane.md"
 
 
 def _module() -> dict:
@@ -42,7 +44,7 @@ def test_interface_is_pathless_and_profile_bound() -> None:
     assert "shell=True" not in source
     assert "/etc/sift/custody-delete-dsn" in source
     assert "/var/lib/sift/.sift/control-plane.env" not in source
-    assert "NOPASSWD: ${HELPER_DST}" in setup
+    assert r'NOPASSWD: ${HELPER_DST} \"\"' in setup
     assert "${HELPER_DST} *" not in setup
     assert "visudo" in setup
     assert "install -o root -g root -m 0755" in setup
@@ -62,6 +64,8 @@ def test_interface_is_pathless_and_profile_bound() -> None:
     assert 'install -o root -g root -m 0600 "$tmp" "$destination"' in migrations_lib
     assert "has_schema_privilege(current_user,'app','USAGE')" in migrations_lib
     assert "has_table_privilege(current_user,'app.custody_operations','SELECT')" in migrations_lib
+    assert migrations_lib.count("select current_user='sift_custody_delete_broker'") == 1
+    assert migrations_lib.count("_custody_delete_broker_scope_valid") == 3
     assert "stale or mis-scoped; rotating" in migrations_lib
     for installed_path in (
         "/usr/local/sbin/sift-custody-delete-broker",
@@ -99,6 +103,18 @@ def test_broker_rebinds_uuid_to_postgres_and_durable_receipt() -> None:
     assert "custody_delete_broker_verified_required" in migration
     assert "force row level security" in migration
     assert "revoke all" in migration
+
+
+def test_live_control_plane_docs_derive_inventory_from_migration_source() -> None:
+    combined = LATEST_INDEX.read_text(encoding="utf-8") + CONTROL_PLANE_DOC.read_text(
+        encoding="utf-8"
+    )
+
+    assert "supabase/migrations/*.sql" in combined
+    assert "source_of_truth: supabase/migrations/*.sql" in combined
+    assert "25 migrations" not in combined
+    assert "Migration Files (25 total)" not in combined
+    assert "source_commit: eadb92b" not in combined
 
 
 def test_parser_rejects_path_or_fact_arguments() -> None:
