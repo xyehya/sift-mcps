@@ -391,8 +391,15 @@ are suppressed from new-pending rediscovery. Missing/changed recovery delegates 
 verified posture-only drift does not authorize a new Evidence Version.
 
 P4.23.5 implements the `EXTERNALLY_READ_ONLY` storage profile. Gateway derives an opaque stable
-source identity and Linux `STATX_MNT_ID_UNIQUE` mount-instance identity from pinned descriptors,
-requires descriptor, VFS, and mount/superblock read-only agreement, and never applies local
+source identity from pinned descriptors and maps their exact source, filesystem, root, device, and
+mount-point facts to one read-only PID 1 mount-table row. The resulting versioned opaque host mount
+identity binds the host boot ID, that host mount object's Linux `STATX_MNT_ID_UNIQUE`, and its
+mount-table facts. It survives systemd service mount-namespace recreation while a host remount or
+reboot changes it. Per-service namespace mount IDs are deliberately not persisted because mount
+clones receive new IDs at every service restart. PID 1's mount namespace is the installation's host
+mount authority; if its exact row, boot ID, or descriptor cannot be read unambiguously, admission
+fails closed. Gateway requires descriptor, VFS, and local plus host mount/superblock read-only
+agreement, and never applies local
 ownership, mode, immutable-flag, or content mutation to external evidence. Profile and source
 authorization are Portal-only, reasoned, idempotent, and freshly re-authenticated. Reconnect of the
 same source requires Full Verify; a different source requires explicit operator authorization;
@@ -400,6 +407,11 @@ writable posture is a custody violation. Successful and failed Full Verify attem
 generation/profile/manifest/version-bound receipts. MCP resolution requires the exact current
 successful receipt and revalidates all descriptor and storage facts. VM Gate C remains required
 before this ticket is DONE.
+
+The `mount-host-v2` identity is not silently substituted for a persisted legacy opaque identity.
+An existing v1 value therefore produces `MOUNT_IDENTITY_CHANGED` and remains blocked in the
+same-source reconnect lane until the operator completes Full Verify Evidence. A concurrent source
+change still requires the separately re-authenticated source-authorization workflow.
 
 Virgin external intake is a distinct bootstrap state, not a Full Verify recovery. With no active
 sealed set, Full Verify returns the sanitized `full_verify_requires_sealed_evidence` conflict and

@@ -9,9 +9,9 @@ APPARMOR = REPO_ROOT / "configs" / "apparmor" / "sift-gateway.template"
 
 def _gateway_rules() -> set[str]:
     source = APPARMOR.read_text(encoding="utf-8")
-    body = source.split(
-        "profile sift-gateway flags=(attach_disconnected) {", 1
-    )[1].split("\n}\n", 1)[0]
+    body = source.split("profile sift-gateway flags=(attach_disconnected) {", 1)[
+        1
+    ].split("\n}\n", 1)[0]
     return {" ".join(line.split()) for line in body.splitlines()}
 
 
@@ -23,9 +23,11 @@ def test_gateway_can_read_only_its_exact_external_storage_kernel_facts() -> None
         for rule in rules
         if "/proc/" in rule and ("fdinfo" in rule or "mountinfo" in rule)
     } == {
+        "/proc/1/mountinfo r,",
         "owner /proc/@{pid}/fdinfo/[0-9]* r,",
         "owner /proc/@{pid}/mountinfo r,",
     }
+    assert "/proc/sys/kernel/random/boot_id r," in rules
 
     assert not any(rule.startswith("/proc/** ") for rule in rules)
     assert not any(rule.startswith("owner /proc/** ") for rule in rules)

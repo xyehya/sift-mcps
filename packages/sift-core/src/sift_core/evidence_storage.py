@@ -1,9 +1,9 @@
 """Descriptor-pinned evidence storage authority.
 
 The module deliberately separates local immutable posture from externally
-read-only posture.  External source and mount-instance identifiers are opaque
-SHA-256 values; raw mount paths, remote source strings, and credentials never
-leave this process.
+read-only posture. External source and host-namespace-stable mount-instance
+identifiers are opaque SHA-256 values; raw mount paths, remote source strings,
+and credentials never leave this process.
 """
 
 from __future__ import annotations
@@ -101,17 +101,6 @@ class MountInfo:
             "source-v1", self.filesystem_type, self.root, self.source
         )
 
-    @property
-    def mount_instance_identity(self) -> str:
-        return _opaque_identity(
-            "mount-v1",
-            str(self.mount_id),
-            str(self.parent_id),
-            self.major_minor,
-            self.root,
-            self.mount_point,
-        )
-
 
 def parse_mountinfo(text: str) -> tuple[MountInfo, ...]:
     """Parse Linux mountinfo strictly; malformed or duplicate IDs fail closed."""
@@ -199,85 +188,60 @@ def mount_for_fd(
     return matches[0]
 
 
-@dataclass(frozen=True, slots=True)
-class ExternalStorageFacts:
-    source_identity: str
-    mount_instance_identity: str
-    filesystem_type: str
-    read_only: bool
-
-    def __post_init__(self) -> None:
-        if not _OPAQUE.fullmatch(self.source_identity):
-            raise ValueError("source identity must be opaque")
-        if not _OPAQUE.fullmatch(self.mount_instance_identity):
-            raise ValueError("mount instance identity must be opaque")
-
-
-def external_storage_facts(
-    fd: int,
+def _stable_mount_for(
+    mount: MountInfo,
     *,
-    fdinfo_text: str | None = None,
-    mountinfo_text: str | None = None,
-    statvfs_flags: int | None = None,
-    descriptor_flags: int | None = None,
-    unique_mount_id: int | None = None,
-    require_read_only: bool = True,
-    expected_mount_path: str | os.PathLike[str] | None = None,
-    supported_filesystems: Iterable[str] = _SUPPORTED_EXTERNAL_FILESYSTEMS,
-) -> ExternalStorageFacts:
-    """Establish external identity and read-only posture from one pinned fd."""
-    mount = mount_for_fd(fd, fdinfo_text=fdinfo_text, mountinfo_text=mountinfo_text)
-    if expected_mount_path is not None:
-        expected = os.path.abspath(
-            os.path.normpath(os.fspath(expected_mount_path))
-        )
-        observed = os.path.abspath(os.path.normpath(mount.mount_point))
-        if observed != expected:
-            raise StorageAuthorityError(
-                "external evidence root is not the mounted source"
-            )
-    if mount.filesystem_type not in frozenset(supported_filesystems):
-        raise StorageAuthorityError("external filesystem semantics are unsupported")
-    try:
-        flags = os.fstatvfs(fd).f_flag if statvfs_flags is None else statvfs_flags
-    except OSError as exc:
-        raise StorageAuthorityError(
-            "descriptor filesystem posture is unavailable"
-        ) from exc
-    statvfs_read_only = bool(flags & getattr(os, "ST_RDONLY", 1))
-    try:
-        open_flags = (
-            fcntl.fcntl(fd, fcntl.F_GETFL)
-            if descriptor_flags is None
-            else descriptor_flags
-        )
-    except OSError as exc:
-        raise StorageAuthorityError("descriptor access posture is unavailable") from exc
-    descriptor_read_only = open_flags & os.O_ACCMODE == os.O_RDONLY
-    posture_read_only = mount.read_only and statvfs_read_only and descriptor_read_only
-    if require_read_only and not posture_read_only:
-        raise StorageAuthorityError("external storage is not consistently read-only")
-    global_mount_id = (
-        unique_mount_id if unique_mount_id is not None else unique_mount_id_for_fd(fd)
+    stable_mountinfo_text: str | None = None,
+) -> MountInfo:
+    """Resolve a namespace-local mount clone to its stable system mount.
+
+    systemd filesystem hardening creates a fresh mount-namespace clone on each
+    service start. Linux mount IDs, including ``STATX_MNT_ID_UNIQUE``, identify
+    those clone objects and therefore cannot be persisted as restart-stable
+    custody authority. PID 1's mount table is the narrow read-only system seam:
+    its mount ID survives service restarts and changes on a real host remount.
+    """
+    stable_mountinfo = (
+        stable_mountinfo_text
+        if stable_mountinfo_text is not None
+        else _read_text(Path("/proc/1/mountinfo"))
     )
-    if (
-        not isinstance(global_mount_id, int)
-        or isinstance(global_mount_id, bool)
-        or global_mount_id <= 0
-    ):
-        raise StorageAuthorityError("unique mount identity is unavailable")
-    return ExternalStorageFacts(
-        source_identity=mount.source_identity,
-        mount_instance_identity=_opaque_identity(
-            "mount-unique-v1",
-            str(global_mount_id),
-            mount.filesystem_type,
+    matches = [
+        row
+        for row in parse_mountinfo(stable_mountinfo)
+        if (
+            row.major_minor,
+            row.root,
+            row.mount_point,
+            row.filesystem_type,
+            row.source,
+        )
+        == (
+            mount.major_minor,
             mount.root,
+            mount.mount_point,
+            mount.filesystem_type,
             mount.source,
-        ),
-        filesystem_type=mount.filesystem_type,
-        read_only=posture_read_only,
+        )
+    ]
+    if len(matches) != 1:
+        raise StorageAuthorityError("stable mount identity is missing or ambiguous")
+    return matches[0]
+
+
+def _boot_identity(value: str | None = None) -> str:
+    raw = (
+        value
+        if value is not None
+        else _read_text(Path("/proc/sys/kernel/random/boot_id"))
     )
+    normalized = raw[:-1] if raw.endswith("\n") else raw
+    if raw not in {normalized, f"{normalized}\n"} or not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        normalized,
+    ):
+        raise StorageAuthorityError("host boot identity is unavailable")
+    return normalized
 
 
 class _StatxTimestamp(ctypes.Structure):
@@ -322,8 +286,7 @@ class _Statx(ctypes.Structure):
     ]
 
 
-def unique_mount_id_for_fd(fd: int) -> int:
-    """Return Linux's cross-namespace ``STATX_MNT_ID_UNIQUE`` for a pinned fd."""
+def _unique_mount_id_for_fd(fd: int) -> int:
     if not sys.platform.startswith("linux"):
         raise StorageAuthorityError("unique mount identity requires Linux")
     syscall_number = {"x86_64": 332, "aarch64": 291}.get(platform.machine())
@@ -343,6 +306,121 @@ def unique_mount_id_for_fd(fd: int) -> int:
     if rc != 0 or result.mask & statx_mnt_id_unique == 0 or result.mnt_id == 0:
         raise StorageAuthorityError("unique mount identity is unavailable")
     return int(result.mnt_id)
+
+
+def _stable_unique_mount_id(mount_point: str) -> int:
+    normalized = os.path.abspath(os.path.normpath(mount_point))
+    if mount_point != normalized or not normalized.startswith("/"):
+        raise StorageAuthorityError("stable mount path is invalid")
+    flags = (
+        os.O_RDONLY
+        | os.O_CLOEXEC
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        fd = os.open(f"/proc/1/root{normalized}", flags)
+    except OSError as exc:
+        raise StorageAuthorityError("stable mount descriptor is unavailable") from exc
+    try:
+        return _unique_mount_id_for_fd(fd)
+    finally:
+        os.close(fd)
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalStorageFacts:
+    source_identity: str
+    mount_instance_identity: str
+    filesystem_type: str
+    read_only: bool
+
+    def __post_init__(self) -> None:
+        if not _OPAQUE.fullmatch(self.source_identity):
+            raise ValueError("source identity must be opaque")
+        if not _OPAQUE.fullmatch(self.mount_instance_identity):
+            raise ValueError("mount instance identity must be opaque")
+
+
+def external_storage_facts(
+    fd: int,
+    *,
+    fdinfo_text: str | None = None,
+    mountinfo_text: str | None = None,
+    statvfs_flags: int | None = None,
+    descriptor_flags: int | None = None,
+    stable_mountinfo_text: str | None = None,
+    stable_unique_mount_id: int | None = None,
+    boot_id: str | None = None,
+    require_read_only: bool = True,
+    expected_mount_path: str | os.PathLike[str] | None = None,
+    supported_filesystems: Iterable[str] = _SUPPORTED_EXTERNAL_FILESYSTEMS,
+) -> ExternalStorageFacts:
+    """Establish external identity and read-only posture from one pinned fd."""
+    mount = mount_for_fd(fd, fdinfo_text=fdinfo_text, mountinfo_text=mountinfo_text)
+    if expected_mount_path is not None:
+        expected = os.path.abspath(os.path.normpath(os.fspath(expected_mount_path)))
+        observed = os.path.abspath(os.path.normpath(mount.mount_point))
+        if observed != expected:
+            raise StorageAuthorityError(
+                "external evidence root is not the mounted source"
+            )
+    if mount.filesystem_type not in frozenset(supported_filesystems):
+        raise StorageAuthorityError("external filesystem semantics are unsupported")
+    stable_mount = _stable_mount_for(mount, stable_mountinfo_text=stable_mountinfo_text)
+    host_unique_mount_id = (
+        stable_unique_mount_id
+        if stable_unique_mount_id is not None
+        else _stable_unique_mount_id(stable_mount.mount_point)
+    )
+    if (
+        not isinstance(host_unique_mount_id, int)
+        or isinstance(host_unique_mount_id, bool)
+        or host_unique_mount_id <= 0
+    ):
+        raise StorageAuthorityError("stable unique mount identity is unavailable")
+    host_boot_identity = _boot_identity(boot_id)
+    try:
+        flags = os.fstatvfs(fd).f_flag if statvfs_flags is None else statvfs_flags
+    except OSError as exc:
+        raise StorageAuthorityError(
+            "descriptor filesystem posture is unavailable"
+        ) from exc
+    statvfs_read_only = bool(flags & getattr(os, "ST_RDONLY", 1))
+    try:
+        open_flags = (
+            fcntl.fcntl(fd, fcntl.F_GETFL)
+            if descriptor_flags is None
+            else descriptor_flags
+        )
+    except OSError as exc:
+        raise StorageAuthorityError("descriptor access posture is unavailable") from exc
+    descriptor_read_only = open_flags & os.O_ACCMODE == os.O_RDONLY
+    posture_read_only = (
+        mount.read_only
+        and stable_mount.read_only
+        and statvfs_read_only
+        and descriptor_read_only
+    )
+    if require_read_only and not posture_read_only:
+        raise StorageAuthorityError("external storage is not consistently read-only")
+    return ExternalStorageFacts(
+        source_identity=mount.source_identity,
+        mount_instance_identity=_opaque_identity(
+            "mount-host-v2",
+            host_boot_identity,
+            str(host_unique_mount_id),
+            str(stable_mount.mount_id),
+            str(stable_mount.parent_id),
+            stable_mount.major_minor,
+            stable_mount.filesystem_type,
+            stable_mount.root,
+            stable_mount.mount_point,
+            stable_mount.source,
+        ),
+        filesystem_type=mount.filesystem_type,
+        read_only=posture_read_only,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,7 +451,7 @@ class ExternalReadOnlyStorage:
             root_stat = os.fstat(self._root_fd)
             if not stat.S_ISDIR(root_stat.st_mode):
                 raise StorageAuthorityError("external evidence root is not a directory")
-            self.facts = external_storage_facts(self._root_fd)
+            self.facts = external_storage_facts(self._root_fd, expected_mount_path=root)
         except Exception:
             os.close(self._root_fd)
             raise

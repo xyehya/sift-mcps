@@ -343,6 +343,36 @@ def test_external_mount_identity_drift_is_unavailable_until_reverified() -> None
     assert result.findings[0].recovery is RecoveryRequirement.RECONNECT_AND_VERIFY
 
 
+def test_legacy_mount_identity_never_auto_upgrades_to_v2_authority() -> None:
+    expected = AuthorityEvidence(
+        evidence_object_id="object-1",
+        sha256="a" * 64,
+        byte_count=4096,
+        storage_profile=StorageProfile.EXTERNALLY_READ_ONLY,
+        storage_source_identity="source-a",
+        mount_identity="legacy-v1-opaque-value",
+    )
+    observed = _mounted(
+        identity=None,
+        immutable=None,
+        read_only=True,
+        storage_source_identity="source-a",
+        mount_identity="mount-host-v2-opaque-value",
+    )
+
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.AVAILABLE,
+            expected=(expected,),
+            observed=(observed,),
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_UNAVAILABLE
+    assert result.findings[0].code is DriftCode.MOUNT_IDENTITY_CHANGED
+    assert result.findings[0].recovery is RecoveryRequirement.RECONNECT_AND_VERIFY
+
+
 def test_external_writable_remount_takes_precedence_over_mount_identity() -> None:
     expected = AuthorityEvidence(
         evidence_object_id="object-1",
