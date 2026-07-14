@@ -368,7 +368,14 @@ describe('Exact Restore modified file flow', () => {
 
 // ── 6. Full database-custody verification (both result branches) ─────────────
 describe('Full Verify Evidence flow', () => {
-  beforeEach(() => seed({ status: 'ok', hmac_verify_needed: true, write_protected: true }))
+  beforeEach(() => seed({
+    status: 'ok',
+    seal_status: 'sealed',
+    manifest_version: 1,
+    active_count: 1,
+    hmac_verify_needed: true,
+    write_protected: true,
+  }))
 
   it('full-verifies mounted evidence and renders the intact branch on { ok:true }', async () => {
     endpoints.postFullVerifyEvidence.mockResolvedValue({ ok: true, verified: true, issues: [] })
@@ -397,6 +404,28 @@ describe('Full Verify Evidence flow', () => {
 
     expect(await within(modal).findByText(/Full verification failed with 1 issue/i)).toBeInTheDocument()
     expect(within(modal).getByText('digest mismatch')).toBeInTheDocument()
+  })
+
+  it('guides virgin external intake and disables Full Verify until a manifest exists', async () => {
+    seed({
+      status: 'unsealed',
+      seal_status: 'unsealed',
+      storage_profile: 'EXTERNALLY_READ_ONLY',
+      storage_availability: 'FULL_VERIFY_REQUIRED',
+      storage_remediation: 'FULL_VERIFY',
+      manifest_version: 0,
+      active_count: 0,
+      hmac_verify_needed: true,
+      unregistered: ['evidence/external.raw'],
+      write_protected: true,
+    })
+
+    render(<EvidenceTab />)
+
+    expect(await screen.findByText(/Add & Seal establishes the first full-hash source and mount receipt/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Full Verify Evidence' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Seal Manifest \(1 file\)/i })).toBeEnabled()
+    expect(endpoints.postFullVerifyEvidence).not.toHaveBeenCalled()
   })
 })
 

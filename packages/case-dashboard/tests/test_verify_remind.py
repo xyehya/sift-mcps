@@ -24,6 +24,7 @@ from _supabase_reauth_harness import (
     set_operator_session,
 )
 from case_dashboard.routes import create_dashboard_v2_app
+from sift_gateway.portal_services import PortalServiceError
 from starlette.testclient import TestClient
 
 _SECRET = secrets.token_hex(32)
@@ -239,6 +240,24 @@ class TestVerifyHmacEndpoint:
         assert data["ok"] is False
         assert data["issues"] == ["Modified: evidence/x"]
         assert ev.verify_calls[0][2] == "operator initiated"
+
+    def test_zero_active_set_preserves_sanitized_service_409(
+        self, passwords_dir, tmp_path, monkeypatch
+    ):
+        class EmptyManifestEvidenceDB(FakeEvidenceDB):
+            def verify(self, *, case_id, actor=None, note=None):
+                raise PortalServiceError(
+                    "full_verify_requires_sealed_evidence", http_status=409
+                )
+
+        c = _build_client(
+            passwords_dir, tmp_path, monkeypatch, EmptyManifestEvidenceDB()
+        )
+
+        resp = c.post("/api/evidence/chain/verify-hmac", json={})
+
+        assert resp.status_code == 409
+        assert resp.json() == {"error": "full_verify_requires_sealed_evidence"}
 
     def test_failed_verify_normalizes_structured_and_runtime_issues(
         self, passwords_dir, tmp_path, monkeypatch

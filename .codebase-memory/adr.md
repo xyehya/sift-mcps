@@ -116,6 +116,14 @@ scans, while a later complete scan may clear transient `INVENTORY_SCAN_FAILED` p
 latch only when no durable cause or violated object remains; any current pending item remains
 unsealed. It never waives content, missing, ledger, conflict, identity, unknown,
 or unauthorized source-change findings, and Portal success requires the reconciled gate to be open.
+Virgin external intake is bootstrapped by Add & Seal, not Full Verify: there is no sealed active set
+to verify. An exact source-less v0/current-generation predicate may project only the chain head from
+the synthetic persisted latch to unsealed while preserving the storage block. The begin and finalizer
+revalidate the predicate plus the complete DETECTED target set under the case lock before atomically
+creating Manifest Version 1 and binding the first hashes/source/mount receipt. Full Verify returns a
+sanitized 409 before adapter or receipt work until that manifest exists. Upgrade repair never edits
+append-only rows, and prior authority, stale generation, unsafe causes, or violated objects remain
+blocked.
 
 **Change routing:** policy/auth/scoping → `sift-gateway`; evidence/findings/reports/execution → `sift-core` + migrations; derived search/ingest → `opensearch-mcp`; human UX → `case-dashboard`; confinement → configs/systemd/AppArmor with the code change.
 

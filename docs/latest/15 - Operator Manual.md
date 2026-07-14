@@ -103,8 +103,18 @@ selected storage profile.
    - The manifest version increments by 1. Postgres appends the custody event
      and advances the hash-linked chain from `prev_hash` to `event_hash`.
    - `app.evidence_chain_heads` is updated (gate read model).
-4. After seal: the evidence gate passes → all 42 MCP tools become available
-   for the agent.
+4. After seal: the evidence gate passes and authorized MCP evidence reads become
+   available for the agent.
+
+For the first seal of an empty `EXTERNALLY_READ_ONLY` case, use this exact order:
+authorize the profile, mount the source read-only, Rescan Inventory, select every
+DETECTED pending object, then **Add & Seal**. Full Verify is intentionally disabled
+until Manifest Version 1 exists because there is no sealed active set to verify; a
+direct API attempt returns `full_verify_requires_sealed_evidence` (409) and creates no
+verification receipt. The storage warning and MCP admission block remain until Add &
+Seal commits the full target set atomically. A violation with prior custody authority,
+an unsafe finding, a stale mount generation, or a violated object is recovery work and
+must not be treated as virgin bootstrap.
 
 If external storage disconnects, the gate reports it as unavailable rather than
 tampering. Reconnecting the same authorized source requires **Full Verify Evidence**;
@@ -119,7 +129,7 @@ receipt, and only a successful current receipt can reopen MCP admission.
 
 ## 6. Agent Investigation Phase
 
-With evidence sealed, the AI agent can call any of the 42 MCP tools (see
+With evidence sealed, the AI agent can call the tools authorized by current policy (see
 [MCP Tool Catalog](12%20-%20MCP%20Tool%20Catalog.md)). Common workflow:
 
 - `case_info` — retrieve active case metadata and summary.

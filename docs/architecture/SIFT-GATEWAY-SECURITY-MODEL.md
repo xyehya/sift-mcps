@@ -67,6 +67,11 @@ and Postgres stores only opaque source and global mount-instance identities. A s
 requires Full Verify, a changed source requires an explicit re-authenticated Portal authorization,
 and writable posture is a blocking custody violation. Final worker open revalidates the exact
 current version receipt, source, mount instance, identity, link count, and read-only posture.
+For virgin external intake, there is no active sealed set to Full Verify. The Portal-only Add & Seal
+lane is enabled only by an exact v0/source-less/current-generation predicate, targets every DETECTED
+pending object, and keeps admission blocked until the existing finalizer atomically establishes the
+first manifest, hashes, and source/mount receipt. Upgrade repair changes only the chain-head read
+model; append-only authority is never rewritten.
 
 | Plane | What it is |
 | --- | --- |
@@ -173,6 +178,10 @@ Local reconciliation orders a complete whole-case receipt against any matching p
 Restore posture receipt and uses only the strictly newer authority; equal or missing timestamps
 suppress historical fallback and require another Full Verify. Portal success
 is derived from the authoritative sealed/open gate after immediate reconciliation, not hashing alone.
+Zero-active-set Full Verify is likewise rejected before adapter preparation or receipt creation with
+the sanitized `full_verify_requires_sealed_evidence` conflict. A virgin external v0 projection may
+remove only the synthetic persisted latch while retaining its storage-verification cause; any prior
+authority, stale generation, unsafe cause, or object violation remains fail-closed.
 
 Ignore, Delete Stray, and Retire are fixed Portal-only durable actions. Postgres blocks admission
 before any disposition filesystem step. Delete is limited to unsealed pending objects and records

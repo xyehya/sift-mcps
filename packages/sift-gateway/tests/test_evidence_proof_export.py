@@ -32,7 +32,7 @@ from case_dashboard.session_jwt import (
     generate_session_envelope,
 )
 from sift_gateway.custody_operations import PinnedEvidenceFile, PostureBatch
-from sift_gateway.portal_services import EvidenceAuthorityService
+from sift_gateway.portal_services import EvidenceAuthorityService, PortalServiceError
 from starlette.testclient import TestClient
 
 _CASE = "11111111-1111-1111-1111-111111111111"
@@ -320,6 +320,28 @@ def _make_sealed_file(tmp_path: Path, rel: str, content: bytes):
     p.write_bytes(content)
     sha = "sha256:" + hashlib.sha256(content).hexdigest()
     return sha, len(content)
+
+
+def test_full_verify_rejects_zero_active_set_before_posture_or_receipt(
+    service,
+) -> None:
+    svc, db, _tmp_path = service
+
+    class _ForbiddenPosture:
+        def prepare(self, _case_dir, _paths):
+            raise AssertionError("zero-active-set Full Verify reached posture adapter")
+
+    svc._posture_adapter = _ForbiddenPosture()
+
+    with pytest.raises(PortalServiceError) as exc_info:
+        svc.verify(
+            case_id=_CASE,
+            actor={"principal_type": "operator", "principal_id": "operator-1"},
+        )
+
+    assert exc_info.value.reason == "full_verify_requires_sealed_evidence"
+    assert exc_info.value.http_status == 409
+    assert db.verify_calls == []
 
 
 class TestTamperDetection:

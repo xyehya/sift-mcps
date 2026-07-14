@@ -1879,6 +1879,12 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
             note=str(body.get("note") or "").strip() or None,
         )
     except Exception as exc:
+        if (
+            getattr(exc, "reason", None)
+            == "full_verify_requires_sealed_evidence"
+            and getattr(exc, "http_status", None) == 409
+        ):
+            return _active_case_error_response(exc, default=409)
         logger.warning("DB evidence verify failed: %s", type(exc).__name__)
         return JSONResponse(
             {"error": "Full evidence verification failed — check gateway logs"},

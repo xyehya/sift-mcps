@@ -129,6 +129,7 @@ stateDiagram-v2
 - Pathless `--prepare` validates the active evidence directory and all direct entries, records/reconciles pending observations, and repairs only eligible mutable regular files. It never changes existing immutable entries.
 - Local pending files are service-owned, mode `0644`, and mutable until Seal. Local sealed files require the immutable flag; mode bits alone are not custody protection.
 - Externally read-only evidence requires a stable mount identity and verified read-only posture. Local ownership repair and immutable flags do not apply.
+- A virgin external intake has no sealed active set for Full Verify to verify. After profile authorization, read-only mount observation, and complete inventory classification, the exact v0 projection remains `unsealed` with its current-generation `STORAGE_FULL_VERIFY_REQUIRED` cause. Add & Seal is the only bootstrap action: it must target every DETECTED pending object and atomically establishes Manifest Version 1, the first full hashes, and the source/mount receipt. Admission stays blocked throughout bootstrap.
 - Symlinks, hardlinks, traversal, nested unexpected entries, non-regular files, cross-case targets, and unsafe mount transitions fail closed.
 
 ### Reconciliation and verification
@@ -270,6 +271,13 @@ unsealed without converting the resolved scan failure into a durable violation. 
 discharges changed or missing content, ledger/conflicting/unknown findings, identity change, or an
 unauthorized storage-source change. The Portal reports success only when the authoritative gate is
 sealed and open after immediate reconciliation; local hash success cannot hide retained DB issues.
+Full Verify is also rejected without creating a receipt when no active manifest and sealed Evidence
+Version exist (`full_verify_requires_sealed_evidence`, HTTP 409). For a virgin external intake, the
+Portal disables that action and directs the examiner to Add & Seal. The upgrade repair for an
+already-stuck virgin case changes only the chain-head projection and removes only its synthetic
+`PERSISTED_VIOLATION`; append-only observations, events, and verification history are unchanged.
+Any prior manifest/version/source/verification authority, violated object, stale storage generation,
+or unrelated finding keeps the violation latched and cannot enter the bootstrap lane.
 
 ### Re-authentication
 
@@ -390,6 +398,15 @@ writable posture is a custody violation. Successful and failed Full Verify attem
 generation/profile/manifest/version-bound receipts. MCP resolution requires the exact current
 successful receipt and revalidates all descriptor and storage facts. VM Gate C remains required
 before this ticket is DONE.
+
+Virgin external intake is a distinct bootstrap state, not a Full Verify recovery. With no active
+sealed set, Full Verify returns the sanitized `full_verify_requires_sealed_evidence` conflict and
+writes no receipt. Under the exact virgin predicate only, the v0 read model may be projected as
+unsealed while the current-generation storage verification cause and MCP admission block remain.
+Add & Seal revalidates the complete DETECTED target set and the predicate under the case lock, then
+the existing v3 finalizer atomically creates the first versions/manifest/event and binds source,
+mount, generation, hashes, bytes, and read-only posture. No append-only row is rewritten by upgrade
+repair; unsafe, stale, or previously authoritative cases remain violated.
 
 Profile/source transition idempotency is Postgres-authoritative: an exact retry with the original
 scoped receipt returns the stored result without advancing generation or appending another event;

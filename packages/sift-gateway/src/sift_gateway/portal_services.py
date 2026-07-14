@@ -2495,6 +2495,15 @@ class EvidenceAuthorityService(_BasePortalDbService):
             raise PortalServiceError(
                 "evidence_storage_authority_unavailable", http_status=503
             )
+        if not sealed or int(authority[2] or 0) <= 0 or not authority[3]:
+            # Full Verify proves an already committed active manifest.  Initial
+            # external intake belongs to Add & Seal, which hashes the complete
+            # target set and atomically binds its first source/mount receipt.
+            # Reject here before touching a posture adapter or writing either a
+            # success or failure verification receipt.
+            raise PortalServiceError(
+                "full_verify_requires_sealed_evidence", http_status=409
+            )
         profile = StorageProfile(str(authority[0]))
         case_dir = self._case_artifact_path(case_id)
         if case_dir is None:
