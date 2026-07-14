@@ -59,6 +59,14 @@ least-privilege workers **claim** it under a lease, confined execution writes re
 up to Postgres and out to the derived index. Evidence is operator-mounted and immutable;
 reports only ever contain approved material.
 
+Evidence storage has two closed profiles. `LOCAL_IMMUTABLE` uses service ownership, fixed mode,
+and immutable flags. `EXTERNALLY_READ_ONLY` never grants Gateway or MCP mutation authority:
+pinned descriptors must agree on read-only open mode, VFS flags, and mount/superblock options,
+and Postgres stores only opaque source and global mount-instance identities. A same-source remount
+requires Full Verify, a changed source requires an explicit re-authenticated Portal authorization,
+and writable posture is a blocking custody violation. Final worker open revalidates the exact
+current version receipt, source, mount instance, identity, link count, and read-only posture.
+
 | Plane | What it is |
 | --- | --- |
 | ① Client | Operator Portal (React/Vite, `/portal`, human-only REST) + AI Agent clients (Supabase JWT, `/mcp` only) |

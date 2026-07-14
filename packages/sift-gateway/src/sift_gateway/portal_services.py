@@ -19,7 +19,12 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, LiteralString
+
+from sift_core.evidence_storage import (
+    StorageAuthorityError,
+    external_storage_facts,
+)
 
 from sift_gateway.custody_drift import (
     AuthorityEvidence,
@@ -39,6 +44,7 @@ from sift_gateway.custody_operations import (
     CustodyOperationRepository,
     CustodyOperationRepositoryProtocol,
     DispositionCustodyOperation,
+    ExternalReadOnlyPostureAdapter,
     LocalImmutablePostureAdapter,
     LocalImmutablePostureProtocol,
     ObjectCustodyCommand,
@@ -99,7 +105,14 @@ def _first_text(*values: Any) -> str:
         if value is None:
             continue
         if isinstance(value, dict):
-            for key in ("message", "error", "detail", "title", "finding_id", "description"):
+            for key in (
+                "message",
+                "error",
+                "detail",
+                "title",
+                "finding_id",
+                "description",
+            ):
                 found = _first_text(value.get(key))
                 if found:
                     return found
@@ -133,12 +146,16 @@ def _activity_args(row: dict[str, Any]) -> dict[str, Any]:
 
 def _activity_tool(row: dict[str, Any]) -> str:
     details = _event_details(row)
-    return _compact_label(details.get("tool") or row.get("event_type") or "activity", limit=64)
+    return _compact_label(
+        details.get("tool") or row.get("event_type") or "activity", limit=64
+    )
 
 
 def _activity_backend(row: dict[str, Any]) -> str:
     details = _event_details(row)
-    return _compact_label(details.get("backend") or row.get("source") or "unknown", limit=64)
+    return _compact_label(
+        details.get("backend") or row.get("source") or "unknown", limit=64
+    )
 
 
 def _activity_kind(tool: str, status: str) -> str:
@@ -148,10 +165,7 @@ def _activity_kind(tool: str, status: str) -> str:
         return "discovery"
     if tool in {"record_timeline_event", "manage_todo"}:
         return "io"
-    if (
-        tool == "run_command"
-        or tool.startswith("opensearch_")
-    ):
+    if tool == "run_command" or tool.startswith("opensearch_"):
         return "analysis"
     return "info"
 
@@ -167,31 +181,44 @@ def _activity_label(row: dict[str, Any]) -> str:
 
     if status == "failure":
         reason = _first_text(result, detail, summary)
-        return _compact_label(f"{tool} failed - {reason}" if reason else f"{tool} failed")
+        return _compact_label(
+            f"{tool} failed - {reason}" if reason else f"{tool} failed"
+        )
 
     if tool == "record_finding":
         title = _first_text(args.get("title"), result)
         confidence = _first_text(args.get("confidence"))
         suffix = f" ({confidence})" if confidence else ""
-        return _compact_label(f"Recorded finding - {title}{suffix}" if title else "Recorded finding")
+        return _compact_label(
+            f"Recorded finding - {title}{suffix}" if title else "Recorded finding"
+        )
 
     if tool == "record_timeline_event":
         desc = _first_text(args.get("description"), args.get("title"), result)
-        return _compact_label(f"Timeline event added - {desc}" if desc else "Timeline event added")
+        return _compact_label(
+            f"Timeline event added - {desc}" if desc else "Timeline event added"
+        )
 
     if tool == "manage_todo":
         action = _first_text(args.get("action"), args.get("operation"))
         return _compact_label(f"TODO {action}" if action else "TODO updated")
 
     if tool == "run_command":
-        command = _first_text(args.get("command"), detail.get("command") if isinstance(detail, dict) else None)
+        command = _first_text(
+            args.get("command"),
+            detail.get("command") if isinstance(detail, dict) else None,
+        )
         exit_code = None
         if isinstance(result, dict):
             exit_code = result.get("exit_code")
         if exit_code is None and isinstance(detail, dict):
             exit_code = detail.get("exit_code")
         exit_part = f" (exit {exit_code})" if exit_code is not None else ""
-        return _compact_label(f"Ran command - {command}{exit_part}" if command else f"Ran command{exit_part}")
+        return _compact_label(
+            f"Ran command - {command}{exit_part}"
+            if command
+            else f"Ran command{exit_part}"
+        )
 
     if tool.startswith("opensearch_"):
         op = tool.removeprefix("opensearch_").replace("_", " ")
@@ -213,7 +240,9 @@ def _activity_label(row: dict[str, Any]) -> str:
     return summary or _compact_label(tool)
 
 
-def _collapse_activity_rows(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+def _collapse_activity_rows(
+    rows: list[dict[str, Any]], limit: int
+) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for row in rows:
@@ -287,7 +316,9 @@ class _BasePortalDbService:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as e:
             if path.exists():
-                logger.warning("Failed to read %s for case %s: %s", filename, case_id, e)
+                logger.warning(
+                    "Failed to read %s for case %s: %s", filename, case_id, e
+                )
             return []
         if isinstance(data, list):
             return [row for row in data if isinstance(row, dict)]
@@ -296,7 +327,9 @@ class _BasePortalDbService:
             return [row for row in rows if isinstance(row, dict)]
         return []
 
-    def _write_json_list(self, case_id: str, filename: str, rows: list[dict[str, Any]]) -> None:
+    def _write_json_list(
+        self, case_id: str, filename: str, rows: list[dict[str, Any]]
+    ) -> None:
         case_dir = self._case_artifact_path(case_id)
         if case_dir is None:
             return
@@ -463,7 +496,11 @@ class _BasePortalDbService:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 for idx, payload in enumerate(rows, start=1):
-                    todo_id = str(payload.get("todo_id") or payload.get("id") or f"TODO-sync-{idx:03d}")
+                    todo_id = str(
+                        payload.get("todo_id")
+                        or payload.get("id")
+                        or f"TODO-sync-{idx:03d}"
+                    )
                     cur.execute(
                         """
                         insert into app.investigation_todos
@@ -513,12 +550,60 @@ class EvidenceAuthorityService(_BasePortalDbService):
         legacy_sync: bool = False,
         custody_repository: CustodyOperationRepositoryProtocol | None = None,
         posture_adapter: LocalImmutablePostureProtocol | None = None,
+        external_posture_adapter: LocalImmutablePostureProtocol | None = None,
     ) -> None:
         super().__init__(dsn, legacy_sync=legacy_sync)
         self._custody_repository = custody_repository or CustodyOperationRepository(
             self._connect
         )
         self._posture_adapter = posture_adapter or LocalImmutablePostureAdapter()
+        self._external_posture_adapter = (
+            external_posture_adapter or ExternalReadOnlyPostureAdapter()
+        )
+
+    def change_storage_profile(
+        self,
+        *,
+        case_id: str,
+        profile: str,
+        reason: str,
+        idempotency_key: str,
+        reauth_audit_event_id: str,
+        actor: Any,
+    ) -> dict[str, Any]:
+        try:
+            selected = StorageProfile(profile)
+        except ValueError as exc:
+            raise PortalServiceError(
+                "invalid_storage_profile", http_status=400
+            ) from exc
+        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        if actor_type != "user" or not actor_user or actor_service:
+            raise PortalServiceError("storage_profile_actor_required", http_status=403)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select (app.evidence_storage_change_profile(
+                         %s,%s,%s,%s,%s,%s)).generation""",
+                    (
+                        case_id,
+                        selected.value,
+                        reason,
+                        idempotency_key,
+                        reauth_audit_event_id,
+                        actor_user,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        if not row:
+            raise PortalServiceError("storage_profile_change_failed", http_status=503)
+        return {
+            "storage_profile": selected.value,
+            "storage_availability": "FULL_VERIFY_REQUIRED",
+            "storage_remediation": "FULL_VERIFY",
+            "generation": int(row[0]),
+        }
 
     def reconcile_for_admission(self, case_id: str) -> dict[str, Any]:
         """Observe the mounted inventory and persist custody state, fail closed.
@@ -537,13 +622,69 @@ class EvidenceAuthorityService(_BasePortalDbService):
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "select seal_status from app.evidence_chain_heads where case_id=%s",
+                    "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
                     (case_id,),
                 )
                 head_row = cur.fetchone()
-                persisted_head_violation = bool(
-                    head_row and str(head_row[0]) == "violated"
+                cur.execute(
+                    """select profile,source_identity,verified_mount_instance,state,generation,
+                              verified_generation,read_only,last_full_verified_at,remediation
+                       from app.evidence_storage_authorities where case_id=%s""",
+                    (case_id,),
                 )
+                storage_row = cur.fetchone()
+                if not storage_row:
+                    raise PortalServiceError(
+                        "evidence_storage_authority_unavailable", http_status=503
+                    )
+                storage_profile = StorageProfile(str(storage_row[0]))
+                storage_issue_codes = {
+                    "STORAGE_UNAVAILABLE",
+                    "MOUNT_IDENTITY_CHANGED",
+                    "STORAGE_SOURCE_CHANGED",
+                    "STORAGE_FULL_VERIFY_REQUIRED",
+                    "POSTURE_DRIFT",
+                    "READ_WRITE_DRIFT",
+                    "STORAGE_PROFILE_CHANGED",
+                }
+                head_issues = (
+                    head_row[1]
+                    if head_row and len(head_row) > 1 and isinstance(head_row[1], list)
+                    else []
+                )
+                storage_recoverable_head = bool(head_issues) and all(
+                    isinstance(issue, dict)
+                    and issue.get("code") in storage_issue_codes
+                    and issue.get("storage_generation") == storage_row[4]
+                    for issue in head_issues
+                )
+                persisted_head_violation = bool(
+                    head_row
+                    and str(head_row[0]) == "violated"
+                    and not storage_recoverable_head
+                )
+                cur.execute(
+                    """select v.item_facts from app.evidence_storage_verifications v
+                       join app.evidence_storage_authorities a on a.case_id=v.case_id
+                       join app.evidence_chain_heads h on h.case_id=v.case_id
+                       where v.case_id=%s and v.outcome='SUCCESS'
+                         and v.generation=a.generation and v.profile=a.profile
+                         and v.manifest_version=h.manifest_version
+                         and v.manifest_hash=h.manifest_hash
+                       order by v.created_at desc,v.id desc limit 1""",
+                    (case_id,),
+                )
+                receipt_row = cur.fetchone()
+                receipt_items = (
+                    receipt_row[0]
+                    if receipt_row and isinstance(receipt_row[0], list)
+                    else []
+                )
+                receipt_by_object = {
+                    str(item.get("evidence_object_id")): item
+                    for item in receipt_items
+                    if isinstance(item, dict)
+                }
                 cur.execute(
                     """
                     select o.id::text, o.display_path, o.current_sha256, o.current_bytes,
@@ -561,7 +702,9 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         "sha256": str(row[2] or ""),
                         "bytes": row[3],
                         "sealed_at": row[4],
-                        "metadata": row[5] if len(row) > 5 and isinstance(row[5], dict) else {},
+                        "metadata": row[5]
+                        if len(row) > 5 and isinstance(row[5], dict)
+                        else {},
                         "authority_status": str(row[6]) if len(row) > 6 else "sealed",
                     }
                     for row in cur.fetchall()
@@ -575,21 +718,70 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 live: set[str] = set()
                 unsafe: list[str] = []
                 storage_available = True
-                correlation_id = _admission_correlation_id() or f"portal-{uuid.uuid4().hex}"
+                external_facts = None
+                correlation_id = (
+                    _admission_correlation_id() or f"portal-{uuid.uuid4().hex}"
+                )
                 observed_facts: list[MountedEvidence] = []
                 if not evidence_dir.is_dir():
                     storage_available = False
                     unsafe.append("evidence_storage_unavailable")
+                    cur.execute(
+                        "select app.evidence_storage_record_observation(%s,%s,false,null,null,null)",
+                        (case_id, storage_profile.value),
+                    )
                 else:
+                    if storage_profile is StorageProfile.EXTERNALLY_READ_ONLY:
+                        root_fd: int | None = None
+                        try:
+                            root_fd = os.open(
+                                evidence_dir,
+                                os.O_RDONLY
+                                | os.O_CLOEXEC
+                                | os.O_DIRECTORY
+                                | getattr(os, "O_NOFOLLOW", 0),
+                            )
+                            external_facts = external_storage_facts(
+                                root_fd, require_read_only=False
+                            )
+                            cur.execute(
+                                """select (app.evidence_storage_record_observation(
+                                     %s,%s,true,%s,%s,%s)).state""",
+                                (
+                                    case_id,
+                                    storage_profile.value,
+                                    external_facts.source_identity,
+                                    external_facts.mount_instance_identity,
+                                    external_facts.read_only,
+                                ),
+                            )
+                            state_row = cur.fetchone()
+                            storage_available = True
+                            if not state_row or str(state_row[0]) != "AVAILABLE":
+                                unsafe.append("external_storage_full_verify_required")
+                        except (OSError, StorageAuthorityError):
+                            storage_available = False
+                            unsafe.append("evidence_storage_unavailable")
+                            cur.execute(
+                                "select app.evidence_storage_record_observation(%s,%s,false,null,null,null)",
+                                (case_id, storage_profile.value),
+                            )
+                        finally:
+                            if root_fd is not None:
+                                os.close(root_fd)
                     try:
-                        entries = sorted(os.scandir(evidence_dir), key=lambda item: item.name)
+                        entries = sorted(
+                            os.scandir(evidence_dir), key=lambda item: item.name
+                        )
                     except OSError:
                         entries = []
                         storage_available = False
                         unsafe.append("evidence_inventory_unavailable")
                     for entry in entries:
                         rel = f"evidence/{entry.name}"
-                        observation_id = hashlib.sha256(rel.encode("utf-8")).hexdigest()[:32]
+                        observation_id = hashlib.sha256(
+                            rel.encode("utf-8")
+                        ).hexdigest()[:32]
                         live.add(rel)
                         if rel in dispositioned_paths:
                             continue
@@ -600,15 +792,24 @@ class EvidenceAuthorityService(_BasePortalDbService):
                             st = None
                             regular = False
                         if not regular or st is None or st.st_nlink != 1:
-                            kind = EntryKind.SYMLINK if entry.is_symlink() else (
-                                EntryKind.DIRECTORY if st is not None and stat.S_ISDIR(st.st_mode)
-                                else EntryKind.OTHER
+                            kind = (
+                                EntryKind.SYMLINK
+                                if entry.is_symlink()
+                                else (
+                                    EntryKind.DIRECTORY
+                                    if st is not None and stat.S_ISDIR(st.st_mode)
+                                    else EntryKind.OTHER
+                                )
                             )
-                            observed_facts.append(MountedEvidence(
-                                observation_id=observation_id,evidence_object_id=None,
-                                entry_kind=kind,byte_count=st.st_size if st else None,
-                                hidden=entry.name.startswith("."),
-                            ))
+                            observed_facts.append(
+                                MountedEvidence(
+                                    observation_id=observation_id,
+                                    evidence_object_id=None,
+                                    entry_kind=kind,
+                                    byte_count=st.st_size if st else None,
+                                    hidden=entry.name.startswith("."),
+                                )
+                            )
                             self._record_detected_observation(
                                 cur,
                                 case_id,
@@ -621,47 +822,109 @@ class EvidenceAuthorityService(_BasePortalDbService):
                             continue
                         known = sealed.get(rel)
                         if known is None:
-                            observed_facts.append(MountedEvidence(
-                                observation_id=observation_id,evidence_object_id=None,
-                                entry_kind=EntryKind.REGULAR,
-                                identity=FileIdentity(st.st_dev,st.st_ino,st.st_size,
-                                    st.st_mtime_ns,st.st_ctime_ns,st.st_nlink),
-                                hidden=entry.name.startswith("."),
-                            ))
+                            observed_facts.append(
+                                MountedEvidence(
+                                    observation_id=observation_id,
+                                    evidence_object_id=None,
+                                    entry_kind=EntryKind.REGULAR,
+                                    identity=FileIdentity(
+                                        st.st_dev,
+                                        st.st_ino,
+                                        st.st_size,
+                                        st.st_mtime_ns,
+                                        st.st_ctime_ns,
+                                        st.st_nlink,
+                                    ),
+                                    hidden=entry.name.startswith("."),
+                                )
+                            )
                             self._record_detected_observation(
-                                cur, case_id, rel, entry.name, st.st_size, correlation_id
+                                cur,
+                                case_id,
+                                rel,
+                                entry.name,
+                                st.st_size,
+                                correlation_id,
                             )
                             continue
                         immutable: bool | None = None
-                        try:
-                            from sift_core.evidence_chain import get_immutable_flag_fd
-                            flags_fd = os.open(entry.path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+                        if storage_profile is StorageProfile.LOCAL_IMMUTABLE:
                             try:
-                                immutable = get_immutable_flag_fd(flags_fd)
-                            finally:
-                                os.close(flags_fd)
-                        except OSError:
-                            immutable = None
-                        observed_facts.append(MountedEvidence(
-                            observation_id=observation_id,evidence_object_id=known["id"],
-                            entry_kind=EntryKind.REGULAR,
-                            identity=FileIdentity(st.st_dev,st.st_ino,st.st_size,
-                                st.st_mtime_ns,st.st_ctime_ns,st.st_nlink),
-                            immutable=immutable,
-                        ))
+                                from sift_core.evidence_chain import (
+                                    get_immutable_flag_fd,
+                                )
+
+                                flags_fd = os.open(
+                                    entry.path,
+                                    os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                                )
+                                try:
+                                    immutable = get_immutable_flag_fd(flags_fd)
+                                finally:
+                                    os.close(flags_fd)
+                            except OSError:
+                                immutable = None
+                        observed_facts.append(
+                            MountedEvidence(
+                                observation_id=observation_id,
+                                evidence_object_id=known["id"],
+                                entry_kind=EntryKind.REGULAR,
+                                identity=FileIdentity(
+                                    st.st_dev,
+                                    st.st_ino,
+                                    st.st_size,
+                                    st.st_mtime_ns,
+                                    st.st_ctime_ns,
+                                    st.st_nlink,
+                                ),
+                                immutable=immutable,
+                                read_only=(
+                                    external_facts.read_only if external_facts else None
+                                ),
+                                mount_identity=(
+                                    external_facts.mount_instance_identity
+                                    if external_facts
+                                    else None
+                                ),
+                                storage_source_identity=(
+                                    external_facts.source_identity
+                                    if external_facts
+                                    else None
+                                ),
+                            )
+                        )
                 expected_facts: list[AuthorityEvidence] = []
                 for known in sealed.values():
                     posture = known["metadata"].get("posture", {})
+                    receipt = receipt_by_object.get(known["id"], {})
+                    if storage_profile is StorageProfile.EXTERNALLY_READ_ONLY:
+                        posture = receipt
                     identity = None
-                    if all(posture.get(key) is not None for key in (
-                        "st_dev","st_ino","st_mtime_ns","st_ctime_ns","st_nlink"
-                    )) and known["bytes"] is not None:
+                    if (
+                        all(
+                            posture.get(key) is not None
+                            for key in (
+                                "st_dev",
+                                "st_ino",
+                                "st_mtime_ns",
+                                "st_ctime_ns",
+                                "st_nlink",
+                            )
+                        )
+                        and known["bytes"] is not None
+                    ):
                         identity = FileIdentity(
-                            int(posture["st_dev"]),int(posture["st_ino"]),int(known["bytes"]),
-                            int(posture["st_mtime_ns"]),int(posture["st_ctime_ns"]),
+                            int(posture["st_dev"]),
+                            int(posture["st_ino"]),
+                            int(known["bytes"]),
+                            int(posture["st_mtime_ns"]),
+                            int(posture["st_ctime_ns"]),
                             int(posture["st_nlink"]),
                         )
-                    if identity is None:
+                    if (
+                        identity is None
+                        and storage_profile is StorageProfile.LOCAL_IMMUTABLE
+                    ):
                         observed = next(
                             (
                                 item
@@ -686,29 +949,68 @@ class EvidenceAuthorityService(_BasePortalDbService):
                             identity = observed.identity
                     sha = str(known["sha256"] or "").removeprefix("sha256:")
                     if len(sha) == 64 and known["bytes"] is not None:
-                        expected_facts.append(AuthorityEvidence(
-                            evidence_object_id=known["id"],sha256=sha,
-                            byte_count=int(known["bytes"]),
-                            storage_profile=StorageProfile.LOCAL_IMMUTABLE,identity=identity,
-                        ))
-                classification = classify_inventory(InventorySnapshot(
-                    availability=(StorageAvailability.AVAILABLE if storage_available
-                                  else StorageAvailability.UNAVAILABLE),
-                    expected=tuple(expected_facts),observed=tuple(observed_facts),
-                    persisted_violation_object_ids=tuple(
-                        known["id"]
-                        for known in sealed.values()
-                        if known["authority_status"] == "violated"
-                    ),
-                    persisted_head_violation=persisted_head_violation,
-                ))
-                findings = [{
-                    "code": finding.code.value,"gate_state": finding.gate_state.value,
-                    "recovery": finding.recovery.value,
-                    "evidence_object_id": finding.evidence_object_id,
-                    "observation_id": finding.observation_id,
-                    "full_verification_required": finding.full_verification_required,
-                } for finding in classification.findings]
+                        expected_facts.append(
+                            AuthorityEvidence(
+                                evidence_object_id=known["id"],
+                                sha256=sha,
+                                byte_count=int(known["bytes"]),
+                                storage_profile=storage_profile,
+                                identity=identity,
+                                mount_identity=(
+                                    (
+                                        str(storage_row[2])
+                                        if storage_row[2] is not None
+                                        else None
+                                    )
+                                    if storage_profile
+                                    is StorageProfile.EXTERNALLY_READ_ONLY
+                                    else None
+                                ),
+                                storage_source_identity=(
+                                    (
+                                        str(storage_row[1])
+                                        if storage_row[1] is not None
+                                        else None
+                                    )
+                                    if storage_profile
+                                    is StorageProfile.EXTERNALLY_READ_ONLY
+                                    else None
+                                ),
+                            )
+                        )
+                classification = classify_inventory(
+                    InventorySnapshot(
+                        availability=(
+                            StorageAvailability.UNAVAILABLE
+                            if not storage_available
+                            else (
+                                StorageAvailability.VERIFICATION_REQUIRED
+                                if str(storage_row[3]) == "FULL_VERIFY_REQUIRED"
+                                or storage_row[5] != storage_row[4]
+                                else StorageAvailability.AVAILABLE
+                            )
+                        ),
+                        expected=tuple(expected_facts),
+                        observed=tuple(observed_facts),
+                        persisted_violation_object_ids=tuple(
+                            known["id"]
+                            for known in sealed.values()
+                            if known["authority_status"] == "violated"
+                        ),
+                        persisted_head_violation=persisted_head_violation,
+                    )
+                )
+                findings = [
+                    {
+                        "code": finding.code.value,
+                        "gate_state": finding.gate_state.value,
+                        "recovery": finding.recovery.value,
+                        "evidence_object_id": finding.evidence_object_id,
+                        "observation_id": finding.observation_id,
+                        "full_verification_required": finding.full_verification_required,
+                    }
+                    for finding in classification.findings
+                ]
                 violation_reasons = {
                     DriftCode.CONTENT_CHANGED: "sealed_evidence_changed",
                     DriftCode.SEALED_EVIDENCE_MISSING: "sealed_evidence_missing",
@@ -726,8 +1028,13 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         )
                         unsafe.append(reason)
                 cur.execute(
-                    "select app.evidence_record_inventory_classification(%s,%s,%s,%s)",
-                    (case_id,correlation_id,classification.gate_state.value,_jsonb(findings)),
+                    "select app.evidence_record_inventory_classification_v2(%s,%s,%s,%s)",
+                    (
+                        case_id,
+                        correlation_id,
+                        classification.gate_state.value,
+                        _jsonb(findings),
+                    ),
                 )
             conn.commit()
         return {
@@ -784,6 +1091,13 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 )
                 row = cur.fetchone()
                 cur.execute(
+                    """select profile,source_identity,verified_mount_instance,state,
+                              generation,verified_generation,read_only,last_full_verified_at,remediation
+                       from app.evidence_storage_authorities where case_id=%s""",
+                    (case_id,),
+                )
+                storage = cur.fetchone()
+                cur.execute(
                     """
                     select display_path
                     from app.evidence_objects
@@ -794,6 +1108,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 )
                 unregistered = [str(r[0]) for r in cur.fetchall()]
         incomplete = public_operation(self._custody_repository.get_incomplete(case_id))
+        storage_public = {
+            "storage_profile": str(storage[0]) if storage else "UNKNOWN",
+            "storage_availability": str(storage[3]) if storage else "UNAVAILABLE",
+            "storage_last_full_verified_at": (_iso(storage[7]) if storage else None),
+            "storage_remediation": str(storage[8]) if storage else "FULL_VERIFY",
+        }
         if not row:
             return {
                 "seal_status": "unsealed",
@@ -805,6 +1125,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 "unregistered": unregistered,
                 "incomplete_operation": incomplete,
                 "gate_state": reconciliation["gate_state"],
+                **storage_public,
             }
         return {
             "seal_status": row[0],
@@ -816,6 +1137,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "unregistered": unregistered,
             "incomplete_operation": incomplete,
             "gate_state": reconciliation["gate_state"],
+            **storage_public,
         }
 
     def list_evidence(self, case_id: str) -> list[dict[str, Any]]:
@@ -890,7 +1212,9 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     (evidence_object_id, case_id),
                 )
                 if not cur.fetchone():
-                    raise PortalServiceError("evidence_object_not_found", http_status=404)
+                    raise PortalServiceError(
+                        "evidence_object_not_found", http_status=404
+                    )
                 cur.execute(
                     """select id::text,manifest_version,sha256,bytes,entry_status,
                               manifest_hash,created_at,custody_operation_id::text
@@ -913,17 +1237,24 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "evidence_object_id": evidence_object_id,
             "versions": [
                 {
-                    "evidence_version_id": str(r[0]), "manifest_version": r[1],
-                    "sha256": r[2], "bytes": r[3], "entry_status": r[4],
-                    "manifest_hash": r[5], "created_at": _iso(r[6]),
+                    "evidence_version_id": str(r[0]),
+                    "manifest_version": r[1],
+                    "sha256": r[2],
+                    "bytes": r[3],
+                    "entry_status": r[4],
+                    "manifest_hash": r[5],
+                    "created_at": _iso(r[6]),
                     "custody_operation_id": str(r[7]) if r[7] else None,
                 }
                 for r in versions
             ],
             "events": [
                 {
-                    "event_id": str(r[0]), "seq": r[1], "event_type": r[2],
-                    "manifest_version": r[3], "event_hash": r[4],
+                    "event_id": str(r[0]),
+                    "seq": r[1],
+                    "event_type": r[2],
+                    "manifest_version": r[3],
+                    "event_hash": r[4],
                     "created_at": _iso(r[5]),
                     "custody_operation_id": str(r[6]) if r[6] else None,
                 }
@@ -960,6 +1291,25 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     (case_id, ref, display_path),
                 )
                 row = cur.fetchone()
+                cur.execute(
+                    """select profile,source_identity,verified_mount_instance,state,
+                              generation,verified_generation,read_only
+                       from app.evidence_storage_authorities where case_id=%s""",
+                    (case_id,),
+                )
+                storage = cur.fetchone()
+                cur.execute(
+                    """select v.item_facts from app.evidence_storage_verifications v
+                       join app.evidence_storage_authorities a on a.case_id=v.case_id
+                       join app.evidence_chain_heads h on h.case_id=v.case_id
+                       where v.case_id=%s and v.outcome='SUCCESS'
+                         and v.generation=a.generation and v.profile=a.profile
+                         and v.manifest_version=h.manifest_version
+                         and v.manifest_hash=h.manifest_hash
+                       order by v.created_at desc,v.id desc limit 1""",
+                    (case_id,),
+                )
+                verification_row = cur.fetchone()
         if not row:
             raise PortalServiceError("evidence_object_not_found", http_status=404)
         if (
@@ -970,12 +1320,85 @@ class EvidenceAuthorityService(_BasePortalDbService):
         ):
             raise PortalServiceError("evidence_object_not_sealed", http_status=403)
         path = self._resolve_evidence_path(case_id, str(row[1]))
-        st, immutable = _admission_fingerprint(path)
+        if not storage:
+            raise PortalServiceError(
+                "evidence_storage_authority_unavailable", http_status=503
+            )
+        profile = StorageProfile(str(storage[0]))
+        verification_items = (
+            verification_row[0]
+            if verification_row and isinstance(verification_row[0], list)
+            else []
+        )
+        verified_item = next(
+            (
+                item
+                for item in verification_items
+                if isinstance(item, dict)
+                and str(item.get("evidence_object_id")) == str(row[0])
+                and str(item.get("evidence_version_id")) == str(row[4])
+            ),
+            None,
+        )
+        flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                raise PortalServiceError("evidence_identity_unsafe", http_status=403)
+            immutable = None
+            external = None
+            if profile is StorageProfile.LOCAL_IMMUTABLE:
+                from sift_core.evidence_chain import get_immutable_flag_fd
+
+                immutable = get_immutable_flag_fd(fd)
+            else:
+                try:
+                    external = external_storage_facts(fd)
+                except StorageAuthorityError as exc:
+                    raise PortalServiceError(
+                        "evidence_posture_changed", http_status=403
+                    ) from exc
+        finally:
+            os.close(fd)
         if row[6] is not None and st.st_size != int(row[6]):
             raise PortalServiceError("evidence_version_changed", http_status=403)
-        immutable_required = sys.platform.startswith("linux")
+        immutable_required = (
+            profile is StorageProfile.LOCAL_IMMUTABLE
+            and sys.platform.startswith("linux")
+        )
         if immutable_required and immutable is not True:
             raise PortalServiceError("evidence_posture_changed", http_status=403)
+        if profile is StorageProfile.EXTERNALLY_READ_ONLY and (
+            str(storage[3]) != "AVAILABLE"
+            or storage[5] != storage[4]
+            or external is None
+            or external.source_identity != str(storage[1])
+            or external.mount_instance_identity != str(storage[2])
+            or not isinstance(verified_item, dict)
+            or (
+                st.st_dev,
+                st.st_ino,
+                st.st_size,
+                st.st_mtime_ns,
+                st.st_ctime_ns,
+                st.st_nlink,
+            )
+            != (
+                int(verified_item.get("st_dev", -1)),
+                int(verified_item.get("st_ino", -1)),
+                int(verified_item.get("bytes", -1)),
+                int(verified_item.get("st_mtime_ns", -1)),
+                int(verified_item.get("st_ctime_ns", -1)),
+                int(verified_item.get("st_nlink", -1)),
+            )
+            or str(verified_item.get("sha256")) != str(row[5])
+            or str(verified_item.get("storage_source_identity")) != str(storage[1])
+            or str(verified_item.get("mount_instance_identity")) != str(storage[2])
+        ):
+            raise PortalServiceError(
+                "external_storage_full_verify_required", http_status=403
+            )
         return {
             "evidence_id": str(row[0]),
             "version_id": str(row[4]),
@@ -988,6 +1411,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "st_mtime_ns": st.st_mtime_ns,
             "st_ctime_ns": st.st_ctime_ns,
             "immutable_required": immutable_required,
+            "storage_profile": profile.value,
+            "storage_source_identity": (
+                external.source_identity if external is not None else ""
+            ),
+            "mount_instance_identity": (
+                external.mount_instance_identity if external is not None else ""
+            ),
+            "read_only_required": profile is StorageProfile.EXTERNALLY_READ_ONLY,
         }
 
     def record_reauth_event(
@@ -1085,6 +1516,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
         reauth_audit_event_id: str,
         actor: Any,
         examiner: str,
+        storage_profile: str = StorageProfile.LOCAL_IMMUTABLE.value,
+        command_schema_version: int = 3,
         resume_reauth_audit_event_id: str | None = None,
     ) -> dict[str, Any]:
         """Validate the Portal command, then delegate the durable operation."""
@@ -1098,6 +1531,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
             raise PortalServiceError("seal_requires_reauth", http_status=403)
         if not file_specs or len(file_specs) > 1000:
             raise PortalServiceError("seal_requires_items", http_status=400)
+        try:
+            profile = StorageProfile(storage_profile)
+        except ValueError as exc:
+            raise PortalServiceError(
+                "invalid_storage_profile", http_status=400
+            ) from exc
 
         allowed_spec_keys = {"path", "description", "source"}
         normalized_specs: list[dict[str, str | None]] = []
@@ -1135,12 +1574,18 @@ class EvidenceAuthorityService(_BasePortalDbService):
             reason=reason,
             reauth_audit_event_id=reauth_audit_event_id,
             idempotency_key=idempotency_key,
+            storage_profile=profile,
+            schema_version=command_schema_version,
             resume_reauth_audit_event_id=resume_reauth_audit_event_id,
         )
         try:
             return SealCustodyOperation(
                 self._custody_repository,
-                self._posture_adapter,
+                (
+                    self._posture_adapter
+                    if profile is StorageProfile.LOCAL_IMMUTABLE
+                    else self._external_posture_adapter
+                ),
                 self._case_artifact_path,
                 self._seal_object_for_path,
             ).execute(command, examiner=examiner)
@@ -1148,7 +1593,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
             raise PortalServiceError(exc.reason, http_status=exc.http_status) from exc
 
     def resume_seal(
-        self, *, case_id: str, operation_id: str, actor: Any, examiner: str,
+        self,
+        *,
+        case_id: str,
+        operation_id: str,
+        actor: Any,
+        examiner: str,
         resume_reauth_audit_event_id: str,
     ) -> dict[str, Any]:
         """Resume one path-free incomplete Add/Seal operation after fresh Portal re-auth."""
@@ -1176,8 +1626,24 @@ class EvidenceAuthorityService(_BasePortalDbService):
             raise PortalServiceError("seal_resume_actor_mismatch", http_status=403)
         command = row[0] if isinstance(row[0], dict) else {}
         files = command.get("files") if isinstance(command, dict) else None
-        if command.get("action") != "ADD_SEAL" or not isinstance(files, list):
-            raise PortalServiceError("custody_operation_command_invalid", http_status=409)
+        schema_version = command.get("schema_version")
+        storage_profile = str(
+            command.get("storage_profile")
+            or (StorageProfile.LOCAL_IMMUTABLE.value if schema_version == 1 else "")
+        )
+        if (
+            command.get("action") != "ADD_SEAL"
+            or schema_version not in {1, 3}
+            or storage_profile not in {profile.value for profile in StorageProfile}
+            or (
+                schema_version == 1
+                and storage_profile != StorageProfile.LOCAL_IMMUTABLE
+            )
+            or not isinstance(files, list)
+        ):
+            raise PortalServiceError(
+                "custody_operation_command_invalid", http_status=409
+            )
         return self.seal(
             case_id=case_id,
             file_specs=files,
@@ -1186,6 +1652,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
             reauth_audit_event_id=str(row[3] or ""),
             actor=actor,
             examiner=examiner,
+            storage_profile=storage_profile,
+            command_schema_version=int(schema_version),
             resume_reauth_audit_event_id=resume_reauth_audit_event_id,
         )
 
@@ -1334,7 +1802,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
                        where id=%s and case_id=%s
                          and action in ('IGNORE','DELETE_STRAY','RETIRE')
                          and phase=any(%s)""",
-                    (operation_id, case_id, [phase.value for phase in RESUMABLE_SEAL_PHASES]),
+                    (
+                        operation_id,
+                        case_id,
+                        [phase.value for phase in RESUMABLE_SEAL_PHASES],
+                    ),
                 )
                 row = cur.fetchone()
         if not row:
@@ -1352,9 +1824,13 @@ class EvidenceAuthorityService(_BasePortalDbService):
             ):
                 raise ValueError("stored disposition action invalid")
             command = ObjectCustodyCommand(
-                action=action,case_id=case_id,evidence_object_id=evidence_object_id,
-                actor_user_id=actor_user,actor_service_identity_id=None,
-                reason=str(row[1] or ""),reauth_audit_event_id=str(row[3] or ""),
+                action=action,
+                case_id=case_id,
+                evidence_object_id=evidence_object_id,
+                actor_user_id=actor_user,
+                actor_service_identity_id=None,
+                reason=str(row[1] or ""),
+                reauth_audit_event_id=str(row[3] or ""),
                 idempotency_key=str(row[2] or ""),
                 resume_reauth_audit_event_id=resume_reauth_audit_event_id,
             )
@@ -1364,10 +1840,16 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 resume_reauth_audit_event_id=resume_reauth_audit_event_id,
             )
             return DispositionCustodyOperation(
-                self._custody_repository,self._case_artifact_path,self._recovery_object_for_id,
+                self._custody_repository,
+                self._case_artifact_path,
+                self._recovery_object_for_id,
             ).execute(command, examiner=examiner, resumed_operation=resumed)
         except (CustodyOperationError, ValueError) as exc:
-            reason = exc.reason if isinstance(exc, CustodyOperationError) else "custody_operation_command_invalid"
+            reason = (
+                exc.reason
+                if isinstance(exc, CustodyOperationError)
+                else "custody_operation_command_invalid"
+            )
             status = exc.http_status if isinstance(exc, CustodyOperationError) else 409
             raise PortalServiceError(reason, http_status=status) from exc
 
@@ -1410,14 +1892,18 @@ class EvidenceAuthorityService(_BasePortalDbService):
         try:
             action = CustodyAction(action)
         except (TypeError, ValueError) as exc:
-            raise PortalServiceError("recovery_action_required", http_status=400) from exc
+            raise PortalServiceError(
+                "recovery_action_required", http_status=400
+            ) from exc
         if action not in (CustodyAction.REPLACE_REACQUIRE, CustodyAction.RESTORE_EXACT):
             raise PortalServiceError("recovery_action_required", http_status=400)
         normalized_reason = " ".join(reason.split())
         if not 1 <= len(normalized_reason) <= 1000:
             raise PortalServiceError("recovery_reason_required", http_status=400)
         if not 1 <= len(idempotency_key.strip()) <= 128:
-            raise PortalServiceError("recovery_idempotency_key_required", http_status=400)
+            raise PortalServiceError(
+                "recovery_idempotency_key_required", http_status=400
+            )
         rel = _relative_display_path(display_path)
         evidence_object_id = self._evidence_id_for_path(case_id, rel)
         if not evidence_object_id:
@@ -1466,7 +1952,9 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     (operation_id, case_id),
                 )
                 if not cur.fetchone():
-                    raise PortalServiceError("custody_operation_not_found", http_status=404)
+                    raise PortalServiceError(
+                        "custody_operation_not_found", http_status=404
+                    )
         try:
             return RecoveryCustodyOperation(
                 self._custody_repository,
@@ -1493,9 +1981,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
         idempotency_key: str = "",
     ) -> dict[str, Any]:
         return self._execute_disposition(
-            case_id=case_id,display_path=display_path,action=CustodyAction.IGNORE,
-            reason=reason,idempotency_key=idempotency_key or f"ignore:{reauth_audit_event_id}",
-            reauth_audit_event_id=reauth_audit_event_id,actor=actor,examiner=examiner,
+            case_id=case_id,
+            display_path=display_path,
+            action=CustodyAction.IGNORE,
+            reason=reason,
+            idempotency_key=idempotency_key or f"ignore:{reauth_audit_event_id}",
+            reauth_audit_event_id=reauth_audit_event_id,
+            actor=actor,
+            examiner=examiner,
         )
 
     def retire(
@@ -1510,9 +2003,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
         idempotency_key: str = "",
     ) -> dict[str, Any]:
         return self._execute_disposition(
-            case_id=case_id,display_path=display_path,action=CustodyAction.RETIRE,
-            reason=reason,idempotency_key=idempotency_key or f"retire:{reauth_audit_event_id}",
-            reauth_audit_event_id=reauth_audit_event_id,actor=actor,examiner=examiner,
+            case_id=case_id,
+            display_path=display_path,
+            action=CustodyAction.RETIRE,
+            reason=reason,
+            idempotency_key=idempotency_key or f"retire:{reauth_audit_event_id}",
+            reauth_audit_event_id=reauth_audit_event_id,
+            actor=actor,
+            examiner=examiner,
         )
 
     def delete_object(
@@ -1534,9 +2032,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
         eligible; Retire preserves its bytes and version history.
         """
         return self._execute_disposition(
-            case_id=case_id,display_path=display_path,action=CustodyAction.DELETE_STRAY,
-            reason=reason,idempotency_key=idempotency_key or f"delete:{reauth_audit_event_id}",
-            reauth_audit_event_id=reauth_audit_event_id,actor=actor,examiner=examiner,
+            case_id=case_id,
+            display_path=display_path,
+            action=CustodyAction.DELETE_STRAY,
+            reason=reason,
+            idempotency_key=idempotency_key or f"delete:{reauth_audit_event_id}",
+            reauth_audit_event_id=reauth_audit_event_id,
+            actor=actor,
+            examiner=examiner,
         )
 
     def _scan_evidence(self, case_id: str) -> None:
@@ -1648,34 +2151,192 @@ class EvidenceAuthorityService(_BasePortalDbService):
         (which escalates to ``violated`` on failure). Returns the chain-head dict.
         DB is the authority; no file manifest/ledger is consulted.
         """
-        self._scan_evidence(case_id)
-        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
+        actor_type, actor_user, _actor_agent, _actor_service = _actor_columns(actor)
         del actor_type
-        ok, issues, manifest_version = self._reverify_sealed(case_id)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    select case_id::text, manifest_version, head_seq, head_hash,
-                           manifest_hash, seal_status, active_count, issues,
-                           last_event_type, last_verified_at
-                    from app.evidence_verify(%s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        case_id,
-                        ok,
-                        manifest_version,
-                        _jsonb(issues),
-                        actor_user,
-                        actor_service,
-                    ),
+                    """select a.profile,a.generation,h.manifest_version,h.manifest_hash
+                       from app.evidence_storage_authorities a
+                       join app.evidence_chain_heads h on h.case_id=a.case_id
+                       where a.case_id=%s""",
+                    (case_id,),
                 )
-                row = cur.fetchone()
-            conn.commit()
-        result = _chain_head_dict(row)
+                authority = cur.fetchone()
+                cur.execute(
+                    """select o.id::text,o.display_path,v.id::text,v.sha256,v.bytes
+                       from app.evidence_objects o join app.evidence_versions v
+                         on v.id=o.current_version_id
+                       where o.case_id=%s and o.status='sealed' order by o.id""",
+                    (case_id,),
+                )
+                sealed = cur.fetchall()
+        if not authority:
+            raise PortalServiceError(
+                "evidence_storage_authority_unavailable", http_status=503
+            )
+        profile = StorageProfile(str(authority[0]))
+        case_dir = self._case_artifact_path(case_id)
+        if case_dir is None:
+            raise PortalServiceError("evidence_storage_unavailable", http_status=409)
+        adapter: LocalImmutablePostureProtocol = (
+            self._posture_adapter
+            if profile is StorageProfile.LOCAL_IMMUTABLE
+            else self._external_posture_adapter
+        )
+        correlation_id = f"full-verify:{uuid.uuid4().hex}"
+        try:
+            batch = adapter.prepare(case_dir, [str(row[1]) for row in sealed])
+        except Exception:
+            failure_code = self._storage_verify_failure_code(case_dir, profile)
+            self._record_storage_verify_failure(
+                case_id=case_id,
+                generation=int(authority[1]),
+                profile=profile,
+                manifest_version=int(authority[2] or 0),
+                manifest_hash=str(authority[3] or ""),
+                failure_code=failure_code,
+                correlation_id=correlation_id,
+                actor_user_id=actor_user,
+            )
+            raise
+        try:
+            try:
+                receipts = adapter.verify(batch)
+            except Exception:
+                failure_code = self._storage_verify_failure_code(case_dir, profile)
+                self._record_storage_verify_failure(
+                    case_id=case_id,
+                    generation=int(authority[1]),
+                    profile=profile,
+                    manifest_version=int(authority[2] or 0),
+                    manifest_hash=str(authority[3] or ""),
+                    failure_code=failure_code,
+                    correlation_id=correlation_id,
+                    actor_user_id=actor_user,
+                )
+                raise
+        finally:
+            adapter.close(batch)
+        expected = {str(row[1]): row for row in sealed}
+        items: list[dict[str, Any]] = []
+        issues: list[str] = []
+        for receipt in receipts:
+            row = expected.get(str(receipt.get("path")))
+            if (
+                not row
+                or receipt.get("sha256") != row[3]
+                or int(receipt.get("bytes", -1)) != int(row[4])
+            ):
+                issues.append("mounted_evidence_digest_mismatch")
+                continue
+            items.append(
+                {
+                    **receipt,
+                    "evidence_object_id": str(row[0]),
+                    "evidence_version_id": str(row[2]),
+                }
+            )
+        ok = not issues and len(items) == len(sealed)
+        manifest_version = int(authority[2] or 0)
+        if ok:
+            source_identity = (
+                str(items[0].get("storage_source_identity"))
+                if items and profile is StorageProfile.EXTERNALLY_READ_ONLY
+                else None
+            )
+            mount_instance = (
+                str(items[0].get("mount_instance_identity"))
+                if items and profile is StorageProfile.EXTERNALLY_READ_ONLY
+                else None
+            )
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """select app.evidence_storage_commit_full_verify(
+                             %s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (
+                            case_id,
+                            int(authority[1]),
+                            profile.value,
+                            source_identity,
+                            mount_instance,
+                            True
+                            if profile is StorageProfile.EXTERNALLY_READ_ONLY
+                            else None,
+                            manifest_version,
+                            _jsonb(items),
+                            correlation_id,
+                            actor_user,
+                        ),
+                    )
+                conn.commit()
+        else:
+            self._record_storage_verify_failure(
+                case_id=case_id,
+                generation=int(authority[1]),
+                profile=profile,
+                manifest_version=manifest_version,
+                manifest_hash=str(authority[3] or ""),
+                failure_code="MOUNTED_EVIDENCE_MISMATCH",
+                correlation_id=correlation_id,
+                actor_user_id=actor_user,
+            )
+        result = self.gate_status(case_id)
         result["verified"] = ok
         result["issues"] = issues
         return result
+
+    @staticmethod
+    def _storage_verify_failure_code(case_dir: Path, profile: StorageProfile) -> str:
+        if profile is StorageProfile.LOCAL_IMMUTABLE:
+            return "FULL_VERIFY_FAILED"
+        root_fd: int | None = None
+        try:
+            root_fd = os.open(
+                case_dir / "evidence",
+                os.O_RDONLY
+                | os.O_CLOEXEC
+                | os.O_DIRECTORY
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            facts = external_storage_facts(root_fd, require_read_only=False)
+            return "FULL_VERIFY_FAILED" if facts.read_only else "READ_WRITE_DRIFT"
+        except (OSError, StorageAuthorityError):
+            return "STORAGE_UNAVAILABLE"
+        finally:
+            if root_fd is not None:
+                os.close(root_fd)
+
+    def _record_storage_verify_failure(
+        self,
+        *,
+        case_id: str,
+        generation: int,
+        profile: StorageProfile,
+        manifest_version: int,
+        manifest_hash: str,
+        failure_code: str,
+        correlation_id: str,
+        actor_user_id: str | None,
+    ) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select app.evidence_storage_record_verify_failure(
+                         %s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (
+                        case_id,
+                        generation,
+                        profile.value,
+                        manifest_version,
+                        manifest_hash,
+                        failure_code,
+                        correlation_id,
+                        actor_user_id,
+                    ),
+                )
+            conn.commit()
 
     def _reverify_sealed(self, case_id: str) -> tuple[bool, list[str], int]:
         """Full re-hash of sealed objects vs. their sealed DB hash.
@@ -1711,7 +2372,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 issues.append(f"Missing: {rel}")
                 continue
             actual_sha, actual_bytes = _hash_file(path)
-            if sealed_bytes is not None and actual_bytes != int(sealed_bytes) or sealed_sha and f"sha256:{actual_sha}" != str(sealed_sha):
+            if (
+                sealed_bytes is not None
+                and actual_bytes != int(sealed_bytes)
+                or sealed_sha
+                and f"sha256:{actual_sha}" != str(sealed_sha)
+            ):
                 issues.append(f"Modified: {rel}")
         return (not issues, issues, manifest_version)
 
@@ -1800,11 +2466,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "verified": verified,
             "issues": issues,
         }
-        proof_hash = "sha256:" + hashlib.sha256(
-            json.dumps(proof_material, sort_keys=True, separators=(",", ":"), default=str).encode(
-                "utf-8"
-            )
-        ).hexdigest()
+        proof_hash = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    proof_material, sort_keys=True, separators=(",", ":"), default=str
+                ).encode("utf-8")
+            ).hexdigest()
+        )
         metadata: dict[str, Any] = {
             "proof_hash": proof_hash,
             "object_count": len(objects),
@@ -1922,6 +2591,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 )
                 row = cur.fetchone()
             conn.commit()
+        if not row:
+            raise PortalServiceError("evidence_detection_failed", http_status=503)
         return str(row[0])
 
     def _ensure_registered(
@@ -2078,9 +2749,7 @@ class InvestigationService(_BasePortalDbService):
         """Approved findings/timeline/IOCs for report generation (DB authority)."""
         return self._store().report_inputs(case_id)
 
-    def audit_events(
-        self, case_id: str, audit_ids: list[str]
-    ) -> list[dict[str, Any]]:
+    def audit_events(self, case_id: str, audit_ids: list[str]) -> list[dict[str, Any]]:
         """Return ``app.audit_events`` rows for this case matching ``audit_ids``.
 
         BATCH-K6: the portal audit view sources audit entries from Postgres
@@ -2166,7 +2835,7 @@ class InvestigationService(_BasePortalDbService):
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (case_id, ids, ids, ids, ids, ids, ids))
-                cols = [d[0] for d in cur.description]
+                cols = [d[0] for d in (cur.description or ())]
                 for record in cur.fetchall():
                     row = dict(zip(cols, record, strict=False))
                     row["created_at"] = _iso(row.get("created_at"))
@@ -2227,7 +2896,8 @@ class InvestigationService(_BasePortalDbService):
             matched = [
                 # SIM109's tuple-membership suggestion would silently drop the
                 # aliases/envelope_eid/row_req_id/detail_audit_id fallbacks below.
-                aid for aid in ids
+                aid
+                for aid in ids
                 if (
                     aid == row_uuid
                     or aid == bid
@@ -2279,7 +2949,7 @@ class InvestigationService(_BasePortalDbService):
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (case_id, safe_limit * 2))
-                cols = [d[0] for d in cur.description]
+                cols = [d[0] for d in (cur.description or ())]
                 for record in cur.fetchall():
                     row = dict(zip(cols, record, strict=False))
                     row["created_at"] = _iso(row.get("created_at"))
@@ -2289,7 +2959,9 @@ class InvestigationService(_BasePortalDbService):
         for row in _collapse_activity_rows(rows, safe_limit):
             details = _event_details(row)
             tool = _activity_tool(row)
-            status = str(row.get("status") or details.get("status") or "requested").lower()
+            status = str(
+                row.get("status") or details.get("status") or "requested"
+            ).lower()
             events.append(
                 {
                     "id": str(row.get("id") or ""),
@@ -2350,7 +3022,13 @@ class InvestigationService(_BasePortalDbService):
         todo = next((row for row in rows if row.get("todo_id") == todo_id), None)
         if todo is None:
             return None
-        for key in ("description", "priority", "status", "assignee", "related_findings"):
+        for key in (
+            "description",
+            "priority",
+            "status",
+            "assignee",
+            "related_findings",
+        ):
             if key in patch:
                 todo[key] = patch[key]
         if patch.get("note"):
@@ -2362,14 +3040,18 @@ class InvestigationService(_BasePortalDbService):
                 }
             )
         if todo.get("status") == "completed":
-            todo["completed_at"] = todo.get("completed_at") or datetime.now(timezone.utc).isoformat()
+            todo["completed_at"] = (
+                todo.get("completed_at") or datetime.now(timezone.utc).isoformat()
+            )
         else:
             todo["completed_at"] = None
         self._upsert_todo(case_id, todo_id, todo, source="portal")
         self._mirror_todos(case_id)
         return todo
 
-    def delete_todo(self, *, case_id: str, todo_id: str, examiner: str, actor: Any) -> bool:
+    def delete_todo(
+        self, *, case_id: str, todo_id: str, examiner: str, actor: Any
+    ) -> bool:
         del examiner, actor
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -2383,7 +3065,9 @@ class InvestigationService(_BasePortalDbService):
             self._mirror_todos(case_id)
         return deleted
 
-    def _payload_rows(self, sql: str, case_id: str) -> list[dict[str, Any]]:
+    def _payload_rows(
+        self, sql: LiteralString, case_id: str
+    ) -> list[dict[str, Any]]:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (case_id,))
@@ -2409,12 +3093,14 @@ class InvestigationService(_BasePortalDbService):
             tid = str(row.get("todo_id") or "")
             if tid.startswith(prefix):
                 try:
-                    max_seq = max(max_seq, int(tid[len(prefix):]))
+                    max_seq = max(max_seq, int(tid[len(prefix) :]))
                 except ValueError:
                     pass
         return max_seq + 1
 
-    def _upsert_todo(self, case_id: str, todo_id: str, payload: dict[str, Any], *, source: str) -> None:
+    def _upsert_todo(
+        self, case_id: str, todo_id: str, payload: dict[str, Any], *, source: str
+    ) -> None:
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(

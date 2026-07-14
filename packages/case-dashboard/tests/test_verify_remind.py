@@ -1,10 +1,10 @@
-"""Tests for evidence chain HMAC verify (DB-authority).
+"""Tests for passwordless Full Verify Evidence (DB-authority).
 
 Covers:
   GET /api/evidence/chain/status surfaces verify-reminder fields
     (hmac_last_verified_at, hmac_last_verified_by, hmac_verify_needed) from the
     DB gate — never from a file verify-state side file.
-  POST /api/evidence/chain/verify-hmac — auth, happy path, DB verify call.
+  POST /api/evidence/chain/verify-hmac — auth, strict body, DB verify call.
 
 The file-backed verify-state mechanism (evidence-verify-state.json) and the
 file ledger HMAC verify have been removed; the DB gate's last_verified_at is the
@@ -47,9 +47,14 @@ class FakeActiveCases:
 class FakeEvidenceDB:
     def __init__(self, *, last_verified_at=None, verify_result=None):
         self.last_verified_at = last_verified_at
-        self.verify_result = verify_result if verify_result is not None else {
-            "verified": True, "issues": [],
-        }
+        self.verify_result = (
+            verify_result
+            if verify_result is not None
+            else {
+                "verified": True,
+                "issues": [],
+            }
+        )
         self.verify_calls: list = []
 
     def gate_status(self, case_id):
@@ -107,8 +112,12 @@ def _build_client(passwords_dir, tmp_path, monkeypatch, evidence_db, *, fake_aut
 
 
 class TestChainStatusIncludesVerifyFields:
-    def test_no_verify_state_hmac_needed_true(self, passwords_dir, tmp_path, monkeypatch):
-        c = _build_client(passwords_dir, tmp_path, monkeypatch, FakeEvidenceDB(last_verified_at=None))
+    def test_no_verify_state_hmac_needed_true(
+        self, passwords_dir, tmp_path, monkeypatch
+    ):
+        c = _build_client(
+            passwords_dir, tmp_path, monkeypatch, FakeEvidenceDB(last_verified_at=None)
+        )
         resp = c.get("/api/evidence/chain/status")
         assert resp.status_code == 200
         data = resp.json()
@@ -117,9 +126,13 @@ class TestChainStatusIncludesVerifyFields:
         assert data["hmac_last_verified_at"] is None
         assert data["hmac_last_verified_by"] is None
 
-    def test_recent_verify_state_hmac_needed_false(self, passwords_dir, tmp_path, monkeypatch):
+    def test_recent_verify_state_hmac_needed_false(
+        self, passwords_dir, tmp_path, monkeypatch
+    ):
         ts = "2026-06-08T10:00:00+00:00"
-        c = _build_client(passwords_dir, tmp_path, monkeypatch, FakeEvidenceDB(last_verified_at=ts))
+        c = _build_client(
+            passwords_dir, tmp_path, monkeypatch, FakeEvidenceDB(last_verified_at=ts)
+        )
         resp = c.get("/api/evidence/chain/status")
         data = resp.json()
         assert data["hmac_verify_needed"] is False
@@ -135,8 +148,10 @@ class TestVerifyHmacEndpoint:
     def test_no_auth_returns_403(self, passwords_dir, tmp_path, monkeypatch):
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
         app = create_dashboard_v2_app(
-            session_secret=_SECRET, session_max_age=28800,
-            active_case_service=FakeActiveCases(), evidence_service=FakeEvidenceDB(),
+            session_secret=_SECRET,
+            session_max_age=28800,
+            active_case_service=FakeActiveCases(),
+            evidence_service=FakeEvidenceDB(),
             supabase_auth=ReauthFakeSupabaseAuth(),
         )
         c = TestClient(app, raise_server_exceptions=True)
@@ -144,41 +159,58 @@ class TestVerifyHmacEndpoint:
         assert resp.status_code == 403
 
     def test_agent_principal_returns_403(self, passwords_dir, tmp_path, monkeypatch):
-        agent = dict(operator_principal(), principal_type="agent",
-                     auth_user_id="auth-user-agent-1")
-        c = _build_client(passwords_dir, tmp_path, monkeypatch, FakeEvidenceDB(),
-                          fake_auth=ReauthFakeSupabaseAuth(principal=agent))
+        agent = dict(
+            operator_principal(),
+            principal_type="agent",
+            auth_user_id="auth-user-agent-1",
+        )
+        c = _build_client(
+            passwords_dir,
+            tmp_path,
+            monkeypatch,
+            FakeEvidenceDB(),
+            fake_auth=ReauthFakeSupabaseAuth(principal=agent),
+        )
         resp = c.post("/api/evidence/chain/verify-hmac", json={})
         assert resp.status_code in (401, 403)
 
-    def test_missing_password_returns_400(self, passwords_dir, tmp_path, monkeypatch):
-        c = _build_client(passwords_dir, tmp_path, monkeypatch, FakeEvidenceDB())
-        resp = c.post("/api/evidence/chain/verify-hmac", json={})
-        assert resp.status_code == 400
-
-    def test_wrong_password_returns_401(self, passwords_dir, tmp_path, monkeypatch):
+    def test_empty_body_runs_passwordless_full_verify(
+        self, passwords_dir, tmp_path, monkeypatch
+    ):
         ev = FakeEvidenceDB()
         c = _build_client(passwords_dir, tmp_path, monkeypatch, ev)
-        resp2 = c.post("/api/evidence/chain/verify-hmac", json={
-            "password": "wrong-password",
-        })
-        assert resp2.status_code == 401
-        assert not ev.verify_calls
+        resp = c.post("/api/evidence/chain/verify-hmac", json={})
+        assert resp.status_code == 200
+        assert len(ev.verify_calls) == 1
 
-    def test_control_plane_down_fails_closed(self, passwords_dir, tmp_path, monkeypatch):
+    def test_password_field_is_rejected_as_unknown(
+        self, passwords_dir, tmp_path, monkeypatch
+    ):
+        c = _build_client(passwords_dir, tmp_path, monkeypatch, FakeEvidenceDB())
+        resp = c.post(
+            "/api/evidence/chain/verify-hmac", json={"password": GOOD_PASSWORD}
+        )
+        assert resp.status_code == 400
+
+    def test_full_verify_does_not_invoke_password_reauth(
+        self, passwords_dir, tmp_path, monkeypatch
+    ):
         ev = FakeEvidenceDB()
-        c = _build_client(passwords_dir, tmp_path, monkeypatch, ev,
-                          fake_auth=ReauthFakeSupabaseAuth(control_plane_down=True))
-        resp = c.post("/api/evidence/chain/verify-hmac", json={"password": GOOD_PASSWORD})
-        assert resp.status_code == 503
-        assert not ev.verify_calls
+        c = _build_client(
+            passwords_dir,
+            tmp_path,
+            monkeypatch,
+            ev,
+            fake_auth=ReauthFakeSupabaseAuth(control_plane_down=True),
+        )
+        resp = c.post("/api/evidence/chain/verify-hmac", json={})
+        assert resp.status_code == 200
+        assert len(ev.verify_calls) == 1
 
     def test_happy_path_ok_result(self, passwords_dir, tmp_path, monkeypatch):
         ev = FakeEvidenceDB(verify_result={"verified": True, "issues": []})
         c = _build_client(passwords_dir, tmp_path, monkeypatch, ev)
-        resp = c.post("/api/evidence/chain/verify-hmac", json={
-            "password": GOOD_PASSWORD,
-        })
+        resp = c.post("/api/evidence/chain/verify-hmac", json={})
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
@@ -194,11 +226,13 @@ class TestVerifyHmacEndpoint:
         assert isinstance(actor, dict) and actor["principal_type"] == "operator"
 
     def test_failed_verify_reports_not_ok(self, passwords_dir, tmp_path, monkeypatch):
-        ev = FakeEvidenceDB(verify_result={"verified": False, "issues": ["Modified: evidence/x"]})
+        ev = FakeEvidenceDB(
+            verify_result={"verified": False, "issues": ["Modified: evidence/x"]}
+        )
         c = _build_client(passwords_dir, tmp_path, monkeypatch, ev)
-        resp = c.post("/api/evidence/chain/verify-hmac", json={
-            "password": GOOD_PASSWORD,
-        })
+        resp = c.post(
+            "/api/evidence/chain/verify-hmac", json={"note": "operator initiated"}
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is False
@@ -217,10 +251,11 @@ class TestVerifyHmacEndpoint:
         """No DB service: verify-hmac degrades to no-case, never reads a file ledger."""
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
         app = create_dashboard_v2_app(
-            session_secret=_SECRET, session_max_age=28800,
+            session_secret=_SECRET,
+            session_max_age=28800,
             supabase_auth=ReauthFakeSupabaseAuth(),
         )
         c = TestClient(app, raise_server_exceptions=True)
         set_operator_session(c, _SECRET)
-        resp = c.post("/api/evidence/chain/verify-hmac", json={"password": GOOD_PASSWORD})
+        resp = c.post("/api/evidence/chain/verify-hmac", json={})
         assert resp.status_code == 404

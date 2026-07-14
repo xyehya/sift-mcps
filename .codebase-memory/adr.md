@@ -83,6 +83,15 @@ before unlink; Ignore and Retire never mutate mounted bytes, and Retire creates 
 manifest while preserving prior versions and siblings. Posture-only verification cannot create an
 Evidence Version. These seams add no MCP tool or authenticated-browser database grant.
 
+12. **Bind external read-only storage by source, mount instance, and exact receipt.**
+`EXTERNALLY_READ_ONLY` is operator-authorized and never MCP-mutated. Gateway reads use pinned
+no-follow descriptors with read-only agreement at descriptor, VFS, and mount/superblock layers.
+Stable source identity is distinct from Linux `STATX_MNT_ID_UNIQUE` mount-instance identity: a
+same-source remount requires Full Verify, while a changed source requires fresh reasoned,
+idempotent Portal authorization. Successful and failed verification receipts are append-only and
+bound to case generation, profile, manifest, active Evidence Version, hash, bytes, identity, and
+posture; stale receipts cannot authorize a worker binding.
+
 **Change routing:** policy/auth/scoping → `sift-gateway`; evidence/findings/reports/execution → `sift-core` + migrations; derived search/ingest → `opensearch-mcp`; human UX → `case-dashboard`; confinement → configs/systemd/AppArmor with the code change.
 
 ## TRADEOFFS

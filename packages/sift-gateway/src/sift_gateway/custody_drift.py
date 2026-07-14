@@ -12,6 +12,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from sift_core.evidence_storage import StorageProfile
+
 _OPAQUE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_INVENTORY_DEPTH = 64
@@ -28,11 +30,7 @@ class StorageAvailability(StrEnum):
     AVAILABLE = "AVAILABLE"
     UNAVAILABLE = "UNAVAILABLE"
     SCAN_FAILED = "SCAN_FAILED"
-
-
-class StorageProfile(StrEnum):
-    LOCAL_IMMUTABLE = "LOCAL_IMMUTABLE"
-    EXTERNALLY_READ_ONLY = "EXTERNALLY_READ_ONLY"
+    VERIFICATION_REQUIRED = "VERIFICATION_REQUIRED"
 
 
 class EntryKind(StrEnum):
@@ -46,6 +44,8 @@ class DriftCode(StrEnum):
     STORAGE_UNAVAILABLE = "STORAGE_UNAVAILABLE"
     INVENTORY_SCAN_FAILED = "INVENTORY_SCAN_FAILED"
     MOUNT_IDENTITY_CHANGED = "MOUNT_IDENTITY_CHANGED"
+    STORAGE_SOURCE_CHANGED = "STORAGE_SOURCE_CHANGED"
+    STORAGE_FULL_VERIFY_REQUIRED = "STORAGE_FULL_VERIFY_REQUIRED"
     LEDGER_INVALID = "LEDGER_INVALID"
     CONFLICTING_AUTHORITY = "CONFLICTING_AUTHORITY"
     CONFLICTING_OBSERVATION = "CONFLICTING_OBSERVATION"
@@ -64,6 +64,8 @@ class DriftCode(StrEnum):
 class RecoveryRequirement(StrEnum):
     INVESTIGATE_AVAILABILITY = "INVESTIGATE_AVAILABILITY"
     RECONNECT_AND_VERIFY = "RECONNECT_AND_VERIFY"
+    AUTHORIZE_STORAGE_SOURCE_CHANGE = "AUTHORIZE_STORAGE_SOURCE_CHANGE"
+    RESTORE_READ_ONLY = "RESTORE_READ_ONLY"
     REPAIR_LEDGER = "REPAIR_LEDGER"
     OPERATOR_DISPOSITION = "OPERATOR_DISPOSITION"
     RESTORE_REACQUIRE_RETIRE = "RESTORE_REACQUIRE_RETIRE"
@@ -102,6 +104,7 @@ class AuthorityEvidence:
     storage_profile: StorageProfile
     identity: FileIdentity | None = None
     mount_identity: str | None = None
+    storage_source_identity: str | None = None
 
     def __post_init__(self) -> None:
         _validate_opaque_id("evidence_object_id", self.evidence_object_id)
@@ -120,9 +123,10 @@ class AuthorityEvidence:
             raise ValueError("authority identity byte count must match authority bytes")
         if self.mount_identity is not None:
             _validate_opaque_id("mount_identity", self.mount_identity)
-        if (
-            self.storage_profile is StorageProfile.LOCAL_IMMUTABLE
-            and self.mount_identity is not None
+        if self.storage_source_identity is not None:
+            _validate_opaque_id("storage_source_identity", self.storage_source_identity)
+        if self.storage_profile is StorageProfile.LOCAL_IMMUTABLE and (
+            self.mount_identity is not None or self.storage_source_identity is not None
         ):
             raise ValueError("local immutable authority cannot carry mount identity")
         if self.storage_profile is StorageProfile.EXTERNALLY_READ_ONLY:
@@ -142,6 +146,7 @@ class MountedEvidence:
     immutable: bool | None = None
     read_only: bool | None = None
     mount_identity: str | None = None
+    storage_source_identity: str | None = None
     depth: int = 1
     hidden: bool = False
 
@@ -160,12 +165,17 @@ class MountedEvidence:
                 or self.byte_count < 0
             ):
                 raise ValueError("byte_count must be non-negative")
-            if self.identity is not None and self.identity.byte_count != self.byte_count:
+            if (
+                self.identity is not None
+                and self.identity.byte_count != self.byte_count
+            ):
                 raise ValueError("observed byte counts must agree")
         if self.sha256 is not None:
             _validate_sha256(self.sha256)
         if self.mount_identity is not None:
             _validate_opaque_id("mount_identity", self.mount_identity)
+        if self.storage_source_identity is not None:
+            _validate_opaque_id("storage_source_identity", self.storage_source_identity)
         for name in ("immutable", "read_only"):
             value = getattr(self, name)
             if value is not None and type(value) is not bool:
@@ -181,7 +191,9 @@ class MountedEvidence:
 
     @property
     def observed_byte_count(self) -> int | None:
-        return self.identity.byte_count if self.identity is not None else self.byte_count
+        return (
+            self.identity.byte_count if self.identity is not None else self.byte_count
+        )
 
     @property
     def unsafe_shape(self) -> bool:
@@ -213,7 +225,9 @@ class InventorySnapshot:
         if type(self.ledger_valid) is not bool:
             raise ValueError("ledger_valid must be a boolean")
         if not isinstance(self.persisted_violation_object_ids, tuple):
-            raise ValueError("persisted violation object ids must be an immutable tuple")
+            raise ValueError(
+                "persisted violation object ids must be an immutable tuple"
+            )
         for object_id in self.persisted_violation_object_ids:
             _validate_opaque_id("persisted_violation_object_id", object_id)
         if type(self.persisted_head_violation) is not bool:
@@ -257,6 +271,16 @@ def classify_inventory(snapshot: InventorySnapshot) -> InventoryClassification:
                 CustodyGateState.BLOCKED_VIOLATION,
             )
         )
+    if snapshot.availability is StorageAvailability.VERIFICATION_REQUIRED:
+        findings.append(
+            _finding(
+                DriftCode.STORAGE_FULL_VERIFY_REQUIRED,
+                CustodyGateState.BLOCKED_UNAVAILABLE,
+                RecoveryRequirement.FULL_VERIFY_AND_REPAIR,
+                full_verification_required=True,
+            )
+        )
+        return _result(tuple(findings))
     if snapshot.availability is not StorageAvailability.AVAILABLE:
         code = (
             DriftCode.INVENTORY_SCAN_FAILED
@@ -322,7 +346,9 @@ def classify_inventory(snapshot: InventorySnapshot) -> InventoryClassification:
             _finding(
                 DriftCode.CONFLICTING_OBSERVATION,
                 CustodyGateState.BLOCKED_VIOLATION,
-                evidence_object_id=next(iter(object_ids)) if len(object_ids) == 1 else None,
+                evidence_object_id=next(iter(object_ids))
+                if len(object_ids) == 1
+                else None,
                 observation_id=observation_id,
             )
         )
@@ -389,7 +415,9 @@ def classify_inventory(snapshot: InventorySnapshot) -> InventoryClassification:
 
 def _classify_pending(item: MountedEvidence) -> DriftFinding:
     return _finding(
-        DriftCode.UNSAFE_PENDING_ITEM if item.unsafe_shape else DriftCode.DETECTED_NEW_ITEM,
+        DriftCode.UNSAFE_PENDING_ITEM
+        if item.unsafe_shape
+        else DriftCode.DETECTED_NEW_ITEM,
         CustodyGateState.BLOCKED_PENDING,
         RecoveryRequirement.OPERATOR_DISPOSITION,
         observation_id=item.observation_id,
@@ -402,7 +430,9 @@ def _classify_bound(
     object_id = expected.evidence_object_id
     observation_id = observed.observation_id
     if expected.storage_profile is StorageProfile.LOCAL_IMMUTABLE and (
-        observed.mount_identity is not None or observed.read_only is not None
+        observed.mount_identity is not None
+        or observed.storage_source_identity is not None
+        or observed.read_only is not None
     ):
         raise ValueError("local immutable observation cannot carry external facts")
     if (
@@ -419,6 +449,32 @@ def _classify_bound(
         )
     if (
         expected.storage_profile is StorageProfile.EXTERNALLY_READ_ONLY
+        and expected.storage_source_identity is not None
+        and observed.storage_source_identity != expected.storage_source_identity
+    ):
+        return _finding(
+            DriftCode.STORAGE_SOURCE_CHANGED,
+            CustodyGateState.BLOCKED_VIOLATION,
+            RecoveryRequirement.AUTHORIZE_STORAGE_SOURCE_CHANGE,
+            evidence_object_id=object_id,
+            observation_id=observation_id,
+            full_verification_required=True,
+        )
+    if (
+        expected.storage_profile is StorageProfile.EXTERNALLY_READ_ONLY
+        and observed.read_only is not True
+    ):
+        return _finding(
+            DriftCode.POSTURE_DRIFT,
+            CustodyGateState.BLOCKED_VIOLATION,
+            RecoveryRequirement.RESTORE_READ_ONLY,
+            evidence_object_id=object_id,
+            observation_id=observation_id,
+            full_verification_required=True,
+        )
+    if (
+        expected.storage_profile is StorageProfile.EXTERNALLY_READ_ONLY
+        and expected.mount_identity is not None
         and observed.mount_identity != expected.mount_identity
     ):
         return _finding(
@@ -485,7 +541,9 @@ def _classify_bound(
     if not posture_ok:
         full_hash_matches = observed.sha256 == expected.sha256
         return _finding(
-            DriftCode.POSTURE_DRIFT if full_hash_matches else DriftCode.FULL_VERIFY_REQUIRED,
+            DriftCode.POSTURE_DRIFT
+            if full_hash_matches
+            else DriftCode.FULL_VERIFY_REQUIRED,
             CustodyGateState.BLOCKED_VIOLATION,
             RecoveryRequirement.FULL_VERIFY_AND_REPAIR,
             evidence_object_id=object_id,
@@ -538,7 +596,11 @@ def _result(findings: tuple[DriftFinding, ...]) -> InventoryClassification:
 
 
 def _validate_opaque_id(name: str, value: str | None) -> None:
-    if value is None or not isinstance(value, str) or _OPAQUE_ID.fullmatch(value) is None:
+    if (
+        value is None
+        or not isinstance(value, str)
+        or _OPAQUE_ID.fullmatch(value) is None
+    ):
         raise ValueError(f"{name} must be a bounded opaque identifier")
 
 

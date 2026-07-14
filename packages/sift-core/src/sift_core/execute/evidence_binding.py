@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import NotRequired, Required, TypedDict
 
 from sift_core.evidence_chain import get_immutable_flag_fd
+from sift_core.evidence_storage import (
+    StorageAuthorityError,
+    StorageProfile,
+    external_storage_facts,
+)
 
 
 class AdmittedEvidenceBinding(TypedDict, total=False):
@@ -25,6 +30,10 @@ class AdmittedEvidenceBinding(TypedDict, total=False):
     st_mtime_ns: Required[int]
     st_ctime_ns: NotRequired[int]
     immutable_required: NotRequired[bool]
+    storage_profile: NotRequired[str]
+    storage_source_identity: NotRequired[str]
+    mount_instance_identity: NotRequired[str]
+    read_only_required: NotRequired[bool]
 
 
 InventoryIdentity = tuple[str, int, int, int, int, int, int, int]
@@ -59,9 +68,7 @@ def inventory_token(case_dir: str) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
-def validate_binding_fd(
-    fd: int, binding: AdmittedEvidenceBinding
-) -> os.stat_result:
+def validate_binding_fd(fd: int, binding: AdmittedEvidenceBinding) -> os.stat_result:
     """Validate a pinned descriptor against the Gateway admission fingerprint."""
     current = os.fstat(fd)
     if not stat.S_ISREG(current.st_mode) or current.st_nlink != 1:
@@ -82,8 +89,23 @@ def validate_binding_fd(
     )
     if expected != actual:
         raise ValueError("admitted evidence identity changed")
-    if binding.get("immutable_required") and get_immutable_flag_fd(fd) is not True:
-        raise ValueError("admitted evidence immutable posture changed")
+    profile = str(binding.get("storage_profile") or StorageProfile.LOCAL_IMMUTABLE)
+    if profile == StorageProfile.LOCAL_IMMUTABLE:
+        if binding.get("immutable_required") and get_immutable_flag_fd(fd) is not True:
+            raise ValueError("admitted evidence immutable posture changed")
+    elif profile == StorageProfile.EXTERNALLY_READ_ONLY:
+        if not binding.get("read_only_required"):
+            raise ValueError("external admitted evidence lacks read-only authority")
+        try:
+            facts = external_storage_facts(fd)
+        except StorageAuthorityError as exc:
+            raise ValueError("external admitted evidence posture changed") from exc
+        if facts.source_identity != binding.get(
+            "storage_source_identity"
+        ) or facts.mount_instance_identity != binding.get("mount_instance_identity"):
+            raise ValueError("external admitted evidence mount identity changed")
+    else:
+        raise ValueError("admitted evidence storage profile is invalid")
     return current
 
 

@@ -2,6 +2,7 @@ import {
   getChainStatus,
   postChainSeal,
   postChainSealResume,
+  postEvidenceStorageProfile,
   postFullVerifyEvidence,
 } from '@/api/endpoints'
 
@@ -9,8 +10,8 @@ import { runGuard } from '@/components/evidence/custody-guard'
 
 // ─────────────────────────────────────────────────────────────────────────
 // useCustodySealActions — operator custody handlers. Full Verify Evidence
-// re-hashes mounted bytes against database custody authority after password
-// re-authentication; Add/Seal additionally requires a justification
+// re-hashes mounted bytes against database custody authority without a new
+// password ceremony; Add/Seal requires re-authentication and a justification
 // and retains one CSPRNG idempotency key across retries of the same modal intent.
 // Seal success refreshes the evidence list via afterSuccess(refreshData).
 // Mock/real split is at the API adapter layer.
@@ -24,6 +25,7 @@ export function useCustodySealActions({
   modalPassword,
   modalReason,
   sealIntentId,
+  pendingPath,
   unregisteredMetadata,
   setModalLoading,
   setModalError,
@@ -35,9 +37,11 @@ export function useCustodySealActions({
 
   async function handleFullVerifyEvidence(e) {
     e.preventDefault()
-    if (!guard(false)) return
+    setModalLoading(true)
+    setModalError('')
+    setModalResult(null)
     try {
-      const res = await postFullVerifyEvidence({ password: modalPassword })
+      const res = await postFullVerifyEvidence({})
       setModalResult(res)
       const status = await getChainStatus()
       if (status) setChainStatus(status)
@@ -61,6 +65,7 @@ export function useCustodySealActions({
         password: modalPassword,
         reason: modalReason,
         idempotency_key: sealIntentId,
+        storage_profile: chainStatus?.storage_profile || 'LOCAL_IMMUTABLE',
         file_specs: fileSpecs,
       })
       if (res.sealed) {
@@ -96,5 +101,30 @@ export function useCustodySealActions({
     }
   }
 
-  return { handleFullVerifyEvidence, handleSealEvidence, handleResumeSeal }
+  async function handleStorageProfileChange(e) {
+    e.preventDefault()
+    if (!guard(true)) return
+    try {
+      const res = await postEvidenceStorageProfile({
+        password: modalPassword,
+        profile: pendingPath,
+        reason: modalReason,
+        idempotency_key: sealIntentId,
+      })
+      setModalResult(res)
+      addToast('Storage profile changed. Full Verify Evidence is required.', 'warning')
+      afterSuccess(refreshData)
+    } catch (err) {
+      setModalError(err.message || 'Storage profile change failed')
+    } finally {
+      setModalLoading(false)
+    }
+  }
+
+  return {
+    handleFullVerifyEvidence,
+    handleSealEvidence,
+    handleResumeSeal,
+    handleStorageProfileChange,
+  }
 }

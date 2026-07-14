@@ -33,17 +33,18 @@ class _Cursor:
         self.params = params
 
     def fetchone(self):
+        storage_v3 = "begin_or_resume_storage_v3" in self.sql
         return (
             "33333333-3333-3333-3333-333333333333",
             "11111111-1111-1111-1111-111111111111",
-            self.params[1],
+            "ADD_SEAL" if storage_v3 else self.params[1],
             "GATE_BLOCKED",
-            self.params[6],
-            self.params[3],
+            self.params[5] if storage_v3 else self.params[6],
+            self.params[2] if storage_v3 else self.params[3],
             None,
             None,
             None,
-            self.params[9],
+            self.params[7] if storage_v3 else self.params[9],
             {},
             {},
         )
@@ -99,15 +100,30 @@ def _json_value(value: Any) -> Any:
     return getattr(value, "obj", value)
 
 
-def test_add_seal_keeps_the_original_rpc_and_payload_contract():
+def test_add_seal_uses_storage_bound_v3_rpc_and_payload_contract():
     conn = _Connection()
     record = CustodyOperationRepository(lambda: conn).begin_or_resume(_seal_command())
 
-    assert "app.custody_operation_begin_or_resume(" in conn.cursor_instance.sql
-    assert conn.cursor_instance.params[1] == "ADD_SEAL"
-    assert _json_value(conn.cursor_instance.params[2])["schema_version"] == 1
+    assert (
+        "app.custody_operation_begin_or_resume_storage_v3(" in conn.cursor_instance.sql
+    )
+    payload = _json_value(conn.cursor_instance.params[1])
+    assert payload["action"] == "ADD_SEAL"
+    assert payload["schema_version"] == 3
+    assert payload["storage_profile"] == "LOCAL_IMMUTABLE"
     assert record.action == "ADD_SEAL"
     assert conn.committed is True
+
+
+def test_stored_v1_local_seal_resume_keeps_legacy_rpc_compatibility():
+    conn = _Connection()
+    command = _seal_command()
+    object.__setattr__(command, "schema_version", 1)
+    record = CustodyOperationRepository(lambda: conn).begin_or_resume(command)
+    assert "app.custody_operation_begin_or_resume(" in conn.cursor_instance.sql
+    assert _json_value(conn.cursor_instance.params[2])["schema_version"] == 1
+    assert "storage_profile" not in _json_value(conn.cursor_instance.params[2])
+    assert record.action == "ADD_SEAL"
 
 
 @pytest.mark.parametrize("action", tuple(CustodyAction)[1:])
@@ -131,7 +147,9 @@ def test_unknown_action_is_rejected_before_database_access():
         connected = True
         return _Connection()
 
-    command = cast(CustodyOperationCommandProtocol, _object_command(CustodyAction.RETIRE))
+    command = cast(
+        CustodyOperationCommandProtocol, _object_command(CustodyAction.RETIRE)
+    )
     object.__setattr__(command, "action", "CUSTOM_SQL")
 
     with pytest.raises(CustodyOperationError) as exc:

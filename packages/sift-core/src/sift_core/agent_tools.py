@@ -543,6 +543,16 @@ def _trusted_internal_evidence_refs(
                 "st_mtime_ns": int(item["st_mtime_ns"]),
                 "st_ctime_ns": int(item.get("st_ctime_ns", -1)),
                 "immutable_required": bool(item.get("immutable_required", False)),
+                "storage_profile": str(
+                    item.get("storage_profile") or "LOCAL_IMMUTABLE"
+                ),
+                "storage_source_identity": str(
+                    item.get("storage_source_identity") or ""
+                ),
+                "mount_instance_identity": str(
+                    item.get("mount_instance_identity") or ""
+                ),
+                "read_only_required": bool(item.get("read_only_required", False)),
             }
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("internal evidence ref has an invalid binding") from exc

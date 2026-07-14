@@ -1111,12 +1111,13 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    allowed_fields = {"password", "file_specs", "reason", "idempotency_key"}
+    allowed_fields = {"password", "file_specs", "reason", "idempotency_key", "storage_profile"}
     if not isinstance(body, dict) or set(body) - allowed_fields:
         return JSONResponse({"error": "Unknown seal request field"}, status_code=400)
     file_specs = body.get("file_specs", [])
     reason = " ".join(str(body.get("reason") or "").split())
     idempotency_key = str(body.get("idempotency_key") or "").strip()
+    storage_profile = str(body.get("storage_profile") or "LOCAL_IMMUTABLE").strip()
 
     if not isinstance(file_specs, list):
         return JSONResponse({"error": "file_specs must be a list"}, status_code=400)
@@ -1126,6 +1127,8 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
         return JSONResponse({"error": "reason is required (max 1000 characters)"}, status_code=400)
     if not idempotency_key or len(idempotency_key) > 128:
         return JSONResponse({"error": "idempotency_key is required (max 128 characters)"}, status_code=400)
+    if storage_profile not in {"LOCAL_IMMUTABLE", "EXTERNALLY_READ_ONLY"}:
+        return JSONResponse({"error": "Invalid storage_profile"}, status_code=400)
 
     # CL3a: re-verify the operator's password against Supabase (fail closed).
     reauth_err = await _supabase_reverify(request, body)
@@ -1163,6 +1166,7 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
             binding={
                 "idempotency_key": idempotency_key,
                 "reason": reason,
+                "storage_profile": storage_profile,
                 "targets": sorted(str(spec.get("path") or "") for spec in file_specs),
             },
         )
@@ -1182,6 +1186,7 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
             reauth_audit_event_id=reauth_id,
             actor=_request_principal(request),
             examiner=examiner,
+            storage_profile=storage_profile,
         )
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
@@ -1206,6 +1211,7 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
         "manifest_version": head.get("manifest_version"),
         "seal_status": head.get("seal_status", "sealed"),
         "files_added": [s.get("path") for s in file_specs],
+        "storage_profile": storage_profile,
     }
     if proof_info is not None:
         resp["proof_export"] = proof_info
@@ -1733,7 +1739,7 @@ async def post_evidence_recovery_complete(request: Request) -> JSONResponse:
 
 
 async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
-    """Full-verify sealed evidence against DB custody authority after fresh re-auth.
+    """Full-verify sealed evidence against DB custody authority.
 
     DB custody authority only (C1): ``_EVIDENCE_DB.verify`` re-hashes the sealed
     objects and records the outcome (escalating to ``violated`` on failure); the
@@ -1741,7 +1747,7 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
     portal can remind the examiner. No ledger/manifest file is read. Without DB
     authority there is no file-backed fallback — degrade gracefully to no_case.
 
-    Body: {password}
+    Body: {} or {note}; no fresh password ceremony is required.
     Requires: session examiner + role examiner + must_reset_password=false.
     Returns: {ok, verified, issues, verified_at, verified_by, authority}
     """
@@ -1762,10 +1768,10 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    # CL3a: re-verify the operator's password against Supabase (fail closed).
-    reauth_err = await _supabase_reverify(request, body)
-    if reauth_err:
-        return reauth_err
+    if not isinstance(body, dict) or set(body) - {"note"}:
+        return JSONResponse({"error": "Invalid Full Verify request fields"}, status_code=400)
+    if len(str(body.get("note") or "")) > 1000:
+        return JSONResponse({"error": "note is too long"}, status_code=400)
 
     verifier = getattr(_EVIDENCE_DB, "verify", None) if _EVIDENCE_DB is not None else None
     if not callable(verifier):
@@ -1793,6 +1799,55 @@ async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
         "verified_by": examiner,
         "authority": "db",
     })
+
+
+async def post_evidence_storage_profile(request: Request) -> JSONResponse:
+    """Change or re-authorize the fixed case storage profile after scoped re-auth."""
+    if (role_err := _require_examiner_role(request)) is not None:
+        return role_err
+    if (reset_err := _must_reset_check(request)) is not None:
+        return reset_err
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    required = {"password", "profile", "reason", "idempotency_key"}
+    if not isinstance(body, dict) or set(body) != required:
+        return JSONResponse({"error": "Invalid storage profile request fields"}, status_code=400)
+    profile = str(body.get("profile") or "")
+    reason = " ".join(str(body.get("reason") or "").split())
+    idempotency_key = str(body.get("idempotency_key") or "").strip()
+    if profile not in {"LOCAL_IMMUTABLE", "EXTERNALLY_READ_ONLY"}:
+        return JSONResponse({"error": "Invalid storage profile"}, status_code=400)
+    if not 1 <= len(reason) <= 1000:
+        return JSONResponse({"error": "reason is required (max 1000 characters)"}, status_code=400)
+    if not 1 <= len(idempotency_key) <= 128:
+        return JSONResponse({"error": "Invalid idempotency_key"}, status_code=400)
+    if (reauth_err := await _supabase_reverify(request, body)) is not None:
+        return reauth_err
+    changer = getattr(_EVIDENCE_DB, "change_storage_profile", None) if _EVIDENCE_DB else None
+    if not callable(changer):
+        return _no_case_response()
+    binding = {"profile": profile, "reason": reason, "idempotency_key": idempotency_key}
+    reauth_id = _record_reauth_event(
+        request, examiner, "evidence_storage_profile_change", binding=binding
+    )
+    if not reauth_id:
+        return JSONResponse({"error": "Storage profile re-auth audit required"}, status_code=403)
+    try:
+        result = changer(
+            case_id=_active_case_id(), profile=profile, reason=reason,
+            idempotency_key=idempotency_key, reauth_audit_event_id=reauth_id,
+            actor=_request_principal(request),
+        )
+    except Exception as exc:
+        return _active_case_error_response(exc, default=500)
+    if not isinstance(result, dict):
+        return JSONResponse({"error": "Storage profile change failed"}, status_code=500)
+    return JSONResponse({"authority": "db", **result})
 
 
 # ---------------------------------------------------------------------------
@@ -5761,6 +5816,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/chain/restore/begin", post_evidence_restore_begin, methods=["POST"]),
         Route("/api/evidence/chain/recovery/complete", post_evidence_recovery_complete, methods=["POST"]),
         Route("/api/evidence/chain/verify-hmac", post_evidence_chain_verify_hmac, methods=["POST"]),
+        Route("/api/evidence/storage/profile", post_evidence_storage_profile, methods=["POST"]),
         Route("/api/evidence/chain/anchor", post_evidence_chain_anchor, methods=["POST"]),
         Route("/api/evidence/chain/proof-export", post_evidence_chain_proof_export, methods=["POST"]),
         # Approach C: response-guard override

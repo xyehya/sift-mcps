@@ -85,7 +85,11 @@ class _AdmissionService:
                 if f"evidence/{entry.name}" not in self.known
             ]
         if self.unavailable:
-            return {"state": "unavailable", "observed": 0, "issues": ["evidence_storage_unavailable"]}
+            return {
+                "state": "unavailable",
+                "observed": 0,
+                "issues": ["evidence_storage_unavailable"],
+            }
         return {"state": "available", "observed": len(self.observations), "issues": []}
 
     def resolve_evidence_reference(self, case_id, ref):
@@ -151,10 +155,16 @@ async def test_force_added_file_reconciles_and_denies_before_tool(tmp_path):
             "manifest_version": 1,
         }
 
-    with patch("sift_gateway.policy_middleware.check_evidence_gate_db", side_effect=observed_gate), patch(
-        "sift_gateway.policy_middleware.current_mcp_identity", return_value=None
+    with (
+        patch(
+            "sift_gateway.policy_middleware.check_evidence_gate_db",
+            side_effect=observed_gate,
+        ),
+        patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=None),
     ):
-        result = await mcp.call_tool("run_command", {"command": "sha256sum evidence/force-added.bin"})
+        result = await mcp.call_tool(
+            "run_command", {"command": "sha256sum evidence/force-added.bin"}
+        )
 
     assert ran is False
     assert service.reconciled == [gateway.active_case_service.case.case_id]
@@ -177,14 +187,26 @@ async def test_stale_open_gate_cannot_authorize_raw_unregistered_operand(tmp_pat
         ran = True
         return command
 
-    opened = {"blocked": False, "status": ChainStatus.OK, "issues": [], "manifest_version": 4}
-    with patch("sift_gateway.policy_middleware.check_evidence_gate_db", return_value=opened), patch(
-        "sift_gateway.policy_middleware.current_mcp_identity", return_value=None
+    opened = {
+        "blocked": False,
+        "status": ChainStatus.OK,
+        "issues": [],
+        "manifest_version": 4,
+    }
+    with (
+        patch(
+            "sift_gateway.policy_middleware.check_evidence_gate_db", return_value=opened
+        ),
+        patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=None),
     ):
-        result = await mcp.call_tool("run_command", {"command": "cat evidence/unregistered.raw"})
+        result = await mcp.call_tool(
+            "run_command", {"command": "cat evidence/unregistered.raw"}
+        )
 
     assert ran is False
-    assert service.resolved == [(gateway.active_case_service.case.case_id, "evidence/unregistered.raw")]
+    assert service.resolved == [
+        (gateway.active_case_service.case.case_id, "evidence/unregistered.raw")
+    ]
     assert "active sealed version" in result.content[0].text
 
 
@@ -204,7 +226,9 @@ async def test_stale_open_gate_cannot_authorize_raw_unregistered_operand(tmp_pat
         "truncate -s 0 evidence/unregistered.raw",
     ],
 )
-async def test_sync_mutation_operands_never_reach_tool_or_change_file(tmp_path, command):
+async def test_sync_mutation_operands_never_reach_tool_or_change_file(
+    tmp_path, command
+):
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     target = evidence / "unregistered.raw"
@@ -221,9 +245,17 @@ async def test_sync_mutation_operands_never_reach_tool_or_change_file(tmp_path, 
         ran = True
         return command
 
-    opened = {"blocked": False, "status": ChainStatus.OK, "issues": [], "manifest_version": 4}
-    with patch("sift_gateway.policy_middleware.check_evidence_gate_db", return_value=opened), patch(
-        "sift_gateway.policy_middleware.current_mcp_identity", return_value=None
+    opened = {
+        "blocked": False,
+        "status": ChainStatus.OK,
+        "issues": [],
+        "manifest_version": 4,
+    }
+    with (
+        patch(
+            "sift_gateway.policy_middleware.check_evidence_gate_db", return_value=opened
+        ),
+        patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=None),
     ):
         await mcp.call_tool("run_command", {"command": command})
 
@@ -291,9 +323,17 @@ async def test_unavailable_inventory_blocks_without_mass_missing_violation(tmp_p
         ran = True
         return command
 
-    opened = {"blocked": False, "status": ChainStatus.OK, "issues": [], "manifest_version": 9}
-    with patch("sift_gateway.policy_middleware.check_evidence_gate_db", return_value=opened), patch(
-        "sift_gateway.policy_middleware.current_mcp_identity", return_value=None
+    opened = {
+        "blocked": False,
+        "status": ChainStatus.OK,
+        "issues": [],
+        "manifest_version": 9,
+    }
+    with (
+        patch(
+            "sift_gateway.policy_middleware.check_evidence_gate_db", return_value=opened
+        ),
+        patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=None),
     ):
         result = await mcp.call_tool("run_command", {"command": "date"})
 
@@ -308,7 +348,9 @@ async def test_unavailable_inventory_blocks_without_mass_missing_violation(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_operator_recovery_allows_only_sealed_version_with_no_pending_sibling(tmp_path):
+async def test_operator_recovery_allows_only_sealed_version_with_no_pending_sibling(
+    tmp_path,
+):
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     sealed = evidence / "sealed.raw"
@@ -333,13 +375,22 @@ async def test_operator_recovery_allows_only_sealed_version_with_no_pending_sibl
             "manifest_version": 2,
         }
 
-    with patch("sift_gateway.policy_middleware.check_evidence_gate_db", side_effect=gate), patch(
-        "sift_gateway.policy_middleware.current_mcp_identity", return_value=None
+    with (
+        patch(
+            "sift_gateway.policy_middleware.check_evidence_gate_db", side_effect=gate
+        ),
+        patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=None),
     ):
-        blocked = await mcp.call_tool("run_command", {"command": "cat evidence/sealed.raw"})
+        blocked = await mcp.call_tool(
+            "run_command", {"command": "cat evidence/sealed.raw"}
+        )
         sibling.unlink()  # models operator disposition/Seal completing outside MCP
-        allowed = await mcp.call_tool("run_command", {"command": "cat evidence/sealed.raw"})
-        denied = await mcp.call_tool("run_command", {"command": "cat evidence/pending.raw"})
+        allowed = await mcp.call_tool(
+            "run_command", {"command": "cat evidence/sealed.raw"}
+        )
+        denied = await mcp.call_tool(
+            "run_command", {"command": "cat evidence/pending.raw"}
+        )
 
     assert blocked.is_error is True
     assert allowed.is_error is False
@@ -376,10 +427,18 @@ async def test_public_durable_mutations_are_denied_before_enqueue(tmp_path, comm
     before = _tree_snapshot(tmp_path, target)
     gateway = _gateway(tmp_path, service)
     mcp = create_gateway_mcp_server(gateway, api_keys={})
-    opened = {"blocked": False, "status": ChainStatus.OK, "issues": [], "manifest_version": 3}
+    opened = {
+        "blocked": False,
+        "status": ChainStatus.OK,
+        "issues": [],
+        "manifest_version": 3,
+    }
 
-    with patch("sift_gateway.policy_middleware.check_evidence_gate_db", return_value=opened), patch(
-        "sift_gateway.policy_middleware.current_mcp_identity", return_value=None
+    with (
+        patch(
+            "sift_gateway.policy_middleware.check_evidence_gate_db", return_value=opened
+        ),
+        patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=None),
     ):
         result = await mcp.call_tool(
             "run_command_job", {"command": command, "purpose": "mutation negative"}
@@ -413,7 +472,9 @@ def test_final_process_reads_pinned_descriptor_after_path_replacement(tmp_path):
     replacement = tmp_path / "replacement.raw"
     replacement.write_bytes(b"replacement")
     os.replace(replacement, target)
-    argv, _ = rewrite_bound_operands(["cat", str(target)], [], opened, cwd=str(tmp_path))
+    argv, _ = rewrite_bound_operands(
+        ["cat", str(target)], [], opened, cwd=str(tmp_path)
+    )
     try:
         result = subprocess.run(
             argv, check=True, capture_output=True, pass_fds=tuple(opened.values())
@@ -444,9 +505,17 @@ async def test_evidence_symlink_alias_is_denied_before_aggregate_tool(tmp_path):
         ran = True
         return command
 
-    opened = {"blocked": False, "status": ChainStatus.OK, "issues": [], "manifest_version": 3}
-    with patch("sift_gateway.policy_middleware.check_evidence_gate_db", return_value=opened), patch(
-        "sift_gateway.policy_middleware.current_mcp_identity", return_value=None
+    opened = {
+        "blocked": False,
+        "status": ChainStatus.OK,
+        "issues": [],
+        "manifest_version": 3,
+    }
+    with (
+        patch(
+            "sift_gateway.policy_middleware.check_evidence_gate_db", return_value=opened
+        ),
+        patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=None),
     ):
         result = await mcp.call_tool("run_command", {"command": "cat agent/alias.raw"})
 
@@ -493,13 +562,25 @@ class _Cursor:
     def __init__(self, row):
         self.row = row
 
-    def execute(self, _sql, _params):
-        return None
+    def execute(self, sql, _params):
+        self.sql = " ".join(sql.split())
 
     def fetchall(self):
         return [self.row]
 
     def fetchone(self):
+        if "evidence_storage_authorities" in self.sql:
+            return (
+                "LOCAL_IMMUTABLE",
+                None,
+                None,
+                "AVAILABLE",
+                1,
+                1,
+                None,
+                None,
+                "NONE",
+            )
         return None
 
     def __enter__(self):
@@ -530,10 +611,14 @@ class _ResolveCursor:
     def __init__(self, row):
         self.row = row
 
-    def execute(self, _sql, _params):
-        return None
+    def execute(self, sql, _params):
+        self.sql = " ".join(sql.split())
 
     def fetchone(self):
+        if "evidence_storage_authorities" in self.sql:
+            return ("LOCAL_IMMUTABLE", None, None, "AVAILABLE", 1, 1, None)
+        if "evidence_storage_verifications" in self.sql:
+            return None
         return self.row
 
     def __enter__(self):
@@ -557,6 +642,39 @@ class _ResolveConnection:
         return None
 
 
+class _ExternalResolveCursor(_ResolveCursor):
+    def __init__(self, row, storage, receipt):
+        super().__init__(row)
+        self.storage = storage
+        self.receipt = receipt
+        self.queries = []
+
+    def execute(self, sql, _params):
+        super().execute(sql, _params)
+        self.queries.append(self.sql)
+
+    def fetchone(self):
+        if "evidence_storage_verifications" in self.sql:
+            return (self.receipt,)
+        if "evidence_storage_authorities" in self.sql:
+            return self.storage
+        return self.row
+
+
+class _ExternalResolveConnection:
+    def __init__(self, row, storage, receipt):
+        self.cursor_instance = _ExternalResolveCursor(row, storage, receipt)
+
+    def cursor(self):
+        return self.cursor_instance
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+
 class _ObservationCursor:
     def __init__(self):
         self.calls = []
@@ -567,7 +685,26 @@ class _ObservationCursor:
         normalized = " ".join(sql.split())
         self.last_sql = normalized
         self.calls.append((normalized, params))
-        self._one = ("observed-evidence",) if "evidence_observe_admission" in normalized else None
+        if "evidence_storage_authorities" in normalized:
+            self._one = (
+                "LOCAL_IMMUTABLE",
+                None,
+                None,
+                "AVAILABLE",
+                1,
+                1,
+                None,
+                None,
+                "NONE",
+            )
+        elif "evidence_storage_verifications" in normalized:
+            self._one = None
+        else:
+            self._one = (
+                ("observed-evidence",)
+                if "evidence_observe_admission" in normalized
+                else None
+            )
 
     def fetchall(self):
         return []
@@ -651,9 +788,7 @@ def test_reconciliation_violation_uses_request_correlation(
         result = service.reconcile_for_admission(context.case_id)
 
     violations = [
-        call
-        for call in cursor.calls
-        if "evidence_mark_admission_violation" in call[0]
+        call for call in cursor.calls if "evidence_mark_admission_violation" in call[0]
     ]
     assert len(violations) == 1
     assert violations[0][1][1] == "sealed-object"
@@ -680,9 +815,7 @@ def test_unavailable_storage_is_not_recorded_as_a_violation(tmp_path, monkeypatc
     monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
     monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
 
-    result = service.reconcile_for_admission(
-        "11111111-1111-1111-1111-111111111111"
-    )
+    result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
 
     assert result["state"] == "unavailable"
     assert not any(
@@ -726,9 +859,7 @@ def test_posture_drift_requires_full_verify_without_generic_content_violation(
         "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: False
     )
 
-    result = service.reconcile_for_admission(
-        "11111111-1111-1111-1111-111111111111"
-    )
+    result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
 
     assert result["gate_state"] == "BLOCKED_VIOLATION"
     classification_call = next(
@@ -785,9 +916,7 @@ def test_persisted_violation_is_returned_and_recorded_when_mount_matches(
         "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True
     )
 
-    result = service.reconcile_for_admission(
-        "11111111-1111-1111-1111-111111111111"
-    )
+    result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
 
     assert result["gate_state"] == "BLOCKED_VIOLATION"
     classification_call = next(
@@ -803,7 +932,9 @@ def test_persisted_violation_is_returned_and_recorded_when_mount_matches(
     )
 
 
-def test_inventory_reconciliation_does_not_hash_large_unchanged_sibling(tmp_path, monkeypatch):
+def test_inventory_reconciliation_does_not_hash_large_unchanged_sibling(
+    tmp_path, monkeypatch
+):
     case_dir = tmp_path / "case"
     evidence = case_dir / "evidence"
     evidence.mkdir(parents=True)
@@ -811,15 +942,25 @@ def test_inventory_reconciliation_does_not_hash_large_unchanged_sibling(tmp_path
     with image.open("wb") as handle:
         handle.truncate(19 * 1024 * 1024 * 1024)
     future = datetime.now(timezone.utc) + timedelta(seconds=5)
-    row = ("ev-1", "evidence/large.E01", "sha256:" + "a" * 64, image.stat().st_size, future)
+    row = (
+        "ev-1",
+        "evidence/large.E01",
+        "sha256:" + "a" * 64,
+        image.stat().st_size,
+        future,
+    )
     service = EvidenceAuthorityService("postgresql://unused")
     monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
     monkeypatch.setattr(service, "_connect", lambda: _Connection(row))
     monkeypatch.setattr(
         "sift_gateway.portal_services._admission_fingerprint",
-        lambda _path: pytest.fail("aggregate inventory scan must not hash sealed siblings"),
+        lambda _path: pytest.fail(
+            "aggregate inventory scan must not hash sealed siblings"
+        ),
     )
-    monkeypatch.setattr("sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True)
+    monkeypatch.setattr(
+        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True
+    )
 
     result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
     assert result["state"] == "available"
@@ -830,7 +971,9 @@ def test_inventory_reconciliation_does_not_hash_large_unchanged_sibling(tmp_path
     assert image.stat().st_size == 19 * 1024 * 1024 * 1024
 
 
-def test_admitted_sparse_19gib_reference_never_reads_file_content(tmp_path, monkeypatch):
+def test_admitted_sparse_19gib_reference_never_reads_file_content(
+    tmp_path, monkeypatch
+):
     case_dir = tmp_path / "case"
     evidence = case_dir / "evidence"
     evidence.mkdir(parents=True)
@@ -867,7 +1010,9 @@ def test_admitted_sparse_19gib_reference_never_reads_file_content(tmp_path, monk
     monkeypatch.setattr(
         os,
         "fdopen",
-        lambda *_args, **_kwargs: pytest.fail("admission must not stream evidence bytes"),
+        lambda *_args, **_kwargs: pytest.fail(
+            "admission must not stream evidence bytes"
+        ),
     )
 
     resolved = service.resolve_evidence_reference("case-1", "evidence/large.E01")
@@ -912,6 +1057,56 @@ def test_local_immutable_posture_drift_denies_reference(tmp_path, monkeypatch):
         service.resolve_evidence_reference("case-1", "evidence/sealed.raw")
 
 
+@pytest.mark.parametrize("receipt_version,allowed", [("ver-1", True), ("stale-ver", False)])
+def test_external_reference_requires_exact_current_receipt_version(
+    receipt_version, allowed, tmp_path, monkeypatch
+):
+    from sift_core.evidence_storage import ExternalStorageFacts
+
+    image = tmp_path / "evidence" / "sealed.raw"
+    image.parent.mkdir()
+    image.write_bytes(b"sealed")
+    st = image.stat()
+    source, mount = "a" * 64, "b" * 64
+    row = (
+        "ev-1", "evidence/sealed.raw", "sealed", "sealed", "ver-1",
+        "sha256:" + "c" * 64, st.st_size, "ACTIVE", "sealed",
+    )
+    receipt = [{
+        "evidence_object_id": "ev-1", "evidence_version_id": receipt_version,
+        "sha256": "sha256:" + "c" * 64, "bytes": st.st_size,
+        "st_dev": st.st_dev, "st_ino": st.st_ino, "st_mtime_ns": st.st_mtime_ns,
+        "st_ctime_ns": st.st_ctime_ns, "st_nlink": st.st_nlink,
+        "storage_source_identity": source, "mount_instance_identity": mount,
+    }]
+    connection = _ExternalResolveConnection(
+        row, ("EXTERNALLY_READ_ONLY", source, mount, "AVAILABLE", 7, 7, True), receipt
+    )
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "reconcile_for_admission", lambda _case_id: {"state": "available"})
+    monkeypatch.setattr(service, "_connect", lambda: connection)
+    monkeypatch.setattr(service, "_resolve_evidence_path", lambda *_args: image)
+    monkeypatch.setattr(
+        "sift_gateway.portal_services.external_storage_facts",
+        lambda _fd: ExternalStorageFacts(source, mount, "ext4", True),
+    )
+
+    if allowed:
+        resolved = service.resolve_evidence_reference("case-1", "evidence/sealed.raw")
+        assert resolved["version_id"] == "ver-1"
+        assert resolved["storage_source_identity"] == source
+        receipt_query = next(
+            q for q in connection.cursor_instance.queries
+            if "evidence_storage_verifications" in q
+        )
+        assert "v.outcome='SUCCESS'" in receipt_query
+        assert "v.generation=a.generation" in receipt_query
+        assert "v.manifest_version=h.manifest_version" in receipt_query
+    else:
+        with pytest.raises(PortalServiceError, match="external_storage_full_verify_required"):
+            service.resolve_evidence_reference("case-1", "evidence/sealed.raw")
+
+
 def test_reconciliation_custody_observation_uses_audit_envelope_request_id(
     tmp_path, monkeypatch
 ):
@@ -934,7 +1129,9 @@ def test_reconciliation_custody_observation_uses_audit_envelope_request_id(
     with use_active_case_context(context):
         result = service.reconcile_for_admission(context.case_id)
 
-    observation = next(call for call in cursor.calls if "evidence_observe_admission" in call[0])
+    observation = next(
+        call for call in cursor.calls if "evidence_observe_admission" in call[0]
+    )
     assert observation[1][4] == "opaque-request-123"
     assert result["correlation_id"] == "opaque-request-123"
 
@@ -963,12 +1160,18 @@ async def test_aggregate_audit_and_custody_ledgers_share_opaque_request_id(
         "issues": ["pending"],
         "manifest_version": 1,
     }
-    with patch("sift_gateway.policy_middleware.check_evidence_gate_db", return_value=blocked), patch(
-        "sift_gateway.policy_middleware.current_mcp_identity", return_value=None
+    with (
+        patch(
+            "sift_gateway.policy_middleware.check_evidence_gate_db",
+            return_value=blocked,
+        ),
+        patch("sift_gateway.policy_middleware.current_mcp_identity", return_value=None),
     ):
         await mcp.call_tool("run_command", {"command": "date"})
 
-    observation = next(call for call in cursor.calls if "evidence_observe_admission" in call[0])
+    observation = next(
+        call for call in cursor.calls if "evidence_observe_admission" in call[0]
+    )
     custody_correlation = observation[1][4]
     envelope = next(
         call

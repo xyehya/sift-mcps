@@ -40,6 +40,7 @@ vi.mock('@/api/endpoints', async (importOriginal) => {
     postRecoveryComplete: vi.fn(),
     getEvidenceHistory: vi.fn(),
     postFullVerifyEvidence: vi.fn(),
+    postEvidenceStorageProfile: vi.fn(),
     postVerifyEvidence: vi.fn(),
     postChainAnchor: vi.fn(),
     postChainProofExport: vi.fn(),
@@ -112,6 +113,7 @@ describe('Seal manifest flow', () => {
       expect(endpoints.postChainSeal).toHaveBeenCalledWith({
         password: 'hunter2',
         reason: 'Initial evidence intake',
+        storage_profile: 'LOCAL_IMMUTABLE',
         idempotency_key: expect.any(String),
         file_specs: [{ path: 'evidence/pcap.raw', source: 'USB drive #1', description: 'PCAP capture' }],
       })
@@ -377,14 +379,10 @@ describe('Full Verify Evidence flow', () => {
     expect(within(modal).getByRole('heading', { name: 'Full Verify Evidence' })).toBeInTheDocument()
     expect(within(modal).getByText(/Postgres custody authority/i)).toBeInTheDocument()
 
-    // Gate: required password empty → endpoint NOT called.
-    fireEvent.click(within(modal).getByRole('button', { name: 'Full Verify' }))
-    expect(endpoints.postFullVerifyEvidence).not.toHaveBeenCalled()
-
-    fillModal({ password: 'pw' })
+    // Full Verify is an integrity read and intentionally has no re-auth ceremony.
     fireEvent.click(within(modal).getByRole('button', { name: 'Full Verify' }))
     await waitFor(() => {
-      expect(endpoints.postFullVerifyEvidence).toHaveBeenCalledWith({ password: 'pw' })
+      expect(endpoints.postFullVerifyEvidence).toHaveBeenCalledWith({})
     })
     expect(await within(modal).findByText(/Mounted evidence matches database custody authority/i)).toBeInTheDocument()
   })
@@ -395,11 +393,74 @@ describe('Full Verify Evidence flow', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Full Verify Evidence' }))
     const modal = await screen.findByRole('dialog')
-    fillModal({ password: 'pw' })
     fireEvent.click(within(modal).getByRole('button', { name: 'Full Verify' }))
 
     expect(await within(modal).findByText(/Full verification failed with 1 issue/i)).toBeInTheDocument()
     expect(within(modal).getByText('digest mismatch')).toBeInTheDocument()
+  })
+})
+
+describe('Evidence storage profile flow', () => {
+  beforeEach(() => seed({
+    status: 'sealed',
+    storage_profile: 'LOCAL_IMMUTABLE',
+    storage_availability: 'AVAILABLE',
+    storage_remediation: 'NONE',
+    write_protected: true,
+  }))
+
+  it('shows only safe posture state and requires scoped re-auth to change profile', async () => {
+    endpoints.postEvidenceStorageProfile.mockResolvedValue({
+      storage_profile: 'EXTERNALLY_READ_ONLY',
+      storage_availability: 'FULL_VERIFY_REQUIRED',
+      storage_remediation: 'FULL_VERIFY',
+    })
+    render(<EvidenceTab />)
+
+    expect(await screen.findByText('Local immutable')).toBeInTheDocument()
+    expect(screen.getByText(/State: AVAILABLE/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Change profile' }))
+    const modal = await screen.findByRole('dialog')
+    expect(within(modal).getByText(/Change to Externally Read-Only/)).toBeInTheDocument()
+
+    fillModal({ reason: 'Move to hardware read-only evidence', password: 'pw' })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Change Profile' }))
+    await waitFor(() => {
+      expect(endpoints.postEvidenceStorageProfile).toHaveBeenCalledWith({
+        password: 'pw',
+        profile: 'EXTERNALLY_READ_ONLY',
+        reason: 'Move to hardware read-only evidence',
+        idempotency_key: expect.any(String),
+      })
+    })
+    expect(await within(modal).findByText(/Storage profile changed\. Full Verify Evidence is required/)).toBeInTheDocument()
+  })
+
+  it('offers explicit source authorization without conflating it with a profile toggle', async () => {
+    seed({
+      status: 'violated',
+      storage_profile: 'EXTERNALLY_READ_ONLY',
+      storage_availability: 'IDENTITY_DRIFT',
+      storage_remediation: 'AUTHORIZE_SOURCE_CHANGE',
+      write_protected: true,
+    })
+    endpoints.postEvidenceStorageProfile.mockResolvedValue({
+      storage_profile: 'EXTERNALLY_READ_ONLY',
+      storage_availability: 'FULL_VERIFY_REQUIRED',
+      storage_remediation: 'FULL_VERIFY',
+    })
+    render(<EvidenceTab />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Authorize current source' }))
+    const modal = await screen.findByRole('dialog')
+    fillModal({ reason: 'Examiner authorizes this replacement source', password: 'pw' })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Change Profile' }))
+    await waitFor(() => expect(endpoints.postEvidenceStorageProfile).toHaveBeenCalledWith({
+      password: 'pw',
+      profile: 'EXTERNALLY_READ_ONLY',
+      reason: 'Examiner authorizes this replacement source',
+      idempotency_key: expect.any(String),
+    }))
   })
 })
 

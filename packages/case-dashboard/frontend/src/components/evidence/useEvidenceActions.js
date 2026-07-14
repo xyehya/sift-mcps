@@ -47,6 +47,7 @@ export function useEvidenceActions({
     modalPassword,
     modalReason,
     sealIntentId,
+    pendingPath,
     unregisteredMetadata,
     setModalLoading,
     setModalError,

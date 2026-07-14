@@ -20,7 +20,9 @@ from sift_core.execute.evidence_binding import (
 _ADMITTED_REFS: ContextVar[tuple[AdmittedEvidenceBinding, ...]] = ContextVar(
     "sift_gateway_admitted_evidence_refs", default=()
 )
-_INVENTORY_TOKEN: ContextVar[str] = ContextVar("sift_gateway_inventory_token", default="")
+_INVENTORY_TOKEN: ContextVar[str] = ContextVar(
+    "sift_gateway_inventory_token", default=""
+)
 
 
 def current_admitted_refs() -> list[AdmittedEvidenceBinding]:
@@ -66,6 +68,10 @@ def _copy_admitted_ref(item: AdmittedEvidenceBinding) -> AdmittedEvidenceBinding
         "st_mtime_ns": item["st_mtime_ns"],
         "st_ctime_ns": item.get("st_ctime_ns", -1),
         "immutable_required": item.get("immutable_required", False),
+        "storage_profile": item.get("storage_profile", "LOCAL_IMMUTABLE"),
+        "storage_source_identity": item.get("storage_source_identity", ""),
+        "mount_instance_identity": item.get("mount_instance_identity", ""),
+        "read_only_required": item.get("read_only_required", False),
     }
 
 

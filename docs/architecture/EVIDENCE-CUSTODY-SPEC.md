@@ -348,6 +348,17 @@ violation, and unavailable gate states. Mounted ignored/retired objects remain r
 are suppressed from new-pending rediscovery. Missing/changed recovery delegates to Ticket 3;
 verified posture-only drift does not authorize a new Evidence Version.
 
+P4.23.5 implements the `EXTERNALLY_READ_ONLY` storage profile. Gateway derives an opaque stable
+source identity and Linux `STATX_MNT_ID_UNIQUE` mount-instance identity from pinned descriptors,
+requires descriptor, VFS, and mount/superblock read-only agreement, and never applies local
+ownership, mode, immutable-flag, or content mutation to external evidence. Profile and source
+authorization are Portal-only, reasoned, idempotent, and freshly re-authenticated. Reconnect of the
+same source requires Full Verify; a different source requires explicit operator authorization;
+writable posture is a custody violation. Successful and failed Full Verify attempts are append-only,
+generation/profile/manifest/version-bound receipts. MCP resolution requires the exact current
+successful receipt and revalidates all descriptor and storage facts. VM Gate C remains required
+before this ticket is DONE.
+
 These items must be replaced in dependency order. Tests that describe obsolete behavior are removed only after stronger public-seam replacements land.
 
 ## Out of Scope

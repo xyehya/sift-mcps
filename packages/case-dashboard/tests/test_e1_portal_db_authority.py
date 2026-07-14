@@ -94,17 +94,22 @@ class FakeEvidenceDB:
         self.verify_calls.append((case_id, actor))
         return {"verified": True, "issues": []}
 
-    def seal(self, *, case_id, file_specs, reason, idempotency_key, reauth_audit_event_id, actor, examiner):
+    def recovery_object_id(self, *, case_id, display_path):
+        return "22222222-2222-4222-8222-222222222222"
+
+    def seal(self, *, case_id, file_specs, reason, idempotency_key, reauth_audit_event_id, actor, examiner, storage_profile="LOCAL_IMMUTABLE"):
         assert reauth_audit_event_id, "seal must receive a re-auth audit event id"
         self.seal_calls.append((case_id, file_specs, reauth_audit_event_id))
         return {"manifest_version": 3, "seal_status": "sealed"}
 
-    def ignore(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
+    def ignore(self, *, case_id, display_path, reason, idempotency_key, reauth_audit_event_id, actor, examiner):
         assert reauth_audit_event_id
+        assert idempotency_key
         self.ignore_calls.append((display_path, reason, reauth_audit_event_id))
 
-    def retire(self, *, case_id, display_path, reason, reauth_audit_event_id, actor, examiner):
+    def retire(self, *, case_id, display_path, reason, idempotency_key, reauth_audit_event_id, actor, examiner):
         assert reauth_audit_event_id
+        assert idempotency_key
         self.retire_calls.append((display_path, reason, reauth_audit_event_id))
 
 
@@ -341,6 +346,7 @@ class TestEvidenceDBAuthority:
         c = _examiner(_make_client(evidence_service=ev))
         r1 = c.post("/api/evidence/chain/ignore", json={
             "password": GOOD_PASSWORD, "path": "evidence/junk", "reason": "noise",
+            "idempotency_key": "ignore-e1",
         })
         assert r1.status_code == 200 and r1.json()["authority"] == "db"
         assert r1.json()["reauth_method"] == "supabase_password_reverify"
@@ -348,6 +354,7 @@ class TestEvidenceDBAuthority:
 
         r2 = c.post("/api/evidence/chain/retire", json={
             "password": GOOD_PASSWORD, "path": "evidence/old", "reason": "dupe",
+            "idempotency_key": "retire-e1",
         })
         assert r2.status_code == 200 and r2.json()["authority"] == "db"
         assert r2.json()["reauth_method"] == "supabase_password_reverify"

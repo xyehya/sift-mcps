@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from sift_core.evidence_storage import StorageProfile
 from sift_gateway.custody_operations import (
     CustodyAction,
     CustodyOperationError,
@@ -15,6 +16,7 @@ from sift_gateway.custody_operations import (
     CustodyOperationRecord,
     CustodyOperationRepositoryProtocol,
     DispositionCustodyOperation,
+    ExternalReadOnlyPostureAdapter,
     LocalImmutablePostureAdapter,
     ObjectCustodyCommand,
     PinnedEvidenceFile,
@@ -572,6 +574,83 @@ def test_posture_adapter_pins_hashes_and_verifies_same_inode(monkeypatch, tmp_pa
         assert receipts[0]["immutable"] is True
     finally:
         adapter.close(batch)
+
+
+def test_external_adapter_observes_without_local_mutation(monkeypatch, tmp_path):
+    from sift_core.evidence_storage import ExternalStorageFacts
+
+    facts = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
+    monkeypatch.setattr("sift_gateway.custody_operations.external_storage_facts", lambda _fd: facts)
+    monkeypatch.setattr(
+        "sift_core.evidence_chain.set_immutable_flag_fd",
+        lambda *_args: pytest.fail("external storage must never invoke local mutation"),
+    )
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "disk.raw").write_bytes(b"external evidence")
+    adapter = ExternalReadOnlyPostureAdapter()
+    batch = adapter.prepare(tmp_path, ["evidence/disk.raw"])
+    try:
+        adapter.apply(batch)
+        receipt = adapter.verify(batch)[0]
+        assert receipt["storage_source_identity"] == "a" * 64
+        assert receipt["mount_instance_identity"] == "b" * 64
+        assert receipt["read_only"] is True
+        assert "owner" not in receipt and "mode" not in receipt
+        assert "immutable" not in receipt
+    finally:
+        adapter.close(batch)
+
+
+def test_external_adapter_fails_closed_when_mount_instance_changes(monkeypatch, tmp_path):
+    from sift_core.evidence_storage import ExternalStorageFacts
+
+    initial = ExternalStorageFacts("a" * 64, "b" * 64, "ext4", True)
+    changed = ExternalStorageFacts("a" * 64, "c" * 64, "ext4", True)
+    calls = 0
+
+    def mount_facts(_fd):
+        nonlocal calls
+        calls += 1
+        return initial if calls < 3 else changed
+
+    monkeypatch.setattr("sift_gateway.custody_operations.external_storage_facts", mount_facts)
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "disk.raw").write_bytes(b"external evidence")
+    adapter = ExternalReadOnlyPostureAdapter()
+    with pytest.raises(CustodyOperationError, match="external_evidence_changed_while_hashing"):
+        adapter.prepare(tmp_path, ["evidence/disk.raw"])
+
+
+def test_full_verify_failure_records_path_free_append_only_outcome():
+    class Cursor:
+        sql = ""
+        params = None
+        def __enter__(self): return self
+        def __exit__(self, *_args): return None
+        def execute(self, sql, params): self.sql, self.params = sql, params
+
+    class Connection:
+        def __init__(self):
+            self.cursor_instance, self.committed = Cursor(), False
+        def __enter__(self): return self
+        def __exit__(self, *_args): return None
+        def cursor(self): return self.cursor_instance
+        def commit(self): self.committed = True
+
+    connection = Connection()
+    service = cast(EvidenceAuthorityService, object.__new__(EvidenceAuthorityService))
+    service._connect = lambda: connection  # type: ignore[method-assign]
+    service._record_storage_verify_failure(
+        case_id=CASE_ID, generation=3, profile=StorageProfile.EXTERNALLY_READ_ONLY,
+        manifest_version=4, manifest_hash="sha256:" + "a" * 64,
+        failure_code="READ_WRITE_DRIFT", correlation_id="full-verify:test",
+        actor_user_id=ACTOR_ID,
+    )
+    assert "evidence_storage_record_verify_failure" in connection.cursor_instance.sql
+    assert connection.cursor_instance.params[5:7] == ("READ_WRITE_DRIFT", "full-verify:test")
+    assert connection.committed is True
 
 
 @pytest.mark.parametrize("kind", ["entry_symlink", "hardlink", "nonregular"])

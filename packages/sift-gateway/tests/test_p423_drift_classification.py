@@ -68,10 +68,7 @@ def test_unavailable_storage_is_not_misclassified_as_missing_evidence() -> None:
     assert result.gate_state is CustodyGateState.BLOCKED_UNAVAILABLE
     assert [finding.code for finding in result.findings] == ["STORAGE_UNAVAILABLE"]
     assert result.findings[0].evidence_object_id is None
-    assert (
-        result.findings[0].recovery
-        is RecoveryRequirement.INVESTIGATE_AVAILABILITY
-    )
+    assert result.findings[0].recovery is RecoveryRequirement.INVESTIGATE_AVAILABILITY
 
 
 def test_scan_failure_is_unavailable_not_a_tamper_accusation() -> None:
@@ -84,10 +81,7 @@ def test_scan_failure_is_unavailable_not_a_tamper_accusation() -> None:
 
     assert result.gate_state is CustodyGateState.BLOCKED_UNAVAILABLE
     assert result.findings[0].code is DriftCode.INVENTORY_SCAN_FAILED
-    assert (
-        result.findings[0].recovery
-        is RecoveryRequirement.INVESTIGATE_AVAILABILITY
-    )
+    assert result.findings[0].recovery is RecoveryRequirement.INVESTIGATE_AVAILABILITY
 
 
 def test_new_and_structurally_unsafe_items_remain_pending_not_violations() -> None:
@@ -320,6 +314,83 @@ def test_external_mount_identity_drift_is_unavailable_until_reverified() -> None
     assert result.findings[0].recovery is RecoveryRequirement.RECONNECT_AND_VERIFY
 
 
+def test_external_writable_remount_takes_precedence_over_mount_identity() -> None:
+    expected = AuthorityEvidence(
+        evidence_object_id="object-1",
+        sha256="a" * 64,
+        byte_count=4096,
+        storage_profile=StorageProfile.EXTERNALLY_READ_ONLY,
+        mount_identity="mount-a",
+        storage_source_identity="source-a",
+    )
+    observed = _mounted(
+        identity=None,
+        immutable=None,
+        read_only=False,
+        mount_identity="mount-b",
+        storage_source_identity="source-a",
+    )
+
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.AVAILABLE,
+            expected=(expected,),
+            observed=(observed,),
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_VIOLATION
+    assert result.findings[0].code is DriftCode.POSTURE_DRIFT
+    assert result.findings[0].recovery is RecoveryRequirement.RESTORE_READ_ONLY
+
+
+def test_authorized_unverified_storage_generation_is_not_a_custody_violation() -> None:
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.VERIFICATION_REQUIRED,
+            expected=(),
+            observed=(),
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_UNAVAILABLE
+    assert result.findings[0].code is DriftCode.STORAGE_FULL_VERIFY_REQUIRED
+    assert result.findings[0].full_verification_required is True
+
+
+def test_external_source_change_requires_explicit_source_authorization() -> None:
+    expected = AuthorityEvidence(
+        evidence_object_id="object-1",
+        sha256="a" * 64,
+        byte_count=4096,
+        storage_profile=StorageProfile.EXTERNALLY_READ_ONLY,
+        mount_identity="mount-a",
+        storage_source_identity="source-a",
+    )
+    observed = _mounted(
+        identity=None,
+        immutable=None,
+        read_only=True,
+        mount_identity="mount-b",
+        storage_source_identity="source-b",
+    )
+
+    result = classify_inventory(
+        InventorySnapshot(
+            availability=StorageAvailability.AVAILABLE,
+            expected=(expected,),
+            observed=(observed,),
+        )
+    )
+
+    assert result.gate_state is CustodyGateState.BLOCKED_VIOLATION
+    assert result.findings[0].code is DriftCode.STORAGE_SOURCE_CHANGED
+    assert (
+        result.findings[0].recovery
+        is RecoveryRequirement.AUTHORIZE_STORAGE_SOURCE_CHANGE
+    )
+
+
 def test_external_read_only_posture_drift_is_a_verified_posture_violation() -> None:
     expected = AuthorityEvidence(
         evidence_object_id="object-1",
@@ -369,7 +440,9 @@ def test_rename_surfaces_missing_authority_and_pending_new_identity() -> None:
     }
 
 
-def test_duplicate_concurrent_observations_are_idempotent_and_order_independent() -> None:
+def test_duplicate_concurrent_observations_are_idempotent_and_order_independent() -> (
+    None
+):
     first = _mounted(observation_id="z-observation")
     second = _mounted(
         observation_id="a-observation",
@@ -433,7 +506,9 @@ def test_ledger_valid_requires_an_exact_boolean(invalid: object) -> None:
 
 
 @pytest.mark.parametrize("invalid", [True, False, "2", 1.5, 0, 65])
-def test_inventory_depth_requires_a_bounded_non_boolean_integer(invalid: object) -> None:
+def test_inventory_depth_requires_a_bounded_non_boolean_integer(
+    invalid: object,
+) -> None:
     with pytest.raises(ValueError, match="depth must be an integer from 1 to 64"):
         _mounted(depth=invalid)
 

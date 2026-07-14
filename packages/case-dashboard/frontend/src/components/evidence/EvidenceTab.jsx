@@ -13,6 +13,7 @@ import { UnregisteredFiles } from '@/components/evidence/UnregisteredFiles'
 import { RegisteredEvidenceTable } from '@/components/evidence/RegisteredEvidenceTable'
 import { EvidenceModals } from '@/components/evidence/EvidenceModals'
 import { IncompleteCustodyOperation } from '@/components/evidence/IncompleteCustodyOperation'
+import { StorageProfileStatus } from '@/components/evidence/StorageProfileStatus'
 
 // ─────────────────────────────────────────────────────────────────────────
 // EvidenceTab — chain-of-custody dashboard (Mission Control reskin of the
@@ -67,7 +68,7 @@ export function EvidenceTab() {
     setModalError('')
     setModalResult(null)
     setSealIntentId(
-      ['seal', 'replace', 'restore', 'ignore', 'delete', 'retire'].includes(name)
+      ['seal', 'replace', 'restore', 'ignore', 'delete', 'retire', 'storage_profile'].includes(name)
         ? crypto.randomUUID()
         : null,
     )
@@ -141,6 +142,11 @@ export function EvidenceTab() {
 
         <FullVerifyBar chainStatus={chainStatus} onVerifyClick={() => openModal('full_verify')} />
 
+        <StorageProfileStatus
+          chainStatus={chainStatus}
+          onChange={(profile) => openModal('storage_profile', profile)}
+        />
+
         <CustodyStatusGrid
           chainStatus={chainStatus}
           onAnchor={custody.handleTriggerAnchor}
@@ -201,6 +207,7 @@ export function EvidenceTab() {
           onReasonChange: setModalReason,
           onClose: closeModal,
           onFullVerifyEvidence: custody.handleFullVerifyEvidence,
+          onStorageProfileChange: custody.handleStorageProfileChange,
           onSeal: custody.handleSealEvidence,
           onResumeSeal: custody.handleResumeSeal,
           onIgnore: custody.handleIgnoreEvidence,

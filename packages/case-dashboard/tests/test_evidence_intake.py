@@ -70,10 +70,26 @@ class FakeEvidenceDB:
         self.unseal_calls: list = []
         self.recovery_begin_calls: list = []
         self.recovery_complete_calls: list = []
+        self.storage_profile_calls: list = []
 
     def record_reauth_event(self, *, case_id, actor, examiner, action, binding=None):
         self.reauth_calls.append((case_id, examiner, action, binding))
         return "audit-evt-001"
+
+    def change_storage_profile(
+        self, *, case_id, profile, reason, idempotency_key,
+        reauth_audit_event_id, actor,
+    ):
+        assert reauth_audit_event_id
+        self.storage_profile_calls.append(
+            (case_id, profile, reason, idempotency_key, reauth_audit_event_id, actor)
+        )
+        return {
+            "storage_profile": profile,
+            "storage_availability": "FULL_VERIFY_REQUIRED",
+            "storage_remediation": "FULL_VERIFY",
+            "generation": 2,
+        }
 
     def gate_status(self, case_id):
         return {
@@ -89,8 +105,9 @@ class FakeEvidenceDB:
     def list_evidence(self, case_id):
         return list(self._objects)
 
-    def seal(self, *, case_id, file_specs, reason, idempotency_key, reauth_audit_event_id, actor, examiner):
+    def seal(self, *, case_id, file_specs, reason, idempotency_key, reauth_audit_event_id, actor, examiner, storage_profile="LOCAL_IMMUTABLE"):
         assert reauth_audit_event_id, "seal must receive a re-auth audit event id"
+        assert storage_profile in {"LOCAL_IMMUTABLE", "EXTERNALLY_READ_ONLY"}
         self.seal_calls.append((case_id, file_specs, reauth_audit_event_id))
         self.seal_status = "sealed"
         return {"seal_status": "sealed", "manifest_version": 1}
@@ -591,6 +608,54 @@ class TestEvidenceChainSeal:
             json={"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "seal-006", "file_specs": [{"path": "evidence/disk.raw"}]},
         )
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# storage profile endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestEvidenceStorageProfile:
+    def test_profile_change_is_strict_reauthenticated_and_service_bound(
+        self, authed_client, evidence_db
+    ):
+        response = authed_client.post(
+            "/api/evidence/storage/profile",
+            json={
+                "password": GOOD_PASSWORD,
+                "profile": "EXTERNALLY_READ_ONLY",
+                "reason": "Case evidence is on a hardware read-only source",
+                "idempotency_key": "profile-change-1",
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["storage_profile"] == "EXTERNALLY_READ_ONLY"
+        assert evidence_db.reauth_calls[-1][2:] == (
+            "evidence_storage_profile_change",
+            {
+                "profile": "EXTERNALLY_READ_ONLY",
+                "reason": "Case evidence is on a hardware read-only source",
+                "idempotency_key": "profile-change-1",
+            },
+        )
+        assert evidence_db.storage_profile_calls[0][1:4] == (
+            "EXTERNALLY_READ_ONLY",
+            "Case evidence is on a hardware read-only source",
+            "profile-change-1",
+        )
+
+    @pytest.mark.parametrize("body", [
+        {},
+        {"password": GOOD_PASSWORD, "profile": "LOCAL_IMMUTABLE", "reason": "", "idempotency_key": "k"},
+        {"password": GOOD_PASSWORD, "profile": "UNKNOWN", "reason": "x", "idempotency_key": "k"},
+        {"password": GOOD_PASSWORD, "profile": "LOCAL_IMMUTABLE", "reason": "x", "idempotency_key": "k", "unknown": True},
+    ])
+    def test_profile_change_rejects_incomplete_unknown_or_open_input(
+        self, authed_client, evidence_db, body
+    ):
+        response = authed_client.post("/api/evidence/storage/profile", json=body)
+        assert response.status_code == 400
+        assert not evidence_db.storage_profile_calls
 
 
 # ---------------------------------------------------------------------------

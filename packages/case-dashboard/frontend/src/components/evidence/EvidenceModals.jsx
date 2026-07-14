@@ -162,15 +162,14 @@ function ConfirmButton({ formId, label, tone = 'neutral', disabled, testId }) {
 }
 
 // ── Full database-custody verification ────────────────────────────────────
-function FullVerifyEvidenceModal({ password, onPasswordChange, loading, error, result, onClose, onSubmit }) {
+function FullVerifyEvidenceModal({ loading, error, result, onClose, onSubmit }) {
   return (
     <ModalShell title="Full Verify Evidence">
       <p className="text-xs text-muted-foreground">
-        Re-authenticate to re-hash every sealed evidence object and compare the mounted bytes with
-        Postgres custody authority. This does not derive a password key or consult a file ledger.
+        Re-hash every sealed evidence object and verify the active storage profile, source, mount,
+        and read-only posture against Postgres custody authority. No new password ceremony is required.
       </p>
       <form id="modal-full-verify" onSubmit={onSubmit} className="space-y-4">
-        {!result && <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />}
         <ModalError error={error} />
         {loading && <ModalLoading message="Hashing and verifying mounted evidence…" />}
         {result &&
@@ -197,6 +196,29 @@ function FullVerifyEvidenceModal({ password, onPasswordChange, loading, error, r
 
 function ResumeSealModal({ password, onPasswordChange, loading, error, result, onClose, onSubmit }) {
   return <ModalShell title="Resume Add & Seal"><p className="text-xs text-muted-foreground">Re-authenticate to resume the server-stored custody operation. No evidence paths or credentials are stored in this page.</p><form id="modal-resume-seal" onSubmit={onSubmit} className="space-y-4"><PasswordField value={password} onChange={onPasswordChange} disabled={loading} /><ModalError error={error} />{loading && <ModalLoading message="Resuming durable custody operation…" />}{result?.sealed && <ModalSuccess message={`Manifest version ${result.manifest_version} sealed successfully!`} />}<div className="flex justify-end gap-2"><CancelButton onClose={onClose} /><ConfirmButton formId="modal-resume-seal" label="Resume" tone="jade" disabled={loading} /></div></form></ModalShell>
+}
+
+function StorageProfileModal({ path, password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
+  const external = path === 'EXTERNALLY_READ_ONLY'
+  return (
+    <ModalShell title="Change Evidence Storage Profile" titleTone="amber">
+      <p className="text-xs text-muted-foreground">
+        Change to {external ? 'Externally Read-Only' : 'Local Immutable'}. The custody gate blocks immediately,
+        and Full Verify Evidence is required before agent access can resume. Mount identity is observed by the server.
+      </p>
+      <form id="modal-storage-profile" onSubmit={onSubmit} className="space-y-4">
+        <ReasonField value={reason} onChange={onReasonChange} disabled={loading} placeholder="Reason for storage profile change" />
+        <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
+        <ModalError error={error} />
+        {loading && <ModalLoading message="Blocking custody gate and changing storage authority…" />}
+        {result && <ModalSuccess message="Storage profile changed. Full Verify Evidence is required." />}
+        <div className="flex justify-end gap-2">
+          <CancelButton onClose={onClose} />
+          <ConfirmButton formId="modal-storage-profile" label="Change Profile" tone="amber" disabled={loading} />
+        </div>
+      </form>
+    </ModalShell>
+  )
 }
 
 function ResumeDispositionModal({ password, onPasswordChange, loading, error, result, onClose, onSubmit }) {
@@ -349,6 +371,9 @@ export function EvidenceModals({ activeModal, pendingPath, password, reason, loa
     <AnimatePresence>
       {activeModal === 'full_verify' && (
         <FullVerifyEvidenceModal key="full_verify" {...common} onSubmit={handlers.onFullVerifyEvidence} />
+      )}
+      {activeModal === 'storage_profile' && (
+        <StorageProfileModal key="storage_profile" {...common} onSubmit={handlers.onStorageProfileChange} />
       )}
       {activeModal === 'seal' && <EvidenceSealModal key="seal" {...common} onSubmit={handlers.onSeal} />}
       {activeModal === 'resume_seal' && <ResumeSealModal key="resume_seal" {...common} onSubmit={handlers.onResumeSeal} />}

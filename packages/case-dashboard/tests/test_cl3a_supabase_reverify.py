@@ -59,7 +59,7 @@ class FakeEvidenceDB:
     def list_evidence(self, case_id):
         return []
 
-    def seal(self, *, case_id, file_specs, reason, idempotency_key, reauth_audit_event_id, actor, examiner):
+    def seal(self, *, case_id, file_specs, reason, idempotency_key, reauth_audit_event_id, actor, examiner, storage_profile="LOCAL_IMMUTABLE"):
         self.seal_calls.append(reauth_audit_event_id)
         return {"manifest_version": 1, "seal_status": "sealed"}
 
