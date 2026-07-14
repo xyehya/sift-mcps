@@ -99,6 +99,18 @@ def test_interface_is_pathless_and_profile_bound() -> None:
         assert installed_path in uninstaller
 
 
+def test_broker_profile_allows_required_runtime_path_introspection_only() -> None:
+    rules = {
+        " ".join(line.split())
+        for line in BROKER_PROFILE.read_text(encoding="utf-8").splitlines()
+    }
+
+    assert "/usr/local/sbin/ r," in rules
+    assert "/proc/@{pid}/attr/current r," in rules
+    assert "/usr/local/sbin/** r," not in rules
+    assert "/proc/** r," not in rules
+
+
 def test_broker_rebinds_uuid_to_postgres_and_durable_receipt() -> None:
     source = HELPER.read_text(encoding="utf-8")
     migration = MIGRATION.read_text(encoding="utf-8")

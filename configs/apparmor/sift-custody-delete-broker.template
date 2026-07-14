@@ -9,13 +9,14 @@ profile sift-custody-delete-broker flags=(attach_disconnected) {
   #include <abstractions/python>
   #include <abstractions/nameservice>
 
+  /usr/local/sbin/                           r,
   /usr/local/sbin/sift-custody-delete-broker r,
   /usr/bin/python3*                           rix,
   /etc/sift/custody-delete.json              r,
   /etc/sift/custody-delete-dsn               r,
   /usr/local/lib/sift/prepare-evidence-python/ r,
   /usr/local/lib/sift/prepare-evidence-python/** mr,
-  /proc/self/attr/current                     r,
+  /proc/@{pid}/attr/current                   r,
 
   @@SIFT_CASES_ROOT@@/                        r,
   @@SIFT_CASES_ROOT@@/*/                      r,
