@@ -21,37 +21,38 @@ Authority classes used in the tables:
   verification.
 - **secret/config** - credentials, keys, or deployment config.
 - **cache** - performance-only; safe to drop and recompute.
-- **legacy/obsolete** - retained only as a fallback for non-DB-active mode or
-  pre-migration parser compatibility; not authoritative in the live deployment.
+- **legacy/obsolete** - retained only for cleanup, export, or pre-migration
+  parser/test compatibility; never an active non-DB authority fallback.
 
 The deployment runs **DB-active** (Supabase is the control plane). The driving
 flag is `db_authority_active()` in
 `packages/sift-core/src/sift_core/active_case_context.py:96`; in DB-active mode
 the core resolvers fail closed to the request/worker `AuthorityContext` instead
 of reading env or pointer files
-(`packages/sift-core/src/sift_core/active_case_context.py:29-50,96-111`). Where a
-legacy file path still exists, it is the **file-mode fallback** path, not the
-live authority.
+(`packages/sift-core/src/sift_core/active_case_context.py:29-50,96-111`). A
+legacy file path may still exist for cleanup, export, or compatibility, but it
+does not become authority when Postgres is unavailable; active workflows fail
+closed.
 
 ## Master Authority Table
 
 | State / fact | Authority | DB object | File mirror or cache | Writer | Reader | Maintenance command | Backup/restore note | Migration status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Case lifecycle + metadata | db | `app.cases` (`status`, `case_key`, `legacy_case_dir`, `metadata`) `supabase/migrations/202606070101_identity_foundation.sql:24` | `CASE.yaml` legacy mirror only (`case_io.py`); `compat_export_status='stale'` flags it | Gateway `ActiveCaseService.create_case/update_case_metadata` `active_case.py:236,336` | Portal/agents via Gateway; `ActiveCaseService.get_case_metadata` `active_case.py:166` | reset via Supabase; cases edited through portal REST | Postgres dump (Supabase). `CASE.yaml` not authoritative | migrated; `CASE.yaml` legacy/file-mirror |
-| Active case pointer | db | `app.active_case_state` (scope=`deployment`) `202606070101_identity_foundation.sql:67`; read view `app.deployment_active_case` `202606070400_active_case_authority.sql:13` | none in DB-active; legacy `~/.sift/active_case` pointer file is fallback only | `ActiveCaseService._set_active_case_cur` `active_case.py:455` (upsert on `scope`) | `ActiveCaseService.get_active_case` `active_case.py:147` | set via portal/MCP case activation (re-auth gated) | Postgres dump | migrated; pointer file obsolete in DB-active |
+| Active case pointer | db | `app.active_case_state` (scope=`deployment`) `202606070101_identity_foundation.sql:67`; read view `app.deployment_active_case` `202606070400_active_case_authority.sql:13` | legacy `~/.sift/active_case` may remain for compatibility but is never an authority fallback | `ActiveCaseService._set_active_case_cur` `active_case.py:455` (upsert on `scope`) | `ActiveCaseService.get_active_case` `active_case.py:147` | set via operator Portal activation (re-auth gated) | Postgres dump | migrated; pointer file obsolete |
 | Case membership + roles | db | `app.case_members` `202606070101_identity_foundation.sql:50` | none | Gateway (case create / member mgmt) | RLS-scoped reads `active_case.py:202-213,431-444` | portal operator admin | Postgres dump | migrated |
 | Operator identity + system role | db | `app.operator_profiles` (`status`, `system_role`, `auth_user_id`) `202606070101_identity_foundation.sql:9`; role col `202606070300_unified_jwt_principals.sql:28` | none; credentials live in Supabase Auth, not `app.*` | Supabase Auth + installer mapping | Gateway `supabase_auth.py` principal resolve | reset password via Supabase Auth path | Supabase Auth dump | migrated |
-| Examiner password (fallback auth) | file | none (Supabase Auth is target authority) | `/var/lib/sift/passwords/examiner.json` PBKDF2 hash+salt `install.sh:908` | installer `write_default_examiner` | Gateway legacy password fallback | rotate via Supabase; legacy file is fallback | back up `/var/lib/sift/passwords/` (0700) | **legacy fallback** - see FORK-1 / BATCH-HR1 |
+| Operator password + re-auth credential | db (Supabase Auth/GoTrue) | Supabase `auth.users`; `app.operator_profiles.auth_user_id` binds the operator principal | retired `/var/lib/sift/passwords/examiner.json` may remain after upgrade but is never read as a fallback | Supabase Auth/admin bootstrap | Gateway resolves the signed-in identity and calls GoTrue password re-verification | rotate/reset only through Supabase Auth | Supabase Auth dump; do not back up the retired password file as credential authority | migrated; Supabase-only, fail closed |
 | Agent + service identities | db | `app.agents`, `app.service_identities` `202606070101_identity_foundation.sql:83,97` | none | Gateway credential issuance (re-auth gated) | Gateway principal resolve | issue/revoke via portal/MCP | Postgres dump | migrated |
-| MCP/service token registry | db | `app.mcp_tokens` (hash-only `token_hash`/`token_fingerprint`, `status`) `202606070101_identity_foundation.sql:109` | none (raw token never stored); legacy `gateway.yaml` static tokens are fallback `token_registry.py` | Gateway token issue/revoke | `PostgresTokenRegistry` lookup by peppered hash | rotate/revoke via token tools | Postgres dump; pepper in `control-plane.env` | PR02 compat bridge; target is Supabase JWT |
+| MCP/service credential + scope authority | db (Supabase JWT + `app.*`) | `app.agents`, `app.service_identities`, `app.principal_tool_scopes`; Supabase-issued JWT subject binds the principal | none; raw credentials are not stored, and `gateway.yaml` static tokens/PR02 tokens are not authentication fallbacks | Gateway/Supabase credential issuance (re-auth gated) | Gateway JWT verification + DB principal/scope resolution | issue/revoke via operator Portal workflow | Postgres/Supabase dump; deployment secrets remain outside repo | migrated under SEC-6; scoped DB authority, fail closed |
 | Per-principal MCP tool scopes | db | `app.principal_tool_scopes` `202606070300_unified_jwt_principals.sql:46`; legacy `app.mcp_token_scopes` `202606070101_identity_foundation.sql:162` | none | Gateway credential issuance | Gateway policy middleware | manage via credential issuance | Postgres dump | migrated (unified JWT) |
 | Portal / agent auth session | db (Supabase Auth) | Supabase Auth `auth.users` + issued JWT; principal mapped via `app.operator_profiles.auth_user_id` | none server-side; token material is in-memory only `supabase_auth.py:307` | Supabase Auth `password_grant` `supabase_auth.py:1043` | Gateway JWT validation | logout = Supabase session revoke / user delete `supabase_auth.py:331,488` | Supabase Auth dump | migrated; no file-backed session store |
 | Audit log (tool calls, identity, custody) | db | `app.audit_events` `202606070101_identity_foundation.sql:136` | per-case `audit/*.jsonl` is **file-mirror**, labelled `legacy-file-mirror` vs `db-audit-events` `audit_ops.py:70-117` | Gateway `DbAuditWriter` `audit_helpers.py:81`; required-write raises `AuditPersistError` | portal/agents via Gateway summaries | n/a (append-only) | Postgres dump; JSONL mirror is local proof copy | migrated (BATCH-K1/K6); JSONL = file-mirror |
 | Examiner approval decisions | db | reflected in `app.investigation_*` approval cols + `app.audit_events` | `approvals.jsonl` per-case append-only `case_io.py:354-415`, `audit_ops.py` | core `case_io`/`audit_ops` | reporting verification | n/a | Postgres dump; JSONL = local proof | migrated; JSONL = export/proof |
-| Evidence registry + seal status | db | `app.evidence_objects` (`status`, `seal_status`, `current_sha256`) `202606081000_evidence_custody.sql:30`; `app.evidence_chain_heads` (`seal_status`, `head_hash`) `:152` | `evidence-manifest.json` = export/proof only | `app.evidence_seal` via `PortalEvidenceService` `portal_services.py:535-578` ("DB is the authority; no file manifest/ledger is consulted") | `app.evidence_gate_status` `portal_services.py:337`, `evidence_gate.check_evidence_gate_db` `evidence_gate.py:137-199` | seal via portal (re-auth gated) | Postgres dump; manifest exported for offline proof | migrated; manifest = export/proof |
-| Evidence custody ledger (hash chain) | db | `app.evidence_custody_events` append-only, per-case `prev_hash`/`event_hash` `202606081000_evidence_custody.sql:113`; append-only enforced by trigger `app.evidence_block_mutation` `:235` | `evidence-ledger.jsonl` HMAC ledger = export/proof `evidence_chain.py` | `app.evidence_append_custody_event` (SECURITY DEFINER, service-only) `:260` | `portal_services.py:412` reads custody events | n/a (append-only) | Postgres dump; JSONL ledger exported for court proof | migrated; JSONL = export/proof |
-| Evidence per-version snapshots | db | `app.evidence_versions` append-only `202606081000_evidence_custody.sql:81` | manifest version mirror | `app.evidence_seal` | gate/reporting | n/a | Postgres dump | migrated |
-| Evidence proof exports | export/proof | `app.evidence_proof_exports` (non-authoritative metadata) `202606081000_evidence_custody.sql:178`; `app.evidence_record_proof_export` `:788` | `evidence-anchor-v{N}.json` (Solana anchor), exported manifest/ledger bundles | `evidence_record_proof_export` RPC; `evidence_chain.anchor_db_proof` `evidence_chain.py:839` | offline verifier | export via portal report/export | bundle = manifest + ledger + anchor | migrated; intentionally file-shaped bundle |
+| Evidence registry + seal status | db | `app.evidence_objects` (`status`, `seal_status`, `current_sha256`); `app.evidence_chain_heads` (`seal_status`, `head_hash`) | current compatibility manifest export is unsigned and non-authoritative | durable `app.custody_operations` begin/resume + verified commit RPCs; historical one-shot `app.evidence_seal` remains migration ancestry only | `app.evidence_gate_status` + Gateway read-only reconciliation | Add/Seal and recovery via re-auth-gated Portal operations | Postgres dump; compatibility manifest is not independent proof | migrated to durable custody operations |
+| Evidence custody ledger (hash chain) | db | `app.evidence_custody_events` append-only, per-case `prev_hash`/`event_hash`; mutation/TRUNCATE blocked | current JSONL compatibility export is unsigned and non-authoritative; retired HMAC JSONL is historical | current verified custody-operation commit RPCs append canonical events atomically; direct `app.evidence_append_custody_event` is a historical low-level predecessor, not an operator workflow | Gateway custody/history services | n/a (append-only) | Postgres dump is current authority | migrated; current chain is Postgres-only |
+| Evidence per-version snapshots | db | `app.evidence_versions` append-only and linked to `custody_operation_id` | unsigned compatibility manifest version export | verified custody-operation commit RPCs | gate/reporting/history | n/a | Postgres dump | migrated to durable custody operations |
+| Evidence proof exports | current compatibility export; future signed proof | `app.evidence_proof_exports` currently stores non-authoritative export metadata | current manifest/ledger/anchor compatibility bundles are unsigned and must not be represented as court-verifiable signed proof | current compatibility export path only | current bundle consumers; **P4.23.6** adds detached signatures plus the supported offline verifier | export via operator Portal workflow | preserve Postgres authority; archive future detached signed proof with its verification material | P4.23.6 signed proof/offline verifier not yet represented by the legacy bundle |
 | Investigation findings | db | `app.investigation_findings` (`status`, `content_hash`) `202606081500_report_metadata.sql:12` | `findings.json` = file-mirror/export in DB-active `case_io.py`, `investigation_store.py:7` | `PostgresInvestigationStore.upsert_finding/apply_review` `investigation_store.py:321,463` | `report_inputs()` approved-only `:614` | manage via portal/MCP (approve = re-auth) | Postgres dump | migrated (BATCH-K2); JSON = mirror |
 | Investigation timeline events | db | `app.investigation_timeline_events` `202606081500_report_metadata.sql:31` | `timeline.json` = file-mirror/export | `PostgresInvestigationStore` `investigation_store.py` | reporting (approved only) | portal/MCP | Postgres dump | migrated; JSON = mirror |
 | Investigation IOCs | db | `app.investigation_iocs` (`content_hash` added `202606081602`) `202606081500_report_metadata.sql:50` | `iocs.json` = file-mirror/export | `PostgresInvestigationStore` | reporting | portal/MCP | Postgres dump | migrated; JSON = mirror |
@@ -70,7 +71,7 @@ live authority.
 | Tool catalog / artifact knowledge | file (reference) | none (static reference data) | `packages/sift-core/data/catalog/*.yaml`, `packages/forensic-knowledge/data/**` (artifacts, tools) | shipped in repo | core tool dispatch / forensic-knowledge MCP | update via repo, reinstall | in git; reference symlinked to `/var/lib/sift/enrichment/forensic-knowledge` `install.sh:636` | **accepted file authority** - static reference data, versioned in repo (FORK-3) |
 | OpenSearch index mappings/templates | file (reference) | none | `packages/opensearch-mcp/src/opensearch_mcp/mappings/*.json`, `reduced_*.yaml` | shipped in repo | opensearch-mcp ingest | update via repo | in git | accepted file authority - static reference |
 | Backend manifest schema | file (reference) | none | `packages/sift-gateway/src/sift_gateway/sift-backend.schema.json` | shipped in repo | manifest validation | update via repo | in git | accepted file authority - schema contract |
-| Gateway runtime config | secret/config | none | `/var/lib/sift/.sift/gateway.yaml` (0600) `install.sh:1685` | installer `write_gateway_config` | Gateway startup `config.py` | edit + restart gateway service | back up `/var/lib/sift/.sift/` (0700) | config file; holds legacy fallback tokens/PBKDF2 |
+| Gateway runtime config | secret/config | none | `/var/lib/sift/.sift/gateway.yaml` (0600) `install.sh:1685` | installer `write_gateway_config` | Gateway startup `config.py` | edit + restart gateway service | back up `/var/lib/sift/.sift/` (0700) | deployment config only; static-token/PBKDF2 entries do not authenticate under SEC-6 |
 | Supabase credentials | secret/config | none | `/var/lib/sift/.sift/supabase.env` (0600) `install.sh:1405`; `~/.sift/supabase-project/sift-supabase.env` `setup-supabase.sh:296` | installer | Gateway/worker env | rotate via Supabase, rewrite env | back up `.sift/` securely | secret env; never commit values |
 | Control-plane DSN + token pepper | secret/config | none | `/var/lib/sift/.sift/control-plane.env` (0600) `install.sh:1521` | installer `write_control_plane_env` | Gateway/worker DB connect, token hashing | rotate DSN/pepper, rewrite env | back up `.sift/` securely | secret env |
 | TLS CA + gateway cert/key | secret/config | none | `/var/lib/sift/.sift/tls/{ca,gateway}-{key,cert}.pem` `install.sh:862-865` (keys 0600) | installer `generate_tls` | Gateway TLS listener | regenerate via installer / BATCH-TLS1 | back up keys securely | self-signed lab CA; profile open in B-MVP-001/BATCH-TLS1 |
@@ -139,15 +140,14 @@ being mistaken for a fallback.
    (accepted):** tools and caches are rebuildable/reinstallable and are not
    mutable system-of-record state.
 
-7. **File-mirrors / export-proof artifacts** - `CASE.yaml`,
+7. **File mirrors / compatibility exports** - `CASE.yaml`,
    `findings/timeline/iocs/todos.json`, `evidence-manifest.json`,
    `evidence-ledger.jsonl`, `evidence-anchor-v{N}.json`, `approvals.jsonl`,
    per-case `audit/*.jsonl`. **Justification (accepted, not authority):** these
-   are written from DB authority for offline custody proof or legacy-parser
-   compatibility and are explicitly labelled (`legacy-file-mirror` vs
-   `db-audit-events` in `audit_ops.py:112-116`). They are export/proof, not
-   authority. Broad relabelling/cleanup of the regenerate docs that still call
-   some of these "authoritative" belongs to BATCH-RG1 (see below).
+   are written from DB authority for legacy-parser/export compatibility and are
+   explicitly labelled (`legacy-file-mirror` vs `db-audit-events` in
+   `audit_ops.py:112-116`). They are unsigned and non-authoritative; they are not
+   the detached signed proof/offline-verifier contract added by P4.23.6.
 
 8. **Parser-compatibility/debug files** - `<case>/host-dictionary.yaml` and
    `~/.sift/ingest-status/*.json`. **Justification (accepted, not authority):**
@@ -156,61 +156,14 @@ being mistaken for a fallback.
    DB authority is `app.host_identity_decisions` and
    `app.opensearch_ingest_status` (BATCH-K4).
 
-## Stale Authority Claims In `docs/regenerate/**` (for BATCH-RG1)
+## Documentation Reconciliation Status
 
-These are pre-migration or partially-stale statements that imply file authority
-where the DB is now authoritative. Listed for BATCH-RG1 to correct; **not edited
-here** (out of OR2 scope).
-
-1. `docs/regenerate/evidence-chain-of-custody-premigration.md` - whole document
-   describes `evidence-manifest.json` as "the current sealed state" and
-   `evidence-ledger.jsonl` as the authoritative append-only log (lines
-   21-22,40,79,277,303-307). This is the pre-migration model; live authority is
-   `app.evidence_objects`/`app.evidence_chain_heads`/`app.evidence_custody_events`
-   with the files as export/proof. Filename already says `premigration`; RG1
-   should relabel it `historical` or rewrite for the DB model.
-
-2. `docs/regenerate/mcp-contracts.md:60-61,423` - claims `case_info` /
-   `evidence_info` `chain_status`/`requires_examiner_action` are "file-backed"
-   and "can disagree with the DB gate" (AUT1-B1). Live gate authority is
-   `app.evidence_gate_status` via `evidence_gate.check_evidence_gate_db`
-   (`evidence_gate.py:137-199`). RG1 should verify whether these tools now read
-   the DB gate and update the file-backed caveat.
-
-3. `docs/regenerate/code-structure.md:58` - "`evidence_chain.py`,
-   `verification.py`, `evidence_ops.py` | File-backed custody assets, HMAC
-   ledger, seal/verify". Lines 169-172 list `~/.sift/active_case`, `CASE.yaml`,
-   `findings.json`, `evidence-manifest.json`, etc. as a file model. The line
-   already adds "Postgres `app.*` is authority; file proofs..." but RG1 should
-   make the export/proof vs authority split explicit per-file (consistent with
-   this map).
-
-4. `docs/regenerate/api-contracts.md:189,353` - "Authority: DB custody chain (C1
-   RPCs) with file-backed fallback" and "DB authority is preferred ...; file-
-   backed paths are [fallback]". "Preferred"/"fallback" understates that in
-   DB-active mode the DB is the **sole** authority and files are export/proof.
-   RG1 should tighten the wording.
-
-5. `docs/regenerate/dfir-hardening-guide-pre-migration.md:177-178` - AppArmor
-   profile lists `/cases/*/evidence-manifest.json` and `evidence-ledger.jsonl`
-   as `rw` custody assets. Filename says `pre-migration`; RG1 should confirm the
-   live AppArmor profile (`install.sh:2487` `configure_apparmor`,
-   `/etc/apparmor.d/sift-gateway`) and reclassify these as export/proof paths.
-
-6. `docs/regenerate/data-flows-and-lifecycles.md:162` and
-   `api-contracts.md:217` - cite `evidence/v1-gate.log` + `evidence/v1-ingest.jsonl`
-   as "sealed" live proof. RG1 should confirm whether these BATCH-V1 proof file
-   references are still current or stale.
-
-7. `docs/regenerate/known-limitations-and-improvements.md:20` - already partly
-   correct (notes residual agent-visible file mirrors such as
-   `agent/findings_list.json`, `case_info.file_structure`). RG1 should reconcile
-   this with the authoritative `app.investigation_*` + `job_status_public` reads
-   and confirm whether those residual mirrors still exist in code.
-
-8. `docs/regenerate/matrix-comparison.md:433` - "Pure JSON reader. Reads
-   `evidence-manifest.json` fresh on every call." RG1 should verify this against
-   the DB-gate path (`evidence_gate.py`) and reclassify.
+The former `docs/regenerate/**` cleanup queue is complete. Current operational
+documents live under `docs/drafts/**`, `docs/latest/**`, and `docs/architecture/**`
+and consistently identify Postgres as authority. Retained pre-migration evidence
+and hardening documents are explicitly historical; their HMAC/file-ledger model
+must not be used as current runtime guidance. Compatibility filenames and the
+legacy `/verify-hmac` URL do not confer authority.
 
 ## Historical Authority Questions and Current Resolutions
 
@@ -226,14 +179,8 @@ here** (out of OR2 scope).
   for operator-managed evidence bytes (`/cases/*`) and snapshots, since the DB
   holds only hashes/metadata.
 
-## Could Not Determine From Code Alone
+## Requires Live Deployment Readback
 
-- Whether the legacy file-mode paths (examiner.json fallback, verification JSONL,
-  `~/.sift/active_case` pointer) are ever actually exercised on the live VM, or
-  are dead in practice - this needs a live run / config inspection (deferred to a
-  live-VM batch; OR2 is repo-analysis only).
 - The exact contents of the live AppArmor profile and auditd rules vs the
   pre-migration regenerate docs - the installer generates them
   (`install.sh:2464,2487`) but the rendered files live on the VM.
-- Whether the BATCH-V1 proof files (`evidence/v1-*.log/jsonl`) referenced in
-  regenerate docs still exist on the live VM.

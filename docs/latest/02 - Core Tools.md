@@ -9,7 +9,7 @@ status: draft
 
 ## Overview
 
-`sift-core` (packages/sift-core/src/sift_core/) provides 8 core MCP tool specs (`case_info`, `evidence_info`, `record_finding`, `record_timeline_event`, `list_existing_findings`, `manage_todo`, `get_tool_help`, `run_command`) plus 3 gateway-local tools (`capability_guide`, `run_command_job`, `running_commands_status`) registered in the Gateway and invoked in-process. It manages the full evidence chain (append-only hash-linked ledger, immutable file sealing), case lifecycle, finding validation, and the `run_command` sandbox (ceil+floor dual-layer containment). Dual-authority: file mode / Postgres DB mode. Key files: `agent_tools.py`, `evidence_chain.py`, `case_manager.py`, `execute/security.py`, `execute/dfir_exec_launcher.py`.
+`sift-core` (packages/sift-core/src/sift_core/) provides 8 core MCP tool specs (`case_info`, `evidence_info`, `record_finding`, `record_timeline_event`, `list_existing_findings`, `manage_todo`, `get_tool_help`, `run_command`) plus 3 gateway-local tools (`capability_guide`, `run_command_job`, `running_commands_status`) registered in the Gateway and invoked in-process. It provides case/investigation helpers and the `run_command` sandbox (ceil+floor dual-layer containment). Active evidence custody is solely Postgres-authoritative and is mediated by the Gateway's durable custody operations; retained `sift-core` file-chain helpers are legacy export/compatibility utilities, never a second authority or failover mode. Key files: `agent_tools.py`, `case_manager.py`, `execute/security.py`, `execute/dfir_exec_launcher.py`; `evidence_chain.py` is legacy/export compatibility only.
 
 ## How it works
 
@@ -189,7 +189,9 @@ then bind a scoped, consumable DB audit receipt to the transition.
 
 ## Invariants
 
-- **DB authority kills file fallback**: When `db_authority_active()` is True, core resolvers use only `AuthorityContext`. Case data writes go to Postgres only; raises if store unavailable. (`active_case_context.py`, `case_manager.py:_persist_investigation`)
+- **DB authority fails closed**: Core resolvers use only `AuthorityContext` for
+  active workflows. Case data writes go to Postgres and raise if the store is
+  unavailable; legacy file helpers never become a fallback authority.
 - **DB custody is append-only**: Postgres custody events and versions are
   hash-linked and mutation-guarded; each successful seal increments manifest
   version exactly once. Protected filesystem posture is verified separately.

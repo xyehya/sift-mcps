@@ -3,16 +3,17 @@
 Status: **historical snapshot — fully superseded as a current-state source.**
 The limitation/status claims below describe the 2026-06-10 freeze and must not
 be used as present runtime truth. Current custody and re-auth authority are
-defined by `docs/architecture/EVIDENCE-CUSTODY-SPEC.md`,
-`docs/architecture/SIFT-GATEWAY-SECURITY-MODEL.md`, and
-`docs/operator/state-authority-map.md`.
+defined by [`EVIDENCE-CUSTODY-SPEC.md`](../architecture/EVIDENCE-CUSTODY-SPEC.md),
+[`SIFT-GATEWAY-SECURITY-MODEL.md`](../architecture/SIFT-GATEWAY-SECURITY-MODEL.md),
+and [`state-authority-map.md`](operator/state-authority-map.md).
 
 Corrections applied after this snapshot:
 - Sensitive Portal actions use fresh Supabase password re-verification plus
   scoped, consumable DB audit receipts. The local HMAC/password bridge is retired.
 - Ingest mount privilege row updated: service now runs as `sift-service` (HR3/BATCH-HR3).
 - RAG scope introspection row updated: `rag_search_case` removed; RAG is `kb_*` via add-on.
-- See `docs/operator/maintenance-guide.md` for the current operational state.
+- See [`maintenance-guide.md`](operator/maintenance-guide.md) for the current
+  operational state.
 Last updated: 2026-06-13 (RG1 corrections applied on top of original 2026-06-10 entry).
 
 ## Historical Known Limitations (2026-06-10 snapshot)
