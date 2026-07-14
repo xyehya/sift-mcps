@@ -436,6 +436,25 @@ describe('Evidence storage profile flow', () => {
     expect(await within(modal).findByText(/Storage profile changed\. Full Verify Evidence is required/)).toBeInTheDocument()
   })
 
+  it('renders current database storage values after the status refresh', async () => {
+    endpoints.getChainStatus.mockResolvedValue({
+      status: 'sealed',
+      storage_profile: 'EXTERNALLY_READ_ONLY',
+      storage_availability: 'AVAILABLE',
+      storage_remediation: 'NONE',
+      storage_last_full_verified_at: '2026-07-14T12:34:56+00:00',
+      write_protected: true,
+    })
+
+    render(<EvidenceTab />)
+
+    expect(await screen.findByText('Externally read-only')).toBeInTheDocument()
+    expect(screen.getByText(/State: AVAILABLE · Remediation: NONE/)).toBeInTheDocument()
+    expect(screen.getByText(/Last full verify: 2026-07-14T12:34:56\+00:00/)).toBeInTheDocument()
+    expect(screen.queryByText(/State: UNAVAILABLE/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Last full verify: never/)).not.toBeInTheDocument()
+  })
+
   it('offers explicit source authorization without conflating it with a profile toggle', async () => {
     seed({
       status: 'violated',

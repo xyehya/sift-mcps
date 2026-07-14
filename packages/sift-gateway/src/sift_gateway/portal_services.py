@@ -1249,6 +1249,17 @@ class EvidenceAuthorityService(_BasePortalDbService):
         storage_public = {
             "storage_profile": str(storage[0]) if storage else "UNKNOWN",
             "storage_availability": str(storage[3]) if storage else "UNAVAILABLE",
+            "storage_source_identity": str(storage[1]) if storage and storage[1] else None,
+            "storage_verified_mount_instance": (
+                str(storage[2]) if storage and storage[2] else None
+            ),
+            "storage_generation": int(storage[4]) if storage else None,
+            "storage_verified_generation": (
+                int(storage[5]) if storage and storage[5] is not None else None
+            ),
+            "storage_read_only": (
+                bool(storage[6]) if storage and storage[6] is not None else None
+            ),
             "storage_last_full_verified_at": (_iso(storage[7]) if storage else None),
             "storage_remediation": str(storage[8]) if storage else "FULL_VERIFY",
         }

@@ -822,6 +822,81 @@ def _empty_evidence_chain_status() -> dict:
         "write_block_warning": None,
         "requires_examiner_action": False,
         "incomplete_operation": None,
+        **_public_storage_status({}),
+    }
+
+
+def _public_storage_status(value: object) -> dict:
+    """Return the fixed path-free storage-authority status contract."""
+    status = value if isinstance(value, dict) else {}
+    profiles = {"LOCAL_IMMUTABLE", "EXTERNALLY_READ_ONLY"}
+    availability = {
+        "AVAILABLE",
+        "UNAVAILABLE",
+        "FULL_VERIFY_REQUIRED",
+        "IDENTITY_DRIFT",
+        "READ_WRITE_DRIFT",
+        "CUSTODY_VIOLATION",
+    }
+    remediations = {
+        "NONE",
+        "RECONNECT_AND_VERIFY",
+        "AUTHORIZE_SOURCE_CHANGE",
+        "RESTORE_READ_ONLY",
+        "FULL_VERIFY",
+        "RESTORE_REACQUIRE_RETIRE",
+    }
+
+    def closed_text(key: str, allowed: set[str], default: str) -> str:
+        candidate = status.get(key)
+        return candidate if isinstance(candidate, str) and candidate in allowed else default
+
+    def opaque_identity(key: str) -> str | None:
+        candidate = status.get(key)
+        if isinstance(candidate, str) and re.fullmatch(r"[0-9a-f]{64}", candidate):
+            return candidate
+        return None
+
+    def positive_generation(key: str) -> int | None:
+        candidate = status.get(key)
+        if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate > 0:
+            return candidate
+        return None
+
+    def iso_timestamp(key: str) -> str | None:
+        candidate = status.get(key)
+        if not isinstance(candidate, str):
+            return None
+        try:
+            datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return candidate
+
+    return {
+        "storage_profile": closed_text("storage_profile", profiles, "UNKNOWN"),
+        "storage_availability": closed_text(
+            "storage_availability", availability, "UNAVAILABLE"
+        ),
+        "storage_remediation": closed_text(
+            "storage_remediation", remediations, "FULL_VERIFY"
+        ),
+        "storage_source_identity": opaque_identity("storage_source_identity"),
+        "storage_verified_mount_instance": opaque_identity(
+            "storage_verified_mount_instance"
+        ),
+        "storage_read_only": (
+            status.get("storage_read_only")
+            if isinstance(status.get("storage_read_only"), bool)
+            else None
+        ),
+        "storage_generation": positive_generation("storage_generation"),
+        "storage_verified_generation": positive_generation(
+            "storage_verified_generation"
+        ),
+        "storage_last_full_verified_at": iso_timestamp(
+            "storage_last_full_verified_at"
+        ),
     }
 
 
@@ -896,6 +971,7 @@ def _db_evidence_chain_status() -> dict | None:
         "incomplete_operation": _public_incomplete_operation(
             status.get("incomplete_operation")
         ),
+        **_public_storage_status(status),
     }
 
     # Detected-vs-sealed object lists for the frontend (Seal Manifest specs,

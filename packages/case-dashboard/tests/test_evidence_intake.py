@@ -56,10 +56,18 @@ class FakeActiveCases:
 class FakeEvidenceDB:
     """Minimal DB evidence adapter for the intake endpoints."""
 
-    def __init__(self, *, seal_status="unsealed", gate_state="BLOCKED_PENDING", objects=None):
+    def __init__(
+        self,
+        *,
+        seal_status="unsealed",
+        gate_state="BLOCKED_PENDING",
+        objects=None,
+        storage_status=None,
+    ):
         self.seal_status = seal_status
         self.gate_state = gate_state
         self._objects = objects if objects is not None else []
+        self.storage_status = storage_status if storage_status is not None else {}
         self.reauth_calls: list = []
         self.seal_calls: list = []
         self.resume_calls: list = []
@@ -100,6 +108,7 @@ class FakeEvidenceDB:
             "issues": [],
             "head_hash": "" if self.seal_status == "unsealed" else "sha256:abc",
             "last_verified_at": None,
+            **self.storage_status,
         }
 
     def list_evidence(self, case_id):
@@ -343,6 +352,85 @@ class TestEvidenceChainStatus:
 
         assert response.status_code == 200
         assert response.json()["gate_state"] == "BLOCKED_UNAVAILABLE"
+
+    def test_status_surfaces_only_public_storage_authority_fields(
+        self, passwords_dir, tmp_path, monkeypatch
+    ):
+        source_identity = "a" * 64
+        mount_instance = "b" * 64
+        ev = FakeEvidenceDB(
+            seal_status="sealed",
+            gate_state="OPEN",
+            storage_status={
+                "storage_profile": "EXTERNALLY_READ_ONLY",
+                "storage_availability": "AVAILABLE",
+                "storage_remediation": "NONE",
+                "storage_source_identity": source_identity,
+                "storage_verified_mount_instance": mount_instance,
+                "storage_read_only": True,
+                "storage_generation": 4,
+                "storage_verified_generation": 4,
+                "storage_last_full_verified_at": "2026-07-14T12:34:56+00:00",
+                "storage_observed_mount_path": "/private/mnt/evidence",
+                "storage_raw_mount_options": "ro,secret=must-not-surface",
+            },
+        )
+        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
+        app = create_dashboard_v2_app(
+            session_secret=_SECRET,
+            session_max_age=28800,
+            active_case_service=FakeActiveCases(),
+            evidence_service=ev,
+            supabase_auth=ReauthFakeSupabaseAuth(),
+        )
+        client = TestClient(app, raise_server_exceptions=True)
+        set_operator_session(client, _SECRET)
+
+        response = client.get("/api/evidence/chain/status")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert {
+            key: body[key]
+            for key in (
+                "storage_profile",
+                "storage_availability",
+                "storage_remediation",
+                "storage_source_identity",
+                "storage_verified_mount_instance",
+                "storage_read_only",
+                "storage_generation",
+                "storage_verified_generation",
+                "storage_last_full_verified_at",
+            )
+        } == {
+            "storage_profile": "EXTERNALLY_READ_ONLY",
+            "storage_availability": "AVAILABLE",
+            "storage_remediation": "NONE",
+            "storage_source_identity": source_identity,
+            "storage_verified_mount_instance": mount_instance,
+            "storage_read_only": True,
+            "storage_generation": 4,
+            "storage_verified_generation": 4,
+            "storage_last_full_verified_at": "2026-07-14T12:34:56+00:00",
+        }
+        assert "storage_observed_mount_path" not in body
+        assert "storage_raw_mount_options" not in body
+
+    def test_status_uses_safe_storage_defaults_when_authority_fields_are_absent(
+        self, authed_client
+    ):
+        body = authed_client.get("/api/evidence/chain/status").json()
+
+        assert body["storage_profile"] == "UNKNOWN"
+        assert body["storage_availability"] == "UNAVAILABLE"
+        assert body["storage_remediation"] == "FULL_VERIFY"
+        assert body["storage_source_identity"] is None
+        assert body["storage_verified_mount_instance"] is None
+        assert body["storage_read_only"] is None
+        assert body["storage_generation"] is None
+        assert body["storage_verified_generation"] is None
+        assert body["storage_last_full_verified_at"] is None
 
     def test_unregistered_file_shows_in_status(self, passwords_dir, tmp_path, monkeypatch):
         """A detected-but-unsealed object surfaces as unregistered."""

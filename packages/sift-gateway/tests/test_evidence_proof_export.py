@@ -93,7 +93,10 @@ class _FakeDb:
         s = " ".join(sql.split())
         if "select seal_status,issues,manifest_version,manifest_hash" in s:
             return [(self.seal_status, [], self.manifest_version, self.manifest_hash)]
-        if "select profile,source_identity,verified_mount_instance,state,generation" in s:
+        if (
+            "from app.evidence_storage_authorities" in s
+            and "profile,source_identity,verified_mount_instance,state" in s
+        ):
             return [("LOCAL_IMMUTABLE", None, None, "AVAILABLE", 1, 1, None, datetime.now(timezone.utc), "NONE")]
         if "select v.id::text,v.item_facts" in s:
             return [("storage-receipt-1", [])]
@@ -232,6 +235,22 @@ def _make_sealed_file(tmp_path: Path, rel: str, content: bytes):
 
 
 class TestTamperDetection:
+    def test_gate_status_surfaces_path_free_storage_authority(self, service):
+        svc, _db, _tmp_path = service
+
+        status = svc.gate_status(_CASE)
+
+        assert status["storage_profile"] == "LOCAL_IMMUTABLE"
+        assert status["storage_availability"] == "AVAILABLE"
+        assert status["storage_source_identity"] is None
+        assert status["storage_verified_mount_instance"] is None
+        assert status["storage_generation"] == 1
+        assert status["storage_verified_generation"] == 1
+        assert status["storage_read_only"] is None
+        assert status["storage_last_full_verified_at"] is not None
+        assert status["storage_remediation"] == "NONE"
+        assert "observed_mount_instance" not in status
+
     def test_modified_sealed_file_marks_violation(self, service):
         svc, db, tmp_path = service
         sha, size = _make_sealed_file(tmp_path, "evidence/disk.bin", b"x" * 64)
