@@ -360,6 +360,9 @@ def test_delete_post_unlink_resume_preserves_facts_and_commits_one_event():
             "display_path": f"evidence/{object_id}.bin",
             "prior_status": "detected",
             "prior_seal_status": "unsealed",
+            "original_version_id": None,
+            "original_sha256": None,
+            "original_bytes": None,
             "present": True,
             "sha256": "sha256:" + "a" * 64,
             "bytes": 4096,
@@ -508,6 +511,9 @@ def test_delete_broker_completed_receipt_is_idempotent_across_new_runner(
                 "display_path": f"evidence/{object_id}.bin",
                 "prior_status": "detected",
                 "prior_seal_status": "unsealed",
+                "original_version_id": None,
+                "original_sha256": None,
+                "original_bytes": None,
                 "present": True,
                 "sha256": "sha256:" + hashlib.sha256(b"broker pending bytes").hexdigest(),
                 "bytes": len(b"broker pending bytes"),
@@ -660,6 +666,9 @@ def test_delete_verified_transition_requires_scoped_completed_broker_receipt():
             "display_path": f"evidence/{object_id}.bin",
             "prior_status": "detected",
             "prior_seal_status": "unsealed",
+            "original_version_id": None,
+            "original_sha256": None,
+            "original_bytes": None,
             "present": True,
             "sha256": "sha256:" + "a" * 64,
             "bytes": 10,
@@ -728,6 +737,65 @@ def test_delete_verified_transition_requires_scoped_completed_broker_receipt():
                 (operation_id, Jsonb({"item": verified})),
             )
             assert cur.fetchone()[0] == "FILESYSTEM_VERIFIED"
+        conn.rollback()
+
+
+@pytest.mark.parametrize(
+    "extra_key",
+    [
+        "case_key",
+        "name",
+        "operation_id",
+        "runner",
+        "runner_instance_id",
+        "prepared_facts_sha256",
+        "receipt_claimed",
+        "receipt_completed",
+        "receipt_runner_instance_id",
+    ],
+)
+def test_broker_authorize_rejects_extra_or_reserved_prepared_item_keys(extra_key: str):
+    from psycopg.types.json import Jsonb
+
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as conn:
+        case_id, actor_id = _case_and_actor(conn)
+        object_id = uuid.uuid4()
+        operation_id, *_ = _begin(
+            conn,
+            case_id=case_id,
+            actor_id=actor_id,
+            object_id=object_id,
+            action="DELETE_STRAY",
+            status="detected",
+            seal_status="unsealed",
+        )
+        item = {
+            "evidence_object_id": str(object_id),
+            "display_path": f"evidence/{object_id}.bin",
+            "prior_status": "detected",
+            "prior_seal_status": "unsealed",
+            "original_version_id": None,
+            "original_sha256": None,
+            "original_bytes": None,
+            "present": True,
+            "sha256": "sha256:" + "a" * 64,
+            "bytes": 10,
+            "st_dev": 11,
+            "st_ino": 12,
+            "st_nlink": 1,
+            extra_key: "attacker-controlled",
+        }
+        with conn.cursor() as cur:
+            cur.execute(
+                "select app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'runner-before')",
+                (operation_id, Jsonb({"item": item})),
+            )
+            with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
+                cur.execute(
+                    "select sift_custody_broker.authorize(%s,'runner-before')",
+                    (operation_id,),
+                )
         conn.rollback()
 
 

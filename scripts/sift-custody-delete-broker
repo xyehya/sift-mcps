@@ -36,6 +36,21 @@ CASE_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 NAME_RE = re.compile(r"^[^/\\\x00]{1,255}$")
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 REQUEST_KEYS = {"schema_version", "operation_id", "runner_instance_id"}
+DELETE_ITEM_KEYS = {
+    "evidence_object_id",
+    "display_path",
+    "prior_status",
+    "prior_seal_status",
+    "original_version_id",
+    "original_sha256",
+    "original_bytes",
+    "present",
+    "sha256",
+    "bytes",
+    "st_dev",
+    "st_ino",
+    "st_nlink",
+}
 
 
 class DeleteBrokerError(RuntimeError):
@@ -125,7 +140,7 @@ def resolve_operation(
         _fail("operation_not_found")
     authority = row[0]
     item = authority.get("item")
-    if not isinstance(item, dict):
+    if not isinstance(item, dict) or set(item) != DELETE_ITEM_KEYS:
         _fail("operation_facts_invalid")
     if authority.get("operation_id") != operation_id or authority.get("runner_instance_id") != runner_instance_id:
         _fail("operation_authority_invalid")
@@ -141,12 +156,44 @@ def resolve_operation(
     name = path_parts[1]
     if not NAME_RE.fullmatch(name) or name in {".", ".."}:
         _fail("name_invalid")
+    evidence_object_id = item.get("evidence_object_id")
+    try:
+        evidence_object_id_valid = (
+            isinstance(evidence_object_id, str)
+            and str(uuid.UUID(evidence_object_id)) == evidence_object_id
+        )
+    except ValueError:
+        evidence_object_id_valid = False
     if (
         item.get("display_path") != display_path
+        or not evidence_object_id_valid
+        or item.get("prior_status") not in {"detected", "registered", "ignored"}
+        or item.get("prior_seal_status") != "unsealed"
+        or item.get("original_version_id") is not None
+        or (
+            item.get("original_sha256") is not None
+            and (
+                not isinstance(item.get("original_sha256"), str)
+                or not SHA256_RE.fullmatch(item["original_sha256"])
+            )
+        )
+        or (
+            item.get("original_bytes") is not None
+            and (
+                not isinstance(item.get("original_bytes"), int)
+                or isinstance(item.get("original_bytes"), bool)
+                or item["original_bytes"] < 0
+            )
+        )
         or item.get("present") is not True
-        or not SHA256_RE.fullmatch(str(item.get("sha256")))
+        or not isinstance(item.get("sha256"), str)
+        or not SHA256_RE.fullmatch(item["sha256"])
     ):
         _fail("pending_object_binding_invalid")
+    if (item.get("original_sha256") is None) is not (
+        item.get("original_bytes") is None
+    ):
+        _fail("original_identity_incomplete")
     for key in ("bytes", "st_dev", "st_ino"):
         value = item.get(key)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -156,16 +203,33 @@ def resolve_operation(
     facts_digest = str(authority.get("prepared_facts_sha256") or "")
     if not SHA256_RE.fullmatch(facts_digest):
         _fail("prepared_facts_digest_invalid")
+    receipt_runner = authority.get("receipt_runner_instance_id")
+    if receipt_runner is not None and (
+        not isinstance(receipt_runner, str) or not receipt_runner
+    ):
+        _fail("receipt_runner_invalid")
     return {
         "operation_id": operation_id,
         "runner_instance_id": runner_instance_id,
         "prepared_facts_sha256": facts_digest,
         "receipt_claimed": authority.get("receipt_claimed") is True,
         "receipt_completed": authority.get("receipt_completed") is True,
-        "receipt_runner_instance_id": authority.get("receipt_runner_instance_id"),
+        "receipt_runner_instance_id": receipt_runner,
         "case_key": case_key,
         "name": name,
-        **item,
+        "evidence_object_id": evidence_object_id,
+        "display_path": display_path,
+        "prior_status": item["prior_status"],
+        "prior_seal_status": item["prior_seal_status"],
+        "original_version_id": None,
+        "original_sha256": item["original_sha256"],
+        "original_bytes": item["original_bytes"],
+        "present": True,
+        "sha256": item["sha256"],
+        "bytes": item["bytes"],
+        "st_dev": item["st_dev"],
+        "st_ino": item["st_ino"],
+        "st_nlink": 1,
     }
 
 

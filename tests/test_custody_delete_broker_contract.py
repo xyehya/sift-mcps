@@ -7,7 +7,9 @@ import json
 import os
 import pwd
 import runpy
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from _installer_support import REPO_ROOT
@@ -93,6 +95,7 @@ def test_broker_rebinds_uuid_to_postgres_and_durable_receipt() -> None:
     ):
         assert binding in source
     assert "from app.custody_operations" not in source
+    assert "**item" not in source
     assert "create table app.custody_delete_broker_receipts" in migration
     assert "create role sift_custody_delete_broker" in migration
     assert "create schema if not exists sift_custody_broker" in migration
@@ -101,8 +104,163 @@ def test_broker_rebinds_uuid_to_postgres_and_durable_receipt() -> None:
     assert "security definer" in migration
     assert "completed_custody_delete_broker_receipt_required" in migration
     assert "custody_delete_broker_verified_required" in migration
+    assert "jsonb_object_length(v_item)<>13" in migration
+    assert "'original_version_id','original_sha256','original_bytes'" in migration
     assert "force row level security" in migration
     assert "revoke all" in migration
+
+
+def _install_fake_authority(monkeypatch, authority: dict) -> None:
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, *_args):
+            return None
+
+        def fetchone(self):
+            return (authority,)
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def cursor(self):
+            return Cursor()
+
+    monkeypatch.setitem(sys.modules, "psycopg", SimpleNamespace(connect=lambda _dsn: Connection()))
+
+
+def _valid_authority(cases_root: Path) -> dict:
+    operation_id = "33333333-3333-3333-3333-333333333333"
+    return {
+        "operation_id": operation_id,
+        "runner_instance_id": "process:test",
+        "prepared_facts_sha256": "sha256:" + "a" * 64,
+        "receipt_claimed": False,
+        "receipt_completed": False,
+        "receipt_runner_instance_id": None,
+        "case_key": "case-a",
+        "legacy_case_dir": str(cases_root / "case-a"),
+        "display_path": "evidence/pending.bin",
+        "item": {
+            "evidence_object_id": "44444444-4444-4444-4444-444444444444",
+            "display_path": "evidence/pending.bin",
+            "prior_status": "detected",
+            "prior_seal_status": "unsealed",
+            "original_version_id": None,
+            "original_sha256": None,
+            "original_bytes": None,
+            "present": True,
+            "sha256": "sha256:" + "b" * 64,
+            "bytes": 7,
+            "st_dev": 1,
+            "st_ino": 2,
+            "st_nlink": 1,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "collision",
+    [
+        "case_key",
+        "name",
+        "operation_id",
+        "runner",
+        "runner_instance_id",
+        "prepared_facts_sha256",
+        "receipt_claimed",
+        "receipt_completed",
+        "receipt_runner_instance_id",
+    ],
+)
+def test_resolve_operation_rejects_prepared_fact_binding_collisions(
+    monkeypatch, tmp_path: Path, collision: str
+) -> None:
+    module = _module()
+    authority = _valid_authority(tmp_path)
+    authority["item"][collision] = "attacker-controlled"
+    _install_fake_authority(monkeypatch, authority)
+
+    with pytest.raises(module["DeleteBrokerError"], match="operation_facts_invalid"):
+        module["resolve_operation"](
+            "unused",
+            authority["operation_id"],
+            authority["runner_instance_id"],
+            tmp_path,
+        )
+
+
+def test_resolve_operation_accepts_exact_production_prepared_item(
+    monkeypatch, tmp_path: Path
+) -> None:
+    module = _module()
+    authority = _valid_authority(tmp_path)
+    _install_fake_authority(monkeypatch, authority)
+
+    operation = module["resolve_operation"](
+        "unused",
+        authority["operation_id"],
+        authority["runner_instance_id"],
+        tmp_path,
+    )
+
+    assert set(operation) == {
+        "operation_id",
+        "runner_instance_id",
+        "prepared_facts_sha256",
+        "receipt_claimed",
+        "receipt_completed",
+        "receipt_runner_instance_id",
+        "case_key",
+        "name",
+        *module["DELETE_ITEM_KEYS"],
+    }
+    assert operation["case_key"] == "case-a"
+    assert operation["name"] == "pending.bin"
+    assert operation["original_version_id"] is None
+
+
+def test_collision_cannot_redirect_delete_into_another_case(monkeypatch, tmp_path: Path) -> None:
+    module = _module()
+    cross_case_target = tmp_path / "case-b" / "evidence" / "protected.bin"
+    cross_case_target.parent.mkdir(parents=True)
+    cross_case_target.write_bytes(b"protect")
+    target_info = cross_case_target.stat()
+    authority = _valid_authority(tmp_path)
+    authority["item"].update(
+        {
+            "case_key": "case-b",
+            "name": "protected.bin",
+            "sha256": "sha256:" + hashlib.sha256(b"protect").hexdigest(),
+            "bytes": len(b"protect"),
+            "st_dev": target_info.st_dev,
+            "st_ino": target_info.st_ino,
+        }
+    )
+    _install_fake_authority(monkeypatch, authority)
+    delete_verified = module["delete_verified"]
+    delete_verified.__globals__["_immutable"] = lambda _fd: False
+    delete_verified.__globals__["claim_operation"] = lambda *_args: None
+    delete_verified.__globals__["complete_operation"] = lambda *_args: None
+
+    with pytest.raises(module["DeleteBrokerError"], match="operation_facts_invalid"):
+        operation = module["resolve_operation"](
+            "unused",
+            authority["operation_id"],
+            authority["runner_instance_id"],
+            tmp_path,
+        )
+        delete_verified(operation, tmp_path, pwd.getpwuid(os.geteuid()), "unused")
+
+    assert cross_case_target.read_bytes() == b"protect"
 
 
 def test_live_control_plane_docs_derive_inventory_from_migration_source() -> None:

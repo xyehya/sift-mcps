@@ -181,7 +181,9 @@ entries. Delete crosses only an exact no-argument sudo rule into the root-owned 
 The broker reads a root-owned `0600` credential for a dedicated role that has no `app` schema/table
 authority and only three isolated SECURITY DEFINER RPCs, accepts operation UUID and current runner
 identity rather than a path or filesystem facts, then independently binds Portal actor/re-auth, `DELETE_STRAY`, applying phase,
-Local Immutable storage, canonical case/object/path/status, and the prepared-facts digest. It
+Local Immutable storage, canonical case/object/path/status, and the prepared-facts digest. The RPC and
+helper require the exact typed 13-field Delete Stray item and reject reserved/extra keys; the helper
+constructs trusted bindings field-by-field rather than merging prepared JSON into them. It
 permanently drops to `sift-service` before reopening the direct entry no-follow, rejects immutable/non-regular/linked/changed objects, durably
 claims the exact operation/facts digest, unlinks, fsyncs the directory, and records completion.
 Postgres rejects both verified and completed DELETE transitions without that exact completed receipt,

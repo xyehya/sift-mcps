@@ -80,7 +80,7 @@ operation state machine. Delete records descriptor-pinned hash/size/identity aft
 routes unlink only through an exact no-argument sudo transition into a root-owned fixed AppArmor broker. The Gateway evidence-file
 write deny remains intact. A root-owned `0600` scoped DSN authenticates a dedicated no-inherit role
 with no `app` schema/table access and only three isolated SECURITY DEFINER RPCs. The broker accepts
-only operation UUID/current runner, independently rebinds Portal/applying/Local-Immutable/object/prepared-fact authority from Postgres, drops permanently to the service UID/GID, revalidates the
+only operation UUID/current runner, independently rebinds Portal/applying/Local-Immutable/object/prepared-fact authority from Postgres, rejects anything outside the exact typed 13-field Delete Stray item, constructs trusted bindings field-by-field instead of merging prepared JSON, drops permanently to the service UID/GID, revalidates the
 direct no-follow entry, and writes a FORCE-RLS exact-operation/facts-digest claim/completion receipt;
 Postgres rejects verified or completed DELETE transitions without the exact completed receipt, and an
 absent file is never credited without the prior claim. Ignore and Retire never mutate mounted bytes, and Retire creates one excluding
