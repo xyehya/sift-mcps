@@ -37,8 +37,11 @@ def _full_verify_finding() -> dict[str, object]:
     }
 
 
-def _sealed_external_case(conn, *, version_source: str | None = None):
-    case_id, object_id, version_id = (uuid.uuid4() for _ in range(3))
+def _sealed_external_case(
+    conn, *, version_source: str | None = None, object_count: int = 1
+):
+    case_id = uuid.uuid4()
+    object_ids = [uuid.uuid4() for _ in range(object_count)]
     source, mount = "a" * 64, "b" * 64
     digest, manifest_hash = "sha256:" + "c" * 64, "sha256:" + "d" * 64
     with conn.cursor() as cur:
@@ -47,41 +50,43 @@ def _sealed_external_case(conn, *, version_source: str | None = None):
             "values(%s,%s,'Reconnect case','active')",
             (case_id, "storage-reconnect-" + uuid.uuid4().hex),
         )
-        cur.execute(
-            """insert into app.evidence_objects(
-                 id,case_id,display_name,display_path,status,seal_status,
-                 current_sha256,current_bytes)
-               values(%s,%s,'external.raw','evidence/external.raw',
-                 'sealed','sealed',%s,8)""",
-            (object_id, case_id, digest),
-        )
-        cur.execute(
-            """insert into app.evidence_versions(
-                 id,evidence_object_id,case_id,manifest_version,sha256,bytes,
-                 entry_status,manifest_hash,storage_profile,
-                 storage_source_identity,storage_mount_instance)
-               values(%s,%s,%s,1,%s,8,'ACTIVE',%s,
-                 'EXTERNALLY_READ_ONLY',%s,%s)""",
-            (
-                version_id,
-                object_id,
-                case_id,
-                digest,
-                manifest_hash,
-                source if version_source is None else version_source,
-                mount,
-            ),
-        )
-        cur.execute(
-            "update app.evidence_objects set current_version_id=%s where id=%s",
-            (version_id, object_id),
-        )
+        for index, object_id in enumerate(object_ids):
+            version_id = uuid.uuid4()
+            name = f"external-{index}.raw"
+            cur.execute(
+                """insert into app.evidence_objects(
+                     id,case_id,display_name,display_path,status,seal_status,
+                     current_sha256,current_bytes)
+                   values(%s,%s,%s,%s,'sealed','sealed',%s,8)""",
+                (object_id, case_id, name, f"evidence/{name}", digest),
+            )
+            cur.execute(
+                """insert into app.evidence_versions(
+                     id,evidence_object_id,case_id,manifest_version,sha256,bytes,
+                     entry_status,manifest_hash,storage_profile,
+                     storage_source_identity,storage_mount_instance)
+                   values(%s,%s,%s,1,%s,8,'ACTIVE',%s,
+                     'EXTERNALLY_READ_ONLY',%s,%s)""",
+                (
+                    version_id,
+                    object_id,
+                    case_id,
+                    digest,
+                    manifest_hash,
+                    source if version_source is None else version_source,
+                    mount,
+                ),
+            )
+            cur.execute(
+                "update app.evidence_objects set current_version_id=%s where id=%s",
+                (version_id, object_id),
+            )
         cur.execute(
             """insert into app.evidence_chain_heads(
                  case_id,manifest_version,manifest_hash,seal_status,active_count,
                  head_seq,head_hash,issues)
-               values(%s,1,%s,'sealed',1,0,'','[]'::jsonb)""",
-            (case_id, manifest_hash),
+               values(%s,1,%s,'sealed',%s,0,'','[]'::jsonb)""",
+            (case_id, manifest_hash, object_count),
         )
         cur.execute(
             """update app.evidence_storage_authorities
@@ -93,7 +98,7 @@ def _sealed_external_case(conn, *, version_source: str | None = None):
             (source, mount, mount, case_id),
         )
     conn.commit()
-    return case_id, object_id, source, mount
+    return case_id, object_ids[0], source, mount
 
 
 def _classify(
@@ -110,7 +115,12 @@ def _classify(
         cur.execute(
             """select id from app.evidence_record_inventory_classification_v2(
                  %s,%s,%s,%s)""",
-            (case_id, correlation, gate_state, Jsonb([finding])),
+            (
+                case_id,
+                correlation,
+                gate_state,
+                Jsonb(finding if isinstance(finding, list) else [finding]),
+            ),
         )
         return cur.fetchone()[0]
 
@@ -199,16 +209,28 @@ def test_same_source_read_only_reconnect_advances_only_to_full_verify() -> None:
 def test_same_source_rw_drift_restores_only_to_full_verify_required() -> None:
     psycopg = pytest.importorskip("psycopg")
     with psycopg.connect(_dsn()) as conn:
-        case_id, object_id, source, mount = _sealed_external_case(conn)
+        case_id, _object_id, source, mount = _sealed_external_case(
+            conn, object_count=2
+        )
         before_counts = _counts(conn, case_id)
-        posture = {
-            "code": "POSTURE_DRIFT",
-            "gate_state": "BLOCKED_VIOLATION",
-            "recovery": "RESTORE_READ_ONLY",
-            "evidence_object_id": str(object_id),
-            "observation_id": "rw-posture-observation",
-            "full_verification_required": True,
-        }
+        with conn.cursor() as cur:
+            cur.execute(
+                """select id::text from app.evidence_objects
+                   where case_id=%s and status='sealed' order by id::text""",
+                (case_id,),
+            )
+            active_ids = [row[0] for row in cur.fetchall()]
+        posture = [
+            {
+                "code": "POSTURE_DRIFT",
+                "gate_state": "BLOCKED_VIOLATION",
+                "recovery": "RESTORE_READ_ONLY",
+                "evidence_object_id": object_id,
+                "observation_id": f"rw-posture-{index}",
+                "full_verification_required": True,
+            }
+            for index, object_id in enumerate(active_ids)
+        ]
 
         with conn.cursor() as cur:
             cur.execute(
@@ -226,6 +248,18 @@ def test_same_source_rw_drift_restores_only_to_full_verify_required() -> None:
             posture,
             gate_state="BLOCKED_VIOLATION",
         )
+        with pytest.raises(
+            psycopg.errors.ObjectNotInPrerequisiteState,
+            match="persisted_custody_violation_requires_recovery",
+        ):
+            with conn.transaction():
+                _classify(
+                    conn,
+                    case_id,
+                    "rw-partial:" + uuid.uuid4().hex,
+                    posture[:1],
+                    gate_state="BLOCKED_VIOLATION",
+                )
         repeated_rw = _classify(
             conn,
             case_id,

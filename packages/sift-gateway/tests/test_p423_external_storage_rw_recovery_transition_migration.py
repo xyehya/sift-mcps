@@ -49,6 +49,11 @@ def test_only_exact_rw_repeat_and_ro_full_verify_transition_are_admitted() -> No
     assert "v_rw_repeat := true" in wrapper
     assert "v_ro_transition := true" in wrapper
     assert "v_ro_repeat := true" in wrapper
+    assert "jsonb_array_length(p_findings)=v_head.active_count" in wrapper
+    assert "count(distinct f->>'evidence_object_id')" in wrapper
+    assert "jsonb_array_length(v_prior_issues)=v_head.active_count" in wrapper
+    assert "count(distinct issue->>'evidence_object_id')" in wrapper
+    assert "issue->'storage_generation' is distinct from" in wrapper
 
 
 def test_transition_is_append_only_except_for_chain_head_projection() -> None:

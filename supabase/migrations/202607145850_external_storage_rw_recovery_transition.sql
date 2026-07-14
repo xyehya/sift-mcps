@@ -22,7 +22,7 @@ declare
   v_head app.evidence_chain_heads;
   v_storage app.evidence_storage_authorities;
   v_finding jsonb;
-  v_prior jsonb;
+  v_prior_issues jsonb;
   v_safe_active_set boolean := false;
   v_rw_repeat boolean := false;
   v_ro_transition boolean := false;
@@ -39,11 +39,10 @@ begin
       then p_findings->0
     else null
   end;
-  v_prior := case
+  v_prior_issues := case
     when jsonb_typeof(coalesce(v_head.issues,'[]'::jsonb))='array'
-         and jsonb_array_length(coalesce(v_head.issues,'[]'::jsonb))=1
-      then v_head.issues->0
-    else null
+      then coalesce(v_head.issues,'[]'::jsonb)
+    else '[]'::jsonb
   end;
 
   v_safe_active_set :=
@@ -84,25 +83,42 @@ begin
      and v_storage.remediation='RESTORE_READ_ONLY'
      and v_storage.read_only is false
      and p_gate_state='BLOCKED_VIOLATION'
-     and jsonb_typeof(v_finding)='object'
-     and v_finding=jsonb_build_object(
-       'code','POSTURE_DRIFT',
-       'gate_state','BLOCKED_VIOLATION',
-       'recovery','RESTORE_READ_ONLY',
-       'evidence_object_id',v_finding->'evidence_object_id',
-       'observation_id',v_finding->'observation_id',
-       'full_verification_required',true)
-     and jsonb_typeof(v_finding->'evidence_object_id')='string'
-     and coalesce(v_finding->>'evidence_object_id','') ~
-       '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
-     and jsonb_typeof(v_finding->'observation_id')='string'
-     and coalesce(v_finding->>'observation_id','') ~
-       '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
-     and exists(select 1 from app.evidence_objects o
-       where o.case_id=p_case_id and o.id=(v_finding->>'evidence_object_id')::uuid
-         and o.status='sealed' and o.seal_status='sealed')
-     and v_prior=(v_finding||jsonb_build_object(
-       'storage_generation',v_storage.generation))
+     and jsonb_typeof(p_findings)='array'
+     and jsonb_array_length(p_findings)=v_head.active_count
+     and not exists(select 1 from jsonb_array_elements(p_findings) f
+       where jsonb_typeof(f)<>'object'
+         or f<>jsonb_build_object(
+           'code','POSTURE_DRIFT',
+           'gate_state','BLOCKED_VIOLATION',
+           'recovery','RESTORE_READ_ONLY',
+           'evidence_object_id',f->'evidence_object_id',
+           'observation_id',f->'observation_id',
+           'full_verification_required',true)
+         or jsonb_typeof(f->'evidence_object_id')<>'string'
+         or coalesce(f->>'evidence_object_id','') !~
+           '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+         or jsonb_typeof(f->'observation_id')<>'string'
+         or coalesce(f->>'observation_id','') !~
+           '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+         or not exists(select 1 from app.evidence_objects o
+           where o.case_id=p_case_id and o.id::text=lower(f->>'evidence_object_id')
+             and o.status='sealed' and o.seal_status='sealed'))
+     and (select count(distinct f->>'evidence_object_id')
+       from jsonb_array_elements(p_findings) f)=v_head.active_count
+     and not exists(select 1 from app.evidence_objects o
+       where o.case_id=p_case_id and o.status='sealed'
+         and not exists(select 1 from jsonb_array_elements(p_findings) f
+           where lower(f->>'evidence_object_id')=o.id::text))
+     and jsonb_array_length(v_prior_issues)=v_head.active_count
+     and not exists(select 1 from jsonb_array_elements(v_prior_issues) issue
+       where issue->'storage_generation' is distinct from
+         to_jsonb(v_storage.generation))
+     and (select jsonb_agg(issue-'storage_generation'
+            order by (issue-'storage_generation')::text)
+          from jsonb_array_elements(v_prior_issues) issue)
+       is not distinct from
+         (select jsonb_agg(f order by f::text)
+          from jsonb_array_elements(p_findings) f)
      then
     v_rw_repeat := true;
   end if;
@@ -119,27 +135,37 @@ begin
        'evidence_object_id',null,
        'observation_id',null,
        'full_verification_required',true) then
-    if jsonb_typeof(v_prior)='object'
-       and v_prior=jsonb_build_object(
-         'code','POSTURE_DRIFT',
-         'gate_state','BLOCKED_VIOLATION',
-         'recovery','RESTORE_READ_ONLY',
-         'evidence_object_id',v_prior->'evidence_object_id',
-         'observation_id',v_prior->'observation_id',
-         'full_verification_required',true,
-         'storage_generation',v_storage.generation)
-       and jsonb_typeof(v_prior->'evidence_object_id')='string'
-       and coalesce(v_prior->>'evidence_object_id','') ~
-         '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
-       and jsonb_typeof(v_prior->'observation_id')='string'
-       and coalesce(v_prior->>'observation_id','') ~
-         '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
-       and exists(select 1 from app.evidence_objects o
-         where o.case_id=p_case_id and o.id=(v_prior->>'evidence_object_id')::uuid
-           and o.status='sealed' and o.seal_status='sealed') then
+    if jsonb_array_length(v_prior_issues)=v_head.active_count
+       and not exists(select 1 from jsonb_array_elements(v_prior_issues) issue
+         where jsonb_typeof(issue)<>'object'
+           or issue<>jsonb_build_object(
+             'code','POSTURE_DRIFT',
+             'gate_state','BLOCKED_VIOLATION',
+             'recovery','RESTORE_READ_ONLY',
+             'evidence_object_id',issue->'evidence_object_id',
+             'observation_id',issue->'observation_id',
+             'full_verification_required',true,
+             'storage_generation',v_storage.generation)
+           or jsonb_typeof(issue->'evidence_object_id')<>'string'
+           or coalesce(issue->>'evidence_object_id','') !~
+             '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+           or jsonb_typeof(issue->'observation_id')<>'string'
+           or coalesce(issue->>'observation_id','') !~
+             '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+           or not exists(select 1 from app.evidence_objects o
+             where o.case_id=p_case_id
+               and o.id::text=lower(issue->>'evidence_object_id')
+               and o.status='sealed' and o.seal_status='sealed'))
+       and (select count(distinct issue->>'evidence_object_id')
+         from jsonb_array_elements(v_prior_issues) issue)=v_head.active_count
+       and not exists(select 1 from app.evidence_objects o
+         where o.case_id=p_case_id and o.status='sealed'
+           and not exists(select 1 from jsonb_array_elements(v_prior_issues) issue
+             where lower(issue->>'evidence_object_id')=o.id::text)) then
       v_ro_transition := true;
-    elsif v_prior=(v_finding||jsonb_build_object(
-      'storage_generation',v_storage.generation)) then
+    elsif v_prior_issues=jsonb_build_array(
+      v_finding||jsonb_build_object(
+        'storage_generation',v_storage.generation)) then
       v_ro_repeat := true;
     end if;
   end if;
