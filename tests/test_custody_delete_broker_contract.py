@@ -264,11 +264,24 @@ def test_resolve_operation_rejects_prepared_fact_binding_collisions(
         )
 
 
-def test_resolve_operation_accepts_exact_production_prepared_item(
-    monkeypatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("original_sha256", "original_bytes"),
+    [
+        (None, None),
+        (None, 39),
+        ("sha256:" + "c" * 64, 39),
+    ],
+)
+def test_resolve_operation_accepts_supported_prior_identity_shapes(
+    monkeypatch,
+    tmp_path: Path,
+    original_sha256: str | None,
+    original_bytes: int | None,
 ) -> None:
     module = _module()
     authority = _valid_authority(tmp_path)
+    authority["item"]["original_sha256"] = original_sha256
+    authority["item"]["original_bytes"] = original_bytes
     _install_fake_authority(monkeypatch, authority)
 
     operation = module["resolve_operation"](
@@ -292,6 +305,94 @@ def test_resolve_operation_accepts_exact_production_prepared_item(
     assert operation["case_key"] == "case-a"
     assert operation["name"] == "pending.bin"
     assert operation["original_version_id"] is None
+    assert operation["original_sha256"] == original_sha256
+    assert operation["original_bytes"] == original_bytes
+
+
+def test_resolve_operation_rejects_prior_digest_without_byte_count(
+    monkeypatch, tmp_path: Path
+) -> None:
+    module = _module()
+    authority = _valid_authority(tmp_path)
+    authority["item"]["original_sha256"] = "sha256:" + "c" * 64
+    authority["item"]["original_bytes"] = None
+    _install_fake_authority(monkeypatch, authority)
+
+    with pytest.raises(module["DeleteBrokerError"], match="original_identity_incomplete"):
+        module["resolve_operation"](
+            "unused",
+            authority["operation_id"],
+            authority["runner_instance_id"],
+            tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("original_sha256", "not-a-digest"),
+        ("original_bytes", -1),
+        ("original_bytes", True),
+    ],
+)
+def test_resolve_operation_rejects_invalid_prior_identity_value(
+    monkeypatch, tmp_path: Path, key: str, value: object
+) -> None:
+    module = _module()
+    authority = _valid_authority(tmp_path)
+    authority["item"][key] = value
+    _install_fake_authority(monkeypatch, authority)
+
+    with pytest.raises(module["DeleteBrokerError"], match="pending_object_binding_invalid"):
+        module["resolve_operation"](
+            "unused",
+            authority["operation_id"],
+            authority["runner_instance_id"],
+            tmp_path,
+        )
+
+
+def test_size_only_prior_observation_reaches_claim(
+    monkeypatch, tmp_path: Path
+) -> None:
+    module = _module()
+    evidence = tmp_path / "case-a" / "evidence"
+    evidence.mkdir(parents=True)
+    target = evidence / "pending.bin"
+    target.write_bytes(b"pending")
+    info = target.stat()
+    authority = _valid_authority(tmp_path)
+    authority["item"].update(
+        {
+            "original_sha256": None,
+            "original_bytes": len(b"pending"),
+            "sha256": "sha256:" + hashlib.sha256(b"pending").hexdigest(),
+            "bytes": len(b"pending"),
+            "st_dev": info.st_dev,
+            "st_ino": info.st_ino,
+        }
+    )
+    _install_fake_authority(monkeypatch, authority)
+    operation = module["resolve_operation"](
+        "unused",
+        authority["operation_id"],
+        authority["runner_instance_id"],
+        tmp_path,
+    )
+    calls: list[str] = []
+    delete_verified = module["delete_verified"]
+    delete_verified.__globals__["_immutable"] = lambda _fd: False
+    delete_verified.__globals__["claim_operation"] = lambda _dsn, _op: calls.append(
+        "claim"
+    )
+    delete_verified.__globals__["complete_operation"] = lambda _dsn, _op: calls.append(
+        "complete"
+    )
+
+    delete_verified(operation, tmp_path, pwd.getpwuid(os.geteuid()), "unused")
+
+    assert calls == ["claim", "complete"]
+    assert not target.exists()
 
 
 def test_collision_cannot_redirect_delete_into_another_case(monkeypatch, tmp_path: Path) -> None:

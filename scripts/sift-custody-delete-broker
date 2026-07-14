@@ -268,8 +268,9 @@ def resolve_operation(
         or not SHA256_RE.fullmatch(item["sha256"])
     ):
         _fail("pending_object_binding_invalid")
-    if (item.get("original_sha256") is None) is not (
-        item.get("original_bytes") is None
+    if (
+        item.get("original_sha256") is not None
+        and item.get("original_bytes") is None
     ):
         _fail("original_identity_incomplete")
     for key in ("bytes", "st_dev", "st_ino"):

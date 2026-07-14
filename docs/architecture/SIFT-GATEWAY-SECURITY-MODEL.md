@@ -186,6 +186,9 @@ helper require the exact typed 13-field Delete Stray item and reject reserved/ex
 constructs trusted bindings field-by-field rather than merging prepared JSON into them. It
 permanently drops to `sift-service` before reopening the direct entry no-follow, rejects immutable/non-regular/linked/changed objects, durably
 claims the exact operation/facts digest, unlinks, fsyncs the directory, and records completion.
+For detected pending items, a prior byte count may exist before a prior digest; the broker accepts
+that size-only observation, but any prior digest requires a byte count and both values remain
+individually type- and range-checked.
 Postgres rejects both verified and completed DELETE transitions without that exact completed receipt,
 including generic advance and finalizer paths. Absent-file restart recovery requires the exact prior claim. Retire never unlinks or clears protection and creates a manifest
 excluding the retired object. Inventory observations are path-free, append-only, FORCE-RLS, and

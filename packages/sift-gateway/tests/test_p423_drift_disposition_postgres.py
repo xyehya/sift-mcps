@@ -268,7 +268,7 @@ def _valid_delete_broker_item(object_id) -> dict[str, object]:
         "prior_seal_status": "unsealed",
         "original_version_id": None,
         "original_sha256": None,
-        "original_bytes": None,
+        "original_bytes": 10,
         "present": True,
         "sha256": "sha256:" + "a" * 64,
         "bytes": 10,
@@ -1017,6 +1017,10 @@ def test_broker_authorize_accepts_exact_production_item_shape(
         item = _valid_delete_broker_item(object_id)
         with conn.cursor() as cur:
             cur.execute(
+                "update app.evidence_objects set current_bytes=%s where id=%s",
+                (item["original_bytes"], object_id),
+            )
+            cur.execute(
                 "select app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'runner-before')",
                 (operation_id, Jsonb({"item": item})),
             )
@@ -1031,6 +1035,13 @@ def test_broker_authorize_accepts_exact_production_item_shape(
             assert authorized is not None
             assert authorized[0]["item"] == item
             assert set(authorized[0]["item"]) == set(DELETE_BROKER_ITEM_KEYS)
+            cur.execute(
+                "select sift_custody_broker.claim(%s,'runner-before',%s)",
+                (operation_id, authorized[0]["prepared_facts_sha256"]),
+            )
+            claimed = cur.fetchone()
+            assert claimed is not None
+            assert claimed[0]["claimed"] is True
 
 
 @pytest.mark.parametrize("missing_key", DELETE_BROKER_ITEM_KEYS)
