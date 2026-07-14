@@ -93,6 +93,13 @@ Profile/source transition results are durably idempotent per case/key, drift rem
 Full Verify, and partial scans cannot create object-level conclusions. Execution rechecks the
 generation, manifest, receipt, and live mount posture at synchronous dispatch plus durable
 claim/execution/pre-exec, including commands without explicit evidence refs.
+Full Verify receipts are indivisible whole-active-set authority bound to the current generation,
+profile, manifest version/hash, and exact Evidence Version/hash/bytes/posture facts. Local
+reconciliation orders that authority against matching per-object exact-Restore posture receipts and
+accepts only the strictly newer receipt; ties fail closed. Successful verification discharges only
+current storage/posture verification latches and a synthetic persisted marker with no remaining
+substantive/object violation. It never waives content, missing, ledger, conflict, identity, unknown,
+or unauthorized source-change findings, and Portal success requires the reconciled gate to be open.
 
 **Change routing:** policy/auth/scoping → `sift-gateway`; evidence/findings/reports/execution → `sift-core` + migrations; derived search/ingest → `opensearch-mcp`; human UX → `case-dashboard`; confinement → configs/systemd/AppArmor with the code change.
 

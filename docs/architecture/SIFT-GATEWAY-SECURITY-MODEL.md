@@ -158,6 +158,15 @@ applying/verified recoverable phase; every receipt remains globally consumed in 
 append-only history and a replaced runner is retired. Legacy standalone Unseal and one-shot
 Reacquire routes and runtime RPC grants are absent.
 
+Full Verify is an operator-only, passwordless byte/posture proof, not an acknowledgment waiver. Its
+append-only SUCCESS receipt must cover the exact current active set and current storage generation,
+profile, manifest version/hash, Evidence Versions, hashes, byte counts, and descriptor posture. It
+may clear only current storage/posture verification latches; content/missing, ledger, conflict,
+unknown, violated-object, identity-change, and unauthorized source-change findings remain blocked.
+Local reconciliation orders a complete whole-case receipt against any matching per-object exact-
+Restore posture receipt and uses only the strictly newer authority; ties fail closed. Portal success
+is derived from the authoritative sealed/open gate after immediate reconciliation, not hashing alone.
+
 Ignore, Delete Stray, and Retire are fixed Portal-only durable actions. Postgres blocks admission
 before any disposition filesystem step. Delete is limited to unsealed pending objects and records
 descriptor-pinned pre-unlink facts; Retire never unlinks or clears protection and creates a manifest

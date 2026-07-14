@@ -525,3 +525,28 @@ class TestVerify:
 
         assert result["verified"] is False
         assert db.verify_calls[-1][0] is False
+
+    def test_successful_hash_does_not_hide_authoritative_blocking_issue(self, service):
+        svc, db, tmp_path = service
+        sha, size = _make_sealed_file(tmp_path, "evidence/disk.bin", b"v" * 20)
+        db.sealed_objects = [("obj-1", "evidence/disk.bin", sha, size)]
+        db.seal_status = "violated"
+        db.issues = [
+            {
+                "code": "CONTENT_CHANGED",
+                "gate_state": "BLOCKED_VIOLATION",
+                "recovery": "RESTORE_REACQUIRE_RETIRE",
+                "evidence_object_id": "obj-1",
+                "observation_id": "observation-1",
+                "full_verification_required": False,
+            }
+        ]
+
+        result = svc.verify(case_id=_CASE)
+
+        assert db.verify_calls[-1][0] is True
+        assert result["verified"] is False
+        assert result["seal_status"] == "violated"
+        assert result["gate_state"] == "BLOCKED_VIOLATION"
+        assert result["issues"][0]["code"] == "PERSISTED_VIOLATION"
+        assert result["verification_issues"] == []

@@ -1015,10 +1015,31 @@ class _ReceiptObservationCursor(_SealedObservationCursor):
                     item["owner"],
                     item["mode"],
                     item["immutable"],
+                    item.get("_authority_created_at"),
                 )
                 for item in self.receipt
             ]
         return super().fetchall()
+
+
+class _CompetingReceiptObservationCursor(_ReceiptObservationCursor):
+    def __init__(self, sealed, restore_receipt, storage_receipt, storage_created):
+        super().__init__(sealed, restore_receipt)
+        self.storage_receipt = storage_receipt
+        self.storage_created = storage_created
+
+    def execute(self, sql, params):
+        normalized = " ".join(sql.split())
+        super().execute(sql, params)
+        if normalized.startswith(
+            "select v.id::text,v.item_facts,v.created_at "
+            "from app.evidence_storage_verifications v"
+        ):
+            self._one = (
+                "whole-case-receipt",
+                self.storage_receipt,
+                self.storage_created,
+            )
 
 
 class _LatchEnforcingObservationCursor(_SealedObservationCursor):
@@ -1465,6 +1486,117 @@ def test_exact_restore_receipt_rebinds_current_posture_without_new_version(
     assert [finding["code"] for finding in drift_findings] == [
         "FULL_VERIFY_REQUIRED"
     ]
+
+
+@pytest.mark.parametrize(
+    (
+        "storage_offset",
+        "restore_offset",
+        "actual_source",
+        "restore_version",
+        "expected_gate",
+    ),
+    (
+        (2, 1, "storage", "version-7", "OPEN"),
+        (1, 2, "restore", "version-7", "OPEN"),
+        (1, 1, "storage", "version-7", "BLOCKED_VIOLATION"),
+        (1, 2, "storage", "version-old", "OPEN"),
+    ),
+)
+def test_local_posture_authority_uses_strictly_newest_complete_receipt(
+    tmp_path,
+    monkeypatch,
+    storage_offset,
+    restore_offset,
+    actual_source,
+    restore_version,
+    expected_gate,
+):
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    image = evidence / "sealed.raw"
+    image.write_bytes(b"verified-current")
+    st = image.stat()
+    sha256 = "sha256:" + hashlib.sha256(b"verified-current").hexdigest()
+    now = datetime.now(timezone.utc)
+
+    def receipt(*, actual, created):
+        return {
+            "evidence_object_id": "sealed-object",
+            "evidence_version_id": "version-7",
+            "sha256": sha256,
+            "bytes": st.st_size,
+            "st_dev": st.st_dev,
+            "st_ino": st.st_ino if actual else st.st_ino + 100,
+            "st_mtime_ns": st.st_mtime_ns if actual else st.st_mtime_ns - 100,
+            "st_ctime_ns": st.st_ctime_ns if actual else st.st_ctime_ns - 100,
+            "st_nlink": st.st_nlink,
+            "owner": "sift-service",
+            "mode": "0644",
+            "immutable": True,
+            "_authority_created_at": created,
+        }
+
+    storage_created = now + timedelta(seconds=storage_offset)
+    restore_created = now + timedelta(seconds=restore_offset)
+    storage_receipt = receipt(
+        actual=actual_source == "storage", created=storage_created
+    )
+    restore_receipt = receipt(
+        actual=actual_source == "restore", created=restore_created
+    )
+    restore_receipt["evidence_version_id"] = restore_version
+    cursor = _CompetingReceiptObservationCursor(
+        [
+            (
+                "sealed-object",
+                "evidence/sealed.raw",
+                sha256,
+                st.st_size,
+                now - timedelta(days=1),
+                {
+                    "posture": {
+                        "st_dev": st.st_dev,
+                        "st_ino": st.st_ino - 1,
+                        "st_mtime_ns": st.st_mtime_ns - 1,
+                        "st_ctime_ns": st.st_ctime_ns - 1,
+                        "st_nlink": st.st_nlink,
+                    }
+                },
+                "sealed",
+                "version-7",
+            )
+        ],
+        [restore_receipt],
+        [storage_receipt],
+        storage_created,
+    )
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(
+        service, "_connect", lambda: _ObservationConnection(cursor)
+    )
+    monkeypatch.setattr(
+        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True
+    )
+
+    result = service.reconcile_for_admission(
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert result["gate_state"] == expected_gate
+    storage_query = next(
+        sql
+        for sql, _params in cursor.calls
+        if "from app.evidence_storage_verifications v" in sql
+    )
+    assert "jsonb_array_length(v.item_facts)=(select count(*)" in storage_query
+    assert "not exists(select 1 from jsonb_array_elements(v.item_facts)" in storage_query
+    assert storage_query.startswith(
+        "select v.id::text,v.item_facts,v.created_at "
+        "from app.evidence_storage_verifications v"
+    )
 
 
 def test_persisted_violation_is_returned_and_recorded_when_mount_matches(

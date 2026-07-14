@@ -670,13 +670,26 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     and not storage_recoverable_head
                 )
                 cur.execute(
-                    """select v.id::text,v.item_facts from app.evidence_storage_verifications v
+                    """select v.id::text,v.item_facts,v.created_at
+                       from app.evidence_storage_verifications v
                        join app.evidence_storage_authorities a on a.case_id=v.case_id
                        join app.evidence_chain_heads h on h.case_id=v.case_id
                        where v.case_id=%s and v.outcome='SUCCESS'
                          and v.generation=a.generation and v.profile=a.profile
                          and v.manifest_version=h.manifest_version
                          and v.manifest_hash=h.manifest_hash
+                         and jsonb_array_length(v.item_facts)=(select count(*)
+                           from app.evidence_objects o
+                           where o.case_id=v.case_id and o.status='sealed')
+                         and not exists(
+                           select 1 from app.evidence_objects o
+                           join app.evidence_versions ev on ev.id=o.current_version_id
+                           where o.case_id=v.case_id and o.status='sealed'
+                             and not exists(select 1 from jsonb_array_elements(v.item_facts) x
+                               where (x->>'evidence_object_id')::uuid=o.id
+                                 and (x->>'evidence_version_id')::uuid=ev.id
+                                 and x->>'sha256'=ev.sha256
+                                 and (x->>'bytes')::bigint=ev.bytes))
                        order by v.created_at desc,v.id desc limit 1""",
                     (case_id,),
                 )
@@ -687,7 +700,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     else []
                 )
                 storage_receipt_by_object = {
-                    str(item.get("evidence_object_id")): item
+                    str(item.get("evidence_object_id")): {
+                        **item,
+                        "_authority_created_at": (
+                            receipt_row[2] if receipt_row and len(receipt_row) > 2 else None
+                        ),
+                    }
                     for item in receipt_items
                     if isinstance(item, dict)
                 }
@@ -720,7 +738,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     """select distinct on (r.evidence_object_id)
                               r.evidence_object_id::text,r.evidence_version_id::text,
                               r.sha256,r.bytes,r.st_dev,r.st_ino,r.st_mtime_ns,
-                              r.st_ctime_ns,r.st_nlink,r.owner_name,r.mode,r.immutable
+                              r.st_ctime_ns,r.st_nlink,r.owner_name,r.mode,r.immutable,
+                              r.created_at
                        from app.evidence_exact_restore_posture_receipts r
                        join app.evidence_storage_authorities a on a.case_id=r.case_id
                          and a.profile=r.storage_profile
@@ -745,6 +764,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         "owner": str(row[9]),
                         "mode": str(row[10]),
                         "immutable": bool(row[11]),
+                        "_authority_created_at": row[12] if len(row) > 12 else None,
                     }
                     for row in cur.fetchall()
                 }
@@ -953,11 +973,46 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 expected_facts: list[AuthorityEvidence] = []
                 for known in sealed.values():
                     posture = known["metadata"].get("posture", {})
-                    receipt = (
-                        storage_receipt_by_object.get(known["id"], {})
-                        if storage_profile is StorageProfile.EXTERNALLY_READ_ONLY
-                        else restore_receipt_by_object.get(known["id"], {})
-                    )
+                    if storage_profile is StorageProfile.EXTERNALLY_READ_ONLY:
+                        receipt = storage_receipt_by_object.get(known["id"], {})
+                    else:
+                        candidates = [
+                            candidate
+                            for candidate in (
+                                storage_receipt_by_object.get(known["id"]),
+                                restore_receipt_by_object.get(known["id"]),
+                            )
+                            if candidate
+                            and candidate.get("evidence_version_id")
+                            == known["version_id"]
+                            and candidate.get("sha256") == known["sha256"]
+                            and candidate.get("bytes") == known["bytes"]
+                        ]
+                        if len(candidates) == 2:
+                            first_created = candidates[0].get(
+                                "_authority_created_at"
+                            )
+                            second_created = candidates[1].get(
+                                "_authority_created_at"
+                            )
+                            # Equal or missing receipt time cannot establish
+                            # which complete verification superseded which
+                            # per-object restore. Fail closed to the historical
+                            # version facts and require another Full Verify.
+                            receipt = (
+                                max(
+                                    candidates,
+                                    key=lambda candidate: candidate[
+                                        "_authority_created_at"
+                                    ],
+                                )
+                                if isinstance(first_created, datetime)
+                                and isinstance(second_created, datetime)
+                                and first_created != second_created
+                                else {}
+                            )
+                        else:
+                            receipt = candidates[0] if candidates else {}
                     receipt_matches_current = (
                         receipt.get("evidence_version_id") == known["version_id"]
                         and receipt.get("sha256") == known["sha256"]
@@ -1154,6 +1209,19 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                  and v.generation=a.generation and v.profile=a.profile
                                  and v.manifest_version=h.manifest_version
                                  and v.manifest_hash=h.manifest_hash
+                                 and jsonb_array_length(v.item_facts)=(select count(*)
+                                   from app.evidence_objects o
+                                   where o.case_id=a.case_id and o.status='sealed')
+                                 and not exists(
+                                   select 1 from app.evidence_objects o
+                                   join app.evidence_versions ev on ev.id=o.current_version_id
+                                   where o.case_id=a.case_id and o.status='sealed'
+                                     and not exists(select 1
+                                       from jsonb_array_elements(v.item_facts) x
+                                       where (x->>'evidence_object_id')::uuid=o.id
+                                         and (x->>'evidence_version_id')::uuid=ev.id
+                                         and x->>'sha256'=ev.sha256
+                                         and (x->>'bytes')::bigint=ev.bytes))
                                order by v.created_at desc,v.id desc limit 1),
                               (select count(*) from app.evidence_objects o
                                where o.case_id=a.case_id and o.status='sealed')
@@ -1523,6 +1591,18 @@ class EvidenceAuthorityService(_BasePortalDbService):
                          and v.generation=a.generation and v.profile=a.profile
                          and v.manifest_version=h.manifest_version
                          and v.manifest_hash=h.manifest_hash
+                         and jsonb_array_length(v.item_facts)=(select count(*)
+                           from app.evidence_objects o
+                           where o.case_id=v.case_id and o.status='sealed')
+                         and not exists(
+                           select 1 from app.evidence_objects o
+                           join app.evidence_versions ev on ev.id=o.current_version_id
+                           where o.case_id=v.case_id and o.status='sealed'
+                             and not exists(select 1 from jsonb_array_elements(v.item_facts) x
+                               where (x->>'evidence_object_id')::uuid=o.id
+                                 and (x->>'evidence_version_id')::uuid=ev.id
+                                 and x->>'sha256'=ev.sha256
+                                 and (x->>'bytes')::bigint=ev.bytes))
                        order by v.created_at desc,v.id desc limit 1""",
                     (case_id,),
                 )
@@ -2518,8 +2598,17 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 note=note,
             )
         result = self.gate_status(case_id)
-        result["verified"] = ok
-        result["issues"] = issues
+        # ``issues`` above are local hashing failures. The gate status carries
+        # the authoritative structured custody issues after the success/failure
+        # receipt and immediate reconciliation; never replace those with an
+        # empty local list and report a misleading green recovery.
+        result["verification_issues"] = issues
+        result["verified"] = bool(
+            ok
+            and result.get("seal_status") == "sealed"
+            and result.get("gate_state") == "OPEN"
+            and not result.get("issues")
+        )
         return result
 
     @staticmethod
