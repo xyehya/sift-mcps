@@ -21,6 +21,7 @@ import pwd
 import re
 import stat
 import sys
+import syslog
 import uuid
 from pathlib import Path
 from typing import Any, NoReturn
@@ -51,10 +52,87 @@ DELETE_ITEM_KEYS = {
     "st_ino",
     "st_nlink",
 }
+KNOWN_FAILURE_CODES = frozenset(
+    {
+        "apparmor_profile_not_enforced",
+        "broker_claim_conflict",
+        "broker_completion_conflict",
+        "broker_dsn_invalid",
+        "broker_dsn_mode_invalid",
+        "broker_dsn_owner_or_type_invalid",
+        "bytes_invalid",
+        "case_directory_binding_invalid",
+        "case_key_invalid",
+        "cases_root_invalid",
+        "completed_receipt_target_present",
+        "configuration_invalid",
+        "configuration_is_writable",
+        "configuration_keys_invalid",
+        "configuration_type_or_owner_invalid",
+        "dependency_entry_invalid",
+        "dependency_root_invalid",
+        "directory_entry_changed",
+        "display_path_invalid",
+        "fixed_root_command_required",
+        "identity_drop_failed",
+        "immutable_evidence_refused",
+        "link_count_invalid",
+        "missing_without_broker_claim",
+        "name_invalid",
+        "operation_authority_invalid",
+        "operation_facts_invalid",
+        "operation_id_invalid",
+        "operation_not_found",
+        "original_identity_incomplete",
+        "pending_object_binding_invalid",
+        "prepared_facts_changed",
+        "prepared_facts_digest_invalid",
+        "receipt_runner_invalid",
+        "regular_single_link_required",
+        "request_schema_invalid",
+        "request_shape_invalid",
+        "request_size_invalid",
+        "runner_instance_invalid",
+        "service_identity_is_root",
+        "service_identity_required",
+        "st_dev_invalid",
+        "st_ino_invalid",
+    }
+)
 
 
 class DeleteBrokerError(RuntimeError):
     pass
+
+
+def _failure_code(error: Exception) -> str:
+    if isinstance(error, DeleteBrokerError):
+        reason = error.args[0] if len(error.args) == 1 else None
+        if isinstance(reason, str) and reason in KNOWN_FAILURE_CODES:
+            return reason
+        return "broker_error_unknown"
+    if isinstance(error, ImportError):
+        return "unexpected_dependency_error"
+    if isinstance(error, (json.JSONDecodeError, UnicodeError, ValueError)):
+        return "unexpected_input_error"
+    if isinstance(error, OSError):
+        return "unexpected_os_error"
+    return "unexpected_internal_error"
+
+
+def _emit_failure_diagnostic(error: Exception) -> None:
+    """Write one bounded path-free code to the privileged local journal."""
+
+    try:
+        syslog.openlog(
+            ident="sift-custody-delete-broker",
+            logoption=0,
+            facility=syslog.LOG_AUTHPRIV,
+        )
+        syslog.syslog(syslog.LOG_ERR, f"failure_code={_failure_code(error)}")
+    except Exception:
+        # Diagnostic transport must never change the broker's fail-closed result.
+        pass
 
 
 def _fail(reason: str) -> NoReturn:
@@ -374,7 +452,8 @@ def main() -> int:
         delete_verified(operation, cases_root, service, dsn)
         print('{"removed":true,"schema_version":1}')
         return 0
-    except Exception:
+    except Exception as exc:
+        _emit_failure_diagnostic(exc)
         # Stable, path-free output. The Portal receives only a generic broker
         # rejection even for database/driver failures; kernel audit and the
         # durable operation retain attribution. This privileged helper always

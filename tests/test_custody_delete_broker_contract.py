@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pwd
+import re
 import runpy
 import sys
 from pathlib import Path
@@ -352,6 +353,58 @@ def test_parser_rejects_path_or_fact_arguments() -> None:
     for extra in ("name", "case_key", "sha256", "bytes", "st_ino"):
         with pytest.raises(module["DeleteBrokerError"]):
             parse_request(json.dumps({**good, extra: "attacker-supplied"}).encode())
+
+
+def test_broker_failure_diagnostics_are_closed_path_free_and_log_only(
+    monkeypatch, capsys
+) -> None:
+    module = _module()
+    source = HELPER.read_text(encoding="utf-8")
+    known_codes = module["KNOWN_FAILURE_CODES"]
+    literal_codes = set(re.findall(r'_fail\("([a-z0-9_]+)"', source))
+    literal_codes.update({"bytes_invalid", "st_dev_invalid", "st_ino_invalid"})
+    assert literal_codes <= known_codes
+
+    captured: list[tuple[int, str]] = []
+    monkeypatch.setattr(module["syslog"], "openlog", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        module["syslog"],
+        "syslog",
+        lambda priority, message: captured.append((priority, message)),
+    )
+    emit = module["_emit_failure_diagnostic"]
+    emit(module["DeleteBrokerError"]("prepared_facts_changed"))
+    emit(module["DeleteBrokerError"]("/cases/secret dsn=postgres://secret"))
+    emit(ValueError("/cases/secret dsn=postgres://secret"))
+    emit(ImportError("/cases/secret dsn=postgres://secret"))
+    emit(OSError("/cases/secret dsn=postgres://secret"))
+    emit(RuntimeError("/cases/secret dsn=postgres://secret"))
+
+    assert [message for _priority, message in captured] == [
+        "failure_code=prepared_facts_changed",
+        "failure_code=broker_error_unknown",
+        "failure_code=unexpected_input_error",
+        "failure_code=unexpected_dependency_error",
+        "failure_code=unexpected_os_error",
+        "failure_code=unexpected_internal_error",
+    ]
+    serialized = json.dumps(captured)
+    assert "/cases/" not in serialized
+    assert "postgres" not in serialized
+    assert "secret" not in serialized
+    assert "RuntimeError" not in serialized
+
+    diagnosed: list[str] = []
+    main = module["main"]
+    main.__globals__["_emit_failure_diagnostic"] = lambda exc: diagnosed.append(
+        module["_failure_code"](exc)
+    )
+    monkeypatch.setattr(sys, "argv", ["sift-custody-delete-broker", "extra"])
+    assert main() == 1
+    streams = capsys.readouterr()
+    assert streams.out == ""
+    assert streams.err == "custody_delete_rejected\n"
+    assert diagnosed == ["fixed_root_command_required"]
 
 
 def test_missing_file_without_durable_claim_fails_closed(tmp_path: Path) -> None:

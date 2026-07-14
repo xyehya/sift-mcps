@@ -190,6 +190,9 @@ Postgres rejects both verified and completed DELETE transitions without that exa
 including generic advance and finalizer paths. Absent-file restart recovery requires the exact prior claim. Retire never unlinks or clears protection and creates a manifest
 excluding the retired object. Inventory observations are path-free, append-only, FORCE-RLS, and
 service-role-only. Neither the browser DB role nor MCP receives custody mutation authority.
+The broker keeps its caller/Portal failure generic and writes only an allowlisted, path-free failure
+code to the privileged local journal. Unknown exceptions are reduced to a bounded input, dependency,
+OS, or internal category; exception text, paths, DSNs, and prepared facts are never logged.
 
 **P4.23.1 status (2026-07-13; source and VM Gate A live-proven):** aggregate MCP admission reconciles
 the mounted inventory before reading the Postgres gate and independently requires every declared or
