@@ -37,7 +37,7 @@ def _full_verify_finding() -> dict[str, object]:
     }
 
 
-def _sealed_external_case(conn):
+def _sealed_external_case(conn, *, version_source: str | None = None):
     case_id, object_id, version_id = (uuid.uuid4() for _ in range(3))
     source, mount = "a" * 64, "b" * 64
     digest, manifest_hash = "sha256:" + "c" * 64, "sha256:" + "d" * 64
@@ -62,7 +62,15 @@ def _sealed_external_case(conn):
                  storage_source_identity,storage_mount_instance)
                values(%s,%s,%s,1,%s,8,'ACTIVE',%s,
                  'EXTERNALLY_READ_ONLY',%s,%s)""",
-            (version_id, object_id, case_id, digest, manifest_hash, source, mount),
+            (
+                version_id,
+                object_id,
+                case_id,
+                digest,
+                manifest_hash,
+                source if version_source is None else version_source,
+                mount,
+            ),
         )
         cur.execute(
             "update app.evidence_objects set current_version_id=%s where id=%s",
@@ -190,7 +198,10 @@ def test_noncausal_or_unsafe_reconnect_stays_fail_closed(defect) -> None:
     from psycopg.types.json import Jsonb
 
     with psycopg.connect(_dsn()) as conn:
-        case_id, object_id, source, _mount = _sealed_external_case(conn)
+        case_id, object_id, source, _mount = _sealed_external_case(
+            conn,
+            version_source="f" * 64 if defect == "version_source" else None,
+        )
         _latch_unavailable(conn, case_id)
         with conn.cursor() as cur:
             cur.execute(
@@ -221,13 +232,6 @@ def test_noncausal_or_unsafe_reconnect_stays_fail_closed(defect) -> None:
                 cur.execute(
                     "update app.evidence_chain_heads set issues=%s where case_id=%s",
                     (Jsonb([content]), case_id),
-                )
-            elif defect == "version_source":
-                cur.execute(
-                    """update app.evidence_versions set storage_source_identity=%s
-                       where id=(select current_version_id from app.evidence_objects
-                         where id=%s)""",
-                    ("f" * 64, object_id),
                 )
             elif defect == "pending":
                 cur.execute(
