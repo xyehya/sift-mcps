@@ -268,7 +268,7 @@ def _valid_delete_broker_item(object_id) -> dict[str, object]:
         "prior_seal_status": "unsealed",
         "original_version_id": None,
         "original_sha256": None,
-        "original_bytes": 10,
+        "original_bytes": None,
         "present": True,
         "sha256": "sha256:" + "a" * 64,
         "bytes": 10,
@@ -1015,6 +1015,7 @@ def test_broker_authorize_accepts_exact_production_item_shape(
             seal_status="unsealed",
         )
         item = _valid_delete_broker_item(object_id)
+        item["original_bytes"] = 10
         with conn.cursor() as cur:
             cur.execute(
                 "update app.evidence_objects set current_bytes=%s where id=%s",
