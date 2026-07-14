@@ -19,6 +19,15 @@ def _dsn() -> str:
     return dsn
 
 
+def _broker_dsn() -> str:
+    dsn = os.environ.get("SIFT_CUSTODY_DELETE_BROKER_DSN", "").strip()
+    if not dsn:
+        pytest.skip(
+            "SIFT_CUSTODY_DELETE_BROKER_DSN is required for scoped broker Postgres proof"
+        )
+    return dsn
+
+
 def _case_and_actor(conn):
     case_id, actor_id = uuid.uuid4(), uuid.uuid4()
     with conn.cursor() as cur:
@@ -343,6 +352,7 @@ def test_delete_post_unlink_resume_preserves_facts_and_commits_one_event():
     from psycopg.types.json import Jsonb
 
     psycopg = pytest.importorskip("psycopg")
+    broker_dsn = _broker_dsn()
     with psycopg.connect(_dsn()) as conn:
         case_id, actor_id = _case_and_actor(conn)
         object_id = uuid.uuid4()
@@ -394,6 +404,8 @@ def test_delete_post_unlink_resume_preserves_facts_and_commits_one_event():
             phase, prepared = cur.fetchone()
             assert phase == "FILESYSTEM_APPLYING"
             assert prepared["item"] == item
+        conn.commit()
+        with psycopg.connect(broker_dsn) as broker_conn, broker_conn.cursor() as cur:
             cur.execute(
                 "select sift_custody_broker.authorize(%s,'runner-after')",
                 (operation_id,),
@@ -407,6 +419,7 @@ def test_delete_post_unlink_resume_preserves_facts_and_commits_one_event():
                 "select sift_custody_broker.complete(%s,'runner-after',%s)",
                 (operation_id, digest),
             )
+        with conn.cursor() as cur:
             verified = {**item, "file_removed": True}
             cur.execute(
                 "select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-after')",
@@ -438,6 +451,7 @@ def test_delete_broker_completed_receipt_is_idempotent_across_new_runner(
     from psycopg.types.json import Jsonb
 
     psycopg = pytest.importorskip("psycopg")
+    broker_dsn = _broker_dsn()
     helper_path = (
         Path(__file__).resolve().parents[3]
         / "scripts"
@@ -528,9 +542,9 @@ def test_delete_broker_completed_receipt_is_idempotent_across_new_runner(
         conn.commit()
 
         operation = broker["resolve_operation"](
-            _dsn(), str(operation_id), "runner-before", tmp_path
+            broker_dsn, str(operation_id), "runner-before", tmp_path
         )
-        delete_verified(operation, tmp_path, pwd.getpwuid(os.geteuid()), _dsn())
+        delete_verified(operation, tmp_path, pwd.getpwuid(os.geteuid()), broker_dsn)
         assert not target.exists()
 
         # Simulate loss after the broker committed its receipt but before the
@@ -556,11 +570,11 @@ def test_delete_broker_completed_receipt_is_idempotent_across_new_runner(
         conn.commit()
 
         resumed = broker["resolve_operation"](
-            _dsn(), str(operation_id), "runner-after", tmp_path
+            broker_dsn, str(operation_id), "runner-after", tmp_path
         )
         assert resumed["receipt_claimed"] is True
         assert resumed["receipt_completed"] is True
-        delete_verified(resumed, tmp_path, pwd.getpwuid(os.geteuid()), _dsn())
+        delete_verified(resumed, tmp_path, pwd.getpwuid(os.geteuid()), broker_dsn)
 
         verified = {**item, "file_removed": True}
         with conn.cursor() as cur:
@@ -649,6 +663,7 @@ def test_delete_verified_transition_requires_scoped_completed_broker_receipt():
     from psycopg.types.json import Jsonb
 
     psycopg = pytest.importorskip("psycopg")
+    broker_dsn = _broker_dsn()
     with psycopg.connect(_dsn()) as conn:
         case_id, actor_id = _case_and_actor(conn)
         object_id = uuid.uuid4()
@@ -709,6 +724,15 @@ def test_delete_verified_transition_requires_scoped_completed_broker_receipt():
                     (operation_id, Jsonb({"item": verified})),
                 )
             cur.execute("rollback to savepoint missing_receipt")
+            cur.execute("savepoint control_broker_denied")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                cur.execute(
+                    "select sift_custody_broker.authorize(%s,'runner-before')",
+                    (operation_id,),
+                )
+            cur.execute("rollback to savepoint control_broker_denied")
+        conn.commit()
+        with psycopg.connect(broker_dsn) as broker_conn, broker_conn.cursor() as cur:
             cur.execute(
                 "select sift_custody_broker.authorize(%s,'runner-before')",
                 (operation_id,),
@@ -718,6 +742,7 @@ def test_delete_verified_transition_requires_scoped_completed_broker_receipt():
                 "select sift_custody_broker.claim(%s,'runner-before',%s)",
                 (operation_id, digest),
             )
+        with conn.cursor() as cur:
             cur.execute("savepoint claimed_only")
             with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
                 cur.execute(
@@ -725,6 +750,7 @@ def test_delete_verified_transition_requires_scoped_completed_broker_receipt():
                     (operation_id, Jsonb({"item": verified})),
                 )
             cur.execute("rollback to savepoint claimed_only")
+        with psycopg.connect(broker_dsn) as broker_conn, broker_conn.cursor() as cur:
             cur.execute("savepoint wrong_digest")
             with pytest.raises(psycopg.errors.IntegrityConstraintViolation):
                 cur.execute(
@@ -736,6 +762,7 @@ def test_delete_verified_transition_requires_scoped_completed_broker_receipt():
                 "select sift_custody_broker.complete(%s,'runner-before',%s)",
                 (operation_id, digest),
             )
+        with conn.cursor() as cur:
             cur.execute(
                 "select phase from app.custody_operation_advance(%s,'FILESYSTEM_APPLYING','FILESYSTEM_VERIFIED',%s,'runner-before')",
                 (operation_id, Jsonb({"item": verified})),
@@ -762,6 +789,7 @@ def test_broker_authorize_rejects_extra_or_reserved_prepared_item_keys(extra_key
     from psycopg.types.json import Jsonb
 
     psycopg = pytest.importorskip("psycopg")
+    broker_dsn = _broker_dsn()
     with psycopg.connect(_dsn()) as conn:
         case_id, actor_id = _case_and_actor(conn)
         object_id = uuid.uuid4()
@@ -795,12 +823,14 @@ def test_broker_authorize_rejects_extra_or_reserved_prepared_item_keys(extra_key
                 "select app.custody_operation_advance(%s,'GATE_BLOCKED','FILESYSTEM_APPLYING',%s,'runner-before')",
                 (operation_id, Jsonb({"item": item})),
             )
+        conn.commit()
+        with psycopg.connect(broker_dsn) as broker_conn, broker_conn.cursor() as cur:
             with pytest.raises(psycopg.errors.InvalidAuthorizationSpecification):
                 cur.execute(
                     "select sift_custody_broker.authorize(%s,'runner-before')",
                     (operation_id,),
                 )
-        conn.rollback()
+            broker_conn.rollback()
 
 
 def test_retire_creates_one_excluding_manifest_and_preserves_versions():
