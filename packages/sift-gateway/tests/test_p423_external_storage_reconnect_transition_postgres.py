@@ -38,7 +38,11 @@ def _full_verify_finding() -> dict[str, object]:
 
 
 def _sealed_external_case(
-    conn, *, version_source: str | None = None, object_count: int = 1
+    conn,
+    *,
+    version_source: str | None = None,
+    version_mount: str | None = None,
+    object_count: int = 1,
 ):
     case_id = uuid.uuid4()
     object_ids = [uuid.uuid4() for _ in range(object_count)]
@@ -74,7 +78,7 @@ def _sealed_external_case(
                     digest,
                     manifest_hash,
                     source if version_source is None else version_source,
-                    mount,
+                    mount if version_mount is None else version_mount,
                 ),
             )
             cur.execute(
@@ -99,6 +103,99 @@ def _sealed_external_case(
         )
     conn.commit()
     return case_id, object_ids[0], source, mount
+
+
+def _set_legacy_posture_recovery_state(
+    conn,
+    case_id,
+    *,
+    source: str,
+    verified_mount: str,
+    observed_mount: str,
+    receipt_defect: str | None = None,
+) -> list[dict[str, object]]:
+    from psycopg.types.json import Jsonb
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """select o.id::text,v.id::text,v.sha256,v.bytes
+               from app.evidence_objects o
+               join app.evidence_versions v on v.id=o.current_version_id
+               where o.case_id=%s and o.status='sealed'
+               order by o.id::text""",
+            (case_id,),
+        )
+        active = cur.fetchall()
+        receipt_items = [
+            {
+                "evidence_object_id": object_id,
+                "evidence_version_id": version_id,
+                "sha256": digest,
+                "bytes": byte_count,
+                "storage_profile": "EXTERNALLY_READ_ONLY",
+                "storage_source_identity": source,
+                "mount_instance_identity": verified_mount,
+                "read_only": True,
+                "st_nlink": 1,
+            }
+            for object_id, version_id, digest, byte_count in active
+        ]
+        if receipt_defect == "incomplete_receipt":
+            receipt_items = receipt_items[:-1]
+        elif receipt_defect == "item_source":
+            receipt_items[0]["storage_source_identity"] = "f" * 64
+        posture = [
+            {
+                "code": "POSTURE_DRIFT",
+                "gate_state": "BLOCKED_VIOLATION",
+                "recovery": "RESTORE_READ_ONLY",
+                "evidence_object_id": object_id,
+                "observation_id": f"legacy-posture-{index}",
+                "full_verification_required": True,
+                "storage_generation": 2,
+            }
+            for index, (object_id, *_rest) in enumerate(active)
+        ]
+        if receipt_defect != "missing_receipt":
+            cur.execute(
+                """insert into app.evidence_storage_verifications(
+                     case_id,generation,profile,source_identity,mount_instance,
+                     manifest_version,manifest_hash,item_facts,outcome,correlation_id)
+                   values(%s,2,'EXTERNALLY_READ_ONLY',%s,%s,1,%s,%s,
+                     'SUCCESS','legacy-success:'||%s)""",
+                (
+                    case_id,
+                    "f" * 64 if receipt_defect == "receipt_source" else source,
+                    (
+                        "f" * 64
+                        if receipt_defect == "receipt_mount"
+                        else verified_mount
+                    ),
+                    (
+                        "sha256:" + "f" * 64
+                        if receipt_defect == "receipt_manifest"
+                        else "sha256:" + "d" * 64
+                    ),
+                    Jsonb(receipt_items),
+                    uuid.uuid4().hex,
+                ),
+            )
+        cur.execute(
+            """update app.evidence_chain_heads
+               set seal_status='violated',issues=%s where case_id=%s""",
+            (Jsonb(posture), case_id),
+        )
+        cur.execute(
+            """update app.evidence_storage_authorities
+               set state='FULL_VERIFY_REQUIRED',remediation='FULL_VERIFY',
+                 read_only=true,source_identity=%s,
+                 verified_mount_instance=%s,observed_mount_instance=%s,
+                 generation=2,verified_generation=2
+               where case_id=%s""",
+            (source, verified_mount, observed_mount, case_id),
+        )
+    conn.commit()
+    return posture
 
 
 def _classify(
@@ -327,6 +424,228 @@ def test_same_source_rw_drift_restores_only_to_full_verify_required() -> None:
                 ("BLOCKED_UNAVAILABLE", 2),
                 ("BLOCKED_VIOLATION", 2),
             ]
+
+
+def test_legacy_posture_drift_with_new_stable_mount_enters_full_verify_lane() -> None:
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_dsn()) as conn:
+        version_mount = "c" * 64
+        observed_mount = "e" * 64
+        case_id, _object_id, source, verified_mount = _sealed_external_case(
+            conn, version_mount=version_mount, object_count=2
+        )
+        _set_legacy_posture_recovery_state(
+            conn,
+            case_id,
+            source=source,
+            verified_mount=verified_mount,
+            observed_mount=observed_mount,
+        )
+        before_counts = _counts(conn, case_id)
+
+        _classify(
+            conn,
+            case_id,
+            "legacy-stable-mount:" + uuid.uuid4().hex,
+            _full_verify_finding(),
+        )
+
+        assert _counts(conn, case_id) == before_counts
+        with conn.cursor() as cur:
+            cur.execute(
+                """select seal_status,issues from app.evidence_chain_heads
+                   where case_id=%s""",
+                (case_id,),
+            )
+            assert cur.fetchone() == (
+                "violated",
+                [{**_full_verify_finding(), "storage_generation": 2}],
+            )
+            cur.execute(
+                """select state,remediation,read_only,source_identity,
+                          verified_mount_instance,observed_mount_instance
+                   from app.evidence_storage_authorities where case_id=%s""",
+                (case_id,),
+            )
+            assert cur.fetchone() == (
+                "FULL_VERIFY_REQUIRED",
+                "FULL_VERIFY",
+                True,
+                source,
+                verified_mount,
+                observed_mount,
+            )
+            cur.execute(
+                """select count(distinct storage_mount_instance)
+                   from app.evidence_versions where case_id=%s""",
+                (case_id,),
+            )
+            assert cur.fetchone() == (1,)
+            cur.execute(
+                """select storage_mount_instance from app.evidence_versions
+                   where case_id=%s limit 1""",
+                (case_id,),
+            )
+            assert cur.fetchone() == (version_mount,)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    (
+        "missing_receipt",
+        "receipt_source",
+        "receipt_mount",
+        "receipt_manifest",
+        "incomplete_receipt",
+        "item_source",
+        "version_source",
+        "storage_source",
+        "writable",
+        "same_mount",
+        "pending",
+        "violated_object",
+        "non_storage_issue",
+        "incomplete_operation",
+    ),
+)
+def test_legacy_mount_transition_rejects_unbound_or_unsafe_state(defect: str) -> None:
+    psycopg = pytest.importorskip("psycopg")
+    from psycopg.types.json import Jsonb
+
+    with psycopg.connect(_dsn()) as conn:
+        observed_mount = "e" * 64
+        case_id, object_id, source, verified_mount = _sealed_external_case(
+            conn,
+            version_source="f" * 64 if defect == "version_source" else None,
+            version_mount="c" * 64,
+            object_count=2,
+        )
+        posture = _set_legacy_posture_recovery_state(
+            conn,
+            case_id,
+            source=source,
+            verified_mount=verified_mount,
+            observed_mount=observed_mount,
+            receipt_defect=(
+                defect
+                if defect
+                in {
+                    "missing_receipt",
+                    "receipt_source",
+                    "receipt_mount",
+                    "receipt_manifest",
+                    "incomplete_receipt",
+                    "item_source",
+                }
+                else None
+            ),
+        )
+        with conn.cursor() as cur:
+            if defect == "writable":
+                cur.execute(
+                    """update app.evidence_storage_authorities
+                       set read_only=false where case_id=%s""",
+                    (case_id,),
+                )
+            elif defect == "storage_source":
+                cur.execute(
+                    """update app.evidence_storage_authorities
+                       set source_identity=%s where case_id=%s""",
+                    ("f" * 64, case_id),
+                )
+            elif defect == "same_mount":
+                cur.execute(
+                    """update app.evidence_storage_authorities
+                       set observed_mount_instance=verified_mount_instance
+                       where case_id=%s""",
+                    (case_id,),
+                )
+            elif defect == "pending":
+                cur.execute(
+                    """insert into app.evidence_objects(
+                         id,case_id,display_name,display_path,status,seal_status)
+                       values(%s,%s,'pending.raw','evidence/pending.raw',
+                         'detected','unsealed')""",
+                    (uuid.uuid4(), case_id),
+                )
+            elif defect == "violated_object":
+                cur.execute(
+                    """update app.evidence_objects
+                       set status='violated',seal_status='violated' where id=%s""",
+                    (object_id,),
+                )
+            elif defect == "non_storage_issue":
+                cur.execute(
+                    """update app.evidence_chain_heads set issues=%s
+                       where case_id=%s""",
+                    (
+                        Jsonb(
+                            [
+                                *posture,
+                                {
+                                    "code": "CONTENT_CHANGED",
+                                    "gate_state": "BLOCKED_VIOLATION",
+                                    "recovery": "RESTORE_REACQUIRE_RETIRE",
+                                    "evidence_object_id": str(object_id),
+                                    "observation_id": None,
+                                    "full_verification_required": True,
+                                    "storage_generation": 2,
+                                },
+                            ]
+                        ),
+                        case_id,
+                    ),
+                )
+            elif defect == "incomplete_operation":
+                actor_id, audit_id = uuid.uuid4(), uuid.uuid4()
+                cur.execute(
+                    """insert into app.operator_profiles(id,display_name,status)
+                       values(%s,'Legacy transition operator','active')""",
+                    (actor_id,),
+                )
+                cur.execute(
+                    """insert into app.audit_events(
+                         id,case_id,event_type,actor_type,actor_user_id,
+                         source,status,details)
+                       values(%s,%s,'reauth.evidence_seal','user',%s,
+                         'portal_reauth','success','{}'::jsonb)""",
+                    (audit_id, case_id, actor_id),
+                )
+                cur.execute(
+                    """insert into app.custody_operations(
+                         case_id,action,phase,idempotency_key,request_digest,
+                         command,reason,reauth_audit_event_id,actor_user_id,
+                         runner_instance_id)
+                       values(%s,'ADD_SEAL','GATE_BLOCKED',%s,%s,%s,
+                         'test pending operation',%s,%s,'test-runner')""",
+                    (
+                        case_id,
+                        "pending-op-" + uuid.uuid4().hex,
+                        "sha256:" + "9" * 64,
+                        Jsonb(
+                            {
+                                "schema_version": 1,
+                                "action": "ADD_SEAL",
+                                "files": [],
+                            }
+                        ),
+                        audit_id,
+                        actor_id,
+                    ),
+                )
+        conn.commit()
+
+        with pytest.raises(
+            psycopg.errors.ObjectNotInPrerequisiteState,
+            match="persisted_custody_violation_requires_recovery",
+        ):
+            with conn.transaction():
+                _classify(
+                    conn,
+                    case_id,
+                    defect + ":" + uuid.uuid4().hex,
+                    _full_verify_finding(),
+                )
 
 
 @pytest.mark.parametrize(
