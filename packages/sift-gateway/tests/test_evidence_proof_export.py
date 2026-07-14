@@ -286,7 +286,7 @@ class TestTamperDetection:
 
         assert not db.violation_calls
 
-    def test_already_violated_remains_blocked_and_observation_is_correlated(self, service):
+    def test_already_violated_remains_blocked_without_duplicate_event(self, service):
         svc, db, tmp_path = service
         sha, size = _make_sealed_file(tmp_path, "evidence/disk.bin", b"q" * 8)
         db.sealed_objects = [("obj-4", "evidence/disk.bin", sha, size)]
@@ -295,11 +295,18 @@ class TestTamperDetection:
 
         svc.gate_status(_CASE)
 
-        assert db.violation_calls
-        assert db.violation_calls[-1][1:3] == (
-            "obj-4",
-            "sealed_evidence_missing",
+        assert not db.violation_calls
+        classification = next(
+            params
+            for sql, params in db.statements
+            if "evidence_record_inventory_classification_v2" in sql
         )
+        assert classification[1]
+        findings = getattr(classification[3], "obj", classification[3])
+        assert [finding["code"] for finding in findings] == [
+            "PERSISTED_VIOLATION",
+            "SEALED_EVIDENCE_MISSING",
+        ]
 
 
 class TestProofExport:

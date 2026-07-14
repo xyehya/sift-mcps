@@ -994,6 +994,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
                                 ),
                             )
                         )
+                persisted_violation_object_ids = tuple(
+                    known["id"]
+                    for known in sealed.values()
+                    if known["authority_status"] == "violated"
+                )
                 classification = classify_inventory(
                     InventorySnapshot(
                         availability=(
@@ -1008,10 +1013,8 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         ),
                         expected=tuple(expected_facts),
                         observed=tuple(observed_facts),
-                        persisted_violation_object_ids=tuple(
-                            known["id"]
-                            for known in sealed.values()
-                            if known["authority_status"] == "violated"
+                        persisted_violation_object_ids=(
+                            persisted_violation_object_ids
                         ),
                         persisted_head_violation=persisted_head_violation,
                     )
@@ -1032,17 +1035,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     DriftCode.SEALED_EVIDENCE_MISSING: "sealed_evidence_missing",
                     DriftCode.UNSAFE_SEALED_ENTRY: "unsafe_evidence_inventory_entry",
                 }
-                for finding in classification.findings:
-                    reason = violation_reasons.get(finding.code)
-                    if reason and finding.evidence_object_id:
-                        self._record_admission_violation(
-                            cur,
-                            case_id,
-                            finding.evidence_object_id,
-                            reason,
-                            correlation_id,
-                        )
-                        unsafe.append(reason)
+                # Persist the complete classification before latching individual
+                # objects.  The classification RPC deliberately rejects a caller
+                # that observes a pre-existing violation without carrying the
+                # PERSISTED_VIOLATION finding.  Marking an object first makes this
+                # transaction's new CONTENT_CHANGED/MISSING finding look like an
+                # unacknowledged old violation and prevents Portal recovery reads.
+                # Both writes remain atomic in this transaction, so admission can
+                # never observe an open gate between the classification and latch.
                 cur.execute(
                     "select app.evidence_record_inventory_classification_v2(%s,%s,%s,%s)",
                     (
@@ -1052,6 +1052,23 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         _jsonb(findings),
                     ),
                 )
+                for finding in classification.findings:
+                    reason = violation_reasons.get(finding.code)
+                    if (
+                        reason
+                        and finding.evidence_object_id
+                        and finding.evidence_object_id
+                        not in persisted_violation_object_ids
+                    ):
+                        self._record_admission_violation(
+                            cur,
+                            case_id,
+                            finding.evidence_object_id,
+                            reason,
+                            findings,
+                            correlation_id,
+                        )
+                        unsafe.append(reason)
             conn.commit()
         execution_authority = None
         if storage_available:
@@ -1207,12 +1224,13 @@ class EvidenceAuthorityService(_BasePortalDbService):
         case_id: str,
         evidence_id: str,
         reason: str,
+        findings: list[dict[str, Any]],
         correlation_id: str | None,
     ) -> None:
         cur.execute(
             "select app.evidence_mark_admission_violation"
             "(%s, %s, %s, %s, %s, null, null)",
-            (case_id, evidence_id, reason, _jsonb([reason]), correlation_id),
+            (case_id, evidence_id, reason, _jsonb(findings), correlation_id),
         )
 
     def gate_status(self, case_id: str) -> dict[str, Any]:

@@ -231,6 +231,33 @@ class TestEvidenceDBAuthority:
         assert body["seal_status"] == "sealed"
         assert body["manifest_version"] == 2
 
+    def test_persisted_violation_remains_visible_for_recovery(self):
+        class ViolatedEvidenceDB(FakeEvidenceDB):
+            def gate_status(self, case_id):
+                status = super().gate_status(case_id)
+                status["gate_state"] = "BLOCKED_VIOLATION"
+                status["issues"] = [{"code": "PERSISTED_VIOLATION"}]
+                return status
+
+            def list_evidence(self, case_id):
+                items = super().list_evidence(case_id)
+                items[0]["status"] = "violated"
+                items[0]["seal_status"] = "violated"
+                return items
+
+        c = _examiner(
+            _make_client(evidence_service=ViolatedEvidenceDB(seal_status="violated"))
+        )
+
+        resp = c.get("/api/evidence/chain/status")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "violated"
+        assert body["gate_state"] == "BLOCKED_VIOLATION"
+        assert body["modified"] == ["evidence/disk.E01"]
+        assert body["requires_examiner_action"] is True
+
     def test_chain_status_surfaces_only_public_incomplete_operation(self):
         incomplete = {
             "operation_id": "25c6c6f1-1111-4111-8111-111111111111",

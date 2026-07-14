@@ -966,12 +966,13 @@ class _ObservationCursor:
 class _ObservationConnection:
     def __init__(self, cursor):
         self._cursor = cursor
+        self.commits = 0
 
     def cursor(self):
         return self._cursor
 
     def commit(self):
-        return None
+        self.commits += 1
 
     def __enter__(self):
         return self
@@ -987,6 +988,27 @@ class _SealedObservationCursor(_ObservationCursor):
 
     def fetchall(self):
         return self.sealed
+
+
+class _LatchEnforcingObservationCursor(_SealedObservationCursor):
+    """Model the migrated RPC's persisted-violation prerequisite check."""
+
+    def __init__(self, sealed):
+        super().__init__(sealed)
+        self.violation_latched = False
+
+    def execute(self, sql, params):
+        normalized = " ".join(sql.split())
+        if (
+            "evidence_record_inventory_classification_v2" in normalized
+            and self.violation_latched
+        ):
+            findings = getattr(params[3], "obj", params[3])
+            if not any(finding["code"] == "PERSISTED_VIOLATION" for finding in findings):
+                raise RuntimeError("persisted_custody_violation_requires_recovery")
+        super().execute(sql, params)
+        if "evidence_mark_admission_violation" in normalized:
+            self.violation_latched = True
 
 
 class _ViolatedObservationCursor(_SealedObservationCursor):
@@ -1006,7 +1028,7 @@ def test_reconciliation_violation_uses_request_correlation(
     rel = "evidence/sealed.raw"
     if condition == "changed":
         (evidence / "sealed.raw").write_bytes(b"changed")
-    cursor = _SealedObservationCursor(
+    cursor = _LatchEnforcingObservationCursor(
         [
             (
                 "sealed-object",
@@ -1037,8 +1059,61 @@ def test_reconciliation_violation_uses_request_correlation(
     assert len(violations) == 1
     assert violations[0][1][1] == "sealed-object"
     assert violations[0][1][2] == f"sealed_evidence_{condition}"
+    violation_findings = getattr(violations[0][1][3], "obj", violations[0][1][3])
+    assert [finding["code"] for finding in violation_findings] == [
+        "CONTENT_CHANGED" if condition == "changed" else "SEALED_EVIDENCE_MISSING"
+    ]
     assert violations[0][1][4] == "opaque-request-violation"
+    classification_index = next(
+        index
+        for index, call in enumerate(cursor.calls)
+        if "evidence_record_inventory_classification_v2" in call[0]
+    )
+    violation_index = next(
+        index
+        for index, call in enumerate(cursor.calls)
+        if "evidence_mark_admission_violation" in call[0]
+    )
+    assert classification_index < violation_index
     assert result["state"] == "available"
+
+
+def test_classification_failure_never_marks_or_commits_violation(
+    tmp_path, monkeypatch
+):
+    class RejectingClassificationCursor(_SealedObservationCursor):
+        def execute(self, sql, params):
+            if "evidence_record_inventory_classification_v2" in sql:
+                raise RuntimeError("classification_write_failed")
+            super().execute(sql, params)
+
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    (evidence / "sealed.raw").write_bytes(b"changed")
+    cursor = RejectingClassificationCursor(
+        [
+            (
+                "sealed-object",
+                "evidence/sealed.raw",
+                "sha256:" + "a" * 64,
+                1,
+                datetime.now(timezone.utc) + timedelta(seconds=5),
+            )
+        ]
+    )
+    connection = _ObservationConnection(cursor)
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(service, "_connect", lambda: connection)
+
+    with pytest.raises(RuntimeError, match="classification_write_failed"):
+        service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
+
+    assert connection.commits == 0
+    assert not any(
+        "evidence_mark_admission_violation" in sql for sql, _params in cursor.calls
+    )
 
 
 def test_unavailable_storage_is_not_recorded_as_a_violation(tmp_path, monkeypatch):
@@ -1237,6 +1312,51 @@ def test_persisted_violation_is_returned_and_recorded_when_mount_matches(
     findings = getattr(classification_call[1][3], "obj", classification_call[1][3])
     assert classification_call[1][2] == "BLOCKED_VIOLATION"
     assert [finding["code"] for finding in findings] == ["PERSISTED_VIOLATION"]
+    assert not any(
+        "evidence_mark_admission_violation" in call[0] for call in cursor.calls
+    )
+
+
+def test_persisted_changed_object_does_not_append_duplicate_violation(
+    tmp_path, monkeypatch
+):
+    case_dir = tmp_path / "case"
+    evidence = case_dir / "evidence"
+    evidence.mkdir(parents=True)
+    image = evidence / "sealed.raw"
+    image.write_bytes(b"changed")
+    cursor = _ViolatedObservationCursor(
+        [
+            (
+                "violated-object",
+                "evidence/sealed.raw",
+                "sha256:" + hashlib.sha256(b"original").hexdigest(),
+                len(b"original"),
+                datetime.now(timezone.utc) + timedelta(seconds=5),
+                {},
+                "violated",
+            )
+        ]
+    )
+    service = EvidenceAuthorityService("postgresql://unused")
+    monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
+    monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
+
+    result = service.reconcile_for_admission(
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert result["gate_state"] == "BLOCKED_VIOLATION"
+    classification_call = next(
+        call
+        for call in cursor.calls
+        if "evidence_record_inventory_classification_v2" in call[0]
+    )
+    findings = getattr(classification_call[1][3], "obj", classification_call[1][3])
+    assert [finding["code"] for finding in findings] == [
+        "PERSISTED_VIOLATION",
+        "CONTENT_CHANGED",
+    ]
     assert not any(
         "evidence_mark_admission_violation" in call[0] for call in cursor.calls
     )
