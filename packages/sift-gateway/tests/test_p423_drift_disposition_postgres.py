@@ -17,6 +17,12 @@ AUTHORIZE_REPAIR_MIGRATION = (
     / "migrations"
     / "202607145300_custody_delete_broker_authorize_shape.sql"
 )
+RETIRE_RECOVERY_MIGRATION = (
+    Path(__file__).resolve().parents[3]
+    / "supabase"
+    / "migrations"
+    / "202607145400_retire_violation_recovery.sql"
+)
 DELETE_BROKER_ITEM_KEYS = (
     "evidence_object_id",
     "display_path",
@@ -1239,3 +1245,208 @@ def test_retire_creates_one_excluding_manifest_and_preserves_versions():
             )
             assert cur.fetchone() == ("retired", version_ids[0])
         conn.rollback()
+
+
+def _prepare_retire_recovery_fixture(
+    conn,
+    *,
+    target_code="SEALED_EVIDENCE_MISSING",
+    extra_issues=(),
+    other_violated=False,
+):
+    from psycopg.types.json import Jsonb
+
+    case_id, actor_id = _case_and_actor(conn)
+    retired_id, sibling_id = uuid.uuid4(), uuid.uuid4()
+    operation_id, *_ = _begin(
+        conn,
+        case_id=case_id,
+        actor_id=actor_id,
+        object_id=retired_id,
+        action="RETIRE",
+        status="violated",
+        seal_status="violated",
+    )
+    retired_version_id, sibling_version_id = uuid.uuid4(), uuid.uuid4()
+    target_finding = {
+        "code": target_code,
+        "gate_state": "BLOCKED_VIOLATION",
+        "recovery": "RESTORE_REACQUIRE_RETIRE",
+        "evidence_object_id": str(retired_id),
+        "observation_id": "missing-" + uuid.uuid4().hex,
+        "full_verification_required": False,
+    }
+    issues = [
+        {"code": "PERSISTED_VIOLATION"},
+        target_finding,
+        *extra_issues,
+    ]
+    with conn.cursor() as cur:
+        cur.execute(
+            """insert into app.evidence_objects
+               (id,case_id,display_name,display_path,status,seal_status)
+               values(%s,%s,'sibling.bin',%s,'sealed','sealed')""",
+            (sibling_id, case_id, f"evidence/{sibling_id}.bin"),
+        )
+        for object_id, version_id, digest in (
+            (retired_id, retired_version_id, "b"),
+            (sibling_id, sibling_version_id, "c"),
+        ):
+            cur.execute(
+                """insert into app.evidence_versions
+                   (id,evidence_object_id,case_id,manifest_version,sha256,bytes,entry_status)
+                   values(%s,%s,%s,1,%s,100,'ACTIVE')""",
+                (version_id, object_id, case_id, "sha256:" + digest * 64),
+            )
+            cur.execute(
+                """update app.evidence_objects set current_version_id=%s,
+                   current_sha256=%s,current_bytes=100 where id=%s""",
+                (version_id, "sha256:" + digest * 64, object_id),
+            )
+        if other_violated:
+            other_id = uuid.uuid4()
+            cur.execute(
+                """insert into app.evidence_objects
+                   (id,case_id,display_name,display_path,status,seal_status)
+                   values(%s,%s,'other.bin',%s,'violated','violated')""",
+                (other_id, case_id, f"evidence/{other_id}.bin"),
+            )
+        cur.execute(
+            """insert into app.evidence_chain_heads(case_id,manifest_version,manifest_hash,
+               seal_status,active_count,issues) values(%s,1,%s,'violated',2,%s)
+               on conflict(case_id) do update set manifest_version=1,
+                 manifest_hash=excluded.manifest_hash,seal_status='violated',
+                 active_count=2,issues=excluded.issues""",
+            (case_id, "sha256:" + "f" * 64, Jsonb(issues)),
+        )
+        cur.execute(
+            """insert into app.evidence_inventory_observations(
+               case_id,correlation_id,gate_state,findings)
+               values(%s,%s,'BLOCKED_VIOLATION',%s)""",
+            (case_id, "retire-" + uuid.uuid4().hex, Jsonb([target_finding])),
+        )
+        item = {
+            "evidence_object_id": str(retired_id),
+            "display_path": f"evidence/{retired_id}.bin",
+            "prior_status": "violated",
+            "prior_seal_status": "violated",
+            "original_version_id": str(retired_version_id),
+            "original_sha256": "sha256:" + "b" * 64,
+            "original_bytes": 100,
+            "present": False,
+            "sha256": "sha256:" + "b" * 64,
+            "bytes": 100,
+            "file_removed": False,
+        }
+        for prior_phase, next_phase in (
+            ("GATE_BLOCKED", "FILESYSTEM_APPLYING"),
+            ("FILESYSTEM_APPLYING", "FILESYSTEM_VERIFIED"),
+        ):
+            cur.execute(
+                "select app.custody_operation_advance(%s,%s,%s,%s,'runner-before')",
+                (operation_id, prior_phase, next_phase, Jsonb({"item": item})),
+            )
+    return case_id, retired_id, operation_id, item
+
+
+@pytest.mark.parametrize(
+    "target_code", ["SEALED_EVIDENCE_MISSING", "CONTENT_CHANGED", "IDENTITY_CHANGED"]
+)
+def test_retire_recovery_clears_only_target_cause_and_synthetic_latch(target_code):
+    from psycopg.types.json import Jsonb
+
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_admin_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("savepoint retire_recovery")
+        cur.execute(RETIRE_RECOVERY_MIGRATION.read_text(encoding="utf-8"))
+        case_id, retired_id, operation_id, item = _prepare_retire_recovery_fixture(
+            conn, target_code=target_code
+        )
+        cur.execute(
+            "select phase from app.custody_operation_commit_verified_disposition(%s,%s,'examiner','runner-before')",
+            (operation_id, Jsonb(item)),
+        )
+        assert cur.fetchone()[0] == "COMPLETED"
+        cur.execute(
+            "select status,seal_status from app.evidence_objects where id=%s",
+            (retired_id,),
+        )
+        assert cur.fetchone() == ("retired", "unsealed")
+        cur.execute(
+            "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+            (case_id,),
+        )
+        assert cur.fetchone() == ("sealed", [])
+        cur.execute(
+            "select count(*) from app.evidence_inventory_observations where case_id=%s",
+            (case_id,),
+        )
+        assert cur.fetchone()[0] == 1
+        cur.execute("rollback to savepoint retire_recovery")
+
+
+def test_retire_recovery_preserves_unrelated_and_security_violations():
+    from psycopg.types.json import Jsonb
+
+    psycopg = pytest.importorskip("psycopg")
+    target_id = uuid.uuid4()
+    # The exact target is filled by the fixture; this deliberately remains an
+    # unrelated binding even when the code is otherwise retirement-recoverable.
+    extra_issues = (
+        {
+            "code": "CONTENT_CHANGED",
+            "evidence_object_id": str(target_id),
+        },
+        {"code": "LEDGER_INVALID", "evidence_object_id": None},
+        {"code": "CONFLICTING_AUTHORITY", "evidence_object_id": None},
+        {"code": "UNSAFE_SEALED_ENTRY", "evidence_object_id": None},
+    )
+    with psycopg.connect(_admin_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("savepoint retire_recovery_negative")
+        cur.execute(RETIRE_RECOVERY_MIGRATION.read_text(encoding="utf-8"))
+        case_id, _retired_id, operation_id, item = _prepare_retire_recovery_fixture(
+            conn, extra_issues=extra_issues, other_violated=True
+        )
+        cur.execute(
+            "select phase from app.custody_operation_commit_verified_disposition(%s,%s,'examiner','runner-before')",
+            (operation_id, Jsonb(item)),
+        )
+        assert cur.fetchone()[0] == "COMPLETED"
+        cur.execute(
+            "select seal_status,issues from app.evidence_chain_heads where case_id=%s",
+            (case_id,),
+        )
+        seal_status, issues = cur.fetchone()
+        assert seal_status == "violated"
+        assert {issue["code"] for issue in issues} == {
+            "PERSISTED_VIOLATION",
+            "CONTENT_CHANGED",
+            "LEDGER_INVALID",
+            "CONFLICTING_AUTHORITY",
+            "UNSAFE_SEALED_ENTRY",
+        }
+        cur.execute("rollback to savepoint retire_recovery_negative")
+
+
+def test_retire_recovery_wrapper_is_service_only_and_hardened():
+    psycopg = pytest.importorskip("psycopg")
+    with psycopg.connect(_admin_dsn()) as conn, conn.cursor() as cur:
+        cur.execute("savepoint retire_recovery_acl")
+        cur.execute(RETIRE_RECOVERY_MIGRATION.read_text(encoding="utf-8"))
+        cur.execute(
+            """select p.prosecdef,p.proconfig,
+                      has_function_privilege('service_role',p.oid,'EXECUTE'),
+                      has_function_privilege('anon',p.oid,'EXECUTE'),
+                      has_function_privilege('authenticated',p.oid,'EXECUTE')
+               from pg_proc p where p.oid=
+                 'app.custody_operation_commit_verified_disposition(uuid,jsonb,text,text)'::regprocedure"""
+        )
+        assert cur.fetchone() == (True, ["search_path=pg_catalog, app"], True, False, False)
+        cur.execute(
+            """select has_function_privilege(
+                 'service_role',
+                 'app.custody_operation_commit_disposition_pre_retire_recovery(uuid,jsonb,text,text)',
+                 'EXECUTE')"""
+        )
+        assert cur.fetchone()[0] is False
+        cur.execute("rollback to savepoint retire_recovery_acl")

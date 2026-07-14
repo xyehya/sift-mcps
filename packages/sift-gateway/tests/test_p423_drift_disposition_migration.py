@@ -4,6 +4,10 @@ MIGRATION = (
     Path(__file__).parents[3]
     / "supabase/migrations/202607143000_drift_disposition.sql"
 )
+RETIRE_RECOVERY_MIGRATION = (
+    Path(__file__).parents[3]
+    / "supabase/migrations/202607145400_retire_violation_recovery.sql"
+)
 
 
 def _sql() -> str:
@@ -74,3 +78,23 @@ def test_retire_creates_manifest_without_unlinking_evidence() -> None:
     assert "o.id<>v_obj.id" in finalizer
     assert "file_removed')::boolean,false)" in finalizer
     assert "unlink" not in finalizer
+
+
+def test_retire_recovery_is_object_scoped_and_preserves_security_causes() -> None:
+    sql = RETIRE_RECOVERY_MIGRATION.read_text(encoding="utf-8").lower()
+    assert (
+        "alter function app.custody_operation_commit_verified_disposition("
+        in sql
+    )
+    assert "rename to custody_operation_commit_disposition_pre_retire_recovery" in sql
+    assert "pg_advisory_xact_lock" in sql
+    assert "v_op.action='retire'" in sql
+    assert "issue->>'evidence_object_id'=v_object_id::text" in sql
+    assert "'sealed_evidence_missing','content_changed','identity_changed'" in sql
+    assert "'unsafe_sealed_entry'" not in sql.split("v_remaining_issues", 1)[1].split(
+        "update app.evidence_chain_heads", 1
+    )[0]
+    assert "issue->>'code'<>'persisted_violation'" in sql
+    assert "status='violated' or seal_status='violated'" in sql
+    assert "revoke execute on function app.custody_operation_commit_disposition_pre_retire_recovery" in sql
+    assert "grant execute on function app.custody_operation_commit_verified_disposition(" in sql

@@ -84,7 +84,10 @@ only operation UUID/current runner, independently rebinds Portal/applying/Local-
 direct no-follow entry, and writes a FORCE-RLS exact-operation/facts-digest claim/completion receipt;
 Postgres rejects verified or completed DELETE transitions without the exact completed receipt, and an
 absent file is never credited without the prior claim. Ignore and Retire never mutate mounted bytes, and Retire creates one excluding
-manifest while preserving prior versions and siblings. Posture-only verification cannot create an
+manifest while preserving prior versions and siblings. Retire discharges only missing/content/identity
+causes bound to the retired object, retains every unrelated or security cause and append-only
+observation, and removes a synthetic persisted marker only when no substantive cause or violated
+object remains. Posture-only verification cannot create an
 Evidence Version. These seams add no MCP tool or authenticated-browser database grant.
 
 12. **Bind external read-only storage by source, mount instance, and exact receipt.**

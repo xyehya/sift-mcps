@@ -191,7 +191,10 @@ that size-only observation, but any prior digest requires a byte count and both 
 individually type- and range-checked.
 Postgres rejects both verified and completed DELETE transitions without that exact completed receipt,
 including generic advance and finalizer paths. Absent-file restart recovery requires the exact prior claim. Retire never unlinks or clears protection and creates a manifest
-excluding the retired object. Inventory observations are path-free, append-only, FORCE-RLS, and
+excluding the retired object. A completed Retire discharges only missing/content/identity causes bound
+to that object; it preserves append-only observations and unrelated, ledger, conflict, and unsafe-entry
+causes, and removes the synthetic persisted marker only when no substantive cause or violated object
+remains. Inventory observations are path-free, append-only, FORCE-RLS, and
 service-role-only. Neither the browser DB role nor MCP receives custody mutation authority.
 The broker keeps its caller/Portal failure generic and writes only an allowlisted, path-free failure
 code to the privileged local journal. Unknown exceptions are reduced to a bounded input, dependency,
