@@ -55,6 +55,7 @@ export const postChainSealResume = (body) => apiPost('/api/evidence/chain/seal/r
 export const postChainAnchor = (body) => apiPost('/api/evidence/chain/anchor', body)
 export const postChainProofExport = (body) => apiPost('/api/evidence/chain/proof-export', body, { timeoutMs: LONG_TIMEOUT_MS })
 export const postVerifyLedger = () => apiPost('/api/evidence/chain/verify-ledger', {})
+export const postRotateSigningKey = (body) => apiPost('/api/evidence/chain/signing-key/rotate', body, REAUTH_OPTS)
 export const postFullVerifyEvidence = (body = {}) => apiPost('/api/evidence/chain/verify-hmac', body, { timeoutMs: LONG_TIMEOUT_MS })
 // Compatibility export for older Portal extensions; the operation is DB custody
 // verification, not HMAC verification.

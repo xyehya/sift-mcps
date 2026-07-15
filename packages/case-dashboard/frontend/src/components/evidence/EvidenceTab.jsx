@@ -151,6 +151,7 @@ export function EvidenceTab() {
           chainStatus={chainStatus}
           onAnchor={custody.handleTriggerAnchor}
           onProofExport={custody.handleProofExport}
+          onRotateSigningKey={custody.handleRotateSigningKey}
         />
 
         <CustodyViolations

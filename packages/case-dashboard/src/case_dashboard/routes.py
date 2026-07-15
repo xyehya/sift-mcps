@@ -2053,6 +2053,43 @@ async def post_evidence_chain_anchor(request: Request) -> JSONResponse:
     })
 
 
+async def post_evidence_chain_signing_key_rotate(request: Request) -> JSONResponse:
+    """Rotate the installation signing public identity after scoped re-auth."""
+    if (role_err := _require_examiner_role(request)) is not None:
+        return role_err
+    if (reset_err := _must_reset_check(request)) is not None:
+        return reset_err
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(body, dict) or set(body) != {"password", "reason"}:
+        return JSONResponse({"error": "Invalid signing-key rotation fields"}, status_code=400)
+    reason = " ".join(str(body.get("reason") or "").split())
+    if not 1 <= len(reason) <= 1000:
+        return JSONResponse({"error": "rotation reason is required"}, status_code=400)
+    if (reauth_err := await _supabase_reverify(request, body)) is not None:
+        return reauth_err
+    reauth_id = _record_reauth_event(
+        request, examiner, "evidence_signing_key_rotate", binding={"reason": reason}
+    )
+    if not reauth_id:
+        return JSONResponse({"error": "Signing-key re-auth audit required"}, status_code=403)
+    rotator = getattr(_EVIDENCE_DB, "rotate_signing_key", None) if _EVIDENCE_DB else None
+    if not callable(rotator):
+        return _no_case_response()
+    principal = _request_principal(request)
+    actor_user = str(principal.get("principal_id") or "") if isinstance(principal, dict) else ""
+    try:
+        result = rotator(actor_user_id=actor_user, reauth_audit_event_id=reauth_id, reason=reason)
+    except Exception as exc:
+        return _active_case_error_response(exc, default=503)
+    return JSONResponse({"authority": "db", "rotation": result if isinstance(result, dict) else {}})
+
+
 async def post_evidence_chain_proof_export(request: Request) -> JSONResponse:
     """Generate a DB-derived proof export and record its metadata in Postgres.
 
@@ -5981,6 +6018,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/chain/verify-ledger", post_evidence_chain_verify_ledger, methods=["POST"]),
         Route("/api/evidence/storage/profile", post_evidence_storage_profile, methods=["POST"]),
         Route("/api/evidence/chain/anchor", post_evidence_chain_anchor, methods=["POST"]),
+        Route("/api/evidence/chain/signing-key/rotate", post_evidence_chain_signing_key_rotate, methods=["POST"]),
         Route("/api/evidence/chain/proof-export", post_evidence_chain_proof_export, methods=["POST"]),
         # Approach C: response-guard override
         Route("/api/response-guard/status", get_response_guard_status, methods=["GET"]),

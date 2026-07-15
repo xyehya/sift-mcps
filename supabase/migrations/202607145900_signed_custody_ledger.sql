@@ -34,6 +34,20 @@ create table if not exists app.custody_signing_key_rotations (
 );
 alter table app.custody_signing_key_rotations enable row level security;
 alter table app.custody_signing_key_rotations force row level security;
+create or replace function app.custody_signing_rotation_append_only()
+returns trigger language plpgsql as $$
+begin
+  raise exception 'append-only custody signing rotation' using errcode='restrict_violation';
+end $$;
+create trigger custody_signing_key_rotations_append_only
+  before update or delete on app.custody_signing_key_rotations
+  for each row execute function app.custody_signing_rotation_append_only();
+create trigger custody_signing_key_rotations_no_truncate
+  before truncate on app.custody_signing_key_rotations
+  for each statement execute function app.evidence_block_truncate();
+revoke all on app.custody_signing_keys,app.custody_signing_key_rotations from public,anon,authenticated;
+grant select,insert,update on app.custody_signing_keys to service_role;
+grant select,insert on app.custody_signing_key_rotations to service_role;
 
 create table if not exists app.custody_signature_checkpoints (
   id uuid primary key default gen_random_uuid(),

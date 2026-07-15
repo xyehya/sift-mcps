@@ -7,6 +7,7 @@ import {
   postChainAnchor,
   postChainProofExport,
   postVerifyLedger,
+  postRotateSigningKey,
   postVerifyEvidence,
 } from '@/api/endpoints'
 
@@ -129,6 +130,21 @@ export function useEvidenceActions({
     }
   }
 
+  async function handleRotateSigningKey() {
+    try {
+      setModalLoading(true)
+      const result = await postRotateSigningKey({ password: modalPassword, reason: modalReason })
+      addToast(`Custody signing key rotated: ${(result.rotation?.key_id || '').slice(0, 22)}`, 'success')
+      await refreshData()
+      return result
+    } catch (err) {
+      setModalError(err.message || 'Signing-key rotation failed')
+      return null
+    } finally {
+      setModalLoading(false)
+    }
+  }
+
   async function handleVerifyEvidence(path) {
     setVerifyStatus((prev) => ({ ...prev, [path]: 'checking' }))
     try {
@@ -155,6 +171,7 @@ export function useEvidenceActions({
     handleTriggerAnchor,
     handleProofExport,
     handleVerifyLedger,
+    handleRotateSigningKey,
     handleVerifyEvidence,
   }
 }

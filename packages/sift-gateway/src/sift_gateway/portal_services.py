@@ -2836,6 +2836,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
             previous = str(row[2] or "")
         if not head or int(head[0] or 0) != len(events) or str(head[1] or "") != previous:
             issues.append("CUSTODY_LEDGER_HEAD_INVALID")
+        current_head_hash = str(head[1] or "") if head else ""
         key_id: str | None = None
         if checkpoint:
             payload, key_id, signature, public_key = checkpoint
@@ -2853,7 +2854,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 )
                 if (
                     str(payload.get("case_id") or "") != case_id
-                    or str(payload.get("ledger_tip_hash") or "") != str(head[1] or "")
+                    or str(payload.get("ledger_tip_hash") or "") != current_head_hash
                     or int(payload.get("manifest_version") or -1) != int(
                         self._ledger_manifest_version(case_id)
                     )
