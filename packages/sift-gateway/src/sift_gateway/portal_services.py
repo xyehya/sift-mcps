@@ -1931,7 +1931,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
             resume_reauth_audit_event_id=resume_reauth_audit_event_id,
         )
         try:
-            return SealCustodyOperation(
+            result = SealCustodyOperation(
                 self._custody_repository,
                 (
                     self._posture_adapter
@@ -1942,6 +1942,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 self._seal_object_for_path,
                 self._seal_expected_root_paths,
             ).execute(command, examiner=examiner)
+            return self._finalize_custody_result(result)
         except CustodyOperationError as exc:
             raise PortalServiceError(exc.reason, http_status=exc.http_status) from exc
 
@@ -2136,11 +2137,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
             idempotency_key=idempotency_key,
         )
         try:
-            return DispositionCustodyOperation(
+            result = DispositionCustodyOperation(
                 self._custody_repository,
                 self._case_artifact_path,
                 self._recovery_object_for_id,
             ).execute(command, examiner=examiner)
+            return self._finalize_custody_result(result)
         except CustodyOperationError as exc:
             raise PortalServiceError(exc.reason, http_status=exc.http_status) from exc
 
@@ -2216,11 +2218,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 actor_user_id=actor_user,
                 resume_reauth_audit_event_id=resume_reauth_audit_event_id,
             )
-            return DispositionCustodyOperation(
+            result = DispositionCustodyOperation(
                 self._custody_repository,
                 self._case_artifact_path,
                 self._recovery_object_for_id,
             ).execute(command, examiner=examiner, resumed_operation=resumed)
+            return self._finalize_custody_result(result)
         except (CustodyOperationError, ValueError) as exc:
             reason = (
                 exc.reason
@@ -2299,11 +2302,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
             idempotency_key=idempotency_key.strip(),
         )
         try:
-            return RecoveryCustodyOperation(
+            result = RecoveryCustodyOperation(
                 self._custody_repository,
                 self._case_artifact_path,
                 self._recovery_object_for_id,
             ).begin(command, examiner=examiner)
+            return result
         except CustodyOperationError as exc:
             raise PortalServiceError(exc.reason, http_status=exc.http_status) from exc
 
@@ -2333,7 +2337,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         "custody_operation_not_found", http_status=404
                     )
         try:
-            return RecoveryCustodyOperation(
+            result = RecoveryCustodyOperation(
                 self._custody_repository,
                 self._case_artifact_path,
                 self._recovery_object_for_id,
@@ -2343,6 +2347,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 completion_reauth_audit_event_id=completion_reauth_audit_event_id,
                 examiner=examiner,
             )
+            return self._finalize_custody_result(result)
         except CustodyOperationError as exc:
             raise PortalServiceError(exc.reason, http_status=exc.http_status) from exc
 
@@ -2792,6 +2797,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
+                    "select valid,issue_code,event_count,head_hash from app.evidence_verify_signed_ledger(%s)",
+                    (case_id,),
+                )
+                chain_check = cur.fetchone()
+                cur.execute(
                     """select seq,prev_hash,event_hash from app.evidence_custody_events
                        where case_id=%s order by seq""",
                     (case_id,),
@@ -2812,6 +2822,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 )
                 checkpoint = cur.fetchone()
         issues: list[str] = []
+        if not chain_check or not bool(chain_check[0]):
+            issues.append(
+                str(chain_check[1])
+                if chain_check and chain_check[1]
+                else "CUSTODY_LEDGER_CHAIN_INVALID"
+            )
         previous = ""
         for expected_seq, row in enumerate(events, start=1):
             if int(row[0]) != expected_seq or str(row[1] or "") != previous:
@@ -2835,12 +2851,27 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     },
                     trusted_keys={str(key_id): str(public_key)},
                 )
+                if (
+                    str(payload.get("case_id") or "") != case_id
+                    or str(payload.get("ledger_tip_hash") or "") != str(head[1] or "")
+                    or int(payload.get("manifest_version") or -1) != int(
+                        self._ledger_manifest_version(case_id)
+                    )
+                ):
+                    issues.append("CUSTODY_SIGNATURE_CHECKPOINT_STALE")
             except CustodyProofError:
                 issues.append("CUSTODY_SIGNATURE_INVALID")
         else:
             issues.append("CUSTODY_SIGNATURE_CHECKPOINT_MISSING")
         return {"verified": not issues, "issues": issues, "key_id": key_id,
                 "event_count": len(events), "byte_reads": 0}
+
+    def _ledger_manifest_version(self, case_id: str) -> int:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select manifest_version from app.evidence_chain_heads where case_id=%s", (case_id,))
+                row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else -1
 
     def finalize_pending_signature(self, *, operation_id: str) -> dict[str, Any]:
         """Service-only completion of the DB latch using the fixed-path key."""
@@ -2871,6 +2902,45 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 )
             conn.commit()
         return {"operation_id": operation_id, "key_id": key.key_id, "signed": True}
+
+    def _finalize_custody_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Cross the service-only signature latch after a custody DB commit."""
+        operation_id = str(result.get("operation_id") or "")
+        if not operation_id:
+            raise PortalServiceError("custody_signature_operation_missing", http_status=500)
+        signed = self.finalize_pending_signature(operation_id=operation_id)
+        return {
+            **result,
+            "operation_phase": "COMPLETED",
+            "signature_key_id": signed["key_id"],
+        }
+
+    def rotate_signing_key(
+        self, *, actor_user_id: str, reauth_audit_event_id: str, reason: str
+    ) -> dict[str, Any]:
+        """Record a Portal-authorized public-key rotation; never exports private bytes."""
+        try:
+            key = load_signing_key()
+        except CustodyProofError as exc:
+            raise PortalServiceError(exc.args[0], http_status=503) from exc
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select key_id from app.custody_signing_keys where retired_at is null for update")
+                old = cur.fetchone()
+                cur.execute(
+                    """insert into app.custody_signing_keys(key_id,algorithm,public_key)
+                       values(%s,'Ed25519',%s) on conflict(key_id) do nothing""",
+                    (key.key_id, key.public_key_b64),
+                )
+                if old and str(old[0]) != key.key_id:
+                    cur.execute("update app.custody_signing_keys set retired_at=now() where key_id=%s", (old[0],))
+                cur.execute(
+                    """insert into app.custody_signing_key_rotations(prior_key_id,new_key_id,reason,reauth_audit_event_id,actor_user_id)
+                       values(%s,%s,%s,%s,%s)""",
+                    (str(old[0]) if old else None, key.key_id, reason, reauth_audit_event_id, actor_user_id),
+                )
+            conn.commit()
+        return {"key_id": key.key_id, "public_key": key.public_key_b64}
 
     def export_proof(
         self,
@@ -2953,6 +3023,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     }
                     for r in cur.fetchall()
                 ]
+                cur.execute(
+                    "select key_id,algorithm,public_key,activated_at,retired_at from app.custody_signing_keys order by activated_at"
+                )
+                signing_keys = [
+                    {"key_id": str(r[0]), "algorithm": str(r[1]), "public_key": str(r[2]),
+                     "activated_at": _iso(r[3]), "retired_at": _iso(r[4])}
+                    for r in cur.fetchall()
+                ]
         proof_material = {
             "format": "sift-custody-proof-payload/v1",
             "case_id": case_id,
@@ -2961,6 +3039,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "ledger_tip_hash": ledger_tip_hash,
             "objects": objects,
             "custody_events": events,
+            "signing_keys": signing_keys,
             "verified": verified,
             "issues": issues,
         }

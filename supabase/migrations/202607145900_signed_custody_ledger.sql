@@ -23,6 +23,17 @@ create table if not exists app.custody_signing_keys (
   metadata jsonb not null default '{}'::jsonb,
   check (not (metadata ?& array['private_key','secret','password','dsn','token']))
 );
+create table if not exists app.custody_signing_key_rotations (
+  id uuid primary key default gen_random_uuid(),
+  prior_key_id text null references app.custody_signing_keys(key_id) on delete restrict,
+  new_key_id text not null references app.custody_signing_keys(key_id) on delete restrict,
+  reason text not null check (length(btrim(reason)) between 1 and 1000),
+  reauth_audit_event_id uuid not null references app.audit_events(id) on delete restrict,
+  actor_user_id uuid not null references app.operator_profiles(id) on delete restrict,
+  created_at timestamptz not null default now()
+);
+alter table app.custody_signing_key_rotations enable row level security;
+alter table app.custody_signing_key_rotations force row level security;
 
 create table if not exists app.custody_signature_checkpoints (
   id uuid primary key default gen_random_uuid(),
@@ -45,6 +56,40 @@ create table if not exists app.custody_signature_checkpoints (
 );
 create index if not exists custody_signature_checkpoints_case_idx
   on app.custody_signature_checkpoints(case_id, created_at desc);
+
+-- Recompute event hashes in PostgreSQL, using the exact jsonb::text rendering
+-- and field order used by app.evidence_append_custody_event.  Python never
+-- guesses Postgres JSON serialization when deciding ledger validity.
+create or replace function app.evidence_verify_signed_ledger(p_case_id uuid)
+returns table(valid boolean, issue_code text, event_count bigint, head_hash text)
+language plpgsql security definer set search_path=pg_catalog,app as $$
+declare r record; v_prev text:=''; v_expected text; v_count bigint:=0; v_head app.evidence_chain_heads;
+begin
+  for r in select * from app.evidence_custody_events where case_id=p_case_id order by seq loop
+    v_count:=v_count+1;
+    if r.canonical_schema='canonical_event_v1' then
+      v_expected := 'sha256:' || encode(sha256(convert_to(r.canonical_material::text,'UTF8')),'hex');
+    else
+      -- Legacy pre-canonical rows retain their existing immutable hash chain;
+      -- new operation finalizers always use canonical_event_v1.
+      v_expected := r.event_hash;
+    end if;
+    if r.seq<>v_count or r.prev_hash<>v_prev or r.event_hash<>v_expected
+       or (r.canonical_schema='canonical_event_v1' and (
+           r.canonical_material->>'case_id'<>p_case_id::text
+           or r.canonical_material->>'seq'<>r.seq::text
+           or r.canonical_material->>'prev_hash'<>r.prev_hash)) then
+      return query select false,'CUSTODY_LEDGER_CHAIN_INVALID',v_count,r.event_hash; return;
+    end if;
+    v_prev:=r.event_hash;
+  end loop;
+  select * into v_head from app.evidence_chain_heads where case_id=p_case_id;
+  if not found or v_head.head_seq<>v_count or v_head.head_hash<>v_prev then
+    return query select false,'CUSTODY_LEDGER_HEAD_INVALID',v_count,coalesce(v_prev,''); return;
+  end if;
+  return query select true,null,v_count,v_prev;
+end $$;
+grant execute on function app.evidence_verify_signed_ledger(uuid) to service_role;
 
 alter table app.custody_signing_keys enable row level security;
 alter table app.custody_signature_checkpoints enable row level security;

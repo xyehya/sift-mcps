@@ -14,7 +14,7 @@ import json
 import os
 import stat
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -26,7 +26,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 _FORMAT = "sift-custody-proof/v1"
 _DEFAULT_KEY_PATH = "/var/lib/sift/.sift/custody/ed25519-private.pem"
-_FORBIDDEN_TEXT = ("/Users/", "/home/", "/var/", "\\\\")
 
 
 class CustodyProofError(ValueError):
@@ -62,7 +61,12 @@ def _reject_unsafe(value: Any) -> None:
         for item in value:
             _reject_unsafe(item)
     elif isinstance(value, str):
-        if ".." in value or any(marker in value for marker in _FORBIDDEN_TEXT):
+        if (
+            ".." in value
+            or Path(value).is_absolute()
+            or PureWindowsPath(value).is_absolute()
+            or (len(value) >= 2 and value[1] == ":")
+        ):
             raise CustodyProofError("proof_contains_absolute_or_unsafe_path")
         if "-----BEGIN" in value or "postgres" in value.lower():
             raise CustodyProofError("proof_contains_forbidden_material")
@@ -126,10 +130,11 @@ def verify_bundle(bundle: dict[str, Any], *, trusted_keys: dict[str, str] | None
         if signature["algorithm"] != "Ed25519" or not isinstance(signature["key_id"], str):
             raise CustodyProofError("invalid_proof_bundle")
         public_b64 = signature["public_key"]
-        if trusted_keys is not None:
-            expected = trusted_keys.get(signature["key_id"])
-            if expected is None or expected != public_b64:
-                raise CustodyProofError("unknown_custody_signing_key")
+        if trusted_keys is None:
+            raise CustodyProofError("trusted_custody_key_registry_required")
+        expected = trusted_keys.get(signature["key_id"])
+        if expected is None or expected != public_b64:
+            raise CustodyProofError("unknown_custody_signing_key")
         public_raw = base64.b64decode(public_b64, validate=True)
         if len(public_raw) != 32:
             raise CustodyProofError("invalid_proof_bundle")

@@ -2006,6 +2006,26 @@ async def post_evidence_chain_anchor(request: Request) -> JSONResponse:
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
+    if (reset_err := _must_reset_check(request)) is not None:
+        return reset_err
+    examiner = _resolve_examiner(request)
+    if not examiner:
+        return JSONResponse({"error": "No examiner identity"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(body, dict) or set(body) != {"password", "reason"}:
+        return JSONResponse({"error": "Invalid anchor request fields"}, status_code=400)
+    reason = " ".join(str(body.get("reason") or "").split())
+    if not 1 <= len(reason) <= 1000:
+        return JSONResponse({"error": "anchor reason is required"}, status_code=400)
+    if (reauth_err := await _supabase_reverify(request, body)) is not None:
+        return reauth_err
+    if not _record_reauth_event(
+        request, examiner, "evidence_anchor", binding={"reason": reason}
+    ):
+        return JSONResponse({"error": "Anchor re-auth audit required"}, status_code=403)
 
     keypair_path = os.environ.get("SIFT_SOLANA_KEYPAIR", "").strip() or None
     if not keypair_path:
