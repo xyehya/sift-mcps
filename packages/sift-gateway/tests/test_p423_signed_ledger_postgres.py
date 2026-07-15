@@ -34,7 +34,7 @@ def test_signed_ledger_migrated_postgres_semantics() -> None:
     psycopg = pytest.importorskip("psycopg")
     with psycopg.connect(_dsn()) as conn, conn.cursor() as cur:
         cur.execute("select to_regclass('app.custody_signature_checkpoints')")
-        assert cur.fetchone()[0] == "custody_signature_checkpoints"
+        assert cur.fetchone()[0] == "app.custody_signature_checkpoints"
         cur.execute("select to_regclass('app.custody_signing_key_rotations')")
         assert cur.fetchone()[0] == "custody_signing_key_rotations"
         cur.execute(
