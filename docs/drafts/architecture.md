@@ -248,7 +248,7 @@ export.
 | Supabase Auth | Operator + agent JWT identity. | Identity issuer. | `supabase_auth.py`, `202606070300_unified_jwt_principals.sql` |
 | Postgres control plane | Identity, cases, active case, custody, audit, jobs, investigation records, reports, RAG metadata. | Authoritative state plane. | `supabase/migrations/**`, `app.*` |
 | Local worker | Claims jobs, resolves opaque IDs internally, runs parsers + controlled commands. | Privileged processor, not agent-facing. | `packages/sift-core/src/sift_core/execute/job_worker.py`, `worker.py` |
-| Evidence broker + mount | Detect, register, hash, seal, verify, ignore, retire evidence. | High-integrity source + custody ledger. | `evidence_chain.py`, `evidence_gate.py`, `evidence_watcher.py` |
+| Evidence broker + mount | Detect, register, hash, seal, verify, ignore, retire evidence. | High-integrity source + custody ledger. | `portal_services.py`, `evidence_gate.py`, `evidence_posture.py` |
 | OpenSearch | Search, timeline, IOC over derived parser docs. | Derived/rebuildable, never authority. | `packages/opensearch-mcp/src/opensearch_mcp/**` |
 | pgvector RAG | Shared forensic knowledge + future case-derived context. | Reference/derived grounding. | `packages/forensic-rag-mcp/src/rag_mcp/**`, `202606081400_rag_pgvector.sql` |
 | OpenCTI (external add-on) / Forensic knowledge (in-process) | Query-only enrichment and reference. | Non-authoritative. | `packages/opencti-mcp/**`, `packages/forensic-knowledge/**`. **RG1: windows-triage-mcp removed from repo; future external add-on candidate only.** |

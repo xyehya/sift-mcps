@@ -178,7 +178,7 @@ In served operation these are workspace / parser-compat / compatibility mirror /
 export only (`Migration-Spec.md` section 4), never fallback authority:
 `SIFT_CASE_DIR`, `~/.sift/active_case`,
 `CASE.yaml`, `findings.json`, `timeline.json`, `todos.json`, `approvals.jsonl`,
-`evidence-manifest.json`, `evidence-ledger.jsonl`, local audit JSONL, ingest
+Postgres custody records and local audit JSONL, ingest
 status JSON, `host-dictionary.yaml`. Postgres `app.*` is authority; file proofs
 are immutable exports.
 

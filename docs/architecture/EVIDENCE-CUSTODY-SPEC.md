@@ -44,7 +44,7 @@ flowchart LR
 4. As an operator, I want intake preparation to preserve every existing immutable evidence file, so that adding a sibling never requires unrelated evidence to be unprotected.
 5. As an operator, I want to use a stable read-only network or external mount without local ownership repair or immutable flags, so that large evidence can remain at its source.
 6. As an operator, I want inventory changes detected without depending on a Portal page refresh, so that agent admission fails closed immediately.
-7. As an operator, I want Portal Rescan Inventory to refresh visibility, so that I can inspect current custody observations without treating the button as a security control.
+7. As an operator, I want Portal Refresh custody status to refresh visibility, so that I can inspect current custody observations without treating the action as a security control.
 8. As an operator, I want Seal Manifest to authenticate me, hash pending evidence fully, record versions and a manifest, apply the selected storage posture, and open the gate only after all steps succeed.
 9. As an operator, I want a new file in an otherwise sealed evidence directory to block agents while existing sealed objects remain protected, so that routine intake does not weaken prior custody.
 10. As an operator, I want to ignore or delete only pending stray items with a reason and re-authentication, so that every unexplained filesystem item has an auditable disposition.
@@ -283,7 +283,7 @@ or unrelated finding keeps the violation latched and cannot enter the bootstrap 
 
 ### Re-authentication
 
-- Automatic detection/blocking, Rescan Inventory, Verify Ledger, and Full Verify Evidence do not require password re-authentication. Full Verify may accept an optional note.
+- Automatic detection/blocking, Refresh custody status, Verify Ledger, and Full Verify Evidence do not require password re-authentication. Full Verify may accept an optional note.
 - Seal, Replace/Reacquire begin and completion, Restore, path correction, Ignore, Delete, Retire, storage-profile change, purge, signing-key rotation, and external anchoring require a reason and fresh scoped re-authentication.
 - Authorization tickets are short-lived, single-use, and bound to case, action, object, and custody operation. They are never agent-visible.
 - The local helper relies on OS `sudo`; it never receives a Portal password.

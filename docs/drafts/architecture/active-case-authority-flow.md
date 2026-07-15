@@ -15,7 +15,7 @@
 > `packages/sift-core/src/sift_core/case_io.py`,
 > `packages/sift-core/src/sift_core/active_case_context.py`,
 > `packages/sift-core/src/sift_core/investigation_store.py`,
-> `packages/sift-core/src/sift_core/evidence_chain.py`
+> `packages/sift-core/src/sift_core/evidence_posture.py`
 >
 > Class: reference (audit-grounded flow)
 > Last validated: `e3ce8f8` (2026-06-18) — two load-bearing invariants

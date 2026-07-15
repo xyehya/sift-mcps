@@ -166,7 +166,7 @@ sequenceDiagram
   `app.evidence_custody_events`, `app.evidence_chain_heads`,
   `app.evidence_proof_exports`. Tests:
   `packages/sift-gateway/tests/test_evidence_gate_db.py`,
-  `test_evidence_proof_export.py`, `packages/sift-core/tests/test_evidence_chain.py`.
+  `test_evidence_proof_export.py`, `packages/sift-gateway/tests/test_p423_legacy_contract_cleanup.py`.
 - Live proof: `evidence/v1-gate.log` + `evidence/v1-ingest.jsonl` sealed,
   `manifest_version=2`, proof exports recorded with proof hashes
   (`Session-Notes.md` 2026-06-08 BATCH-V1).
@@ -376,7 +376,7 @@ stateDiagram-v2
   evidence-chain block, avoiding stale legacy-manifest warnings (BATCH-V1 fix).
 - Authority: Postgres `app.report_metadata`. Tests:
   `packages/sift-core/tests/test_reporting_custody_appendix.py`,
-  `test_reporting_evidence_chain.py`,
+  `test_reporting_custody_appendix.py`,
   `packages/case-dashboard/tests/test_reports_endpoints.py`,
   `test_j1_report_reauth_custody.py`.
 - Live proof: report `41e0a5ff-...` generated/saved/downloaded with the approved
