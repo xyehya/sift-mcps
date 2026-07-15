@@ -6,7 +6,7 @@ import { useMotionVariants } from '@/lib/motion'
 import { sortEvidence } from '@/components/evidence/evidence-utils'
 import { useEvidenceCustody } from '@/components/evidence/useEvidenceCustody'
 import { EvidenceHeader } from '@/components/evidence/EvidenceHeader'
-import { FullVerifyBar } from '@/components/evidence/HmacBar'
+import { FullVerifyBar } from '@/components/evidence/FullVerifyBar'
 import { CustodyStatusGrid } from '@/components/evidence/CustodyStatusGrid'
 import { CustodyViolations } from '@/components/evidence/CustodyViolations'
 import { UnregisteredFiles } from '@/components/evidence/UnregisteredFiles'
@@ -129,7 +129,7 @@ export function EvidenceTab() {
         aria-label="Evidence chain of custody"
         className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-5"
       >
-        <EvidenceHeader chainStatus={chainStatus} onRescan={custody.handleRescan} />
+        <EvidenceHeader chainStatus={chainStatus} onRefresh={custody.handleRefreshCustody} />
 
         <IncompleteCustodyOperation operation={chainStatus?.incomplete_operation} onResume={(operation) => openModal(
           operation.action === 'ADD_SEAL'
@@ -186,7 +186,7 @@ export function EvidenceTab() {
           onSort={handleSort}
           onReplace={(path) => openModal('replace', path)}
           onVerify={custody.handleVerifyEvidence}
-          onRescan={custody.handleRescan}
+          onRefresh={custody.handleRefreshCustody}
           onNavigateFinding={(rid) => {
             setSelectedFindingId(rid)
             setFindingsFilter('all')

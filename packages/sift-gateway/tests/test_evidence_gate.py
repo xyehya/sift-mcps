@@ -3,8 +3,7 @@
 BU3 (XYE-21) removed the file-backed gate (``check_evidence_gate`` + its 30s TTL
 cache). The gate is now DB-authority only (``check_evidence_gate_db``, covered in
 test_evidence_gate_db.py). This module covers the remaining surface:
-``build_block_response`` shaping and the retained ``invalidate_evidence_cache``
-no-op.
+``build_block_response`` shaping.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from __future__ import annotations
 import json
 
 from sift_core.evidence_chain import ChainStatus
-from sift_gateway.evidence_gate import build_block_response, invalidate_evidence_cache
+from sift_gateway.evidence_gate import build_block_response
 
 
 class TestBuildBlockResponse:
@@ -49,11 +48,3 @@ class TestBuildBlockResponse:
         }
         resp = build_block_response("case_status", gate)
         json.dumps(resp)  # must not raise — ChainStatus is a str-enum so it serialises
-
-
-class TestInvalidateEvidenceCacheNoOp:
-    def test_invalidate_is_a_safe_noop(self):
-        # The DB-authority gate holds no cache; invalidation is a retained no-op
-        # and must never raise (the watcher / portal seal callback still call it).
-        assert invalidate_evidence_cache("/any/case/dir") is None
-        assert invalidate_evidence_cache("") is None

@@ -27,8 +27,6 @@ from sift_core.case_manager import (
     build_platform_capabilities,
 )
 from sift_core.case_ops import case_status_data
-from sift_core.evidence_chain import ChainStatus, chain_status
-from sift_core.evidence_ops import list_evidence_status_data
 from sift_core.execute.catalog import get_tool_def
 from sift_core.execute.evidence_binding import AdmittedEvidenceBinding
 from sift_core.execute.exceptions import SiftError
@@ -635,14 +633,17 @@ def _detect_artifact_context(command: list[str]) -> str | None:
 
 
 def _case_info(manager: CaseManager) -> dict:
-    """Consolidated case overview: status, file structure, evidence chain, capabilities."""
+    """Consolidated case overview with gateway-owned custody authority.
+
+    ``sift-core`` intentionally has no control-plane credentials.  It must not
+    read an on-disk manifest, JSONL ledger, or evidence bytes merely to build an
+    orientation response; the gateway replaces this fixed placeholder from
+    Postgres before a real agent receives it.
+    """
     case_dir = get_case_dir()
     status = case_status_data(case_dir)
     structure = _case_file_structure()
     caps = build_platform_capabilities()
-
-    chain = chain_status(case_dir)
-    evidence_ok = chain["status"] == ChainStatus.OK
 
     return {
         "case_id": status["case_id"],
@@ -659,10 +660,11 @@ def _case_info(manager: CaseManager) -> dict:
         "timeline_events": status["timeline_count"],
         "todos": {"open": status["todo_open"], "total": status["todo_total"]},
         "evidence_chain": {
-            "status": chain["status"],
-            "ok": evidence_ok,
-            "issues": chain["issues"],
-            "manifest_version": chain["manifest_version"],
+            "status": "authority_required",
+            "ok": False,
+            "issues": ["Gateway custody authority is required"],
+            "manifest_version": 0,
+            "authority": "gateway_required",
         },
         "file_structure": {
             "top_level_dirs": structure.get("top_level_dirs", []),
@@ -675,20 +677,22 @@ def _case_info(manager: CaseManager) -> dict:
 
 
 def _evidence_info() -> dict:
-    """Consolidated evidence overview: listing + chain verification."""
-    case_dir = get_case_dir()
-    evidence = list_evidence_status_data(case_dir)
-    verify = _evidence_verify()
+    """Return a fixed DB-authority placeholder for gateway replacement.
 
+    The agent-facing gateway overlays the current Postgres custody gate and
+    evidence-object listing.  Keeping this process away from evidence folders
+    prevents stale local files from becoming a second authority surface.
+    """
     return {
-        "chain_status": verify["status"],
-        "ok_count": verify["ok_count"],
-        "issues": verify["issues"],
-        "manifest_version": verify["manifest_version"],
-        "evidence_files": evidence.get("evidence", []),
-        "total_evidence_files": evidence.get("total_evidence_files", 0),
-        "unregistered_files": evidence.get("unregistered_files", []),
-        "requires_examiner_action": evidence.get("requires_examiner_action", False),
+        "chain_status": "authority_required",
+        "ok_count": 0,
+        "issues": ["Gateway custody authority is required"],
+        "manifest_version": 0,
+        "evidence_files": [],
+        "total_evidence_files": 0,
+        "unregistered_files": [],
+        "requires_examiner_action": True,
+        "authority": "gateway_required",
     }
 
 
@@ -709,8 +713,10 @@ def _case_file_structure() -> dict:
     case_resolved = case_dir.resolve()
     files_list = []
     dirs_list = []
-    exclude_basenames = {"evidence-ledger.jsonl", "evidence-verify-state.json"}
-    exclude_dirs = {"audit", ".git", "__pycache__"}
+    exclude_basenames: set[str] = set()
+    # Evidence inventory is Postgres authority only.  The generic case tree may
+    # describe non-evidence case structure, but must never walk evidence bytes.
+    exclude_dirs = {"audit", ".git", "__pycache__", "evidence"}
 
     # Manual stack walk (not rglob) so we can prune transient ingest-mount
     # subtrees BEFORE descending into them, and so a per-entry OSError on an
@@ -793,23 +799,6 @@ def _case_file_structure() -> dict:
     if full_path:
         slim["full_tree_path"] = full_path
     return slim
-
-
-def _evidence_verify() -> dict:
-    status = chain_status(get_case_dir())
-    result = {
-        "status": status["status"],
-        "issues": status["issues"],
-        "manifest_version": status["manifest_version"],
-        "ok_count": status["ok_count"],
-        "source": "manifest_v2",
-    }
-    if status["status"] not in (ChainStatus.OK, ChainStatus.UNSEALED):
-        result["operator_action_required"] = (
-            "Integrity issues detected. Notify the operator to use the Examiner Portal "
-            "Evidence tab to verify and repair the chain."
-        )
-    return result
 
 
 def _run_command(args: dict, examiner: str, audit: AuditWriter) -> dict:

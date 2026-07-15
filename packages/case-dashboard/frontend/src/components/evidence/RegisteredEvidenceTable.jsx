@@ -112,14 +112,14 @@ export function RegisteredEvidenceTable({
   onReplace,
   onVerify,
   onNavigateFinding,
-  onRescan,
+  onRefresh,
 }) {
   const sealedPaths = chainStatus?.ok ?? []
 
   return (
     <div className="space-y-3">
       <h3 className="mono text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        Registered Evidence ({evidence.length} file{evidence.length === 1 ? '' : 's'})
+        Sealed Evidence ({evidence.length} file{evidence.length === 1 ? '' : 's'})
       </h3>
 
       {evidenceError && (
@@ -135,10 +135,10 @@ export function RegisteredEvidenceTable({
           <Archive className="mb-3 size-12 text-muted-foreground opacity-30" aria-hidden />
           <p className="text-sm font-semibold text-foreground">No evidence files registered.</p>
           <p className="mb-4 mt-1 max-w-xs text-xs text-muted-foreground">
-            Use the Rescan button or add files to the evidence directory.
+            Refresh custody status after an operator-authorized evidence workflow.
           </p>
-          <Button type="button" size="sm" onClick={onRescan} className="text-xs font-semibold">
-            Rescan Directory
+          <Button type="button" size="sm" onClick={onRefresh} className="text-xs font-semibold">
+            Refresh custody status
           </Button>
         </div>
       ) : (

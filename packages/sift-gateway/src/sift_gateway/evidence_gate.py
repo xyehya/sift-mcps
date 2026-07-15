@@ -1,7 +1,6 @@
 """Evidence chain gate for the MCP endpoint.
 
 check_evidence_gate_db(case_id, dsn) → {blocked, status, issues, manifest_version}
-invalidate_evidence_cache(case_dir_str) → None (retained no-op, see below)
 
 Gate behaviour:
   - UNSEALED or any violation → blocked=True, structured response for Hermes
@@ -32,19 +31,6 @@ PORTAL_REMEDIATION = (
     "Open the Examiner Portal and use the Evidence tab to review and seal "
     "the evidence chain before proceeding with agent analysis."
 )
-
-
-def invalidate_evidence_cache(case_dir_str: str) -> None:
-    """Retained no-op (BU3/XYE-21).
-
-    The file-backed gate kept a 30s TTL cache that the portal invalidated after
-    sealing. The DB-authority gate (:func:`check_evidence_gate_db`) reads
-    Postgres on every call and holds no cache, so there is nothing to drop. The
-    function is kept so the gateway's evidence-watcher wiring and the portal's
-    seal callback (case-dashboard) keep their stable call signature without an
-    out-of-scope edit.
-    """
-    del case_dir_str
 
 
 # ---------------------------------------------------------------------------

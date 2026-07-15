@@ -216,8 +216,6 @@ _MVP_REAUTH_METHOD = "supabase_password_reverify"
 _MVP_REGISTRATION_MODE = "atomic_register_and_seal"
 
 # Callback invoked after every successful evidence chain mutation (seal/ignore).
-# Set by create_dashboard_v2_app() — the gateway passes invalidate_evidence_cache.
-_ON_CHAIN_MUTATION: Callable[[str], None] | None = None
 
 # Response-guard override callbacks — set by create_dashboard_v2_app().
 # The gateway passes the three functions from sift_gateway.response_guard.
@@ -806,9 +804,6 @@ def _empty_evidence_chain_status() -> dict:
         "active_count": 0,
         "issues": [],
         "head_hash": "",
-        "hmac_last_verified_at": None,
-        "hmac_last_verified_by": None,
-        "hmac_verify_needed": False,
         "last_verified_at": None,
         "last_verified_by": None,
         "verification_needed": False,
@@ -960,11 +955,8 @@ def _db_evidence_chain_status() -> dict | None:
         "active_count": status.get("active_count", 0),
         "issues": status.get("issues", []),
         "head_hash": status.get("head_hash", ""),
-        "hmac_last_verified_at": status.get("last_verified_at"),
         # The DB gate does not (yet) record the verifying examiner; surface it when
         # the gate/reauth metadata carries it, else None.
-        "hmac_last_verified_by": status.get("last_verified_by"),
-        "hmac_verify_needed": status.get("last_verified_at") is None,
         "last_verified_at": status.get("last_verified_at"),
         "last_verified_by": status.get("last_verified_by"),
         "verification_needed": status.get("last_verified_at") is None,
@@ -1167,22 +1159,6 @@ async def get_evidence_chain_status(request: Request) -> JSONResponse:
     return JSONResponse(_evidence_chain_status())
 
 
-async def post_evidence_chain_rescan(request: Request) -> JSONResponse:
-    """Drop the evidence gate cache and return a fresh DB-authority status."""
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-
-    case_dir_str = _active_case_dir_str()
-    if _ON_CHAIN_MUTATION and case_dir_str:
-        try:
-            _ON_CHAIN_MUTATION(case_dir_str)
-        except Exception as exc:
-            logger.warning("evidence rescan: cache invalidation failed: %s", exc)
-
-    return JSONResponse(_evidence_chain_status())
-
-
 async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     """Run the durable operator Add/Seal custody operation.
 
@@ -1286,13 +1262,6 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
     head = head if isinstance(head, dict) else {}
-
-    case_dir_str = _active_case_dir_str()
-    if _ON_CHAIN_MUTATION and case_dir_str:
-        try:
-            _ON_CHAIN_MUTATION(case_dir_str)
-        except Exception as exc:
-            logger.warning("evidence seal: cache invalidation failed: %s", exc)
 
     # DB-first proof export: derive proof material from DB custody state and record
     # metadata/hash in Postgres. Optional Solana anchoring is external proof only
@@ -1441,13 +1410,6 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
 
-    case_dir_str = _active_case_dir_str()
-    if _ON_CHAIN_MUTATION and case_dir_str:
-        try:
-            _ON_CHAIN_MUTATION(case_dir_str)
-        except Exception as exc:
-            logger.warning("evidence ignore: cache invalidation failed: %s", exc)
-
     return JSONResponse({
         "ignored": True,
         "authority": "db",
@@ -1534,13 +1496,6 @@ async def post_evidence_chain_delete(request: Request) -> JSONResponse:
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
     result = result if isinstance(result, dict) else {}
-
-    case_dir_str = _active_case_dir_str()
-    if _ON_CHAIN_MUTATION and case_dir_str:
-        try:
-            _ON_CHAIN_MUTATION(case_dir_str)
-        except Exception as exc:
-            logger.warning("evidence delete: cache invalidation failed: %s", exc)
 
     return JSONResponse({
         "deleted": True,
@@ -1629,13 +1584,6 @@ async def post_evidence_chain_retire(request: Request) -> JSONResponse:
         )
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
-
-    case_dir_str = _active_case_dir_str()
-    if _ON_CHAIN_MUTATION and case_dir_str:
-        try:
-            _ON_CHAIN_MUTATION(case_dir_str)
-        except Exception as exc:
-            logger.warning("evidence retire: cache invalidation failed: %s", exc)
 
     return JSONResponse({
         "retired": True,
@@ -1853,7 +1801,7 @@ async def post_evidence_chain_verify_ledger(request: Request) -> JSONResponse:
                          "key_id": result.get("key_id"), "byte_reads": 0})
 
 
-async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
+async def post_evidence_chain_full_verify(request: Request) -> JSONResponse:
     """Full-verify sealed evidence against DB custody authority.
 
     DB custody authority only (C1): ``_EVIDENCE_DB.verify`` re-hashes the sealed
@@ -5472,7 +5420,7 @@ def _db_custody_summary() -> dict | None:
         "head_hash": db_status.get("head_hash"),
         "active_count": db_status.get("active_count"),
         "issues": db_status.get("issues", []),
-        "last_verified_at": db_status.get("hmac_last_verified_at"),
+        "last_verified_at": db_status.get("last_verified_at"),
     }
     if _EVIDENCE_DB is not None:
         events_fn = getattr(_EVIDENCE_DB, "custody_events", None)
@@ -5949,7 +5897,7 @@ async def get_portal_state(request: Request) -> JSONResponse:
         "manifest_version": db_status.get("manifest_version"),
         "active_count": db_status.get("active_count"),
         "issues": db_status.get("issues", []),
-        "hmac_verify_needed": db_status.get("hmac_verify_needed"),
+        "verification_needed": db_status.get("verification_needed"),
     }
     if _EVIDENCE_DB is not None:
         events_fn = getattr(_EVIDENCE_DB, "custody_events", None)
@@ -6004,7 +5952,6 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/commit", post_commit, methods=["POST"]),
         # Phase 16a: evidence chain intake
         Route("/api/evidence/chain/status", get_evidence_chain_status, methods=["GET"]),
-        Route("/api/evidence/chain/rescan", post_evidence_chain_rescan, methods=["POST"]),
         Route("/api/evidence/chain/seal", post_evidence_chain_seal, methods=["POST"]),
         Route("/api/evidence/chain/seal/resume", post_evidence_chain_seal_resume, methods=["POST"]),
         Route("/api/evidence/chain/ignore", post_evidence_chain_ignore, methods=["POST"]),
@@ -6014,7 +5961,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/chain/replace/begin", post_evidence_replace_begin, methods=["POST"]),
         Route("/api/evidence/chain/restore/begin", post_evidence_restore_begin, methods=["POST"]),
         Route("/api/evidence/chain/recovery/complete", post_evidence_recovery_complete, methods=["POST"]),
-        Route("/api/evidence/chain/verify-hmac", post_evidence_chain_verify_hmac, methods=["POST"]),
+        Route("/api/evidence/chain/full-verify", post_evidence_chain_full_verify, methods=["POST"]),
         Route("/api/evidence/chain/verify-ledger", post_evidence_chain_verify_ledger, methods=["POST"]),
         Route("/api/evidence/storage/profile", post_evidence_storage_profile, methods=["POST"]),
         Route("/api/evidence/chain/anchor", post_evidence_chain_anchor, methods=["POST"]),
@@ -6094,7 +6041,6 @@ def create_dashboard_v2_app(
     api_keys: dict | None = None,
     gateway_config_path: str | None = None,
     token_registry=None,
-    on_chain_mutation: Callable[[str], None] | None = None,
     on_case_activated: Callable[[str], object] | None = None,
     on_override_get_status: Callable[[str], dict] | None = None,
     on_override_enable: Callable[[str, str, int], dict] | None = None,
@@ -6119,9 +6065,6 @@ def create_dashboard_v2_app(
             activation writes.
         token_registry: DB-backed hash-only MCP/service token registry. Required
             for token lifecycle writes in PR02.
-        on_chain_mutation: Called with case_dir_str after every evidence chain
-            seal or ignore. The gateway passes invalidate_evidence_cache so the
-            30s TTL cache is dropped immediately on portal seal.
         on_case_activated: Called with case_dir_str after portal case creation
             updates SIFT_CASE_DIR. The gateway passes an async callback that
             restarts stdio backends so they inherit the new case directory.
@@ -6161,7 +6104,7 @@ def create_dashboard_v2_app(
 
     global _SESSION_SECRET, _SESSION_MAX_AGE, _API_KEYS, _GATEWAY_CONFIG_PATH
     global _TOKEN_REGISTRY
-    global _ON_CHAIN_MUTATION, _OVERRIDE_GET_STATUS, _OVERRIDE_ENABLE, _OVERRIDE_CANCEL
+    global _OVERRIDE_GET_STATUS, _OVERRIDE_ENABLE, _OVERRIDE_CANCEL
     global _ON_CASE_ACTIVATED
     global _SUPABASE_AUTH, _ACTIVE_CASES
     global _EVIDENCE_DB, _INVESTIGATION_DB, _REPORT_DB, _JOB_SERVICE
@@ -6170,7 +6113,6 @@ def create_dashboard_v2_app(
     _API_KEYS = api_keys if api_keys is not None else {}
     _GATEWAY_CONFIG_PATH = Path(gateway_config_path) if gateway_config_path else None
     _TOKEN_REGISTRY = token_registry
-    _ON_CHAIN_MUTATION = on_chain_mutation
     _ON_CASE_ACTIVATED = on_case_activated
     _OVERRIDE_GET_STATUS = on_override_get_status
     _OVERRIDE_ENABLE = on_override_enable

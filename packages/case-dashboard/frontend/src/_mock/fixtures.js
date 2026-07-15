@@ -234,7 +234,7 @@ const TIMELINE = [
   { id: 'E-10', timestamp: iso(2 * D - 30 * 60 * 1000), event_type: 'other', host: 'DC-01', description: 'Security event log cleared (1102) during maintenance window', finding_refs: ['F-005'] },
 ]
 
-const CHAIN_STATUS = { status: 'ok', manifest_version: 3, hmac_verify_needed: false, write_protected: true }
+const CHAIN_STATUS = { status: 'ok', manifest_version: 3, verification_needed: false, write_protected: true }
 
 // Agent Command & Control state (DB-authority `portalState` contract — see
 // lib/agent-state.js). Agent runs autonomously; blocked_actions populates the

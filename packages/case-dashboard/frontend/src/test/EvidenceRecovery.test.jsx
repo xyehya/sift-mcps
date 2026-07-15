@@ -8,7 +8,6 @@ vi.mock('../api/endpoints', async (importOriginal) => ({
   ...(await importOriginal()),
   getEvidence: vi.fn(),
   getChainStatus: vi.fn(),
-  postChainRescan: vi.fn(),
   postReplaceBegin: vi.fn(),
   postRestoreBegin: vi.fn(),
   postRecoveryComplete: vi.fn(),

@@ -5,7 +5,7 @@
 // Field contract (preserve exactly — SessionChanges B-03 pins these names):
 //   chainStatus.status            'ok' | 'unsealed' | 'violation' | …
 //   chainStatus.manifest_version  > 0 once sealed
-//   chainStatus.hmac_verify_needed
+//   chainStatus.verification_needed
 //   chainStatus.write_protected
 
 /**
@@ -19,7 +19,7 @@ export function deriveSeal(chainStatus) {
 
   const isSealed = chainStatus.status !== 'unsealed' && chainStatus.manifest_version > 0
   if (!isSealed) return { label: 'UNSEALED', tone: 'unsealed' }
-  if (chainStatus.hmac_verify_needed) return { label: 'SEALED · verify pending', tone: 'pending' }
+  if (chainStatus.verification_needed) return { label: 'SEALED · verify pending', tone: 'pending' }
   return { label: 'SEALED', tone: 'sealed' }
 }
 

@@ -6,12 +6,12 @@ import { sealBadgeClass } from './evidence-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
 // EvidenceHeader — "Evidence Chain" title + seal/custody authority badge +
-// Rescan. Single-column custody-dashboard header (legacy IA parity §1).
+// Refresh custody status. Single-column custody-dashboard header.
 // The seal badge reads chainStatus.(seal_status||status), appends ·v{version}
 // and ·db when authority==='db', and explains the authority source via title.
 // ─────────────────────────────────────────────────────────────────────────
 
-export function EvidenceHeader({ chainStatus, onRescan }) {
+export function EvidenceHeader({ chainStatus, onRefresh }) {
   const sealState = chainStatus?.seal_status ?? chainStatus?.status
 
   return (
@@ -25,7 +25,7 @@ export function EvidenceHeader({ chainStatus, onRescan }) {
             title={
               chainStatus.authority === 'db'
                 ? 'Seal status from Postgres custody authority'
-                : 'Seal status from file manifest'
+                : 'Custody authority unavailable'
             }
             className={cn(
               'mono rounded border border-border-soft bg-secondary px-2 py-0.5 text-[10px] uppercase tracking-wider',
@@ -43,11 +43,11 @@ export function EvidenceHeader({ chainStatus, onRescan }) {
         type="button"
         variant="outline"
         size="sm"
-        onClick={onRescan}
+        onClick={onRefresh}
         className="mono gap-1.5 text-xs"
       >
         <RefreshCw className="size-3.5" aria-hidden />
-        Rescan
+        Refresh custody status
       </Button>
     </header>
   )

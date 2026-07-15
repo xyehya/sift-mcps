@@ -3,7 +3,6 @@ import { useState } from 'react'
 import {
   getEvidence,
   getChainStatus,
-  postChainRescan,
   postChainAnchor,
   postChainProofExport,
   postVerifyLedger,
@@ -18,7 +17,7 @@ import { useCustodyLedgerActions } from '@/components/evidence/useCustodyLedgerA
 // useEvidenceActions — composes the custody action handlers: the password-
 // guarded Add/Seal and Full Verify Evidence pair (useCustodySealActions), the reason-guarded
 // ledgered mutations (useCustodyLedgerActions), plus the unguarded async-toast
-// actions (rescan · anchor · proof-export · per-item verify) it owns directly.
+// actions (refresh · anchor · proof-export · per-item verify) it owns directly.
 // Reads the evidence list/refresh from useEvidenceData; modal field state stays
 // in the tab. Mock/real split is at the API adapter layer (AGENTS §3).
 // ─────────────────────────────────────────────────────────────────────────
@@ -70,16 +69,16 @@ export function useEvidenceActions({
     afterSuccess,
   })
 
-  async function handleRescan() {
+  async function handleRefreshCustody() {
     try {
-      addToast('Rescanning evidence directory…', 'info')
-      const freshStatus = await postChainRescan()
+      addToast('Refreshing custody status…', 'info')
+      const freshStatus = await getChainStatus()
       if (freshStatus) setChainStatus(freshStatus)
       const ev = await getEvidence()
       setEvidence(ev || [])
-      addToast('Evidence chain rescan completed', 'success')
+      addToast('Custody status refreshed', 'success')
     } catch (ex) {
-      addToast(ex.message || 'Rescan failed', 'error')
+      addToast(ex.message || 'Custody refresh failed', 'error')
     }
   }
 
@@ -167,7 +166,7 @@ export function useEvidenceActions({
     verifyStatus,
     ...sealActions,
     ...ledgerActions,
-    handleRescan,
+    handleRefreshCustody,
     handleTriggerAnchor,
     handleProofExport,
     handleVerifyLedger,

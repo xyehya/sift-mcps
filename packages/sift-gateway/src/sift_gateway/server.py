@@ -1547,7 +1547,6 @@ class Gateway:
             _gw_config_path: str | None = _os.environ.get("SIFT_GATEWAY_CONFIG") or str(
                 _Path.home() / ".sift" / "gateway.yaml"
             )
-            from sift_gateway.evidence_gate import invalidate_evidence_cache
             from sift_gateway.response_guard import (
                 cancel_override,
                 enable_override,
@@ -1566,7 +1565,6 @@ class Gateway:
                 investigation_service=self.investigation_service,
                 report_service=self.report_service,
                 job_service=self.job_service,
-                on_chain_mutation=invalidate_evidence_cache,
                 on_case_activated=None,
                 on_override_get_status=get_override_status,
                 on_override_enable=enable_override,

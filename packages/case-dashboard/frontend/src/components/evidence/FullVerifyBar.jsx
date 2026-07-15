@@ -5,17 +5,16 @@ import { Button } from '@/components/ui/button'
 import { formatTime } from './evidence-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
-// FullVerifyBar — full-width database-custody verification reminder. The API
-// retains legacy hmac_* timestamp field names for compatibility, but the active
+// FullVerifyBar — full-width database-custody verification reminder. The active
 // workflow re-hashes mounted evidence against Postgres authority; it does not
 // derive a password key or verify a file ledger.
 // ─────────────────────────────────────────────────────────────────────────
 
 export function FullVerifyBar({ chainStatus, onVerifyClick }) {
   if (!chainStatus) return null
-  const needed = chainStatus.verification_needed ?? chainStatus.hmac_verify_needed
-  const lastVerifiedAt = chainStatus.last_verified_at ?? chainStatus.hmac_last_verified_at
-  const lastVerifiedBy = chainStatus.last_verified_by ?? chainStatus.hmac_last_verified_by
+  const needed = chainStatus.verification_needed
+  const lastVerifiedAt = chainStatus.last_verified_at
+  const lastVerifiedBy = chainStatus.last_verified_by
   const hasActiveManifest =
     Number(chainStatus.manifest_version || 0) > 0 && Number(chainStatus.active_count || 0) > 0
   const virginExternalBootstrap =

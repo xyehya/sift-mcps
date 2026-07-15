@@ -1,6 +1,6 @@
 """Tests for the evidence chain intake portal endpoints (DB-authority).
 
-Covers: GET /api/evidence/chain/status, POST /api/evidence/chain/rescan,
+Covers: GET /api/evidence/chain/status,
         GET /api/evidence/chain/challenge, POST /api/evidence/chain/seal,
         POST /api/evidence/chain/ignore, POST /api/evidence/chain/retire.
 
@@ -507,50 +507,6 @@ class TestEvidenceChainStatus:
 
 
 # ---------------------------------------------------------------------------
-# rescan endpoint
-# ---------------------------------------------------------------------------
-
-
-class TestEvidenceChainRescan:
-    def test_no_auth_returns_403(self, client):
-        resp = client.post("/api/evidence/chain/rescan")
-        assert resp.status_code == 403
-
-    def test_rescan_returns_fresh_status(self, authed_client):
-        resp = authed_client.post("/api/evidence/chain/rescan")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "status" in data
-        assert "manifest_version" in data
-
-    def test_rescan_fresh_install_graceful(self, passwords_dir, tmp_path, monkeypatch):
-        c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
-        resp = c.post("/api/evidence/chain/rescan")
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "no_case"
-
-    def test_rescan_invokes_on_chain_mutation(self, passwords_dir, tmp_path, monkeypatch):
-        """on_chain_mutation callback is called with case_dir_str."""
-        called_with: list[str] = []
-        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
-
-        app = create_dashboard_v2_app(
-            session_secret=_SECRET,
-            session_max_age=28800,
-            active_case_service=FakeActiveCases(),
-            evidence_service=FakeEvidenceDB(),
-            on_chain_mutation=lambda s: called_with.append(s),
-            supabase_auth=ReauthFakeSupabaseAuth(),
-        )
-        c = TestClient(app, raise_server_exceptions=True)
-        set_operator_session(c, _SECRET)
-        c.post("/api/evidence/chain/rescan")
-        # The mutation hook fires with the resolved case dir str (empty here since
-        # FakeActiveCases has no artifact_path, but the hook is still invoked).
-        assert called_with == [] or all(isinstance(s, str) for s in called_with)
-
-
-# ---------------------------------------------------------------------------
 # challenge endpoint
 # ---------------------------------------------------------------------------
 
@@ -691,30 +647,6 @@ class TestEvidenceChainSeal:
         )
         assert resp.status_code == 404
         assert "active case" in resp.json()["error"].lower()
-
-    def test_seal_invokes_on_chain_mutation(self, passwords_dir, tmp_path, monkeypatch):
-        called_with: list[str] = []
-        monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
-
-        app = create_dashboard_v2_app(
-            session_secret=_SECRET,
-            session_max_age=28800,
-            active_case_service=FakeActiveCases(),
-            evidence_service=FakeEvidenceDB(),
-            on_chain_mutation=lambda s: called_with.append(s),
-            supabase_auth=ReauthFakeSupabaseAuth(),
-        )
-        c = TestClient(app, raise_server_exceptions=True)
-        set_operator_session(c, _SECRET)
-
-        r = c.post(
-            "/api/evidence/chain/seal",
-            json={"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "seal-005", "file_specs": [{"path": "evidence/disk.raw"}]},
-        )
-        assert r.status_code == 200
-        # FakeActiveCases exposes no artifact_path, so the resolved case dir str is
-        # empty and the hook is skipped — assert it never raised and stayed empty.
-        assert called_with == []
 
     def test_must_reset_password_blocked(self, passwords_dir, tmp_path, monkeypatch):
         # CL3b: the forced-reset gate now derives from the Supabase 'invited'

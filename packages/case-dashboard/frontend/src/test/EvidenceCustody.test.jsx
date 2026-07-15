@@ -29,7 +29,6 @@ vi.mock('@/api/endpoints', async (importOriginal) => {
     ...actual,
     getEvidence: vi.fn(),
     getChainStatus: vi.fn(),
-    postChainRescan: vi.fn(),
     postChainSeal: vi.fn(),
     postChainSealResume: vi.fn(),
     postChainIgnore: vi.fn(),
@@ -373,7 +372,7 @@ describe('Full Verify Evidence flow', () => {
     seal_status: 'sealed',
     manifest_version: 1,
     active_count: 1,
-    hmac_verify_needed: true,
+    verification_needed: true,
     write_protected: true,
   }))
 
@@ -415,7 +414,7 @@ describe('Full Verify Evidence flow', () => {
       storage_remediation: 'FULL_VERIFY',
       manifest_version: 0,
       active_count: 0,
-      hmac_verify_needed: true,
+      verification_needed: true,
       unregistered: ['evidence/external.raw'],
       write_protected: true,
     })
@@ -438,7 +437,7 @@ describe('Full Verify Evidence flow', () => {
       storage_verified_generation: 1,
       manifest_version: 2,
       active_count: 0,
-      hmac_verify_needed: true,
+      verification_needed: true,
       unregistered: [],
     })
 
