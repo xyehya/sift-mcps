@@ -9,3 +9,27 @@ export function parseTimestamp(value) {
   if (typeof value === 'string') return Date.parse(value)
   return Number.NaN
 }
+
+/**
+ * Extracts the date part (YYYY-MM-DD) from a timestamp without allocating a new Date
+ * if the input is already a valid ISO string.
+ */
+export function extractDate(value) {
+  if (typeof value === 'string' && value.length >= 10 && value[4] === '-' && value[7] === '-') {
+    return value.substring(0, 10)
+  }
+  const ms = parseTimestamp(value)
+  return Number.isNaN(ms) ? '' : new Date(ms).toISOString().substring(0, 10)
+}
+
+/**
+ * Extracts the time part (HH:MM:SS) from a timestamp without allocating a new Date
+ * if the input is already a valid ISO string.
+ */
+export function extractTime(value) {
+  if (typeof value === 'string' && value.length >= 19 && value[10] === 'T' && value[13] === ':' && value[16] === ':') {
+    return value.substring(11, 19)
+  }
+  const ms = parseTimestamp(value)
+  return Number.isNaN(ms) ? '' : new Date(ms).toISOString().substring(11, 19)
+}
