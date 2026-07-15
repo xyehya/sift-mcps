@@ -36,7 +36,7 @@ def test_signed_ledger_migrated_postgres_semantics() -> None:
         cur.execute("select to_regclass('app.custody_signature_checkpoints')")
         assert cur.fetchone()[0] == "app.custody_signature_checkpoints"
         cur.execute("select to_regclass('app.custody_signing_key_rotations')")
-        assert cur.fetchone()[0] == "custody_signing_key_rotations"
+        assert cur.fetchone()[0] == "app.custody_signing_key_rotations"
         cur.execute(
             """select pg_get_functiondef(p.oid) from pg_proc p
                join pg_namespace n on n.oid=p.pronamespace
