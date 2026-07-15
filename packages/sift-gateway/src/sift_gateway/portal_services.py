@@ -2813,7 +2813,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 )
                 head = cur.fetchone()
                 cur.execute(
-                    """select canonical_payload,key_id,signature,k.public_key
+                    """select canonical_payload,c.key_id,signature,k.public_key
                        from app.custody_signature_checkpoints c
                        left join app.custody_signing_keys k on k.key_id=c.key_id
                        where c.case_id=%s and c.state='SIGNED'

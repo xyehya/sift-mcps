@@ -558,6 +558,30 @@ class TestProofExport:
         assert svc.latest_proof_export(_CASE) is None
 
 
+def test_verify_ledger_qualifies_checkpoint_key_id_on_join(service) -> None:
+    """The checkpoint/key registry join has two ``key_id`` columns.
+
+    Keep the selected checkpoint identity explicitly bound to the checkpoint
+    row: PostgreSQL rejects the former unqualified projection at proof-export
+    time, before the signed bundle can be generated.
+    """
+    svc, db, _tmp_path = service
+    # The export fixture isolates byte-verification tests by stubbing this
+    # method; exercise the real SQL-producing implementation here.
+    svc.verify_ledger = EvidenceAuthorityService.verify_ledger.__get__(svc)
+
+    svc.verify_ledger(case_id=_CASE)
+
+    checkpoint_query = next(
+        sql
+        for sql, _params in db.statements
+        if "from app.custody_signature_checkpoints c" in sql
+    )
+    assert "select canonical_payload,c.key_id,signature,k.public_key" in " ".join(
+        checkpoint_query.split()
+    )
+
+
 class TestVerify:
     def test_verify_records_ok_when_intact(self, service):
         svc, db, tmp_path = service
