@@ -1,6 +1,7 @@
 import { cn } from '@/lib/utils'
 import { EditableField } from '@/components/findings/EditableField'
 import { AuditTrailPanel } from '@/components/findings/AuditTrailPanel'
+import { extractTime } from '@/components/common/entity-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
 // Finding detail — evidence & context column (the old "Zone 2"). Timeline
@@ -16,7 +17,7 @@ function Label({ children }) {
 
 function fmtTime(iso) {
   try {
-    return new Date(iso).toISOString().substring(11, 19)
+    return extractTime(iso)
   } catch {
     return ''
   }
