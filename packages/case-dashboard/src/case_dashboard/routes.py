@@ -961,7 +961,7 @@ def _db_evidence_chain_status() -> dict | None:
     }
 
     # Detected-vs-sealed object lists for the frontend (Seal Manifest specs,
-    # custody badges). Derived from DB custody authority — list_evidence() rescans
+    # custody badges). Derived from DB custody authority — list_evidence() reconciles
     # the mounted tree → DB first, so these reflect current disk state.
     unregistered: list[str] = []
     missing: list[str] = []

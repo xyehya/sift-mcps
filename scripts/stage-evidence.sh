@@ -31,7 +31,7 @@
 #                     --case are allowed in this mode.
 #
 # AFTER STAGING
-#   In the portal (active case) -> Evidence -> Rescan (if needed) -> Seal.
+#   In the portal (active case) -> Evidence -> Refresh custody status -> Add & Seal.
 #
 # Run on the SIFT VM as a sudo-capable operator (e.g. sansforensics), not as
 # `sudo stage-evidence.sh`. The script elevates only its individual metadata and
@@ -84,7 +84,7 @@ if [ "$prepare" -eq 1 ]; then
   authenticate_sudo || die "sudo authentication is required"
   sudo "$PREPARE_PYTHON" -I "$PREPARE_HELPER"
   echo
-  echo "NEXT: portal (active case) -> Evidence tab -> Rescan (if needed) -> Seal (password)."
+  echo "NEXT: portal (active case) -> Evidence tab -> Refresh custody status -> Add & Seal (password)."
   echo "      Seal, not --prepare, hashes the file and applies immutable +i (the write-protection boundary)."
   exit 0
 fi
@@ -157,5 +157,5 @@ echo
 echo "Staged $staged file(s). Current evidence dir:"
 sudo ls -la "$evidence_dir"
 echo
-echo "NEXT: portal (active case) -> Evidence tab -> Rescan (if the file is not listed) -> Seal (password)."
+echo "NEXT: portal (active case) -> Evidence tab -> Refresh custody status -> Add & Seal (password)."
 echo "      Seal hashes the file and applies immutable +i (the write-protection boundary)."

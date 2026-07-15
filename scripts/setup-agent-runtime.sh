@@ -132,12 +132,9 @@ configure_case() {
             echo "WARN: could not set default ACL on every directory in ${case_dir}/evidence" >&2
     fi
 
-    # Legacy temp-test shadows; production integrity records live under STATE_ROOT.
+    # Runtime must not access authority artifacts.
     for protected in "${case_dir}/audit" \
-        "${case_dir}/approvals.jsonl" \
-        "${case_dir}/evidence-ledger.jsonl" \
-        "${case_dir}/evidence-manifest.json" \
-        "${case_dir}/evidence-verify-state.json"; do
+        "${case_dir}/approvals.jsonl"; do
         [[ -e "${protected}" ]] || continue
         setfacl -R -m "u:${RUNTIME_USER}:---" "${protected}"
         if [[ -d "${protected}" ]]; then
