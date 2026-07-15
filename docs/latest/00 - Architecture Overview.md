@@ -31,7 +31,7 @@ The SIFT MCP runtime is a portable, single-policy-boundary MCP gateway for auton
 | Package | Role | Key Modules |
 |---------|------|-------------|
 | `sift-gateway` | Single policy boundary. ASGI app (Starlette/FastMCP), auth, 10-stage MCP policy chain, REST API, backend proxy. | `server.py`, `mcp_server.py`, `mcp_endpoint.py`, `policy_middleware.py`, `auth.py`, `supabase_auth.py`, `rest.py`, `response_guard.py`, `evidence_gate.py`, `mcp_backends_registry.py` |
-| `sift-core` | In-process DFIR tools: run_command sandbox, evidence chain, case manager, finding/timeline/todo lifecycle, reporting. | `agent_tools.py`, `evidence_chain.py`, `case_manager.py`, `execute/security.py`, `execute/dfir_exec_launcher.py`, `execute/job_worker.py` |
+| `sift-core` | In-process DFIR tools: run_command sandbox, generic evidence posture utilities, case manager, finding/timeline/todo lifecycle, reporting. | `agent_tools.py`, `evidence_posture.py`, `custody_types.py`, `case_manager.py`, `execute/security.py`, `execute/dfir_exec_launcher.py`, `execute/job_worker.py` |
 | `sift-common` | Shared contracts: AuditWriter (cross-process flock), MCP output_schema, ToolDef/ErrorCode, parsers, identifiers, surface test harness. | `audit.py`, `contracts.py`, `mcp_schema.py`, `registry_helpers.py`, `testing/surface.py` |
 | `opensearch-mcp` | Derived data plane: OpenSearch search/aggregate/timeline/ingest/enrich. 14 namespace-prefixed tools. Stdio subprocess. | `server.py`, `registry.py`, `client.py`, `ingest.py`, `ingest_job.py`, `bulk.py`, `case_scoped.py`, `search_format.py` |
 | `forensic-rag-mcp` | Semantic search over IR/DFIR knowledge corpus. pgvector(768) embedding store. 3 read-only tools, ns `kb_`. | `server.py`, `pgvector_store.py`, `sources.py`, `constants.py` |
@@ -510,7 +510,7 @@ flowchart TD
 | IOCs | `GET /api/iocs` | 1 |
 | Summary | `GET /api/summary` | 1 |
 | Commit | `POST /api/commit` | 1 |
-| Evidence Chain | `GET /api/evidence/chain/status`, `POST /api/evidence/chain/seal`, `POST /api/evidence/chain/seal/resume`, `POST /api/evidence/chain/ignore`, `POST /api/evidence/chain/delete`, `POST /api/evidence/chain/retire`, `POST /api/evidence/chain/replace/begin`, `POST /api/evidence/chain/restore/begin`, `POST /api/evidence/chain/recovery/complete`, `POST /api/evidence/chain/anchor`, `POST /api/evidence/chain/proof-export` | 11 |
+| Evidence Chain | `GET /api/evidence/chain/status`, `POST /api/evidence/chain/seal`, `POST /api/evidence/chain/seal/resume`, `POST /api/evidence/chain/ignore`, `POST /api/evidence/chain/delete`, `POST /api/evidence/chain/retire`, `POST /api/evidence/chain/replace/begin`, `POST /api/evidence/chain/restore/begin`, `POST /api/evidence/chain/recovery/complete`, `POST /api/evidence/chain/full-verify`, `POST /api/evidence/chain/verify-ledger`, `POST /api/evidence/chain/anchor`, `POST /api/evidence/chain/proof-export` | 13 |
 | Response Guard | `GET /api/response-guard/status`, `POST /api/response-guard/override`, `POST /api/response-guard/override/cancel` | 3 |
 | Auth | `GET /api/auth/setup-required`, `POST /api/auth/login`, `POST /api/auth/forced-reset`, `POST /api/auth/logout`, `POST /api/auth/refresh`, `GET /api/auth/me` | 6 |
 | Principals | `GET /api/auth/principals`, `POST /api/auth/principals`, `DELETE /api/auth/principals/{type}/{id}` | 3 |
@@ -695,8 +695,8 @@ flowchart TD
 ### sift-core (`packages/sift-core/src/sift_core/`)
 
 - `agent_tools.py` — 8 core tool specs, `call_core_tool()` dispatcher
-- `evidence_chain.py` — legacy compatibility/export helpers; not DB-active custody, admission, mutation, or Full Verify authority
-- `evidence_ops.py` — `register_evidence_data()`, `list_evidence_data()`, `verify_evidence_data()`
+- `evidence_posture.py` — generic canonical-path, symlink/hardlink, and immutable-posture checks; never custody authority
+- `custody_types.py` / `custody_anchor.py` — shared custody status values and optional DB-derived external proof anchoring
 - `case_manager.py` — `CaseManager`, finding/timeline/todo lifecycle, `_derive_confidence_ceiling()`, `_persist_investigation()`
 - `case_ops.py` — `case_init_data()`, `case_status_data()`, `case_list_data()`
 - `case_io.py` — `cases_root()`, `get_case_dir()`, `resolve_case_path()`, `export_bundle()`, `import_bundle()`

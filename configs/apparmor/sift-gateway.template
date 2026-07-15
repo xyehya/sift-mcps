@@ -71,10 +71,7 @@ profile sift-gateway flags=(attach_disconnected) {
 
   # Case metadata and outputs (read + write)
   /cases/*/evidence.json                      rw,
-  /cases/*/evidence-manifest.json            rw,
-  /cases/*/evidence-ledger.jsonl             rw,
   /cases/*/evidence-anchor-v*.json           rw,
-  /cases/*/evidence-verify-state.json        rw,
   /cases/*/approvals.jsonl                   rw,
   /cases/*/findings.json                     rw,
   /cases/*/timeline.json                     rw,

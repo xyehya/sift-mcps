@@ -16,7 +16,7 @@ def anchor_db_proof(*, manifest_version: int, manifest_hash: str, ledger_tip_has
     """Build optional external proof from DB authority without touching case files."""
     mh = manifest_hash.split(":")[-1]
     tip = ledger_tip_hash.split(":")[-1]
-    proof = {"schema": "sift.evidence-anchor.v1", "timestamp": datetime.now(timezone.utc).isoformat(), "manifest_version": manifest_version, "manifest_hash": manifest_hash, "ledger_tip_hmac": ledger_tip_hash, "anchor_payload": f"SIFT|{mh[:16]}|{tip[:16]}", "solana_tx": None, "solana_cluster": cluster, "confirmed": False, "explorer_url": None}
+    proof = {"schema": "sift.evidence-anchor.v1", "timestamp": datetime.now(timezone.utc).isoformat(), "manifest_version": manifest_version, "manifest_hash": manifest_hash, "ledger_tip_hash": ledger_tip_hash, "anchor_payload": f"SIFT|{mh[:16]}|{tip[:16]}", "solana_tx": None, "solana_cluster": cluster, "confirmed": False, "explorer_url": None}
     if keypair_path:
         try:
             _do_solana_anchor(proof, keypair_path, rpc_url, cluster)

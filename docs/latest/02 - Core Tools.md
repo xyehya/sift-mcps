@@ -9,7 +9,7 @@ status: draft
 
 ## Overview
 
-`sift-core` (packages/sift-core/src/sift_core/) provides 8 core MCP tool specs (`case_info`, `evidence_info`, `record_finding`, `record_timeline_event`, `list_existing_findings`, `manage_todo`, `get_tool_help`, `run_command`) plus 3 gateway-local tools (`capability_guide`, `run_command_job`, `running_commands_status`) registered in the Gateway and invoked in-process. It provides case/investigation helpers and the `run_command` sandbox (ceil+floor dual-layer containment). Active evidence custody is solely Postgres-authoritative and is mediated by the Gateway's durable custody operations; retained `sift-core` file-chain helpers are legacy export/compatibility utilities, never a second authority or failover mode. Key files: `agent_tools.py`, `case_manager.py`, `execute/security.py`, `execute/dfir_exec_launcher.py`; `evidence_chain.py` is legacy/export compatibility only.
+`sift-core` (packages/sift-core/src/sift_core/) provides 8 core MCP tool specs (`case_info`, `evidence_info`, `record_finding`, `record_timeline_event`, `list_existing_findings`, `manage_todo`, `get_tool_help`, `run_command`) plus 3 gateway-local tools (`capability_guide`, `run_command_job`, `running_commands_status`) registered in the Gateway and invoked in-process. It provides case/investigation helpers and the `run_command` sandbox (ceil+floor dual-layer containment). Active evidence custody is solely Postgres-authoritative and mediated by the Gateway's durable custody operations. Key files: `agent_tools.py`, `case_manager.py`, `evidence_posture.py`, `execute/security.py`, and `execute/dfir_exec_launcher.py`.
 
 ## How it works
 
@@ -35,38 +35,18 @@ Tool specs (from `core_tool_specs()`):
 
 **call_core_tool(name, arguments, *, examiner, manager, audit)** -> str: Validates name in `_SPECS_BY_NAME`. Routes via if/elif chain. Returns JSON text. Exceptions become `{"success": False, "tool": name, "data": None, "error": ...}`.
 
-### evidence_chain.py — Legacy File/Export Compatibility Helpers
+### Custody-support utilities
 
-These functions describe the retained file-format implementation and its tests.
-They are not the active DB custody, admission, mutation, re-authentication, or
-Full Verify Evidence authority. In DB-active operation, Postgres objects,
-versions, chain heads, custody events, and durable operations are authoritative;
-file manifests/JSONL are export/proof artifacts only.
+`evidence_posture.py` contains only local, non-authoritative safeguards used by
+Portal-controlled custody operations: canonical evidence-root containment,
+symlink and hardlink rejection, and verified immutable-flag posture. It cannot
+register, inventory, seal, restore, or verify custody state.
 
-**class ChainStatus(str, Enum)**: OK, UNSEALED, MODIFIED, MISSING, UNREGISTERED, LEDGER_ERROR.
-
-Key functions:
-- `chain_status(case_dir)` — Fast stat-check + structural hash-chain verify, no rehashing
-- `verify_chain_integrity(case_dir)` — Full structural verify (manifest hash + ledger chain)
-- `seal_manifest(case_dir, file_specs, examiner, derived_key)` — Seal new manifest version
-- `harden_sealed_evidence(case_dir, rel_paths)` — Set `+i` immutable flag. Fails CLOSED.
-- `hash_file(path)` — Streaming SHA-256
-- `compute_manifest_hash(manifest)` — SHA-256 of canonical manifest JSON
-
-Historical file-format enforcement points in `evidence_chain.py`:
-1. Manifest versioning: every mutation increments version by exactly 1
-2. Ledger chain: each event carries `previous_manifest_hash` + `new_manifest_hash`; `_check_hash_chain()` links consecutive events
-3. HMAC signing: every event HMAC-SHA256 signed with `derived_key`
-4. Ledger file permissions: `chmod 0o444` after each append
-5. Immutable flag: `+i` set on sealed files
-6. Atomic writes: `tempfile.mkstemp` + `os.replace` + `os.fsync`
-7. Symlink rejection: `_resolve_sealed_target()` rejects symlinks at literal path
-
-### evidence_ops.py — Evidence Data Operations
-
-- `register_evidence_data(case_dir, path, examiner, description)` — Register file in evidence.json. Validates path containment.
-- `list_evidence_data(case_dir)` — Return registered evidence
-- `verify_evidence_data(case_dir)` — SHA-256 verification of every registered file
+`custody_types.py` provides shared status values. `custody_anchor.py` builds an
+optional external proof from Postgres-derived manifest and ledger-tip hashes;
+it never writes a case-sidecar or decides admission. Postgres custody objects,
+versions, chain heads, append-only events, signed proofs, and durable operations
+are the sole custody authority.
 
 ### case_manager.py — CaseManager
 
@@ -105,7 +85,7 @@ agent_tools._run_command() → tools.generic.run_command() → executor.execute(
 - `validate_shell_command()`: Full pipeline — control chars → IFS → proc/environ → process substitution → destructive patterns → split → per-subcommand validation
 - `sanitize_extra_args()`: Blocks dangerous flags, shell metacharacters, program-text constructs (awk `system()`, sed `e`, sqlite3 `.shell`)
 - `sanitize_paths_deep()`: Recursive path sanitization for response structures
-- `resolve_evidence_ref(ref, case_dir)`: Resolves evidence ref to absolute path against sealed manifest. Defined in `evidence_chain.py` (not in this file). Fail-closed.
+- `resolve_evidence_ref(ref, case_dir)`: Rejects worker-side resolution; the Gateway must inject a DB-authorized pinned evidence binding. Fail-closed.
 
 **execute/runtime_acl.py** — Environment Scrubbing:
 - `build_sandbox_env()`: Keeps only 20 safe names (PATH, HOME, locale) + 12 safe SIFT names. Drops 45+ secret patterns.
@@ -215,8 +195,8 @@ then bind a scoped, consumable DB audit receipt to the transition.
 ## Key files
 
 - `agent_tools.py` — 8 core tool specs, call_core_tool dispatcher
-- `evidence_chain.py` — Append-only hash-linked evidence chain
-- `evidence_ops.py` — Evidence data operations (register, list, verify)
+- `evidence_posture.py` — Canonical-path and immutable filesystem-posture safeguards
+- `custody_types.py` / `custody_anchor.py` — Shared custody values and DB-derived external proof helper
 - `case_manager.py` — CaseManager class, finding/timeline/todo lifecycle
 - `case_ops.py` — Case lifecycle (init, activate, status)
 - `case_io.py` — Case path resolution, file I/O with atomic writes

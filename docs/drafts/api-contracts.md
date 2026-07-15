@@ -188,8 +188,6 @@ file-backed mutation fallback. All mutations require examiner role,
   DB unavailability fails closed and never selects a file authority. Returns `{authority: "db", status/seal_status, manifest_version,
   active_count, issues, head_hash, hmac_last_verified_at, anchor{...}, proof_export?}`.
   Role: examiner or readonly.
-### POST `/api/evidence/chain/rescan` (`post_evidence_chain_rescan`, 1014)
-- Examiner; drops the evidence gate cache and returns fresh status.
 ### POST `/api/evidence/chain/seal` (`post_evidence_chain_seal`, 1081)
 - Exact request: `{password, reason, idempotency_key,
   file_specs:[{path, source?, description?}]}`.
@@ -219,8 +217,8 @@ file-backed mutation fallback. All mutations require examiner role,
 - Retires versioned evidence while preserving protected bytes, immutable posture, and
   every prior version. It writes one excluding manifest/event. Exact request
   `{password, path, reason, idempotency_key}` with object-bound fresh re-authentication.
-### POST `/api/evidence/chain/full-verify`
-- Compatibility URL for **Full Verify Evidence**. This is a passwordless authenticated
+### POST `/api/evidence/chain/full-verify` (`post_evidence_chain_full_verify`)
+- **Full Verify Evidence** is a passwordless authenticated
   operator action: the gateway re-hashes every sealed mounted object and compares it
   with Postgres custody authority; no password-derived key or file ledger participates. Records the DB
   verification timestamp and returns `{ok, verified, issues, verified_at, verified_by}`.

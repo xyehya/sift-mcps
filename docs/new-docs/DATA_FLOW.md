@@ -339,11 +339,11 @@ EvidenceGateMiddleware intercepts every tool call
                      tool, status, issues, manifest_version, detail, remediation}
 ```
 
-> The block response keys are `blocked / reason / tool / status / issues / manifest_version / detail / remediation` — there is no `error: "evidence_gate"` or `chain_status` key. `chain_status()` does **not** SHA-256-rehash files; it does a stat-check plus structural hash-chain verification.
+> The block response keys are `blocked / reason / tool / status / issues / manifest_version / detail / remediation` — there is no `error: "evidence_gate"` or `chain_status` key. The DB custody gate is authoritative; file manifests are not consulted.
 
 [VERIFY: packages/sift-gateway/src/sift_gateway/policy_middleware.py:463-528]  
 [VERIFY: packages/sift-gateway/src/sift_gateway/evidence_gate.py:137-232]  
-[VERIFY: packages/sift-core/src/sift_core/evidence_chain.py:289-338]
+[VERIFY: packages/sift-gateway/src/sift_gateway/evidence_gate.py:137-232]
 
 ---
 

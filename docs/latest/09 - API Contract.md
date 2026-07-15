@@ -255,7 +255,7 @@ cookie (`sift_session_envelope`) or gateway Bearer token (limited set).
 | POST | `/api/evidence/chain/restore/begin` | `post_evidence_restore_begin` | Persist exact Restore intent and block gate | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/recovery/complete` | `post_evidence_recovery_complete` | Fresh operation-bound re-auth, verify and finalize recovery | Session (examiner) + step-up |
 | GET | `/api/evidence/objects/{object_id}/history` | `get_evidence_history` | Case-scoped path-free object history | Session |
-| POST | `/api/evidence/chain/full-verify` | `post_evidence_chain_verify_hmac` | Passwordless Full Verify Evidence against the active Postgres manifest; returns `full_verify_requires_sealed_evidence` (409) without a receipt when no sealed active set exists () | Session (examiner) |
+| POST | `/api/evidence/chain/full-verify` | `post_evidence_chain_full_verify` | Passwordless Full Verify Evidence against active Postgres custody; returns `full_verify_requires_sealed_evidence` (409) without a receipt when no sealed active set exists | Session (examiner) |
 | POST | `/api/evidence/chain/anchor` | `post_evidence_chain_anchor` | Anchor manifest on Solana | Session (examiner) |
 | POST | `/api/evidence/chain/proof-export` | `post_evidence_chain_proof_export` | Generate DB-derived proof export | Session (examiner) |
 
