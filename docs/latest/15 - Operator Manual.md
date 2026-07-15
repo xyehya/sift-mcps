@@ -107,7 +107,7 @@ selected storage profile.
    available for the agent.
 
 For the first seal of an empty `EXTERNALLY_READ_ONLY` case, use this exact order:
-authorize the profile, mount the source read-only, Rescan Inventory, select every
+authorize the profile, mount the source read-only, **Refresh custody status**, select every
 DETECTED pending object, then **Add & Seal**. Full Verify is intentionally disabled
 until Manifest Version 1 exists because there is no sealed active set to verify; a
 direct API attempt returns `full_verify_requires_sealed_evidence` (409) and creates no
@@ -120,7 +120,8 @@ direct regular single-link entry on the authorized source/mount. Retired histori
 or be absent, but are never selected or added to the new receipt. Symlinks, directories, hardlinks,
 unknown names, omitted required files, pathname swaps, replacements, or entries appearing during
 verification keep the gate blocked and create no custody version or successful storage receipt.
-Remove or disposition unsafe pending entries through the supported operator workflow, then Rescan.
+Remove or disposition unsafe pending entries through the supported operator workflow, then
+**Refresh custody status** before Add & Seal.
 
 If external storage disconnects, the gate reports it as unavailable rather than
 tampering. Reconnecting the same authorized source requires **Full Verify Evidence**;

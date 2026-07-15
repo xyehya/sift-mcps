@@ -627,14 +627,13 @@ batch reports RLS posture read-only — **enabled but not FORCEd**).
   (`seal_status`, `current_sha256`), `app.evidence_chain_heads` (`head_hash`),
   append-only `app.evidence_custody_events` (per-case `prev_hash`/`event_hash`,
   mutation blocked by trigger `app.evidence_block_mutation`), custody appended only
-  via SECURITY-DEFINER `app.evidence_append_custody_event`. File artifacts
-  (`evidence-manifest.json`, `evidence-ledger.jsonl`, per-case `audit/*.jsonl`) are
-  **export/proof only** — "DB is the authority; no file manifest/ledger is consulted"
-  (`portal_services.py:535-578`). Sensitive evidence actions (seal/ignore/retire)
+  via SECURITY-DEFINER `app.evidence_append_custody_event`. Signed DB-derived proof
+  exports and per-case audit mirrors are non-authoritative; Postgres is the sole
+  custody authority. Sensitive evidence actions (seal/ignore/retire)
   are re-auth gated. **verified 2026-06-12:** `/health` `evidence_root`:
   `path:/cases`, `readable:true`, `writable:true`, **`write_protected:false`**,
-  `case_count:0`. Sealing applies the immutable `+i` flag
-  (`evidence_chain.py`); that flag, rather than mode bits, is the disk
+  `case_count:0`. Sealing applies the immutable `+i` flag through
+  `evidence_posture.py`; that flag, rather than mode bits, is the disk
   write-protection boundary.
 - **Threats.** A host/root actor editing `/cases` bytes directly — caught by hash on
   re-verification, but (today) **not** by kernel auditd (§11, absent). `/cases` is
