@@ -50,6 +50,14 @@ profile sift-gateway flags=(attach_disconnected) {
   /var/lib/sift/.sift/                    r,
   /var/lib/sift/.sift/**                  r,
 
+  # Installation-held custody signing authority.  These exact read-only
+  # traversals deliberately sit outside service-writable state; no /etc write
+  # grant or wildcard is allowed for custody key material.
+  /etc/                                      r,
+  /etc/sift/                                 r,
+  /etc/sift/custody/                         r,
+  /etc/sift/custody/ed25519-private.pem      r,
+
   # sift state directory (read + write for passwords, tokens, verification)
   /var/lib/sift/                          rw,
   /var/lib/sift/**                        rw,

@@ -31,3 +31,17 @@ def test_runtime_default_uses_root_owned_state_parent_not_service_writable_sift_
 
     assert '_DEFAULT_KEY_PATH = "/etc/sift/custody/ed25519-private.pem"' in proof
     assert "/var/lib/sift/" not in proof
+
+
+def test_gateway_apparmor_can_only_read_the_fixed_custody_signing_authority() -> None:
+    profile = (ROOT / "configs" / "apparmor" / "sift-gateway.template").read_text()
+
+    for rule in (
+        "/etc/                                      r,",
+        "/etc/sift/                                 r,",
+        "/etc/sift/custody/                         r,",
+        "/etc/sift/custody/ed25519-private.pem      r,",
+    ):
+        assert rule in profile
+    assert "/etc/sift/custody/**" not in profile
+    assert "/etc/sift/custody/ed25519-private.pem      rw" not in profile

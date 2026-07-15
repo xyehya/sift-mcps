@@ -32,7 +32,7 @@ Primary service config dir: `/var/lib/sift/.sift/` — mode `0700`, owner
 | `opensearch.env` | `0600` | `sift-service` | `OPENSEARCH_CONFIG`, `OPENSEARCH_HOST` | low |
 | `opensearch.yaml` | `0600` | `sift-service` | `host`, `user`, `password=<redacted>`, `verify_certs` | yes (password) |
 | `forensic-knowledge.env` | `0644` | `sift-service` | `FK_DATA_DIR` (non-secret pointer) | no |
-| `/etc/sift/custody/ed25519-private.pem` | `0600` | `sift-service` | installation-held Ed25519 custody signing authority; root-owned `0750` parent under root-owned `/etc` prevents service replacement | yes |
+| `/etc/sift/custody/ed25519-private.pem` | `0600` | `sift-service` | installation-held Ed25519 custody signing authority; root-owned `0750` parent under root-owned `/etc` prevents service replacement; Gateway AppArmor receives only exact read traversal | yes |
 | `opencti-stack.env` | `0600` | `root` | OpenCTI administrator, worker, broker, object-store, encryption, and health secrets | yes (add-on) |
 | `opencti-shared.env` | `0600` | `root` | dedicated OpenCTI OpenSearch identity, password, CA pointer | yes (add-on) |
 | `opencti-connectors.env` | `0600` | `root` | per-connector identities and tokens | yes (add-on) |
