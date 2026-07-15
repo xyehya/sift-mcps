@@ -161,7 +161,8 @@ def test_signed_ledger_latch_finalizer_and_canonical_tamper_detection() -> None:
                 checkpoint = cur.fetchone()
                 assert checkpoint is not None
                 assert checkpoint[0] == "PENDING_SIGNATURE"
-                assert checkpoint[1].startswith("sha256:")
+                cur.execute("select head_hash from app.evidence_chain_heads where case_id=%s", (case_id,))
+                assert checkpoint[1] == cur.fetchone()[0]
                 assert checkpoint[2] == str(operation_id)
 
                 # The legacy direct completion edge must be latched, not accepted.
