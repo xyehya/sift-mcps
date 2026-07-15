@@ -151,7 +151,7 @@ export function EvidenceTab() {
           chainStatus={chainStatus}
           onAnchor={custody.handleTriggerAnchor}
           onProofExport={custody.handleProofExport}
-          onRotateSigningKey={custody.handleRotateSigningKey}
+          onRotateSigningKey={() => openModal('rotate_signing_key')}
         />
 
         <CustodyViolations
@@ -209,6 +209,7 @@ export function EvidenceTab() {
           onClose: closeModal,
           onFullVerifyEvidence: custody.handleFullVerifyEvidence,
           onStorageProfileChange: custody.handleStorageProfileChange,
+          onRotateSigningKey: custody.handleRotateSigningKey,
           onSeal: custody.handleSealEvidence,
           onResumeSeal: custody.handleResumeSeal,
           onIgnore: custody.handleIgnoreEvidence,

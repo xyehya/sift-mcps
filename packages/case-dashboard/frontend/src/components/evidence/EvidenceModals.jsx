@@ -221,6 +221,22 @@ function StorageProfileModal({ path, password, onPasswordChange, reason, onReaso
   )
 }
 
+function RotateSigningKeyModal({ password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
+  return (
+    <ModalShell title="Rotate Custody Signing Key" titleTone="amber">
+      <p className="text-xs text-muted-foreground">Record an installation signing-key rotation. This requires a reason and fresh examiner re-authentication; private key material never enters this page.</p>
+      <form id="modal-rotate-signing-key" onSubmit={onSubmit} className="space-y-4">
+        <ReasonField value={reason} onChange={onReasonChange} disabled={loading} placeholder="Reason for signing-key rotation" />
+        <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
+        <ModalError error={error} />
+        {loading && <ModalLoading message="Recording signing-key rotation…" />}
+        {result && <ModalSuccess message="Signing-key rotation recorded." />}
+        <div className="flex justify-end gap-2"><CancelButton onClose={onClose} /><ConfirmButton formId="modal-rotate-signing-key" label="Rotate Key" tone="amber" disabled={loading} testId="rotate-signing-key-submit" /></div>
+      </form>
+    </ModalShell>
+  )
+}
+
 function ResumeDispositionModal({ password, onPasswordChange, loading, error, result, onClose, onSubmit }) {
   return <ModalShell title="Resume Evidence Disposition"><p className="text-xs text-muted-foreground">Re-authenticate to resume the server-stored, gate-blocked disposition. The action and evidence object are selected from the immutable operation record.</p><form id="modal-resume-disposition" onSubmit={onSubmit} className="space-y-4"><PasswordField value={password} onChange={onPasswordChange} disabled={loading} /><ModalError error={error} />{loading && <ModalLoading message="Resuming durable disposition…" />}{result?.success && <ModalSuccess message="Custody disposition completed." />}<div className="flex justify-end gap-2"><CancelButton onClose={onClose} /><ConfirmButton formId="modal-resume-disposition" label="Resume" tone="jade" disabled={loading} /></div></form></ModalShell>
 }
@@ -375,6 +391,7 @@ export function EvidenceModals({ activeModal, pendingPath, password, reason, loa
       {activeModal === 'storage_profile' && (
         <StorageProfileModal key="storage_profile" {...common} onSubmit={handlers.onStorageProfileChange} />
       )}
+      {activeModal === 'rotate_signing_key' && <RotateSigningKeyModal key="rotate_signing_key" {...common} onSubmit={handlers.onRotateSigningKey} />}
       {activeModal === 'seal' && <EvidenceSealModal key="seal" {...common} onSubmit={handlers.onSeal} />}
       {activeModal === 'resume_seal' && <ResumeSealModal key="resume_seal" {...common} onSubmit={handlers.onResumeSeal} />}
       {activeModal === 'resume_disposition' && <ResumeDispositionModal key="resume_disposition" {...common} onSubmit={handlers.onDispositionResume} />}
