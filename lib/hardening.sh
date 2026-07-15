@@ -174,6 +174,14 @@ configure_custody_delete_broker() {
     --helper-src "$REPO_DIR/scripts/sift-custody-delete-broker"
 }
 
+provision_custody_signing_authority() {
+  log "Provisioning installation-held Ed25519 custody signing authority."
+  sudo_if_needed "$REPO_DIR/scripts/setup-custody-signing-authority.sh" \
+    --service-user "$SIFT_GATEWAY_SERVICE_USER" \
+    --state-dir "$SIFT_STATE_DIR" \
+    --python "$VENV_DIR/bin/python"
+}
+
 verify_gateway_apparmor_attachment() {
   [[ "${SIFT_APPARMOR_ENFORCE:-0}" == "1" ]] || return 0
   command -v systemctl >/dev/null 2>&1 || return 0

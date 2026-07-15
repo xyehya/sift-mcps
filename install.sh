@@ -264,6 +264,7 @@ main() {
   # warn) so a prior teardown's leftover evidence never collides or is clobbered.
   backup_preexisting_data_if_fresh
   install_state_dirs
+  provision_custody_signing_authority
   configure_agent_runtime
   # agent_runtime is created by configure_agent_runtime (setup-agent-runtime.sh);
   # add it to the shared `sift` group AFTER, so it can write the vol symbol cache.
