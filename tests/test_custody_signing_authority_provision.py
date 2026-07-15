@@ -1,5 +1,7 @@
 """Fail-on-revert installer contract for the custody signing authority."""
 
+import os
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,6 +28,7 @@ def test_installer_provisions_fixed_service_only_custody_signing_authority() -> 
     assert 'stat.S_IMODE(info.st_mode) != 0o640' in helper
     assert 'info.st_uid != 0 or info.st_gid != gid' in helper
     assert 'os.fchown(fd, 0, gid)' in helper
+    assert 'os.fchmod(fd, 0o640)' in helper
     assert 'Ed25519PrivateKey.generate()' in helper
     assert '"$PYTHON_BIN" - "$KEY_DIR" "$KEY_PATH" "$SERVICE_USER"' in helper
     assert 'provision_custody_signing_authority' in hardening
@@ -84,3 +87,17 @@ def test_installed_authority_requires_root_service_group_read_only_mode(
     )
     with pytest.raises(custody_proof.CustodyProofError, match="unavailable"):
         custody_proof.load_signing_key()
+
+
+def test_explicit_fchmod_preserves_required_mode_under_secure_umask(tmp_path: Path) -> None:
+    key_path = tmp_path / "ed25519-private.pem"
+    previous = os.umask(0o077)
+    try:
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+    finally:
+        os.umask(previous)
+    try:
+        os.fchmod(fd, 0o640)
+    finally:
+        os.close(fd)
+    assert stat.S_IMODE(key_path.stat().st_mode) == 0o640

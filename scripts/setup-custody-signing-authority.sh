@@ -62,6 +62,9 @@ try:
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
     try:
         os.fchown(fd, 0, gid)
+        # os.open's requested mode is filtered by the caller's umask.  Set the
+        # required root:service-group read-only mode explicitly before writing.
+        os.fchmod(fd, 0o640)
         view = memoryview(raw)
         while view:
             written = os.write(fd, view)
