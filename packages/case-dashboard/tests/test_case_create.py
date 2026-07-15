@@ -6,7 +6,6 @@ is wired with supabase_auth. Tests that need a readonly operator create their
 own app instance with the appropriate principal.
 """
 
-import json
 import os
 import secrets
 from datetime import datetime, timezone
