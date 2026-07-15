@@ -74,6 +74,7 @@ def test_installed_authority_requires_root_service_group_read_only_mode(
         return SimpleNamespace(st_mode=0o100640, st_uid=0, st_gid=4242)
 
     monkeypatch.setattr(custody_proof.os, "stat", authority_stat)
+    monkeypatch.setenv("SIFT_CUSTODY_SIGNING_KEY_PATH", "/tmp/attacker-key.pem")
     assert custody_proof.load_signing_key().key_id.startswith("ed25519:sha256:")
 
     monkeypatch.setattr(

@@ -34,6 +34,7 @@ from case_dashboard.session_jwt import (
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sift_gateway.custody_operations import PinnedEvidenceFile, PostureBatch
+from sift_gateway.custody_proof import load_signing_key
 from sift_gateway.portal_services import EvidenceAuthorityService, PortalServiceError
 from starlette.testclient import TestClient
 
@@ -320,7 +321,9 @@ def service(monkeypatch, tmp_path):
         )
     )
     key_path.chmod(0o600)
-    monkeypatch.setenv("SIFT_CUSTODY_SIGNING_KEY_PATH", str(key_path))
+    # Production authority selection is fixed.  This fake DB fixture injects
+    # an explicit test key at the service seam rather than altering process env.
+    monkeypatch.setattr(ps, "load_signing_key", lambda: load_signing_key(key_path))
     # This legacy fake has no P4.23.6 checkpoint tables; proof-export tests
     # isolate its byte-verification behaviour from the separately tested ledger.
     monkeypatch.setattr(svc, "verify_ledger", lambda *, case_id: {"verified": True, "issues": []})

@@ -78,11 +78,11 @@ def _reject_unsafe(value: Any) -> None:
 def load_signing_key(path: str | os.PathLike[str] | None = None) -> SigningKey:
     """Load a service-only PEM key from a fixed, owner-restricted path.
 
-    The path is deployment configuration only; it is never copied into a proof
+    The runtime path is fixed; it is never copied into a proof
     or error.  The installed authority is root-owned and readable only by the
     dedicated service group; writable or substituted material fails closed.
     """
-    configured = path or os.environ.get("SIFT_CUSTODY_SIGNING_KEY_PATH") or _DEFAULT_KEY_PATH
+    configured = path or _DEFAULT_KEY_PATH
     try:
         info = os.stat(configured, follow_symlinks=False)
         mode = stat.S_IMODE(info.st_mode)
