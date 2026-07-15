@@ -26,9 +26,6 @@ from sift_core.case_io import (
     case_audit_dir,
     cases_root,
 )
-from sift_core.evidence_chain import (
-    init_evidence_chain,
-)
 
 # BATCH-NW1: compute_content_hash is imported from investigation_store (single
 # shared authority).  case_io re-exports it for backward compatibility but routes
@@ -422,9 +419,6 @@ def _configure_agent_runtime_case_acl(case_dir: Path) -> dict:
     protected_paths = [
         case_dir / "audit",
         case_dir / "approvals.jsonl",
-        case_dir / "evidence-ledger.jsonl",
-        case_dir / "evidence-manifest.json",
-        case_dir / "evidence-verify-state.json",
     ]
     for path in protected_paths:
         if not path.exists():
@@ -1115,7 +1109,7 @@ def _db_export_proof_after_seal(request, examiner):
         head = gate(case_id) if callable(gate) else {}
         head = head if isinstance(head, dict) else {}
         try:
-            from sift_core.evidence_chain import anchor_db_proof
+            from sift_core.custody_anchor import anchor_db_proof
             anchor_proof = anchor_db_proof(
                 manifest_version=head.get("manifest_version", 0),
                 manifest_hash=head.get("head_hash", "") or "",
@@ -5066,11 +5060,9 @@ async def post_case_create(request: Request) -> JSONResponse:
                 f.flush()
                 os.fsync(f.fileno())
 
-        # Compatibility proof exports only; Postgres remains custody authority.
-        # Initialize evidence-manifest.json (v0) + evidence-ledger.jsonl for
-        # offline/export consumers, never for admission or Full Verify Evidence.
-        init_evidence_chain(real_requested)
-        case_approvals_path(real_requested).touch(exist_ok=True)
+        approvals_path = case_approvals_path(real_requested)
+        approvals_path.parent.mkdir(parents=True, exist_ok=True)
+        approvals_path.touch(exist_ok=True)
         runtime_acl = _configure_agent_runtime_case_acl(real_requested)
         if runtime_acl.get("status") not in {"configured", "skipped"}:
             logger.warning("case create: runtime ACL setup incomplete: %s", runtime_acl)

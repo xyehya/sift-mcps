@@ -219,7 +219,7 @@ file-backed mutation fallback. All mutations require examiner role,
 - Retires versioned evidence while preserving protected bytes, immutable posture, and
   every prior version. It writes one excluding manifest/event. Exact request
   `{password, path, reason, idempotency_key}` with object-bound fresh re-authentication.
-### POST `/api/evidence/chain/verify-hmac` (`post_evidence_chain_verify_hmac`, 1426)
+### POST `/api/evidence/chain/full-verify`
 - Compatibility URL for **Full Verify Evidence**. This is a passwordless authenticated
   operator action: the gateway re-hashes every sealed mounted object and compares it
   with Postgres custody authority; no password-derived key or file ledger participates. Records the DB

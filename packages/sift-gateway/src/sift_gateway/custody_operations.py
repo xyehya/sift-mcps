@@ -790,7 +790,7 @@ class LocalImmutablePostureAdapter:
             raise
 
     def apply(self, batch: PostureBatch) -> None:
-        from sift_core.evidence_chain import set_immutable_flag_fd
+        from sift_core.evidence_posture import set_immutable_flag_fd
 
         for item in batch.files:
             if not set_immutable_flag_fd(item.fd, True):
@@ -799,7 +799,7 @@ class LocalImmutablePostureAdapter:
                 )
 
     def verify(self, batch: PostureBatch) -> list[dict[str, Any]]:
-        from sift_core.evidence_chain import get_immutable_flag_fd
+        from sift_core.evidence_posture import get_immutable_flag_fd
 
         receipts: list[dict[str, Any]] = []
         expected_uid = pwd.getpwnam(self._service_user).pw_uid
@@ -1318,7 +1318,7 @@ class RecoveryCustodyOperation:
     def _verified_descriptor_facts(
         self, case_id: str, evidence_object_id: str
     ) -> tuple[dict[str, Any], int, int]:
-        from sift_core.evidence_chain import get_immutable_flag_fd
+        from sift_core.evidence_posture import get_immutable_flag_fd
 
         obj = self._object_for_id(case_id, evidence_object_id)
         display_path = str(obj.get("display_path") or "")
@@ -1395,7 +1395,7 @@ class RecoveryCustodyOperation:
             display_path = str(obj.get("display_path") or "")
             observed: dict[str, Any]
             try:
-                from sift_core.evidence_chain import get_immutable_flag_fd
+                from sift_core.evidence_posture import get_immutable_flag_fd
 
                 root_fd, fd = self._open_object(command.case_id, display_path)
                 st = os.fstat(fd)
@@ -1437,7 +1437,7 @@ class RecoveryCustodyOperation:
                 facts={"item": prepared},
             )
             current = operation.phase
-            from sift_core.evidence_chain import (
+            from sift_core.evidence_posture import (
                 get_immutable_flag_fd,
                 set_immutable_flag_fd,
             )
@@ -1525,7 +1525,7 @@ class RecoveryCustodyOperation:
             else:
                 raise CustodyOperationError("recovery_action_required", http_status=409)
 
-            from sift_core.evidence_chain import (
+            from sift_core.evidence_posture import (
                 get_immutable_flag_fd,
                 set_immutable_flag_fd,
             )

@@ -1183,81 +1183,15 @@ class EvidenceRefError(ValueError):
     """An evidence/output reference could not be resolved to a sealed target."""
 
 
-def _evidence_manifest_entries(case_dir: Path) -> list[dict]:
-    """ACTIVE sealed-manifest entries for the active case (empty if unsealed)."""
-    try:
-        from sift_core.evidence_chain import load_manifest
-
-        manifest = load_manifest(case_dir)
-    except Exception:  # pragma: no cover - defensive against packaging issues
-        return []
-    if not manifest:
-        return []
-    return [
-        f
-        for f in manifest.get("files", [])
-        if isinstance(f, dict) and f.get("status") == "ACTIVE"
-    ]
-
-
 def resolve_evidence_ref(ref: str, *, case_dir: str | Path | None = None) -> str:
-    """Resolve an opaque evidence reference to an absolute path under evidence/.
+    """Reject non-gateway evidence resolution.
 
-    A reference is matched, in order, against the ACTIVE entries of the sealed
-    evidence manifest by:
-      * exact ``evidence_id`` (manifest entry ``evidence_id`` / ``id``),
-      * exact relative display ``path`` (e.g. ``evidence/disk.E01``),
-      * basename of the relative path (e.g. ``disk.E01``).
-
-    Returns the absolute path the worker should read. Raises EvidenceRefError if
-    no active sealed entry matches — the agent cannot reach arbitrary paths and
-    cannot reach unsealed/ignored/retired evidence through this door.
+    The gateway resolves DB-authorized evidence references and injects pinned
+    paths before worker dispatch. A worker must never reconstruct authority from
+    case files.
     """
-    if not isinstance(ref, str) or not ref.strip():
-        raise EvidenceRefError("evidence reference must be a non-empty string")
-    ref = ref.strip()
-    if "\x00" in ref:
-        raise EvidenceRefError("evidence reference contains a null byte")
-
-    case_str = str(case_dir) if case_dir else _active_case_dir_str()
-    if not case_str:
-        raise EvidenceRefError(
-            "No active case: an evidence reference can only be resolved with an "
-            "active sealed case."
-        )
-    case_resolved = Path(case_str).resolve()
-
-    entries = _evidence_manifest_entries(case_resolved)
-    if not entries:
-        raise EvidenceRefError(
-            f"Evidence reference '{ref}' could not be resolved: the case has no "
-            "sealed evidence. Ask the operator to register and seal evidence "
-            "via the Examiner Portal first."
-        )
-
-    match: dict | None = None
-    for entry in entries:
-        rel = str(entry.get("path", ""))
-        ev_id = str(entry.get("evidence_id") or entry.get("id") or "")
-        if ref == ev_id or ref == rel or ref == Path(rel).name:  # noqa: SIM109 pre-monorepo legacy debt, grandfathered 2026-07-01 during ruff/pytest config centralization — revisit, do not treat as new debt
-            match = entry
-            break
-    if match is None:
-        raise EvidenceRefError(
-            f"Evidence reference '{ref}' does not match any sealed evidence in "
-            "this case. Reference sealed evidence by its evidence_id or relative "
-            "display path."
-        )
-
-    rel_path = str(match.get("path", ""))
-    # Reuse the input-path jail so the resolved target is provably inside the
-    # case and never escapes via traversal in a manifest entry.
-    resolved = _resolve_user_path(rel_path, base_dir=case_resolved)
-    if not (resolved == case_resolved or resolved.is_relative_to(case_resolved)):
-        raise EvidenceRefError(
-            f"Evidence reference '{ref}' resolves outside the case directory."
-        )
-    return str(resolved)
+    del ref, case_dir
+    raise EvidenceRefError("Gateway DB evidence binding is required")
 
 
 def resolve_output_ref(ref: str, *, case_dir: str | Path | None = None) -> str:

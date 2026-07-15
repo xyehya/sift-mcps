@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import case_dashboard.routes as portal_routes
-from sift_core import agent_tools
+from sift_core import agent_tools, reporting
+from sift_core.execute import security as execute_security
 
 
 def test_core_mcp_catalog_has_no_custody_mutation_tools() -> None:
@@ -40,3 +42,15 @@ def test_public_portal_contract_has_no_hmac_verify_or_rescan_route() -> None:
     assert "/api/evidence/chain/verify-hmac" not in source
     assert "/api/evidence/chain/rescan" not in source
     assert "post_evidence_chain_full_verify" in source
+
+
+def test_legacy_file_custody_modules_and_fallbacks_are_absent() -> None:
+    """A file-HMAC fallback must not return through an untested worker path."""
+    core_root = Path(reporting.__file__).parent
+    assert not (core_root / "evidence_chain.py").exists()
+    assert not (core_root / "evidence_ops.py").exists()
+    assert "load_manifest" not in inspect.getsource(reporting)
+    assert "_evidence_manifest_entries" not in inspect.getsource(execute_security)
+    assert "Gateway DB evidence binding is required" in inspect.getsource(
+        execute_security.resolve_evidence_ref
+    )

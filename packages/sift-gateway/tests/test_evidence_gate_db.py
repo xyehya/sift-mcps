@@ -15,7 +15,7 @@ import sys
 import types
 from contextlib import contextmanager
 
-from sift_core.evidence_chain import ChainStatus
+from sift_core.custody_types import ChainStatus
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.evidence_gate import check_evidence_gate_db
 from sift_gateway.policy_middleware import (

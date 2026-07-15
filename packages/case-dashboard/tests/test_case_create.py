@@ -321,14 +321,8 @@ def test_successful_case_creation(client, case_env, passwords_dir, monkeypatch):
     assert meta["examiner"] == "alice"
     assert meta["created_at"] == "2026-05-25T14:13:00+00:00"
 
-    for fname in ("findings.json", "timeline.json", "todos.json", "iocs.json", "evidence-manifest.json"):
+    for fname in ("findings.json", "timeline.json", "todos.json", "iocs.json"):
         assert (requested_dir / fname).exists()
-
-    with open(requested_dir / "evidence-manifest.json") as f:
-        manifest = json.load(f)
-    assert manifest["version"] == 0
-    assert manifest["files"] == []
-    assert manifest["manifest_hash"].startswith("sha256:")
 
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
@@ -394,7 +388,7 @@ def test_runtime_acl_helper_sets_case_permissions(tmp_path, monkeypatch):
     case_dir = tmp_path / "case"
     for subdir in ("agent", "evidence", "extractions", "audit"):
         (case_dir / subdir).mkdir(parents=True, exist_ok=True)
-    for filename in ("approvals.jsonl", "evidence-ledger.jsonl", "evidence-manifest.json"):
+    for filename in ("approvals.jsonl",):
         (case_dir / filename).write_text("", encoding="utf-8")
 
     monkeypatch.setenv("SIFT_EXECUTE_AS_USER", "agent_runtime")

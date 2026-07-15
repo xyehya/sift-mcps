@@ -936,7 +936,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                         immutable: bool | None = None
                         if storage_profile is StorageProfile.LOCAL_IMMUTABLE:
                             try:
-                                from sift_core.evidence_chain import (
+                                from sift_core.evidence_posture import (
                                     get_immutable_flag_fd,
                                 )
 
@@ -1689,7 +1689,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
             immutable = None
             external = None
             if profile is StorageProfile.LOCAL_IMMUTABLE:
-                from sift_core.evidence_chain import get_immutable_flag_fd
+                from sift_core.evidence_posture import get_immutable_flag_fd
 
                 immutable = get_immutable_flag_fd(fd)
             else:
@@ -2054,12 +2054,12 @@ class EvidenceAuthorityService(_BasePortalDbService):
         """Apply the service-owned + immutable FS posture to the sealed files.
 
         Resolves the case dir, derives case-relative paths, and delegates to
-        ``sift_core.evidence_chain.harden_sealed_evidence`` which re-validates each
+        ``sift_core.evidence_posture.harden_sealed_evidence`` which re-validates each
         path inside ``evidence/`` and fails closed if immutability cannot be set.
         Maps any hardening failure to a fail-closed seal error so the DB seal is
         never written for un-hardened bytes.
         """
-        from sift_core.evidence_chain import (
+        from sift_core.evidence_posture import (
             EvidenceHardeningError,
             harden_sealed_evidence,
         )
@@ -3901,7 +3901,7 @@ def _hash_file(path: Path) -> tuple[str, int]:
 
 def _admission_fingerprint(path: Path) -> tuple[os.stat_result, bool | None]:
     """Read one cheap descriptor-pinned identity and immutable posture."""
-    from sift_core.evidence_chain import get_immutable_flag_fd
+    from sift_core.evidence_posture import get_immutable_flag_fd
 
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags)

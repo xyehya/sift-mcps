@@ -5,7 +5,6 @@ Pure-data functions (no CLI output). Called by the core case tools and the SIFT 
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -24,7 +23,6 @@ from sift_core.case_io import (
     load_timeline,
     load_todos,
 )
-from sift_core.evidence_chain import init_evidence_chain
 
 logger = logging.getLogger(__name__)
 
@@ -296,13 +294,6 @@ def case_init_data(
             f.write("[]")
             f.flush()
             os.fsync(f.fileno())
-    with open(case_dir / "evidence.json", "w") as f:
-        json.dump({"files": []}, f)
-        f.flush()
-        os.fsync(f.fileno())
-
-    init_evidence_chain(case_dir)
-
     # Detect non-POSIX filesystems before trying chmod
     fs_warning = ""
     try:

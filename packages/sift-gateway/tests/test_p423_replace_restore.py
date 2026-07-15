@@ -141,14 +141,14 @@ def _operation(monkeypatch, tmp_path, original: bytes):
     repo = RecoveryRepository()
     immutable = {"value": True}
     monkeypatch.setattr(
-        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: immutable["value"]
+        "sift_core.evidence_posture.get_immutable_flag_fd", lambda _fd: immutable["value"]
     )
 
     def set_flag(_fd, enabled):
         immutable["value"] = enabled
         return True
 
-    monkeypatch.setattr("sift_core.evidence_chain.set_immutable_flag_fd", set_flag)
+    monkeypatch.setattr("sift_core.evidence_posture.set_immutable_flag_fd", set_flag)
     op = RecoveryCustodyOperation(
         repo, lambda _case_id: tmp_path, lambda _case_id, _object_id: _object(original),
         service_user=pwd.getpwuid(os.getuid()).pw_name,

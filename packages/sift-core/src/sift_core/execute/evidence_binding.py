@@ -12,7 +12,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, NotRequired, Required, TypedDict
 
-from sift_core.evidence_chain import get_immutable_flag_fd
+from sift_core.evidence_posture import get_immutable_flag_fd
 from sift_core.evidence_storage import (
     StorageAuthorityError,
     StorageProfile,

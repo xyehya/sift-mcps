@@ -11,7 +11,7 @@ def is_under_system_tmpdir(path: Path) -> bool:
 
     Used to detect throwaway pytest/dev-tool cases so integrity-record and
     audit writes route to a tmp-adjacent fallback instead of the production
-    state root (see callers in sift_core.case_io, sift_core.evidence_chain,
+    state root (see callers in sift_core.case_io, sift_core.evidence_posture,
     sift_core.audit_ops, sift_core.execute.security, sift_common.audit).
 
     Compares against ``tempfile.gettempdir()`` (resolved on both sides)

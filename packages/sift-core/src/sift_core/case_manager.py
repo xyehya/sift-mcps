@@ -22,8 +22,6 @@ from sift_common.identifiers import is_valid_examiner_slug
 
 from sift_core.case_io import cases_root
 from sift_core.case_ops import build_case_brief
-from sift_core.evidence_chain import load_manifest
-from sift_core.evidence_ops import list_manifest_evidence_data
 from sift_core.finding_validation import validate as validate_finding_data
 from sift_core.investigation_store import compute_content_hash as _compute_content_hash
 
@@ -749,8 +747,6 @@ class CaseManager:
         from sift_core.investigation_store import resolve_case_metadata
 
         case_dir = self._resolve_case_dir(case_id)
-        manifest = load_manifest(case_dir) or {}
-        active_evidence = [f for f in manifest.get("files", []) if f.get("status") != "IGNORED"]
 
         db_meta = resolve_case_metadata()
         if db_meta is not None:
@@ -785,7 +781,7 @@ class CaseManager:
                 "rejected": sum(1 for f in findings if f.get("status") == "REJECTED"),
             },
             "timeline_events": len(timeline),
-            "evidence_files": len(active_evidence),
+            "evidence_files": 0,
             "todos": {
                 "total": len(todos),
                 "open": sum(1 for t in todos if t.get("status") == "open"),
@@ -1562,8 +1558,9 @@ class CaseManager:
     # --- Evidence ---
 
     def list_evidence(self) -> list[dict]:
-        case_dir = self._require_active_case()
-        return list_manifest_evidence_data(case_dir).get("evidence", [])
+        self._require_active_case()
+        # Evidence enumeration belongs to the gateway's DB-authority overlay.
+        return []
 
     # --- Grounding Score ---
 

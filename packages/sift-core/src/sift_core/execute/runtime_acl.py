@@ -212,9 +212,6 @@ AUTHORITY_FILE_BASENAMES: frozenset[str] = frozenset(
         "todos.json",
         "iocs.json",
         "approvals.jsonl",
-        "evidence-manifest.json",
-        "evidence-ledger.jsonl",
-        "evidence-verify-state.json",
         "host-dictionary.yaml",
     }
 )

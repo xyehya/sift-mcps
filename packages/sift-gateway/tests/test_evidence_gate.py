@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from sift_core.evidence_chain import ChainStatus
+from sift_core.custody_types import ChainStatus
 from sift_gateway.evidence_gate import build_block_response
 
 

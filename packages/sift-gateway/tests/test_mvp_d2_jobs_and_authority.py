@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 from fastmcp import FastMCP
-from sift_core.evidence_chain import ChainStatus
+from sift_core.custody_types import ChainStatus
 from sift_gateway.identity import CaseMembership, Identity
 from sift_gateway.jobs import EnqueuedJob, JobService, JobServiceError
 from sift_gateway.policy_middleware import gateway_policy_middlewares

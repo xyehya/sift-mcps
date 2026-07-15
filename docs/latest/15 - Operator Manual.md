@@ -287,7 +287,7 @@ Once you have staged all your decisions, commit them to apply.
 > [!note] **DB authority throughout.**
 > Evidence custody, case metadata, and investigation data are
 > authoritative in Postgres. File artifacts (CASE.yaml,
-> evidence-manifest.json, findings.json, reports) are **exports** — they
+> findings.json, reports) are **exports** — they
 > are mirrors, not the source of truth. The Portal never reads case files
 > for report eligibility or evidence chain status when DB authority is
 > wired.

@@ -39,7 +39,7 @@ from unittest.mock import patch
 
 import pytest
 from fastmcp import FastMCP
-from sift_core.evidence_chain import ChainStatus
+from sift_core.custody_types import ChainStatus
 from sift_gateway.backends import load_and_validate_manifest
 from sift_gateway.identity import Identity
 from sift_gateway.mcp_backends_registry import (

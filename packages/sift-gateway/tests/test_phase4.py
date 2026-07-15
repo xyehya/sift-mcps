@@ -541,7 +541,7 @@ from unittest.mock import AsyncMock
 from fastmcp import FastMCP
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
-from sift_core.evidence_chain import ChainStatus
+from sift_core.custody_types import ChainStatus
 from sift_gateway.policy_middleware import gateway_policy_middlewares
 
 

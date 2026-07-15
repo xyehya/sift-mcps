@@ -111,7 +111,7 @@ describe('B-03: StatusBar chain status field names', () => {
     const chainStatus = {
       status: 'ok',
       manifest_version: 3,
-      hmac_verify_needed: false,
+      full_verify_needed: false,
       hmac_last_verified_at: '2026-05-27T10:00:00Z',
       write_protected: false,
     }
@@ -119,7 +119,7 @@ describe('B-03: StatusBar chain status field names', () => {
     const cs = useStore.getState().chainStatus
     const isSealed = cs && cs.status !== 'unsealed' && cs.manifest_version > 0
     const sealLabel = !cs ? 'LOADING'
-      : isSealed && !cs.hmac_verify_needed ? 'SEALED ✓'
+      : isSealed && !cs.full_verify_needed ? 'SEALED ✓'
       : isSealed ? 'SEALED · verify pending'
       : 'UNSEALED'
     expect(isSealed).toBe(true)
@@ -130,14 +130,14 @@ describe('B-03: StatusBar chain status field names', () => {
     const chainStatus = {
       status: 'ok',
       manifest_version: 1,
-      hmac_verify_needed: true,
+      full_verify_needed: true,
       write_protected: false,
     }
     useStore.getState().setChainStatus(chainStatus)
     const cs = useStore.getState().chainStatus
     const isSealed = cs && cs.status !== 'unsealed' && cs.manifest_version > 0
     const sealLabel = !cs ? 'LOADING'
-      : isSealed && !cs.hmac_verify_needed ? 'SEALED ✓'
+      : isSealed && !cs.full_verify_needed ? 'SEALED ✓'
       : isSealed ? 'SEALED · verify pending'
       : 'UNSEALED'
     expect(sealLabel).toBe('SEALED · verify pending')
@@ -147,13 +147,13 @@ describe('B-03: StatusBar chain status field names', () => {
     const chainStatus = {
       status: 'unsealed',
       manifest_version: 0,
-      hmac_verify_needed: true,
+      full_verify_needed: true,
       write_protected: false,
     }
     useStore.getState().setChainStatus(chainStatus)
     const cs = useStore.getState().chainStatus
     const sealLabel = !cs ? 'LOADING'
-      : cs.status !== 'unsealed' && cs.manifest_version > 0 && !cs.hmac_verify_needed ? 'SEALED ✓'
+      : cs.status !== 'unsealed' && cs.manifest_version > 0 && !cs.full_verify_needed ? 'SEALED ✓'
       : cs.status !== 'unsealed' && cs.manifest_version > 0 ? 'SEALED · verify pending'
       : 'UNSEALED'
     expect(sealLabel).toBe('UNSEALED')
@@ -170,7 +170,7 @@ describe('B-03: StatusBar chain status field names', () => {
     const chainStatus = {
       status: 'ok',
       manifest_version: 1,
-      hmac_verify_needed: false,
+      full_verify_needed: false,
       write_protected: true,
     }
     useStore.getState().setChainStatus(chainStatus)
@@ -187,15 +187,15 @@ describe('B-03: StatusBar chain status field names', () => {
 
   it('seal colors map correctly', () => {
     const cases = [
-      { status: 'ok', manifest_version: 1, hmac_verify_needed: false, expected: 'var(--jade)' },
-      { status: 'ok', manifest_version: 1, hmac_verify_needed: true, expected: 'var(--amber)' },
-      { status: 'unsealed', manifest_version: 0, hmac_verify_needed: true, expected: 'var(--crimson)' },
+      { status: 'ok', manifest_version: 1, full_verify_needed: false, expected: 'var(--jade)' },
+      { status: 'ok', manifest_version: 1, full_verify_needed: true, expected: 'var(--amber)' },
+      { status: 'unsealed', manifest_version: 0, full_verify_needed: true, expected: 'var(--crimson)' },
     ]
-    for (const { status, manifest_version, hmac_verify_needed, expected } of cases) {
-      const cs = { status, manifest_version, hmac_verify_needed }
+    for (const { status, manifest_version, full_verify_needed, expected } of cases) {
+      const cs = { status, manifest_version, full_verify_needed }
       const isSealed = cs.status !== 'unsealed' && cs.manifest_version > 0
       const color = !cs ? 'var(--text-muted)'
-        : isSealed && !cs.hmac_verify_needed ? 'var(--jade)'
+        : isSealed && !cs.full_verify_needed ? 'var(--jade)'
         : isSealed ? 'var(--amber)'
         : 'var(--crimson)'
       expect(color).toBe(expected)
@@ -591,12 +591,12 @@ describe('Response time expectations', () => {
   })
 
   it('chainStatus color computation is O(1)', () => {
-    const cs = { status: 'ok', manifest_version: 2, hmac_verify_needed: false }
+    const cs = { status: 'ok', manifest_version: 2, full_verify_needed: false }
     const start = performance.now()
     let color = ''
     for (let i = 0; i < 10000; i++) {
       const isSealed = cs.status !== 'unsealed' && cs.manifest_version > 0
-      color = isSealed && !cs.hmac_verify_needed ? 'jade' : isSealed ? 'amber' : 'crimson'
+      color = isSealed && !cs.full_verify_needed ? 'jade' : isSealed ? 'amber' : 'crimson'
     }
     const end = performance.now()
     expect(color).toBe('jade')
@@ -622,7 +622,7 @@ describe('Edge cases', () => {
   })
 
   it('chainStatus with zero manifest_version is unsealed', () => {
-    const cs = { status: 'ok', manifest_version: 0, hmac_verify_needed: true }
+    const cs = { status: 'ok', manifest_version: 0, full_verify_needed: true }
     const isSealed = cs.status !== 'unsealed' && cs.manifest_version > 0
     expect(isSealed).toBe(false)
   })

@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 from fastmcp import FastMCP
 from fastmcp.server import create_proxy
-from sift_core.evidence_chain import ChainStatus
+from sift_core.custody_types import ChainStatus
 from sift_gateway.identity import Identity
 from sift_gateway.policy_middleware import (
     ToolAuthorizationMiddleware,

@@ -12,11 +12,10 @@ Verifies F-MVP-4 deliverables in core report generation:
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 import yaml
-from sift_core.evidence_chain import ChainStatus
+from sift_core.custody_types import ChainStatus
 from sift_core.reporting import (
     _provenance_refs,
     build_custody_appendix,
@@ -64,24 +63,8 @@ def case_dir(tmp_path):
 
 
 def _gen(case_dir: Path, profile="full", **kwargs):
-    with (
-        patch(
-            "sift_core.reporting._ev_chain_status",
-            return_value={
-                "status": ChainStatus.OK,
-                "manifest_version": 2,
-                "ok_count": 3,
-                "issues": [],
-            },
-        ),
-        patch(
-            "sift_core.reporting.load_manifest",
-            return_value={"manifest_hash": "manifest-hash-xyz"},
-        ),
-        patch("sift_core.reporting.list_evidence_data", return_value={"evidence": []}),
-        # B-MVP-011: file-ledger reconcile path retired; nothing to patch.
-    ):
-        return generate_report_data(profile, case_dir, **kwargs)
+    kwargs.setdefault("custody", {"seal_status": "ok", "manifest_version": 2, "active_count": 3, "issues": [], "manifest_hash": "manifest-hash-xyz", "head_hash": "head", "ledger_tip_hash": "tip"})
+    return generate_report_data(profile, case_dir, **kwargs)
 
 
 class TestApprovedOnly:
@@ -118,7 +101,7 @@ class TestCustodyAppendix:
         seal = result["custody_appendix"]["evidence_seal"]
         assert seal["manifest_version"] == 2
         assert seal["manifest_hash"] == "manifest-hash-xyz"
-        assert seal["seal_status"] == str(ChainStatus.OK)
+        assert seal["seal_status"] == ChainStatus.OK.value
 
     def test_finding_provenance_carries_hash_and_refs(self, case_dir):
         result = _gen(case_dir, "full")

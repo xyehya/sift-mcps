@@ -22,14 +22,7 @@ from sift_core.case_io import (
     load_timeline,
     load_todos,
 )
-from sift_core.evidence_chain import (
-    ChainStatus,
-    load_manifest,
-)
-from sift_core.evidence_chain import (
-    chain_status as _ev_chain_status,
-)
-from sift_core.evidence_ops import list_evidence_data
+from sift_core.custody_types import ChainStatus
 from sift_core.investigation_store import compute_content_hash
 from sift_core.report_profiles import PROFILES, STRIPPED_FINDING_FIELDS
 from sift_core.verification import read_approval_commit_tip_db
@@ -433,19 +426,7 @@ def generate_report_data(
         all_timeline = load_timeline(case_dir)
     todos = load_todos(case_dir)
 
-    # Evidence
-    evidence_list: list[dict] = []
-    try:
-        ev_data = list_evidence_data(case_dir)
-        evidence_list = ev_data.get("evidence", [])
-    except (ValueError, OSError):
-        pass
-    evidence_count = len(evidence_list)
-
-    # Evidence chain status — included in every report for chain-of-custody. In
-    # DB-active portal generation, the caller supplies the DB custody summary;
-    # prefer that authority over the legacy local manifest mirror.
-    ev_chain: dict = {}
+    # Custody is DB authority. Reports never inspect an evidence-folder mirror.
     if custody and custody.get("seal_status"):
         active_count = custody.get("active_count", 0)
         ev_chain = {
@@ -458,30 +439,10 @@ def generate_report_data(
             "head_hash": custody.get("head_hash"),
             "ledger_tip_hash": custody.get("ledger_tip_hash"),
         }
+        evidence_count = active_count
+        evidence_list: list[dict] = []
     else:
-        try:
-            ev_status = _ev_chain_status(case_dir)
-            ev_chain = {
-                "status": str(ev_status["status"]),
-                "manifest_version": ev_status.get("manifest_version", 0),
-                "ok_count": ev_status.get("ok_count", 0),
-                "issues": ev_status.get("issues", []),
-                "manifest_hash": None,
-            }
-            try:
-                manifest = load_manifest(case_dir)
-                if manifest:
-                    ev_chain["manifest_hash"] = manifest.get("manifest_hash")
-            except Exception:
-                pass
-        except Exception as exc:
-            ev_chain = {
-                "status": str(ChainStatus.LEDGER_ERROR),
-                "issues": [f"Chain status check failed: {exc}"],
-                "manifest_version": 0,
-                "ok_count": 0,
-                "manifest_hash": None,
-            }
+        raise ValueError("DB custody authority is required for report generation")
 
     # Filter approved only. This is the single authoritative gate: only items
     # whose status is exactly "APPROVED" reach the report. Unapproved, draft,

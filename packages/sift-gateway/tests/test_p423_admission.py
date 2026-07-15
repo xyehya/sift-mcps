@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastmcp import FastMCP
 from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
-from sift_core.evidence_chain import ChainStatus
+from sift_core.custody_types import ChainStatus
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.identity import Identity
 from sift_gateway.policy_middleware import gateway_policy_middlewares
@@ -1601,7 +1601,7 @@ def test_posture_drift_requires_full_verify_without_generic_content_violation(
     monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
     monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
     monkeypatch.setattr(
-        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: False
+        "sift_core.evidence_posture.get_immutable_flag_fd", lambda _fd: False
     )
 
     result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
@@ -1678,7 +1678,7 @@ def test_exact_restore_receipt_rebinds_current_posture_without_new_version(
     monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
     monkeypatch.setattr(service, "_connect", lambda: connection)
     monkeypatch.setattr(
-        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True
+        "sift_core.evidence_posture.get_immutable_flag_fd", lambda _fd: True
     )
 
     result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
@@ -1711,7 +1711,7 @@ def test_exact_restore_receipt_rebinds_current_posture_without_new_version(
         drift_service, "_connect", lambda: _ObservationConnection(drift_cursor)
     )
     monkeypatch.setattr(
-        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: False
+        "sift_core.evidence_posture.get_immutable_flag_fd", lambda _fd: False
     )
     drift = drift_service.reconcile_for_admission(
         "11111111-1111-1111-1111-111111111111"
@@ -1821,7 +1821,7 @@ def test_local_posture_authority_uses_strictly_newest_complete_receipt(
     monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
     monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
     monkeypatch.setattr(
-        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True
+        "sift_core.evidence_posture.get_immutable_flag_fd", lambda _fd: True
     )
 
     result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
@@ -1876,7 +1876,7 @@ def test_persisted_violation_is_returned_and_recorded_when_mount_matches(
     monkeypatch.setattr(service, "_case_artifact_path", lambda _case_id: case_dir)
     monkeypatch.setattr(service, "_connect", lambda: _ObservationConnection(cursor))
     monkeypatch.setattr(
-        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True
+        "sift_core.evidence_posture.get_immutable_flag_fd", lambda _fd: True
     )
 
     result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
@@ -1965,7 +1965,7 @@ def test_inventory_reconciliation_does_not_hash_large_unchanged_sibling(
         ),
     )
     monkeypatch.setattr(
-        "sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True
+        "sift_core.evidence_posture.get_immutable_flag_fd", lambda _fd: True
     )
 
     result = service.reconcile_for_admission("11111111-1111-1111-1111-111111111111")
@@ -2006,7 +2006,7 @@ def test_admitted_sparse_19gib_reference_never_reads_file_content(
     monkeypatch.setattr(service, "_connect", lambda: _ResolveConnection(row))
     monkeypatch.setattr(service, "_resolve_evidence_path", lambda *_args: image)
     monkeypatch.setattr(
-        "sift_core.evidence_chain.get_immutable_flag_fd",
+        "sift_core.evidence_posture.get_immutable_flag_fd",
         lambda _fd: True,
     )
     monkeypatch.setattr(

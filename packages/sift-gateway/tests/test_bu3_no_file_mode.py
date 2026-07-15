@@ -18,7 +18,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 import pytest
-from sift_core.evidence_chain import ChainStatus
+from sift_core.custody_types import ChainStatus
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.policy_middleware import (
     ControlPlaneRequiredMiddleware,
@@ -178,12 +178,6 @@ async def test_evidence_gate_uses_db_authority_only(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "sift_gateway.policy_middleware.check_evidence_gate_db", fake_db_gate
     )
-    # Any file-chain read raising must not affect the gate decision.
-    monkeypatch.setattr(
-        "sift_core.evidence_chain.chain_status",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("file chain must not be read")),
-    )
-
     gateway = _Gateway(dsn=_DSN)
     middleware = EvidenceGateMiddleware(gateway)
     case = ActiveCase(

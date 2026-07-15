@@ -701,10 +701,10 @@ def test_seal_rejects_unknown_file_spec_fields_and_traversal(seal_service):
 def _adapter(monkeypatch):
     user = pwd.getpwuid(os.getuid()).pw_name
     monkeypatch.setattr(
-        "sift_core.evidence_chain.set_immutable_flag_fd", lambda fd, enabled: True
+        "sift_core.evidence_posture.set_immutable_flag_fd", lambda fd, enabled: True
     )
     monkeypatch.setattr(
-        "sift_core.evidence_chain.get_immutable_flag_fd", lambda fd: True
+        "sift_core.evidence_posture.get_immutable_flag_fd", lambda fd: True
     )
     return LocalImmutablePostureAdapter(service_user=user)
 
@@ -743,7 +743,7 @@ def test_external_adapter_observes_without_local_mutation(monkeypatch, tmp_path)
         "sift_gateway.custody_operations.external_storage_facts", storage_facts
     )
     monkeypatch.setattr(
-        "sift_core.evidence_chain.set_immutable_flag_fd",
+        "sift_core.evidence_posture.set_immutable_flag_fd",
         lambda *_args: pytest.fail("external storage must never invoke local mutation"),
     )
     evidence = tmp_path / "evidence"
@@ -1174,14 +1174,14 @@ def test_posture_adapter_fails_on_ioctl_and_digest_drift(monkeypatch, tmp_path):
     target.chmod(0o644)
     batch = adapter.prepare(tmp_path, ["evidence/disk.raw"])
     monkeypatch.setattr(
-        "sift_core.evidence_chain.set_immutable_flag_fd", lambda fd, enabled: False
+        "sift_core.evidence_posture.set_immutable_flag_fd", lambda fd, enabled: False
     )
     with pytest.raises(CustodyOperationError):
         adapter.apply(batch)
     adapter.close(batch)
 
     monkeypatch.setattr(
-        "sift_core.evidence_chain.set_immutable_flag_fd", lambda fd, enabled: True
+        "sift_core.evidence_posture.set_immutable_flag_fd", lambda fd, enabled: True
     )
     batch = adapter.prepare(tmp_path, ["evidence/disk.raw"])
     try:

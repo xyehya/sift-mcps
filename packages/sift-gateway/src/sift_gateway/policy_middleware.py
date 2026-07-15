@@ -22,7 +22,7 @@ from sift_core.active_case_context import (
     use_active_case_context,
 )
 from sift_core.agent_tools import core_tool_names
-from sift_core.evidence_chain import ChainStatus
+from sift_core.custody_types import ChainStatus
 from sift_core.execute.evidence_binding import (
     AdmittedEvidenceBinding,
     inventory_token,

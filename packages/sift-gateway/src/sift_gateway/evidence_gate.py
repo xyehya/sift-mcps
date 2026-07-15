@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 
-from sift_core.evidence_chain import ChainStatus
+from sift_core.custody_types import ChainStatus
 
 logger = logging.getLogger(__name__)
 

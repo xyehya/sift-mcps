@@ -294,7 +294,7 @@ class TestInCaseWritePosture:
         case = self._case(tmp_path)
         with self._ctx(case):
             with pytest.raises(ValueError, match="protected|integrity"):
-                validate_output_path("evidence-manifest.json", base_dir=case)
+                validate_output_path("CASE.yaml", base_dir=case)
 
     def test_write_out_of_case_denied(self, tmp_path):
         from sift_core.execute.security import validate_output_path

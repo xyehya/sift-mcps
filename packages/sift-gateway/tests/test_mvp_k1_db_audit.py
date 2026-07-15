@@ -19,7 +19,7 @@ import pytest
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
 from sift_core.active_case_context import AuthorityContext, use_active_case_context
-from sift_core.evidence_chain import ChainStatus
+from sift_core.custody_types import ChainStatus
 from sift_gateway.active_case import ActiveCase
 from sift_gateway.audit_helpers import AuditPersistError, DbAuditWriter, _actor_columns
 from sift_gateway.identity import Identity

@@ -324,7 +324,7 @@ def service(monkeypatch, tmp_path):
     # This legacy fake has no P4.23.6 checkpoint tables; proof-export tests
     # isolate its byte-verification behaviour from the separately tested ledger.
     monkeypatch.setattr(svc, "verify_ledger", lambda *, case_id: {"verified": True, "issues": []})
-    monkeypatch.setattr("sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True)
+    monkeypatch.setattr("sift_core.evidence_posture.get_immutable_flag_fd", lambda _fd: True)
     (tmp_path / "evidence").mkdir()
     return svc, db, tmp_path
 

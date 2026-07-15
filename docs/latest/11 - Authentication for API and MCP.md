@@ -250,7 +250,7 @@ No-op when Supabase is not the active authority (`request.state.supabase_enabled
 - Mint join code (`POST /api/v1/setup/join-code`)
 - Evidence seal/resume, ignore, delete, retire, Replace/Reacquire begin,
   exact Restore begin, recovery completion, and Full Verify Evidence (legacy
-  `/verify-hmac` compatibility URL)
+  `/full-verify` DB custody route)
 - Commit review delta (`POST /api/commit`)
 - Case activation
 - Response guard override

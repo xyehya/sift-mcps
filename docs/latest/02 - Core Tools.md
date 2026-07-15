@@ -46,12 +46,8 @@ file manifests/JSONL are export/proof artifacts only.
 **class ChainStatus(str, Enum)**: OK, UNSEALED, MODIFIED, MISSING, UNREGISTERED, LEDGER_ERROR.
 
 Key functions:
-- `init_evidence_chain(case_dir)` — Write empty version-0 manifest + empty ledger
-- `load_manifest(case_dir)` — Load evidence-manifest.json
-- `load_ledger(case_dir)` — Load evidence-ledger.jsonl
 - `chain_status(case_dir)` — Fast stat-check + structural hash-chain verify, no rehashing
 - `verify_chain_integrity(case_dir)` — Full structural verify (manifest hash + ledger chain)
-- `verify_chain_hmac(case_dir, derived_key)` — HMAC verification on every ledger event
 - `seal_manifest(case_dir, file_specs, examiner, derived_key)` — Seal new manifest version
 - `harden_sealed_evidence(case_dir, rel_paths)` — Set `+i` immutable flag. Fails CLOSED.
 - `hash_file(path)` — Streaming SHA-256

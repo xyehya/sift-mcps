@@ -247,7 +247,6 @@ cookie (`sift_session_envelope`) or gateway Bearer token (limited set).
 | Method | Path | Handler | Description | Auth |
 |--------|------|---------|-------------|------|
 | GET | `/api/evidence/chain/status` | `get_evidence_chain_status` | Evidence chain status + write-block detection | Session |
-| POST | `/api/evidence/chain/rescan` | `post_evidence_chain_rescan` | Drop cache and return fresh status | Session (examiner) |
 | POST | `/api/evidence/chain/seal` | `post_evidence_chain_seal` | Seal evidence with re-auth | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/ignore` | `post_evidence_chain_ignore` | Ignore unregistered file | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/delete` | `post_evidence_chain_delete` | Delete non-sealed evidence | Session (examiner) + step-up |
@@ -256,7 +255,7 @@ cookie (`sift_session_envelope`) or gateway Bearer token (limited set).
 | POST | `/api/evidence/chain/restore/begin` | `post_evidence_restore_begin` | Persist exact Restore intent and block gate | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/recovery/complete` | `post_evidence_recovery_complete` | Fresh operation-bound re-auth, verify and finalize recovery | Session (examiner) + step-up |
 | GET | `/api/evidence/objects/{object_id}/history` | `get_evidence_history` | Case-scoped path-free object history | Session |
-| POST | `/api/evidence/chain/verify-hmac` | `post_evidence_chain_verify_hmac` | Passwordless Full Verify Evidence against the active Postgres manifest; returns `full_verify_requires_sealed_evidence` (409) without a receipt when no sealed active set exists (legacy compatibility URL) | Session (examiner) |
+| POST | `/api/evidence/chain/full-verify` | `post_evidence_chain_verify_hmac` | Passwordless Full Verify Evidence against the active Postgres manifest; returns `full_verify_requires_sealed_evidence` (409) without a receipt when no sealed active set exists () | Session (examiner) |
 | POST | `/api/evidence/chain/anchor` | `post_evidence_chain_anchor` | Anchor manifest on Solana | Session (examiner) |
 | POST | `/api/evidence/chain/proof-export` | `post_evidence_chain_proof_export` | Generate DB-derived proof export | Session (examiner) |
 
