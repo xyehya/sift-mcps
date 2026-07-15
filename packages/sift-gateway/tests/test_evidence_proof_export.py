@@ -545,6 +545,13 @@ class TestProofExport:
         assert result["anchor"] is None
         assert result["export_id"] == db.proof_export_id
 
+    def test_proof_payload_exposes_public_key_rotation_history(self, service):
+        svc, db, tmp_path = service
+        sha, size = _make_sealed_file(tmp_path, "evidence/disk.bin", b"a")
+        db.sealed_objects = [("obj-1", "evidence/disk.bin", sha, size)]
+        result = svc.export_proof(case_id=_CASE)
+        assert "signing_key_rotations" in result["bundle"]["payload"]
+
     def test_latest_proof_export_returns_none_when_absent(self, service):
         svc, db, tmp_path = service
         # No proof_exports rows scripted -> router returns [] for that select.

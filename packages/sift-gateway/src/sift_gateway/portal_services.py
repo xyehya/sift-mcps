@@ -3032,6 +3032,18 @@ class EvidenceAuthorityService(_BasePortalDbService):
                      "activated_at": _iso(r[3]), "retired_at": _iso(r[4])}
                     for r in cur.fetchall()
                 ]
+                cur.execute(
+                    """select prior_key_id,new_key_id,reason,reauth_audit_event_id::text,
+                              actor_user_id::text,created_at
+                       from app.custody_signing_key_rotations order by created_at"""
+                )
+                signing_key_rotations = [
+                    {"prior_key_id": str(r[0]) if r[0] else None, "new_key_id": str(r[1]),
+                     "reason": _compact_label(r[2], limit=1000),
+                     "reauth_audit_event_id": str(r[3]), "actor_user_id": str(r[4]),
+                     "created_at": _iso(r[5])}
+                    for r in cur.fetchall()
+                ]
         proof_material = {
             "format": "sift-custody-proof-payload/v1",
             "case_id": case_id,
@@ -3041,6 +3053,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "objects": objects,
             "custody_events": events,
             "signing_keys": signing_keys,
+            "signing_key_rotations": signing_key_rotations,
             "verified": verified,
             "issues": issues,
         }
