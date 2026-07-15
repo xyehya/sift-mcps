@@ -25,6 +25,7 @@ KEY_DIR="/etc/sift/custody"
 KEY_PATH="$KEY_DIR/ed25519-private.pem"
 # Root owns the directory so the runtime service can read the fixed key but
 # cannot replace, unlink, or create a signing authority.
+install -d -o root -g "$SERVICE_USER" -m 0750 /etc/sift
 install -d -o root -g "$SERVICE_USER" -m 0750 "$KEY_DIR"
 
 "$PYTHON_BIN" - "$KEY_DIR" "$KEY_PATH" "$SERVICE_USER" <<'PY'

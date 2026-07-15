@@ -13,6 +13,7 @@ def test_installer_provisions_fixed_service_only_custody_signing_authority() -> 
     assert 'KEY_PATH="$KEY_DIR/ed25519-private.pem"' in helper
     assert 'KEY_DIR="/etc/sift/custody"' in helper
     assert 'STATE_DIR=' not in helper
+    assert 'install -d -o root -g "$SERVICE_USER" -m 0750 /etc/sift' in helper
     assert 'install -d -o root -g "$SERVICE_USER" -m 0750 "$KEY_DIR"' in helper
     assert 'os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW' in helper
     assert 'os.link(tmp, key_path, follow_symlinks=False)' in helper
