@@ -45,7 +45,7 @@ def safe_existing() -> bool:
         info = os.stat(key_path, follow_symlinks=False)
     except FileNotFoundError:
         return False
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_gid != gid or stat.S_IMODE(info.st_mode) != 0o600:
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != gid or stat.S_IMODE(info.st_mode) != 0o640:
         raise SystemExit("ERROR: existing custody signing key has unsafe ownership or mode")
     return True
 
@@ -59,9 +59,9 @@ raw = Ed25519PrivateKey.generate().private_bytes(
 )
 tmp = os.path.join(directory, ".ed25519-private.pem.new-%d" % os.getpid())
 try:
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
     try:
-        os.fchown(fd, uid, gid)
+        os.fchown(fd, 0, gid)
         view = memoryview(raw)
         while view:
             written = os.write(fd, view)

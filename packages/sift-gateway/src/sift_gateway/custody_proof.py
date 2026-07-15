@@ -9,6 +9,7 @@ admission decision.
 from __future__ import annotations
 
 import base64
+import grp
 import hashlib
 import json
 import os
@@ -78,12 +79,20 @@ def load_signing_key(path: str | os.PathLike[str] | None = None) -> SigningKey:
     """Load a service-only PEM key from a fixed, owner-restricted path.
 
     The path is deployment configuration only; it is never copied into a proof
-    or error. Group/world-readable key files fail closed.
+    or error.  The installed authority is root-owned and readable only by the
+    dedicated service group; writable or substituted material fails closed.
     """
     configured = path or os.environ.get("SIFT_CUSTODY_SIGNING_KEY_PATH") or _DEFAULT_KEY_PATH
     try:
         info = os.stat(configured, follow_symlinks=False)
-        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+        mode = stat.S_IMODE(info.st_mode)
+        if not stat.S_ISREG(info.st_mode):
+            raise CustodyProofError("custody_signing_authority_unavailable")
+        if configured == _DEFAULT_KEY_PATH:
+            service_gid = grp.getgrnam("sift-service").gr_gid
+            if info.st_uid != 0 or info.st_gid != service_gid or mode != 0o640:
+                raise CustodyProofError("custody_signing_authority_unavailable")
+        elif mode & 0o077:
             raise CustodyProofError("custody_signing_authority_unavailable")
         raw = Path(configured).read_bytes()
         private = serialization.load_pem_private_key(raw, password=None)
