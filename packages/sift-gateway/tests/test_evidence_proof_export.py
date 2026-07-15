@@ -31,6 +31,8 @@ from case_dashboard.session_jwt import (
     SESSION_ENVELOPE_COOKIE_NAME,
     generate_session_envelope,
 )
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sift_gateway.custody_operations import PinnedEvidenceFile, PostureBatch
 from sift_gateway.portal_services import EvidenceAuthorityService, PortalServiceError
 from starlette.testclient import TestClient
@@ -309,6 +311,19 @@ def service(monkeypatch, tmp_path):
         "postgresql://service@localhost/sift", posture_adapter=adapter
     )
     monkeypatch.setattr(svc, "_case_artifact_path", lambda case_id: tmp_path)
+    key_path = tmp_path / "custody-signing.pem"
+    key_path.write_bytes(
+        Ed25519PrivateKey.generate().private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    key_path.chmod(0o600)
+    monkeypatch.setenv("SIFT_CUSTODY_SIGNING_KEY_PATH", str(key_path))
+    # This legacy fake has no P4.23.6 checkpoint tables; proof-export tests
+    # isolate its byte-verification behaviour from the separately tested ledger.
+    monkeypatch.setattr(svc, "verify_ledger", lambda *, case_id: {"verified": True, "issues": []})
     monkeypatch.setattr("sift_core.evidence_chain.get_immutable_flag_fd", lambda _fd: True)
     (tmp_path / "evidence").mkdir()
     return svc, db, tmp_path
@@ -496,7 +511,7 @@ class TestProofExport:
         result = svc.export_proof(case_id=_CASE)
 
         assert result["verified"] is False
-        assert any("Modified" in i for i in result["issues"])
+        assert any("mismatch" in str(i).lower() for i in result["issues"])
         assert db.record_calls[-1][5] is False
 
     def test_solana_anchor_recorded_as_external_proof(self, service):

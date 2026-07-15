@@ -92,6 +92,18 @@ selected pathname is reopened and rebound to its pinned descriptor identity at b
 so swaps, replacements, extra/unsafe names, and omitted required siblings fail before the database
 finalizer can create authority. Optional retired bytes never enter the selected receipt or manifest.
 
+P4.23.6 signing is a distinct custody-control-plane capability: the fixed-path
+Ed25519 private key is readable only by the Gateway service account and is never
+stored in Postgres or returned by the Portal. Postgres accepts only public key
+identity plus an append-only pending/signed checkpoint. A `LEDGER_COMMITTED`
+operation is latched at `PENDING_SIGNATURE`; only the service-side signer can
+finalize it. Verify Ledger traverses database chain/checkpoint material without
+reading evidence bytes. Full Verify Evidence adds byte and posture validation;
+Proof Export performs both and returns canonical path-safe JSON with detached
+signature/public verification material. Neither proof bundles nor optional
+external anchors are admission authority, and MCP exposes no signing, export,
+key, anchor, or custody-mutation tool.
+
 | Plane | What it is |
 | --- | --- |
 | ① Client | Operator Portal (React/Vite, `/portal`, human-only REST) + AI Agent clients (Supabase JWT, `/mcp` only) |

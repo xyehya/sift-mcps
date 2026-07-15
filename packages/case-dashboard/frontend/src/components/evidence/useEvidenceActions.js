@@ -6,6 +6,7 @@ import {
   postChainRescan,
   postChainAnchor,
   postChainProofExport,
+  postVerifyLedger,
   postVerifyEvidence,
 } from '@/api/endpoints'
 
@@ -116,6 +117,18 @@ export function useEvidenceActions({
     }
   }
 
+  async function handleVerifyLedger() {
+    try {
+      addToast('Verifying custody ledger and signatures…', 'info')
+      const result = await postVerifyLedger()
+      addToast(result.verified ? 'Custody ledger verified.' : 'Custody ledger verification found violations.', result.verified ? 'success' : 'warning')
+      return result
+    } catch (err) {
+      addToast(err.message || 'Ledger verification failed', 'error')
+      return null
+    }
+  }
+
   async function handleVerifyEvidence(path) {
     setVerifyStatus((prev) => ({ ...prev, [path]: 'checking' }))
     try {
@@ -141,6 +154,7 @@ export function useEvidenceActions({
     handleRescan,
     handleTriggerAnchor,
     handleProofExport,
+    handleVerifyLedger,
     handleVerifyEvidence,
   }
 }

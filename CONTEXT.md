@@ -83,3 +83,7 @@ _Avoid_: MCP evidence manager, file gate
 **Custody Proof Bundle**:
 A versioned, path-sanitized JSON export containing manifests, evidence identities and digests, custody events, verification state, and detached signature material for independent verification.
 _Avoid_: Audit export, manifest file
+
+**Signed Ledger Checkpoint**:
+An append-only record binding a canonical custody-ledger head to an installation-held Ed25519 public-key identity. The fixed-path private key is service-only and never appears in Postgres, source, logs, trackers, or proof bundles.
+_Avoid_: HMAC proof, DB signing key

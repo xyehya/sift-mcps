@@ -55,6 +55,12 @@ from sift_gateway.custody_operations import (
     SealCustodyOperation,
     public_operation,
 )
+from sift_gateway.custody_proof import (
+    CustodyProofError,
+    load_signing_key,
+    sign_bundle,
+    verify_bundle,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2781,6 +2787,91 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 issues.append(f"Modified: {rel}")
         return (not issues, issues, manifest_version)
 
+    def verify_ledger(self, *, case_id: str) -> dict[str, Any]:
+        """Fast DB-only chain/checkpoint verification; never reads evidence bytes."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select seq,prev_hash,event_hash from app.evidence_custody_events
+                       where case_id=%s order by seq""",
+                    (case_id,),
+                )
+                events = cur.fetchall()
+                cur.execute(
+                    "select head_seq,head_hash from app.evidence_chain_heads where case_id=%s",
+                    (case_id,),
+                )
+                head = cur.fetchone()
+                cur.execute(
+                    """select canonical_payload,key_id,signature,k.public_key
+                       from app.custody_signature_checkpoints c
+                       left join app.custody_signing_keys k on k.key_id=c.key_id
+                       where c.case_id=%s and c.state='SIGNED'
+                       order by c.signed_at desc limit 1""",
+                    (case_id,),
+                )
+                checkpoint = cur.fetchone()
+        issues: list[str] = []
+        previous = ""
+        for expected_seq, row in enumerate(events, start=1):
+            if int(row[0]) != expected_seq or str(row[1] or "") != previous:
+                issues.append("CUSTODY_LEDGER_CHAIN_INVALID")
+                break
+            previous = str(row[2] or "")
+        if not head or int(head[0] or 0) != len(events) or str(head[1] or "") != previous:
+            issues.append("CUSTODY_LEDGER_HEAD_INVALID")
+        key_id: str | None = None
+        if checkpoint:
+            payload, key_id, signature, public_key = checkpoint
+            try:
+                verify_bundle(
+                    {
+                        "format": "sift-custody-proof/v1",
+                        "payload": payload if isinstance(payload, dict) else {},
+                        "signature": {
+                            "algorithm": "Ed25519", "key_id": str(key_id),
+                            "public_key": str(public_key), "value": str(signature),
+                        },
+                    },
+                    trusted_keys={str(key_id): str(public_key)},
+                )
+            except CustodyProofError:
+                issues.append("CUSTODY_SIGNATURE_INVALID")
+        else:
+            issues.append("CUSTODY_SIGNATURE_CHECKPOINT_MISSING")
+        return {"verified": not issues, "issues": issues, "key_id": key_id,
+                "event_count": len(events), "byte_reads": 0}
+
+    def finalize_pending_signature(self, *, operation_id: str) -> dict[str, Any]:
+        """Service-only completion of the DB latch using the fixed-path key."""
+        try:
+            key = load_signing_key()
+        except CustodyProofError as exc:
+            raise PortalServiceError(exc.args[0], http_status=503) from exc
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """select canonical_payload from app.custody_signature_checkpoints
+                       where custody_operation_id=%s and state='PENDING_SIGNATURE'""",
+                    (operation_id,),
+                )
+                row = cur.fetchone()
+                if not row or not isinstance(row[0], dict):
+                    raise PortalServiceError("custody_signature_checkpoint_unavailable", http_status=409)
+                payload = row[0]
+                signed = sign_bundle(payload, key)
+                cur.execute(
+                    """insert into app.custody_signing_keys(key_id,algorithm,public_key)
+                       values(%s,'Ed25519',%s) on conflict(key_id) do nothing""",
+                    (key.key_id, key.public_key_b64),
+                )
+                cur.execute(
+                    "select app.custody_signature_finalize(%s,%s,%s)",
+                    (operation_id, key.key_id, signed["signature"]["value"]),
+                )
+            conn.commit()
+        return {"operation_id": operation_id, "key_id": key.key_id, "signed": True}
+
     def export_proof(
         self,
         *,
@@ -2802,10 +2893,16 @@ class EvidenceAuthorityService(_BasePortalDbService):
         Returns a portal-safe dict (no absolute paths): export id, kind,
         manifest_version, manifest_hash, ledger_tip_hash, verified, anchor.
         """
-        self._scan_evidence(case_id)
+        # Export is deliberately the expensive path: Full Verify Evidence first,
+        # then a DB-only ledger pass, then detached signing.  Verify Ledger below
+        # never invokes `_reverify_sealed`, preserving the public distinction.
+        full_verify = self.verify(case_id=case_id, actor=actor)
+        ledger = self.verify_ledger(case_id=case_id)
         actor_type, actor_user, _actor_agent, _actor_service = _actor_columns(actor)
         del actor_type
-        verified, issues, manifest_version = self._reverify_sealed(case_id)
+        verified = bool(full_verify.get("verified")) and bool(ledger.get("verified"))
+        issues = [*full_verify.get("verification_issues", []), *ledger.get("issues", [])]
+        manifest_version = int(full_verify.get("manifest_version") or 0)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -2857,6 +2954,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     for r in cur.fetchall()
                 ]
         proof_material = {
+            "format": "sift-custody-proof-payload/v1",
             "case_id": case_id,
             "manifest_version": manifest_version,
             "manifest_hash": manifest_hash,
@@ -2866,6 +2964,10 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "verified": verified,
             "issues": issues,
         }
+        try:
+            signed_bundle = sign_bundle(proof_material, load_signing_key())
+        except CustodyProofError as exc:
+            raise PortalServiceError(exc.args[0], http_status=503) from exc
         proof_hash = (
             "sha256:"
             + hashlib.sha256(
@@ -2876,6 +2978,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
         )
         metadata: dict[str, Any] = {
             "proof_hash": proof_hash,
+            "signing_key_id": signed_bundle["signature"]["key_id"],
             "object_count": len(objects),
             "custody_event_count": len(events),
             "issues": issues,
@@ -2922,6 +3025,7 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "verified": verified,
             "issues": issues,
             "anchor": anchor_meta,
+            "bundle": signed_bundle,
         }
 
     def latest_proof_export(self, case_id: str) -> dict[str, Any] | None:

@@ -1829,8 +1829,28 @@ async def post_evidence_recovery_complete(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# Full Verify Evidence endpoint (legacy URL retained for compatibility)
+# Verify Ledger and Full Verify Evidence (legacy URL retained for compatibility)
 # ---------------------------------------------------------------------------
+
+
+async def post_evidence_chain_verify_ledger(request: Request) -> JSONResponse:
+    """Fast, DB-only custody ledger/signature verification; no byte hashing."""
+    if (role_err := _require_examiner_role(request)) is not None:
+        return role_err
+    if (err := _must_reset_check(request)) is not None:
+        return err
+    verifier = getattr(_EVIDENCE_DB, "verify_ledger", None) if _EVIDENCE_DB else None
+    if not callable(verifier):
+        return _no_case_response()
+    try:
+        result = verifier(case_id=_active_case_id())
+    except Exception as exc:
+        logger.warning("DB ledger verification failed: %s", type(exc).__name__)
+        return JSONResponse({"error": "Ledger verification unavailable"}, status_code=503)
+    result = result if isinstance(result, dict) else {}
+    return JSONResponse({"authority": "db", "verified": bool(result.get("verified")),
+                         "issues": result.get("issues") if isinstance(result.get("issues"), list) else [],
+                         "key_id": result.get("key_id"), "byte_reads": 0})
 
 
 async def post_evidence_chain_verify_hmac(request: Request) -> JSONResponse:
@@ -5938,6 +5958,7 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/chain/restore/begin", post_evidence_restore_begin, methods=["POST"]),
         Route("/api/evidence/chain/recovery/complete", post_evidence_recovery_complete, methods=["POST"]),
         Route("/api/evidence/chain/verify-hmac", post_evidence_chain_verify_hmac, methods=["POST"]),
+        Route("/api/evidence/chain/verify-ledger", post_evidence_chain_verify_ledger, methods=["POST"]),
         Route("/api/evidence/storage/profile", post_evidence_storage_profile, methods=["POST"]),
         Route("/api/evidence/chain/anchor", post_evidence_chain_anchor, methods=["POST"]),
         Route("/api/evidence/chain/proof-export", post_evidence_chain_proof_export, methods=["POST"]),
