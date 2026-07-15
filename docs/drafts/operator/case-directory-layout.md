@@ -14,7 +14,7 @@ classes: (1) **evidence bytes** (Portal-authorized under a closed local-protecte
 or external-read-only profile, the only file class that is itself primary data);
 (2) **working data** the agent/tools produce
 (`agent/`, `tmp/`, `extractions/`, `reports/`); and (3) **mirrors/exports** of
-DB-authoritative state (`CASE.yaml`, `findings.json`, `evidence-ledger.jsonl`,
+DB-authoritative state (`CASE.yaml`, `findings.json`,
 `audit/*.jsonl`, …) kept for offline proof or compatibility. Served operation never
 reads a mirror as authority; Postgres unavailability fails closed.
 
@@ -67,8 +67,6 @@ file-audit path and stays empty when the DB is the audit authority.
 | `iocs.json` | `app.investigation_iocs` | mirror |
 | `todos.json` | `app.investigation_todos` | mirror |
 | `evidence.json` | `app.evidence_objects` | mirror |
-| `evidence-manifest.json` *(on export)* | `app.evidence_objects` / `app.evidence_versions` | export/proof |
-| `evidence-ledger.jsonl` *(on export)* | `app.evidence_custody_events` (append-only hash chain) | export/proof |
 | `approvals.jsonl` *(legacy)* | `app.investigation_*` approvals + `app.approval_commit_events` | proof; no longer a write authority |
 | `audit/*.jsonl` | `app.audit_events` | mirror (empty in DB-active) |
 
@@ -114,7 +112,7 @@ chain (`app.evidence_custody_events`) and provides equivalent tamper-evidence
 **without a secret key**. Migration:
 `supabase/migrations/202606141200_approval_ledger_db.sql`.
 
-This **retires** the former file HMAC verification ledger at
+This **retired** the former file verification ledger at
 `/var/lib/sift/verification/{case_id}.jsonl` (`sift_core.verification.
 write_ledger_entry` + `compute_hmac`, deleted). A pre-existing legacy `.jsonl`
 may still be copied into a backup as a read-only artifact, but it is no longer a

@@ -252,8 +252,7 @@ means RAG was never seeded — see `rag-and-search-maintenance.md` §1.
 
 Postgres is the sole custody/control-plane authority; **operator-managed evidence
 bytes** under `/cases` are the primary forensic data it identifies and hashes. The
-file mirrors (`CASE.yaml`, `findings.json`, `evidence-manifest.json`,
-`evidence-ledger.jsonl`, per-case `audit/*.jsonl`) are **export/proof, not
+file mirrors (`CASE.yaml`, `findings.json`, per-case `audit/*.jsonl`) are **export/proof, not
 authority** — restoring them does not restore truth; restore the database.
 
 ### 4.1 What to back up
@@ -317,7 +316,7 @@ Evidence integrity is re-provable because the DB holds the sealed
 and must be **registered and sealed before analysis.** The DB
 (`app.evidence_objects`, `app.evidence_chain_heads`,
 `app.evidence_custody_events`) owns custody metadata and hashes; the
-`evidence-manifest.json` / `evidence-ledger.jsonl` files are export/proof only.
+Case-sidecar custody files are retired; Postgres custody records are authoritative.
 
 ### 5.1 Operator steps
 
@@ -371,7 +370,7 @@ and must be **registered and sealed before analysis.** The DB
    repair. Resolve a failure manually; do not bypass it with
    `sudo stage-evidence.sh`.
 3. **Register** the evidence object (portal evidence flow). The placed file
-   surfaces as `unregistered` in the evidence chain (use **Rescan** if it does
+   surfaces as pending in the evidence chain (use **Refresh custody status** if it does
    not appear); registering records the object and computes its hash.
 4. **Seal** the evidence through the re-auth-gated durable custody-operation
    workflow. The operation blocks the gate before filesystem work, verifies
@@ -397,8 +396,7 @@ docker exec supabase_db_sift-mcps psql -U postgres -d postgres -tA -c \
    group by status, seal_status order by 1,2;"
 ```
 
-The exported `evidence-ledger.jsonl` (legacy HMAC-chained export format) and
-`evidence-anchor-v{N}.json` are offline proof artifacts only; the gate consults
+Signed DB-derived proof exports and optional anchors are offline proof artifacts only; the gate consults
 the DB (`app.evidence_gate_status` via `evidence_gate.check_evidence_gate_db`),
 not the files. **Full Verify Evidence** is a passwordless authenticated-examiner
 action (optional bounded note): it hashes every ACTIVE mounted object, verifies
@@ -857,7 +855,7 @@ An interactive "DELETE EVIDENCE" prompt is shown even then.
 | `supabase` | Supabase CLI local stack (`supabase stop`), CLI binaries, `~/.sift/supabase-project/sift-supabase.env`, **+ the project-scoped Supabase data volume** (`supabase_db_<project>` — greenfield reset, so a reinstall migrates against a fresh DB; `supabase stop` alone preserves it) | core |
 | `systemd` | `sift-gateway.service` + `sift-job-worker.service` units, **plus every dynamically-discovered `sift-opensearch-worker@N.service` instance and the `sift-opensearch-worker@.service` template unit** (also stops the auto parent slice and runs `systemctl reset-failed 'sift-*'`), service user `sift-service`, groups, `agent_runtime` user, sudoers drop-ins, hayabusa symlink | core |
 | `runtime` | `/opt/sift-mcps` staged tree, `.venv`, `/var/lib/sift/.sift/` (config, TLS, secrets, hayabusa, logs), enrichment symlinks | core |
-| `state` | `/var/lib/sift/{verification,tokens,snapshots,enrichment,.cache}`, **plus a sweep of all other residual top-level entries under `/var/lib/sift`** — per-case audit/ledger sidecars (`<case_key>/evidence-ledger.jsonl`, `evidence-manifest.json`, `audit/`), the service user's `.local/share/fastmcp`, and add-on baseline DB trees (e.g. windows-triage `*.db`, up to ~17 GB incl. the registry baseline). A canonical-path guard **never** removes `/cases` (the evidence root) or an ancestor of it | core |
+| `state` | `/var/lib/sift/{verification,tokens,snapshots,enrichment,.cache}`, **plus a sweep of all other residual top-level entries under `/var/lib/sift`** — per-case audit sidecars (`<case_key>/audit/`), the service user's `.local/share/fastmcp`, and add-on baseline DB trees (e.g. windows-triage `*.db`, up to ~17 GB incl. the registry baseline). A canonical-path guard **never** removes `/cases` (the evidence root) or an ancestor of it | core |
 | `cache` | `/var/cache/sift/` (Volatility3 symbols), Hugging Face model cache | core |
 | `auditd` | `/etc/audit/rules.d/99-sift-evidence.rules`; reload auditd | core |
 | `apparmor` | `/etc/apparmor.d/sift-gateway`; unload profile | core |

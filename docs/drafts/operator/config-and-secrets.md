@@ -319,6 +319,6 @@ operator path, or the DB — then restart services.
 
 > The DB is the source of truth for cases, custody, findings, jobs, audit, RAG,
 > backends, and tokens. File mirrors (`CASE.yaml`, `findings.json`,
-> `evidence-manifest.json`, `evidence-ledger.jsonl`, per-case `audit/*.jsonl`)
+> per-case `audit/*.jsonl`)
 > are **export/proof only** — editing them changes nothing authoritative and can
 > mislead a later reader.

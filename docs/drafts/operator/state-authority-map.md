@@ -141,8 +141,7 @@ being mistaken for a fallback.
    mutable system-of-record state.
 
 7. **File mirrors / compatibility exports** - `CASE.yaml`,
-   `findings/timeline/iocs/todos.json`, `evidence-manifest.json`,
-   `evidence-ledger.jsonl`, `evidence-anchor-v{N}.json`, `approvals.jsonl`,
+   `findings/timeline/iocs/todos.json`, `approvals.jsonl`,
    per-case `audit/*.jsonl`. **Justification (accepted, not authority):** these
    are written from DB authority for legacy-parser/export compatibility and are
    explicitly labelled (`legacy-file-mirror` vs `db-audit-events` in
@@ -163,7 +162,7 @@ documents live under `docs/drafts/**`, `docs/latest/**`, and `docs/architecture/
 and consistently identify Postgres as authority. Retained pre-migration evidence
 and hardening documents are explicitly historical; their HMAC/file-ledger model
 must not be used as current runtime guidance. Compatibility filenames and the
-legacy `/verify-hmac` URL do not confer authority.
+retired file-custody endpoints do not confer authority.
 
 ## Historical Authority Questions and Current Resolutions
 
