@@ -178,7 +178,6 @@ provision_custody_signing_authority() {
   log "Provisioning installation-held Ed25519 custody signing authority."
   sudo_if_needed "$REPO_DIR/scripts/setup-custody-signing-authority.sh" \
     --service-user "$SIFT_GATEWAY_SERVICE_USER" \
-    --state-dir "$SIFT_STATE_DIR" \
     --python "$VENV_DIR/bin/python"
 }
 

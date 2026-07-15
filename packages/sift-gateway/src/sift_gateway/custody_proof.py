@@ -25,7 +25,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 _FORMAT = "sift-custody-proof/v1"
-_DEFAULT_KEY_PATH = "/var/lib/sift/.sift/custody/ed25519-private.pem"
+# Kept below root-owned /etc, outside the service-writable state tree.  The
+# gateway can read, but cannot replace, the authority.
+_DEFAULT_KEY_PATH = "/etc/sift/custody/ed25519-private.pem"
 
 
 class CustodyProofError(ValueError):

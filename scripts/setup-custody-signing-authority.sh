@@ -5,12 +5,10 @@ set -Eeuo pipefail
 umask 077
 
 SERVICE_USER="${SIFT_GATEWAY_SERVICE_USER:-sift-service}"
-STATE_DIR="${SIFT_STATE_DIR:-/var/lib/sift}"
 PYTHON_BIN="/opt/sift-mcps/.venv/bin/python"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --service-user) SERVICE_USER="${2:?missing service user}"; shift 2 ;;
-    --state-dir) STATE_DIR="${2:?missing state dir}"; shift 2 ;;
     --python) PYTHON_BIN="${2:?missing python path}"; shift 2 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -18,13 +16,12 @@ done
 
 [[ "${EUID}" -eq 0 ]] || { printf 'ERROR: run as root\n' >&2; exit 1; }
 [[ "$SERVICE_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] || { printf 'ERROR: invalid service user\n' >&2; exit 1; }
-[[ "$STATE_DIR" == /* && "$STATE_DIR" != / && "$STATE_DIR" != *..* && "$STATE_DIR" != *//* ]] || {
-  printf 'ERROR: invalid state directory\n' >&2; exit 1;
-}
 [[ "$PYTHON_BIN" == /* && -x "$PYTHON_BIN" ]] || { printf 'ERROR: trusted runtime Python not found\n' >&2; exit 1; }
 id -u "$SERVICE_USER" >/dev/null 2>&1 || { printf 'ERROR: service user not found\n' >&2; exit 1; }
 
-KEY_DIR="$STATE_DIR/.sift/custody"
+# /etc is root-owned; unlike /var/lib/sift and .sift it cannot be used by the
+# service account to rename or replace this child directory.
+KEY_DIR="/etc/sift/custody"
 KEY_PATH="$KEY_DIR/ed25519-private.pem"
 # Root owns the directory so the runtime service can read the fixed key but
 # cannot replace, unlink, or create a signing authority.
