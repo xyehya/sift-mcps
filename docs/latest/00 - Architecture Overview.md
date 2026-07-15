@@ -510,7 +510,7 @@ flowchart TD
 | IOCs | `GET /api/iocs` | 1 |
 | Summary | `GET /api/summary` | 1 |
 | Commit | `POST /api/commit` | 1 |
-| Evidence Chain | `GET /api/evidence/chain/status`, `POST /api/evidence/chain/seal`, `POST /api/evidence/chain/seal/resume`, `POST /api/evidence/chain/ignore`, `POST /api/evidence/chain/delete`, `POST /api/evidence/chain/retire`, `POST /api/evidence/chain/replace/begin`, `POST /api/evidence/chain/restore/begin`, `POST /api/evidence/chain/recovery/complete`, `POST /api/evidence/chain/full-verify`, `POST /api/evidence/chain/verify-ledger`, `POST /api/evidence/chain/anchor`, `POST /api/evidence/chain/proof-export` | 13 |
+| Evidence Chain | `GET /api/evidence/chain/status`, `POST /api/evidence/chain/seal`, `POST /api/evidence/chain/seal/resume`, `POST /api/evidence/chain/ignore`, `POST /api/evidence/chain/delete`, `POST /api/evidence/chain/retire`, `POST /api/evidence/chain/disposition/resume`, `POST /api/evidence/chain/replace/begin`, `POST /api/evidence/chain/restore/begin`, `POST /api/evidence/chain/recovery/complete`, `POST /api/evidence/chain/full-verify`, `POST /api/evidence/chain/verify-ledger`, `POST /api/evidence/storage/profile`, `POST /api/evidence/chain/anchor`, `POST /api/evidence/chain/signing-key/rotate`, `POST /api/evidence/chain/proof-export` | 16 |
 | Response Guard | `GET /api/response-guard/status`, `POST /api/response-guard/override`, `POST /api/response-guard/override/cancel` | 3 |
 | Auth | `GET /api/auth/setup-required`, `POST /api/auth/login`, `POST /api/auth/forced-reset`, `POST /api/auth/logout`, `POST /api/auth/refresh`, `GET /api/auth/me` | 6 |
 | Principals | `GET /api/auth/principals`, `POST /api/auth/principals`, `DELETE /api/auth/principals/{type}/{id}` | 3 |

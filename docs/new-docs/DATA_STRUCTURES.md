@@ -271,9 +271,9 @@ class ChainStatus(str, Enum):
     LEDGER_ERROR = "ledger_error"  # hash-chain broken or manifest hash mismatch
 ```
 
-[VERIFY: packages/sift-core/src/sift_core/evidence_chain.py:35-41]
+[VERIFY: packages/sift-core/src/sift_core/custody_types.py]
 
-### 5.2 `chain_status(case_dir)` return value
+### 5.2 DB custody gate status
 
 ```python
 {
@@ -284,9 +284,8 @@ class ChainStatus(str, Enum):
 }
 ```
 
-The gateway gate (`check_evidence_gate*`) derives **`blocked = (status != ChainStatus.OK)`** — so UNSEALED, MODIFIED, MISSING, UNREGISTERED, **and** LEDGER_ERROR all block (not only a single "broken" state). The DB path maps Postgres `seal_status` → `{sealed→OK, unsealed→UNSEALED, violated→LEDGER_ERROR}`.
+The gateway gate (`check_evidence_gate_db`) derives **`blocked = (status != ChainStatus.OK)`** from Postgres custody state. The DB path maps Postgres `seal_status` → `{sealed→OK, unsealed→UNSEALED, violated→LEDGER_ERROR}`; it never reads a case-sidecar manifest.
 
-[VERIFY: packages/sift-core/src/sift_core/evidence_chain.py:289-338]  
 [VERIFY: packages/sift-gateway/src/sift_gateway/evidence_gate.py:118,130-134,204]
 
 ---

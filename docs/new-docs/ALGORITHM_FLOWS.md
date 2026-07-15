@@ -414,13 +414,13 @@ For each absolute-path token (single value, or embedded in stdout/stderr free te
 
 So not every absolute path is redacted — benign tool-binary paths survive so command echoes stay readable.
 
-**(b) Authority write-jail — `is_authority_path()`** (`runtime_acl.py:232-241`, used by `assert_no_authority_write_target`). This is unrelated to response redaction; it refuses `run_command` **write/redirect targets** that land on a proof artifact. It returns True when the path's basename is in `AUTHORITY_FILE_BASENAMES` (e.g. `case.yaml`, `evidence-manifest.json`, `evidence-ledger.jsonl`) **or** the path contains a marker in `_AUTHORITY_PATH_MARKERS`:
+**(b) Authority write-jail — `is_authority_path()`** (`runtime_acl.py`, used by `assert_no_authority_write_target`). This is unrelated to response redaction; it refuses `run_command` **write/redirect targets** that land on a protected case artifact. It returns True when the path's basename is in `AUTHORITY_FILE_BASENAMES` (for example `CASE.yaml` and approval/audit artifacts) **or** the path contains a marker in `_AUTHORITY_PATH_MARKERS`:
 - `"/audit/"`  (the substring with slashes — not just "audit")
 - `"evidence-anchor"`
 - `"/.sift/"`
 - `"/var/lib/sift"`
 
-(There is no `/cases/` marker, and `evidence-ledger` is matched as a basename, not an arbitrary substring.)
+(There is no `/cases/` marker; evidence custody authority remains in Postgres.)
 
 [VERIFY: packages/sift-core/src/sift_core/execute/security.py:1256-1354]  
 [VERIFY: packages/sift-core/src/sift_core/execute/runtime_acl.py:207-256]
@@ -576,26 +576,12 @@ def evaluate_requirement(req: str) -> bool:
 [VERIFY: packages/sift-core/src/sift_core/agent_tools.py:434-479]
 
 ```
-resolve_evidence_ref(ref, case_dir):    [security.py:1166-1223]
+resolve_evidence_ref(ref, case_dir):
     │
-    ├── Reject empty ref or ref containing a NUL byte
-    │
-    ├── Load ACTIVE entries of the sealed manifest
-    │       (evidence-manifest.json; evidence-ledger.jsonl is the legacy append-log)
-    │       → only entries with status == "ACTIVE" are considered
-    │
-    ├── If no active entries → EvidenceRefError("...the case has no sealed evidence...")
-    │
-    ├── Match ref against each entry, in order, by:
-    │       1. exact evidence_id  (entry["evidence_id"] or entry["id"])
-    │       2. exact relative display path  (e.g. "evidence/disk.E01")
-    │       3. basename of the relative path  (e.g. "disk.E01")
-    │       (NOTE: there is NO match-by-sha256)
-    │
-    ├── If no match → EvidenceRefError("... does not match any sealed evidence ...")
-    │
-    └── Resolve through the input-path jail (must stay inside case_dir)
-        → Return the absolute path the worker may read
+    └── Reject worker-side resolution with EvidenceRefError.
+        Gateway policy must inject a DB-authorized, descriptor-pinned evidence
+        binding before worker dispatch; a worker never reconstructs authority
+        from an evidence folder.
 ```
 
 **DB path** (when _INTERNAL_RESOLVED_EVIDENCE_REFS injected by Gateway):

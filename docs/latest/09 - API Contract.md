@@ -248,15 +248,20 @@ cookie (`sift_session_envelope`) or gateway Bearer token (limited set).
 |--------|------|---------|-------------|------|
 | GET | `/api/evidence/chain/status` | `get_evidence_chain_status` | Evidence chain status + write-block detection | Session |
 | POST | `/api/evidence/chain/seal` | `post_evidence_chain_seal` | Seal evidence with re-auth | Session (examiner) + step-up |
+| POST | `/api/evidence/chain/seal/resume` | `post_evidence_chain_seal_resume` | Resume an interrupted durable Seal operation | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/ignore` | `post_evidence_chain_ignore` | Ignore unregistered file | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/delete` | `post_evidence_chain_delete` | Delete non-sealed evidence | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/retire` | `post_evidence_chain_retire` | Retire registered evidence | Session (examiner) + step-up |
+| POST | `/api/evidence/chain/disposition/resume` | `post_evidence_chain_disposition_resume` | Resume an interrupted Ignore, Delete, or Retire operation | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/replace/begin` | `post_evidence_replace_begin` | Persist Replace/Reacquire intent and block gate before protection changes | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/restore/begin` | `post_evidence_restore_begin` | Persist exact Restore intent and block gate | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/recovery/complete` | `post_evidence_recovery_complete` | Fresh operation-bound re-auth, verify and finalize recovery | Session (examiner) + step-up |
 | GET | `/api/evidence/objects/{object_id}/history` | `get_evidence_history` | Case-scoped path-free object history | Session |
 | POST | `/api/evidence/chain/full-verify` | `post_evidence_chain_full_verify` | Passwordless Full Verify Evidence against active Postgres custody; returns `full_verify_requires_sealed_evidence` (409) without a receipt when no sealed active set exists | Session (examiner) |
+| POST | `/api/evidence/chain/verify-ledger` | `post_evidence_chain_verify_ledger` | Verify the append-only Postgres custody ledger | Session (examiner) |
+| POST | `/api/evidence/storage/profile` | `post_evidence_storage_profile` | Change the operator-authorized local or external read-only storage profile | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/anchor` | `post_evidence_chain_anchor` | Anchor manifest on Solana | Session (examiner) |
+| POST | `/api/evidence/chain/signing-key/rotate` | `post_evidence_chain_signing_key_rotate` | Rotate the custody signing key under fresh authorization | Session (examiner) + step-up |
 | POST | `/api/evidence/chain/proof-export` | `post_evidence_chain_proof_export` | Generate DB-derived proof export | Session (examiner) |
 
 ### 3.14 Response Guard

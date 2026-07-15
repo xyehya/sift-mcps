@@ -10,7 +10,7 @@ import { FullVerifyBar } from '@/components/evidence/FullVerifyBar'
 import { CustodyStatusGrid } from '@/components/evidence/CustodyStatusGrid'
 import { CustodyViolations } from '@/components/evidence/CustodyViolations'
 import { UnregisteredFiles } from '@/components/evidence/UnregisteredFiles'
-import { RegisteredEvidenceTable } from '@/components/evidence/RegisteredEvidenceTable'
+import { SealedEvidenceTable } from '@/components/evidence/SealedEvidenceTable'
 import { EvidenceModals } from '@/components/evidence/EvidenceModals'
 import { IncompleteCustodyOperation } from '@/components/evidence/IncompleteCustodyOperation'
 import { StorageProfileStatus } from '@/components/evidence/StorageProfileStatus'
@@ -175,7 +175,7 @@ export function EvidenceTab() {
           onSeal={() => openModal('seal')}
         />
 
-        <RegisteredEvidenceTable
+        <SealedEvidenceTable
           evidence={sortedEvidence}
           evidenceLoading={custody.evidenceLoading}
           evidenceError={custody.evidenceError}

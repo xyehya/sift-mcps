@@ -59,7 +59,7 @@ file presence under `packages/**/tests/`.
 | --- | --- |
 | `agent_tools.py` | `CORE_TOOL_SPECS` (the local agent tool catalog: `case_info`, `evidence_info`, `record_finding`, `record_timeline_event`, `list_existing_findings`, `manage_todo`, `get_tool_help`, `run_command`); `call_core_tool`, `core_tool_names`, `core_tool_specs`. |
 | `investigation_store.py` | `InvestigationAuthorityStore` / `PostgresInvestigationStore`; `compute_content_hash`, `StaleVersionError`, `is_human_locked`. |
-| `evidence_chain.py`, `verification.py`, `evidence_ops.py` | Legacy file/export helpers. In DB-active mode they are not custody, admission, mutation, re-auth, or Full Verify authority. |
+| `evidence_posture.py`, `custody_types.py`, `custody_anchor.py`, `verification.py` | Generic local posture safeguards, shared custody values, DB-derived proof anchoring, and verification helpers. |
 | `active_case_context.py` | Authority context plumbing for DB-active requests. |
 | `approval_auth.py` | Legacy/local-mode PBKDF2 and HMAC helpers retained for compatibility tests; active Portal re-auth is Supabase password re-verification plus scoped DB receipts. |
 | `reporting.py`, `report_profiles.py` | `generate_report_data`, `build_custody_appendix`, MITRE/IOC builders, approved-only filtering. |
@@ -161,14 +161,14 @@ flowchart LR
 | Area | Key tests |
 | --- | --- |
 | Policy parity / agent block | `sift-gateway/tests/test_policy_parity_d27b.py`, `test_portal_agent_block.py` |
-| Evidence gate | `sift-gateway/tests/test_evidence_gate.py`, `test_evidence_gate_db.py`, `test_evidence_proof_export.py`; `sift-core/tests/test_evidence_chain.py` |
+| Evidence gate | `sift-gateway/tests/test_evidence_gate.py`, `test_evidence_gate_db.py`, `test_evidence_proof_export.py`, `test_p423_legacy_contract_cleanup.py` |
 | Response redaction | `sift-gateway/tests/test_mvp_b1_policy_redaction.py`; `case-dashboard/tests/test_response_guard_portal.py` |
 | Audit envelope | `sift-gateway/tests/test_audit_envelope.py`, `test_mvp_k1_db_audit.py`, `test_k6_precontext_denial_audit.py` |
 | Active case | `sift-gateway/tests/test_pr03b_active_case_policy.py`, `test_pr03b_active_case_service.py`; `sift-core/tests/test_active_case_context.py` |
 | Jobs / worker | `sift-core/tests/test_job_worker.py`; `sift-gateway/tests/test_mvp_d2_jobs_and_authority.py`, `test_mvp_binding_job_tools.py` |
-| run_command isolation | `sift-core/tests/test_mvp_k5_run_command_isolation.py`, `test_run_command_uplift_i1.py`, `test_execute_security_policy.py` |
+| run_command isolation | `sift-core/tests/test_execute_security_policy.py` |
 | RAG pgvector | `forensic-rag-mcp/tests/test_pgvector_store.py`, `test_pgvector_chroma_import.py`; `sift-gateway/tests/test_g1_rag_bridge.py` |
-| Reports / custody appendix | `sift-core/tests/test_reporting_custody_appendix.py`, `test_reporting_evidence_chain.py`; `case-dashboard/tests/test_reports_endpoints.py`, `test_j1_report_reauth_custody.py` |
+| Reports / custody appendix | `sift-core/tests/test_reporting_custody_appendix.py`; `case-dashboard/tests/test_reports_endpoints.py`, `test_j1_report_reauth_custody.py` |
 | Approvals / re-auth | `sift-core/tests/test_approval_auth.py` |
 | OpenSearch ingest | `opensearch-mcp/tests/test_job_ingest.py`, `test_gateway_client.py` |
 

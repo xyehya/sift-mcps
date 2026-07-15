@@ -94,7 +94,7 @@ Important modules:
 | `agent_tools.py` | Core MCP tool specs and `call_core_tool()`. |
 | `case_manager.py`, `case_ops.py`, `case_io.py` | Case state helpers and file-backed compatibility paths. |
 | `active_case_context.py` | Request-scoped authority context passed from Gateway. |
-| `evidence_chain.py`, `evidence_ops.py`, `verification.py` | Evidence registration/seal/proof helpers and integrity checks. |
+| `evidence_posture.py`, `custody_types.py`, `custody_anchor.py`, `verification.py` | Generic local posture safeguards, shared custody values, DB-derived proof anchoring, and integrity helpers. |
 | `investigation_store.py` | DB-backed findings, timeline, TODOs, and stale-write guards. |
 | `reporting.py`, `report_profiles.py` | Report assembly and approved-only filtering. |
 | `execute/` | `run_command`, sandbox policy, worker subprocess, runtime ACL, command catalog. |
@@ -333,7 +333,7 @@ Developer rules:
 | MCP tool behavior | `sift-gateway/mcp_server.py`, `sift-core/agent_tools.py`, related package tests. |
 | Policy/auth/evidence gate | `sift-gateway/policy_middleware.py`, `auth.py`, `supabase_auth.py`, `evidence_gate.py`, migrations. |
 | Portal workflow | `case-dashboard/src/case_dashboard/routes.py`, `portal_services.py`, `case-dashboard/frontend/src/`. |
-| Evidence lifecycle | `sift-core/evidence_chain.py`, `sift-gateway/portal_services.py`, evidence custody migrations. |
+| Evidence lifecycle | `sift-core/evidence_posture.py`, `sift-gateway/portal_services.py`, evidence custody migrations. |
 | `run_command` | `sift-core/agent_tools.py`, `sift-core/execute/`, AppArmor/systemd configs. |
 | Durable jobs | `sift-gateway/jobs.py`, `job_tools.py`, `sift-core/execute/job_worker.py`, durable-job migrations. |
 | OpenSearch ingest/search | `opensearch-mcp/registry.py`, `server.py`, `ingest_job.py`, parsers, manifest. |

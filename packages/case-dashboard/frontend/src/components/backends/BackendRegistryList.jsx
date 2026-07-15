@@ -5,7 +5,7 @@ import { BackendServiceRow } from './BackendServiceRow'
 
 // ─────────────────────────────────────────────────────────────────────────
 // BackendRegistryList — the DB-registry table, rebuilt to the reference-tab bar
-// (Evidence RegisteredEvidenceTable): section label (mono 10px uppercase) over a
+// (Evidence SealedEvidenceTable): section label (mono 10px uppercase) over a
 // `rounded-lg border bg-card` table; header row `bg-secondary/40`, mono labels;
 // comfortable `px-3 py-2.5` cells, `divide-y` body, hover affordance. Loading
 // skeleton · empty-state guidance · per-row BackendServiceRow. Action handlers

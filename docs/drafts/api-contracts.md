@@ -186,7 +186,7 @@ file-backed mutation fallback. All mutations require examiner role,
 ### GET `/api/evidence/chain/status` (`get_evidence_chain_status`, 993)
 - Read-only and Postgres-only (`_db_evidence_chain_status` → `app.evidence_gate_status`);
   DB unavailability fails closed and never selects a file authority. Returns `{authority: "db", status/seal_status, manifest_version,
-  active_count, issues, head_hash, hmac_last_verified_at, anchor{...}, proof_export?}`.
+  active_count, issues, head_hash, last_verified_at, anchor{...}, proof_export?}`.
   Role: examiner or readonly.
 ### POST `/api/evidence/chain/seal` (`post_evidence_chain_seal`, 1081)
 - Exact request: `{password, reason, idempotency_key,

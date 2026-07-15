@@ -178,7 +178,7 @@ For a DFIR product this is the make-or-break dimension, and it is taken seriousl
 
 ### 7.1 What's rigorous
 
-- **Sealed evidence manifest with a hash chain**: manifest-hash verification + ledger hash-chain verification, plus a stat-check diff for missing/modified/unregistered files (`evidence_chain.py:289-338`). Notably, `chain_status()` does **not** rehash files on the hot path — it's a stat-check + structural verification (a deliberate performance/forensics trade-off, documented as a cache invalidation hint, never an integrity assertion).
+- **DB-authoritative sealed evidence custody**: Postgres versions and append-only custody events provide the chain head and integrity state; Gateway full verification re-hashes sealed objects when explicitly requested. File manifests are not an authority or fallback.
 - **Global fail-closed gate**: when status ≠ OK, *every* tool is blocked — including read-only `case_info` — because any result derived from un-sealed/tampered evidence is legally indefensible (`evidence_gate.py:118,204`).
 - **Dual-channel audit**: Postgres `app.audit_events` is authoritative; the JSONL trail is an fsync'd mirror with a **monotonic per-day sequence** and **restart-safe resume** (sidecar `.seq` fast path + JSONL scan fallback, `audit.py:163-231`). The audit code uses *specific* exceptions (OSError, JSONDecodeError), not blanket catches — good discipline exactly where it matters.
 - **Provenance receipts**: each `run_command` emits a hash-linked, path-free receipt (`rc-<audit_id>`, input/output SHA-256s, public evidence refs) the agent can cite in findings without leaking paths (`agent_tools.py:1037-1047`).
