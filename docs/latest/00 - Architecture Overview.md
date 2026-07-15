@@ -413,7 +413,7 @@ flowchart TD
 | Tool | Read-Only | Description |
 |------|:---------:|-------------|
 | `case_info` | ✓ | Active case metadata and chain status |
-| `evidence_info` | ✓ | Registered evidence listing |
+| `evidence_info` | ✓ | Sealed evidence listing |
 | `list_existing_findings` | ✓ | Query findings with optional filters |
 | `get_tool_help` | ✓ | Usage and suggestions for available tools |
 | `record_finding` | | Create investigation finding (DRAFT) |

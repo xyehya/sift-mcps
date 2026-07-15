@@ -25,7 +25,7 @@ export function UnregisteredFiles({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="flex items-center gap-1.5 text-xs font-bold text-foreground">
           <FolderSearch className="size-3.5" aria-hidden />
-          Unregistered Evidence Files Detected
+          Pending Evidence Files Detected
         </h4>
         <Button
           type="button"

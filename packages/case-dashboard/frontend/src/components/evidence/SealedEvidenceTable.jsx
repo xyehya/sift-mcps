@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { formatTime, shortHash } from './evidence-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
-// SealedEvidenceTable — the sealed/registered evidence registry (legacy IA
+// SealedEvidenceTable — the sealed custody registry (legacy IA
 // parity §6). Sortable columns (Path · SHA-256 · Description · Registered At ·
 // Registered By · Referenced By · Action). Referenced-by chips deep-link to
 // Findings. Action cell exposes durable per-item Replace/Reacquire, verification,
