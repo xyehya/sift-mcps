@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { parseTimestamp } from '@/lib/timestamp-utils'
+import { parseTimestamp, extractDate, extractTime } from '@/lib/timestamp-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
 // timestamp-utils — direct unit tests against the low-level parser (P2.3).
@@ -57,5 +57,42 @@ describe('parseTimestamp — unsupported inputs', () => {
     expect(Number.isNaN(parseTimestamp(true))).toBe(true)
     expect(Number.isNaN(parseTimestamp({}))).toBe(true)
     expect(Number.isNaN(parseTimestamp([]))).toBe(true)
+  })
+})
+
+describe('extractDate', () => {
+  it('uses fast-path slicing for string values', () => {
+    expect(extractDate('2026-01-02T03:04:05.000Z')).toBe('2026-01-02')
+    expect(extractDate('2024-12-31')).toBe('2024-12-31')
+  })
+
+  it('falls back to allocating a Date for number or Date inputs', () => {
+    const ms = Date.parse('2026-01-02T03:04:05.000Z')
+    expect(extractDate(ms)).toBe('2026-01-02')
+    expect(extractDate(new Date(ms))).toBe('2026-01-02')
+  })
+
+  it('returns empty string for invalid dates', () => {
+    expect(extractDate('bad')).toBe('')
+    expect(extractDate(null)).toBe('')
+    expect(extractDate(Number.NaN)).toBe('')
+  })
+})
+
+describe('extractTime', () => {
+  it('uses fast-path slicing for string values', () => {
+    expect(extractTime('2026-01-02T03:04:05.000Z')).toBe('03:04:05')
+  })
+
+  it('falls back to allocating a Date for number or Date inputs', () => {
+    const ms = Date.parse('2026-01-02T03:04:05.000Z')
+    expect(extractTime(ms)).toBe('03:04:05')
+    expect(extractTime(new Date(ms))).toBe('03:04:05')
+  })
+
+  it('returns empty string for invalid dates or parses correctly if valid date-only string', () => {
+    expect(extractTime('2026-01-02')).toBe('00:00:00')
+    expect(extractTime('bad')).toBe('')
+    expect(extractTime(null)).toBe('')
   })
 })

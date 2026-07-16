@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils'
+import { extractTime } from '@/components/common/entity-utils'
 import { EditableField } from '@/components/findings/EditableField'
 import { AuditTrailPanel } from '@/components/findings/AuditTrailPanel'
 
@@ -16,7 +17,7 @@ function Label({ children }) {
 
 function fmtTime(iso) {
   try {
-    return new Date(iso).toISOString().substring(11, 19)
+    return extractTime(iso)
   } catch {
     return ''
   }
