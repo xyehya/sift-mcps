@@ -12,7 +12,7 @@ dependencies = [
     "fastmcp>=3",
     "opensearch-py>=2.4",
     "evtx>=0.8",
-    "mcp>=1.26",
+    "mcp>=1.28.1",
     "pyyaml>=6.0.3",
     "sift-core",
     "sift-common",
