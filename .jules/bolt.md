@@ -1,0 +1,3 @@
+## 2024-07-17 - Fast-path timestamp parsing in hot loops
+**Learning:** `new Date(ts)` allocations in hot loops (like mapping over a timeline with hundreds of events) cause significant memory churn and garbage collection pressure. Additionally, using `new Date(ts).toDateString()` introduces bugs because it converts UTC timestamps to the user's local timezone, causing date separators to shift incorrectly.
+**Action:** Use fast-path string slicing for valid ISO strings (e.g., `ts.substring(0, 10)` for dates) and fallback to `parseTimestamp()` to extract epoch ms without `Date` instantiation. Use `extractDate()` and `extractTime()` utilities from `@/components/common/entity-utils` to ensure consistent formatting and avoid timezone bugs.
