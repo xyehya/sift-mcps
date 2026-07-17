@@ -108,6 +108,33 @@ export function getAccountsForFinding(f) {
 }
 
 // ── Time-range / timestamp formatting ────────────────────────────────────
+
+/**
+ * Fast-path date extraction (YYYY-MM-DD) avoiding `new Date()` allocation
+ * for valid ISO strings.
+ */
+export function extractDate(ts) {
+  if (typeof ts === 'string' && ts.length >= 10 && ts[4] === '-' && ts[7] === '-') {
+    return ts.substring(0, 10)
+  }
+  const ms = parseTimestamp(ts)
+  if (Number.isNaN(ms)) return '—'
+  return new Date(ms).toISOString().substring(0, 10)
+}
+
+/**
+ * Fast-path time extraction (HH:MM:SS) avoiding `new Date()` allocation
+ * for valid ISO strings.
+ */
+export function extractTime(ts) {
+  if (typeof ts === 'string' && ts.length >= 19 && ts[10] === 'T' && ts[13] === ':' && ts[16] === ':') {
+    return ts.substring(11, 19)
+  }
+  const ms = parseTimestamp(ts)
+  if (Number.isNaN(ms)) return '—'
+  return new Date(ms).toISOString().substring(11, 19)
+}
+
 /** "YYYY-MM-DD HH:MM:SS" (UTC) for a timestamp, or '—' when unparseable. */
 export function fmtTs(raw) {
   if (!raw) return '—'
