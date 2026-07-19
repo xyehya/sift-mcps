@@ -1,5 +1,11 @@
 # Protocol SIFT Domain Language
 
+> **P4.23 remediation freeze (2026-07-16; SPEC accepted 2026-07-19):** this file still mixes
+> retained terms with pre-remediation/as-built concepts. Do not use it to infer the remediation
+> target: the sole behavioral authority is `docs/architecture/EVIDENCE-CUSTODY-SPEC.md`
+> (accepted 2026-07-19). This glossary is reconciled during the remediation sprint; the decision
+> register remains frozen provenance.
+
 Protocol SIFT separates human custody authority from agent investigation. These terms are the canonical language for evidence custody across code, tests, APIs, Portal copy, and documentation.
 
 ## Cases

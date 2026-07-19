@@ -25,6 +25,15 @@ Internal ops hub lives **outside this repo** (local): `~/AI/sift-portal-ops/`.
 - **Packet handoffs are scope contracts:** an instruction such as `Finalize P1` means execute the P1
   actions/acceptance criteria in `MASTER_TRACKER.md`, expand code discovery only as needed, and do not
   pull in adjacent packets. Update the packet state and proof record when finished.
+- **P4.23 remediation freeze (2026-07-16; SPEC accepted 2026-07-19):** the original
+  P4.23.1–P4.23.8 packet set and Gate C/Gate D matrices are superseded historical evidence and must
+  not be resumed. The sole behavioral authority is `docs/architecture/EVIDENCE-CUSTODY-SPEC.md`
+  (accepted 2026-07-19);
+  `~/AI/sift-portal-ops/briefs/p423-evidence-custody/DECISION-REGISTER.md` is frozen provenance;
+  execution routing starts at that directory's `00-ORCHESTRATION-INDEX.md`. Other
+  custody/security/domain documents remain pre-remediation/as-built until reconciled. No agent may
+  infer target requirements from an archive or begin coding before the Joint Engineering Design
+  Gate is approved.
 - **Surfacing lesson (the #1 repeat bug):** a gateway/add-on fix is INERT live unless it
   lands at the **agent-facing surface** — the registry `*Out` Pydantic model + the worker
   `result_public` envelope + the DB-authority path — NOT the impl function. SDK `outputSchema`
@@ -314,6 +323,29 @@ Next action:
 
 Never paste secrets, raw tokens, DSNs, passwords, private keys, service-role
 keys, or sensitive full evidence paths into GitHub, docs, or any external service.
+
+## Agent skills
+
+Repo-scoped configuration consumed by the engineering skills in `.claude/skills/` /
+`.agents/skills/` (to-tickets, triage, to-spec, wayfinder, domain-modeling, …).
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues (`gh` CLI; repo inferred from the remote) — **except the
+P4.23 remediation sprint, whose work items are the ops-hub packet DAG** starting at
+`~/AI/sift-portal-ops/briefs/p423-evidence-custody/00-ORCHESTRATION-INDEX.md`. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five-role vocabulary mapped onto this repo's existing labels (`ready-for-agent` maps to the
+existing `agent-ready`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` + `docs/adr/`. While the P4.23 freeze banner is on
+`CONTEXT.md`, custody target vocabulary comes from `docs/architecture/EVIDENCE-CUSTODY-SPEC.md`
+plus the decision register, not the frozen glossary. See `docs/agents/domain.md`.
 
 ## Cursor Cloud specific instructions
 

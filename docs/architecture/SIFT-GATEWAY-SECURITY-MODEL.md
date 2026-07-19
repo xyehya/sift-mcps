@@ -1,5 +1,12 @@
 # SIFT Gateway — Security Model (canonical reference)
 
+> **P4.23 remediation freeze (2026-07-16; SPEC accepted 2026-07-19):** the general Gateway trust
+> boundaries remain the security design, but P4.23 custody sections describing external storage,
+> Exact Restore, same-object replacement, and mandatory Ed25519 signing are pre-remediation/
+> as-built material. Do not treat those sections as target requirements. The sole P4.23 behavioral
+> authority is `docs/architecture/EVIDENCE-CUSTODY-SPEC.md` (accepted 2026-07-19; the decision
+> register remains frozen provenance); this document is reconciled during the remediation sprint.
+
 > **Read this before any gateway / security / backend / execution work.** It is the
 > intended security architecture (C4 + STRIDE viewpoints VP-1..VP-5).
 >
