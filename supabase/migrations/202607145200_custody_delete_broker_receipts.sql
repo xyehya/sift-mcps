@@ -45,8 +45,14 @@ do $$ begin
     nocreatedb nocreaterole noreplication nobypassrls;
 exception when duplicate_object then null;
 end $$;
-alter role sift_custody_delete_broker with login noinherit nosuperuser
-  nocreatedb nocreaterole noreplication nobypassrls;
+-- SUPERUSER/REPLICATION/BYPASSRLS are set once at creation above and never
+-- altered again for this role. PostgreSQL 16+ requires the executing role to
+-- itself hold SUPERUSER to *restate* any of those three clauses in ALTER ROLE
+-- (even to their already-effective off value), which the Supabase CLI
+-- migration role does not have. Omitting them here keeps this an idempotent
+-- reset of the non-privileged attributes without needing SUPERUSER.
+alter role sift_custody_delete_broker with login noinherit
+  nocreatedb nocreaterole;
 
 create schema if not exists sift_custody_broker;
 revoke all on schema sift_custody_broker from public,anon,authenticated,service_role;
