@@ -80,7 +80,11 @@ install when present.
 
 Fail-closed; no component menu.
 
-1. **Stop** systemd: `sift-gateway`, `sift-job-worker`, `sift-opensearch-worker@*`
+1. **Stop** systemd: `sift-gateway`, `sift-job-worker`, `sift-mount-observer`,
+   `sift-opensearch-worker@*`, and any live `sift-addon-*` transient units (add-on
+   sandbox processes started via `systemd-run --collect`; not children of the
+   gateway's cgroup, so they need an explicit stop — `--collect` means there is no
+   unit file left to remove once stopped)
 2. **Docker force purge** (`force_purge_sift_docker_state`):
    - Best-effort `compose down -v` (may no-op without env/secrets)
    - Force `docker rm -f` matching SIFT/OpenCTI/Supabase containers
@@ -111,6 +115,35 @@ Fail-closed; no component menu.
 - Contracts: `tests/test_greenfield_uninstall_contract.py`,
   `tests/test_opencti_uninstall_contract.py`,
   `tests/test_installer_no_evidence_deletion.py`.
+
+## Fast-reset cycle (P0-INFRA)
+
+For a fast test-environment respin (VM data is disposable — see repo `AGENTS.md`),
+run the existing flags together; no separate "fast-reset" flag exists or is needed:
+
+```bash
+./scripts/uninstall.sh --yes --i-understand --keep-caches \
+  --data --i-understand-evidence-loss
+./install.sh --with-rag --with-windows-triage
+```
+
+`--keep-caches` spares `/var/cache/sift` (uv/pip/HF/wintriage/hayabusa) and Docker
+images so reinstall doesn't re-download bandwidth-heavy artifacts; `--data` wipes
+`/cases` test evidence. The user-level `~/.cache/uv` (distinct from the durable
+`/var/cache/sift/uv`) is never touched by this script under any flag combination.
+
+### Known anomalies (already covered by the existing privilege model)
+
+- **Stray non-native (e.g. macOS UID 501) ownership on rsynced scripts, or a
+  root-owned individual script** under the staged runtime tree: every removal of
+  `SIFT_MCPS_INSTALL_ROOT` / `.venv` / `SIFT_HOME` goes through `sudo_if_needed`,
+  so foreign or root ownership on those files does not block the wipe.
+- **A permission-denied / root-owned residue subdirectory under `/cases`** (e.g. a
+  stale quarantine dir): `_purge_tree()` clears `chattr -i`/`-a` first, then runs
+  `sudo_if_needed rm -rf`, so root privilege — not the caller's DAC permissions —
+  governs the removal.
+- These are documented here rather than special-cased in the script because the
+  existing sudo-escalation path already covers them; no code change was needed.
 
 ## Related code
 

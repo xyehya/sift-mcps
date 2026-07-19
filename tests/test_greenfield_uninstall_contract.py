@@ -125,6 +125,49 @@ def test_addon_sandbox_sudoers_removed() -> None:
     assert "sift-addon-systemd-sandbox" in src
 
 
+def test_addon_transient_units_are_stopped() -> None:
+    src = UNINSTALL_SH.read_text(encoding="utf-8")
+    stop = src.split("stop_sift_services()", 1)[1].split("\n}", 1)[0]
+    # Transient sift-addon-<backend>-<nonce>.service units (systemd-run --collect
+    # from sift-addon-systemd-sandbox) are standalone units, not children of the
+    # gateway's cgroup — stopping sift-gateway.service alone does not reap them.
+    assert "'sift-addon-*.service'" in stop
+    assert "_addon_units" in stop
+    assert "systemctl stop" in stop
+    # --collect auto-unloads the unit once stopped; no unit FILE removal step
+    # should exist for this pattern (there is nothing on disk to remove).
+    assert "rm -f" not in stop.split("_addon_units+=")[-1]
+
+
+def test_purge_tree_clears_immutable_flags_before_removal() -> None:
+    src = UNINSTALL_SH.read_text(encoding="utf-8")
+    purge = src.split("_purge_tree() {", 1)[1].split("\n}", 1)[0]
+    # Root-owned / permission-denied residue (e.g. a stale quarantine subdir
+    # under /cases) is handled by clearing chattr flags then a root-privileged
+    # rm -rf — DAC permissions on the target do not gate removal.
+    assert "chattr -R -f -i" in purge
+    assert "chattr -R -f -a" in purge
+    assert "sudo_if_needed rm -rf" in purge
+
+
+def test_runtime_removal_is_root_privileged_regardless_of_ownership() -> None:
+    src = UNINSTALL_SH.read_text(encoding="utf-8")
+    runtime = src.split("teardown_runtime()", 1)[1].split("\nteardown_state", 1)[0]
+    # Staged /opt tree, clone .venv, and SIFT_HOME removal must all escalate via
+    # sudo_if_needed so foreign ownership (e.g. stray macOS UID rsync residue,
+    # or a root-owned individual file) never blocks a wipe.
+    assert runtime.count("sudo_if_needed rm -rf") >= 3
+
+
+def test_uv_user_cache_is_never_a_wipe_target() -> None:
+    src = UNINSTALL_SH.read_text(encoding="utf-8")
+    # The user-level ~/.cache/uv (distinct from the durable $SIFT_CACHE_ROOT/uv)
+    # must survive every flag combination — only $SIFT_CACHE_ROOT-scoped paths
+    # are ever removal targets.
+    assert ".cache/uv" not in src
+    assert "$HOME/.cache" not in src
+
+
 def test_durable_cache_defaults_in_common() -> None:
     src = COMMON_SH.read_text(encoding="utf-8")
     assert 'SIFT_CACHE_ROOT="${SIFT_CACHE_ROOT:-/var/cache/sift}"' in src
