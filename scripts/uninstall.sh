@@ -272,7 +272,7 @@ _preserve_hayabusa_into_cache() {
 # or holds named volumes open. Unit-file removal happens later.
 stop_sift_services() {
   command -v systemctl >/dev/null 2>&1 || return 0
-  local _os_workers=() _u _wlink
+  local _os_workers=() _addon_units=() _u _wlink
   for _u in $(systemctl list-units --all --plain --no-legend 'sift-opensearch-worker@*.service' 2>/dev/null | awk '{print $1}'); do
     _os_workers+=("$_u")
   done
@@ -294,6 +294,19 @@ stop_sift_services() {
   fi
   action "systemctl stop (best-effort)" "system-sift\\x2dopensearch\\x2dworker.slice"
   run_if_live sudo_if_needed systemctl stop "system-sift\\x2dopensearch\\x2dworker.slice" 2>/dev/null || true
+
+  # Add-on transient units (sift-addon-<backend>-<nonce>.service, minted by
+  # sift-addon-systemd-sandbox via `systemd-run --collect`) are standalone
+  # units, not children of sift-gateway's cgroup — stopping the gateway does
+  # NOT reap them. --collect auto-unloads a unit once it stops, so there is
+  # no unit file on disk to remove here, only a runtime stop.
+  for _u in $(systemctl list-units --all --plain --no-legend 'sift-addon-*.service' 2>/dev/null | awk '{print $1}'); do
+    _addon_units+=("$_u")
+  done
+  if [[ ${#_addon_units[@]} -gt 0 ]]; then
+    action "systemctl stop" "add-on transient units: ${_addon_units[*]}"
+    run_if_live sudo_if_needed systemctl stop "${_addon_units[@]}" 2>/dev/null || true
+  fi
 }
 
 # Authoritative Docker purge: never depend solely on `compose down -v` (it
