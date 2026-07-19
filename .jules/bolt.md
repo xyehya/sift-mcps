@@ -1,0 +1,3 @@
+## 2024-07-19 - Avoid new Date() in Hot Loops for Timestamp Parsing
+**Learning:** `new Date(ts)` in a hot loop like React renders or sorting causes significant object allocation overhead, and when paired with `.toDateString()`, risks bugs from mismatched local vs. UTC timezones.
+**Action:** When extracting date or time parts from timestamps, use fast-path logic to check if the input is already a valid ISO string and use simple string slicing (`substring(0, 10)` or `substring(11, 19)`) before falling back to parsing. This drastically reduces allocations and enforces consistent UTC string handling. Use the helpers `extractDate` and `extractTime` in `entity-utils.js`.
