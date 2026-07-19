@@ -78,7 +78,14 @@ Prefer **repo** config over user-global installs. Canonical locations:
 - Skills (Claude + Cursor): `.claude/skills/` → `.agents/skills/` (do not also mirror under `.cursor/skills/` — Cursor loads both and duplicates)
 - Claude / Codex / OpenCode MCP: `.mcp.json`, `.claude/settings.json`, `.codex/config.toml`, `opencode.json`
 
-CodeGuard is vendored as `.cursor/rules/codeguard-*.mdc` + `.cursor/agents/codeguard-reviewer.md` — do not also enable the CodeGuard marketplace plugin in this project.
+CodeGuard security guidance runs via the Claude Code `codeguard-security` plugin (marketplace
+`cosai-oasis/project-codeguard`, project-enabled in `.claude/settings.json`
+`enabledPlugins`) — the source every spawned agent invokes per the loadout below
+(`codeguard-security:codeguard` / `codeguard-security:security-review`). `enabledPlugins` is
+git-tracked and portable, but the marketplace registration + plugin cache under
+`~/.claude/plugins/` is machine-local and **not** git-tracked — on a new machine or profile,
+re-run `/plugin marketplace add cosai-oasis/project-codeguard` then
+`/plugin install codeguard-security@project-codeguard` before it resolves.
 
 Keep `~/.cursor/mcp.json` empty so project `.cursor/mcp.json` owns memory MCP.
 Do **not** commit absolute machine paths (`/Users/...`, `/home/...`) in MCP configs.
