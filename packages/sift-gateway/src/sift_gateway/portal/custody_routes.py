@@ -4,8 +4,23 @@ FROZEN INTERFACE (P4.23 CP1, re-frozen 2026-07-20 repair round 1). CP2B
 implements the bodies. Each route does exactly: parse the JSON body -> authorize
 the operator session -> call ONE custody domain function (``custody.seal`` /
 ``custody.actions`` / ``custody.ledger`` / ``custody.admission``) -> return a
-shaped response. It holds ZERO business logic (OPERATING-MODEL §1/§12) and is NOT
-registered into the app until CP2B wires it.
+shaped response. It holds ZERO business logic (OPERATING-MODEL §1/§12).
+
+**Repair round 1 — real operator auth (was: unauth-read exposure + dead
+writes).** ``custody_routes_list()`` is mounted by ``server.py`` as its own
+Starlette sub-app wrapped in ``case_dashboard.auth.PortalSessionMiddleware`` —
+the SAME Supabase-session middleware ``dashboard_app`` uses — at
+``/portal/custody`` (registered ahead of the broader ``Mount("/portal", ...)``
+so it is tried first). The shared top-level ``AuthMiddleware`` deliberately
+sets ``identity=None`` for every ``/portal``-prefixed path ("portal sub-app
+owns its own auth", ``auth.py`` dispatch) and is NOT touched here. Because of
+that, ``sift_gateway.auth.require_control_plane_operator`` — which treats an
+absent identity/role as an implicit single-user operator — is WRONG for these
+routes: it would fail OPEN for an anonymous caller. Every route instead uses
+:func:`_require_authenticated_operator` / :func:`_require_examiner` below,
+which read ``request.state.role``/``request.state.principal`` (set by
+``PortalSessionMiddleware``) with a POSITIVE allow-list and deny an absent
+session outright — no anonymous-is-operator fallback for custody.
 
 **EC-3 — shaped errors are FORCED, not optional (re-frozen).** Every custody
 route is wrapped by the single error boundary :func:`_custody_route`, so EVERY
@@ -42,7 +57,6 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from sift_gateway.active_case import ActiveCase, ActiveCaseError
-from sift_gateway.auth import require_control_plane_operator
 from sift_gateway.custody import actions, admission, ledger, seal
 
 logger = logging.getLogger(__name__)
@@ -158,6 +172,50 @@ async def _read_json_body(request: Request) -> tuple[dict[str, Any] | None, JSON
     return body, None
 
 
+# Portal roles PortalSessionMiddleware assigns an authenticated operator
+# principal (case_dashboard.auth._examiner_role_from_principal): "examiner" or
+# "readonly". Agent/service principals never reach a Portal session cookie at
+# all (they authenticate to /mcp with a bearer token, a disjoint transport),
+# so a valid, non-None role here already implies "authenticated human Portal
+# operator" — no separate principal_type check is needed.
+_AUTHENTICATED_PORTAL_ROLES = frozenset({"examiner", "readonly"})
+
+
+def _require_authenticated_operator(request: Request) -> JSONResponse | None:
+    """Deny-by-default: only an authenticated Portal operator may read custody.
+
+    Unlike ``sift_gateway.auth.require_control_plane_operator`` (correct for
+    ``/api/v1`` control-plane routes, wrong here), an absent session is DENIED,
+    never treated as an implicit single-user operator — custody inventory must
+    never be readable by an unauthenticated caller (STRIDE boundary #7).
+    """
+    role = getattr(request.state, "role", None)
+    if role not in _AUTHENTICATED_PORTAL_ROLES:
+        return _shaped_error(
+            code="invalid_request",
+            message="Authentication required to read custody status.",
+            audit_id=_new_audit_id(),
+            status_code=401,
+        )
+    return None
+
+
+def _require_examiner(request: Request) -> JSONResponse | None:
+    """Mutating/reauth-bearing custody actions require the examiner role.
+
+    Readonly Portal sessions may observe custody state but never mutate it
+    (matches ``sift_gateway.auth._CONTROL_PLANE_DENIED_ROLES``'s own framing).
+    """
+    if getattr(request.state, "role", None) != "examiner":
+        return _shaped_error(
+            code="invalid_request",
+            message="Examiner role required for this custody action.",
+            audit_id=_new_audit_id(),
+            status_code=403,
+        )
+    return None
+
+
 def _require_active_case(request: Request) -> tuple[ActiveCase | None, JSONResponse | None]:
     gateway = request.app.state.gateway
     active_case_service = getattr(gateway, "active_case_service", None)
@@ -169,7 +227,7 @@ def _require_active_case(request: Request) -> tuple[ActiveCase | None, JSONRespo
             status_code=503,
         )
     try:
-        case = active_case_service.get_active_case(getattr(request.state, "identity", None))
+        case = active_case_service.get_active_case(getattr(request.state, "principal", None))
     except ActiveCaseError as exc:
         return None, _shaped_error(
             code="invalid_request",
@@ -183,20 +241,33 @@ def _require_active_case(request: Request) -> tuple[ActiveCase | None, JSONRespo
 @dataclasses.dataclass(frozen=True, slots=True)
 class _RequestOperatorSession:
     """The minimal :class:`~sift_gateway.custody.reauth.OperatorSession` this
-    request satisfies, built from the authenticated bearer identity."""
+    request satisfies, built from the authenticated Portal session principal."""
 
     actor_user_id: str
     session_id: str
 
 
 def _operator_session(request: Request) -> _RequestOperatorSession | None:
-    identity = getattr(request.state, "identity", None)
-    principal_id = getattr(identity, "principal_id", None)
+    """Build the domain-layer session from ``request.state.principal``.
+
+    ``PortalSessionMiddleware`` sets ``request.state.principal`` to the plain
+    dict ``supabase_auth._principal_dict`` shape ({principal_type, principal_id,
+    auth_user_id, display_name, email, system_role, status, case_memberships})
+    — never ``request.state.identity`` (a distinct, MCP/bearer-token concept
+    this Portal session middleware never populates). ``principal_id`` is the
+    same ``app.operator_profiles.id`` authority ``active_case.py`` already uses
+    for actor columns; ``auth_user_id`` (the stable Supabase subject) stands in
+    for the non-authoritative ``session_id`` this Protocol asks for.
+    """
+    principal = getattr(request.state, "principal", None)
+    if not isinstance(principal, dict):
+        return None
+    principal_id = principal.get("principal_id")
     if not principal_id:
         return None
     return _RequestOperatorSession(
         actor_user_id=str(principal_id),
-        session_id=str(getattr(identity, "token_id", None) or ""),
+        session_id=str(principal.get("auth_user_id") or ""),
     )
 
 
@@ -214,7 +285,7 @@ async def custody_status(request: Request) -> JSONResponse:
     Drives an operator Refresh reconciliation and renders sealed/pending/ignored/
     retired strictly per EC-4, scoped to the active case.
     """
-    auth_error = require_control_plane_operator(request)
+    auth_error = _require_authenticated_operator(request)
     if auth_error is not None:
         return auth_error
     case, case_error = _require_active_case(request)
@@ -256,7 +327,7 @@ async def custody_seal(request: Request) -> JSONResponse:
     ``{display_path, snapshot_observation_id, display_name?, source?,
     supersedes_object_id?}`` from the most recent Refresh snapshot.
     """
-    auth_error = require_control_plane_operator(request)
+    auth_error = _require_examiner(request)
     if auth_error is not None:
         return auth_error
     body, body_error = await _read_json_body(request)
@@ -374,7 +445,7 @@ async def resolve_findings(request: Request) -> JSONResponse:
     custody verb (Ignore / Retire / Verify-and-Reprotect). Zero business logic in
     the route.
     """
-    auth_error = require_control_plane_operator(request)
+    auth_error = _require_examiner(request)
     if auth_error is not None:
         return auth_error
     body, body_error = await _read_json_body(request)
@@ -446,7 +517,7 @@ async def resolve_findings(request: Request) -> JSONResponse:
 @_custody_route
 async def custody_verify(request: Request) -> JSONResponse:
     """POST Full Verify (read-only, no fresh password) -> ``custody.actions``."""
-    auth_error = require_control_plane_operator(request)
+    auth_error = _require_authenticated_operator(request)
     if auth_error is not None:
         return auth_error
     case, case_error = _require_active_case(request)
@@ -467,7 +538,7 @@ async def custody_verify(request: Request) -> JSONResponse:
 @_custody_route
 async def custody_export(request: Request) -> JSONResponse:
     """POST/GET the derived ``custody_export_v1`` -> ``custody.ledger``."""
-    auth_error = require_control_plane_operator(request)
+    auth_error = _require_authenticated_operator(request)
     if auth_error is not None:
         return auth_error
     case, case_error = _require_active_case(request)
@@ -506,7 +577,7 @@ async def custody_anchor(request: Request) -> JSONResponse:
     automatic mode. A partial set is a shaped ``invalid_request``, never silently
     treated as either mode.
     """
-    auth_error = require_control_plane_operator(request)
+    auth_error = _require_examiner(request)
     if auth_error is not None:
         return auth_error
     body, body_error = await _read_json_body(request)
@@ -557,12 +628,18 @@ async def custody_anchor(request: Request) -> JSONResponse:
 
 
 def custody_routes_list() -> list[Route]:
-    """The custody route table — registered into the app by ``server.py``."""
+    """The custody route table.
+
+    Paths are relative to the ``/portal/custody`` mount point ``server.py``
+    wraps in ``PortalSessionMiddleware`` — NOT absolute ``/portal/custody/*``
+    paths (this table is never registered at the gateway's top level, where
+    ``request.state.role``/``request.state.principal`` would never be set).
+    """
     return [
-        Route("/portal/custody/status", custody_status, methods=["GET"]),
-        Route("/portal/custody/seal", custody_seal, methods=["POST"]),
-        Route("/portal/custody/resolve", resolve_findings, methods=["POST"]),
-        Route("/portal/custody/verify", custody_verify, methods=["POST"]),
-        Route("/portal/custody/export", custody_export, methods=["POST", "GET"]),
-        Route("/portal/custody/anchor", custody_anchor, methods=["POST"]),
+        Route("/status", custody_status, methods=["GET"]),
+        Route("/seal", custody_seal, methods=["POST"]),
+        Route("/resolve", resolve_findings, methods=["POST"]),
+        Route("/verify", custody_verify, methods=["POST"]),
+        Route("/export", custody_export, methods=["POST", "GET"]),
+        Route("/anchor", custody_anchor, methods=["POST"]),
     ]

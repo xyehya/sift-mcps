@@ -18,6 +18,15 @@ _GATEWAY_SRC = Path(__file__).resolve().parents[1] / "src" / "sift_gateway"
 _CORE_SRC = (
     Path(__file__).resolve().parents[2] / "sift-core" / "src" / "sift_core"
 )
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_ROOT_TESTS = _REPO_ROOT / "tests"
+
+# repair round 1, MUST-FIX 2: tests/test_custody_signing_authority_provision.py
+# imported the (already-deleted) custody_proof module and broke CI collection
+# suite-wide (testpaths=["tests","packages"]) — the absence harness only
+# scanned packages/sift-gateway/src, never the root-level tests/ tree where
+# the actual stale importer lived. Every scan below now covers both.
+_DELETED_MODULE_NAMES = ("custody_drift", "custody_proof", "custody_anchor")
 
 
 def test_custody_drift_module_is_unimportable():
@@ -112,11 +121,55 @@ def test_signing_symbols_are_gone_from_the_source_tree():
     # Fail-on-revert: no surviving source file references the deleted signing
     # API by name (a reintroduction anywhere would be a SPEC violation — no
     # installation-held Ed25519 key, signature latch, or trusted-key registry).
+    # Scans packages/sift-gateway/src AND the root-level tests/ tree — the
+    # signing-authority test this round deleted lived in the latter, which the
+    # original scan (repair round 1) missed.
     forbidden = ("load_signing_key", "sign_bundle", "verify_bundle", "CustodyProofError")
     hits = []
-    for path in _GATEWAY_SRC.rglob("*.py"):
-        text = path.read_text()
-        for symbol in forbidden:
-            if symbol in text:
-                hits.append((path, symbol))
+    for base in (_GATEWAY_SRC, _ROOT_TESTS):
+        if not base.exists():
+            continue
+        for path in base.rglob("*.py"):
+            text = path.read_text()
+            for symbol in forbidden:
+                if symbol in text:
+                    hits.append((path, symbol))
+    assert hits == []
+
+
+def test_no_stale_import_of_a_deleted_custody_module_anywhere_in_the_repo():
+    # Fail-on-revert for THIS round's exact CI-collection break: an AST-based
+    # (import statements only, so a docstring merely MENTIONING one of these
+    # module names as historical context is never a false positive — several
+    # of this packet's own docstrings say things like "absorbs the as-built
+    # custody_proof.py") scan for any `import sift_gateway.custody_proof`,
+    # `from sift_gateway import custody_proof`, or
+    # `from sift_gateway.custody_proof import X` (and the drift/anchor
+    # equivalents) anywhere under packages/ or the root tests/ tree — not just
+    # packages/sift-gateway/src, where the stale importer this round fixed did
+    # NOT live (it was in the root tests/ suite). Matches pytest's own CI
+    # collection scope exactly: testpaths = ["tests", "packages"].
+    search_roots = (_REPO_ROOT / "packages", _ROOT_TESTS)
+    hits: list[tuple[Path, str]] = []
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for path in root.rglob("*.py"):
+            try:
+                tree = ast.parse(path.read_text())
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.rsplit(".", 1)[-1] in _DELETED_MODULE_NAMES:
+                            hits.append((path, alias.name))
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    tail = node.module.rsplit(".", 1)[-1]
+                    if tail in _DELETED_MODULE_NAMES:
+                        hits.append((path, node.module))
+                    elif tail in ("sift_gateway", "sift_core"):
+                        for alias in node.names:
+                            if alias.name in _DELETED_MODULE_NAMES:
+                                hits.append((path, f"{node.module}.{alias.name}"))
     assert hits == []

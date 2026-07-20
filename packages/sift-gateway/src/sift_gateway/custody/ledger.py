@@ -84,41 +84,32 @@ class _Anchorer(Protocol):
 # ---------------------------------------------------------------------------
 # Verify Ledger — deterministic, read-only hash-chain recomputation.
 # ---------------------------------------------------------------------------
-def verify_ledger(*, case_id: str, dsn: str | None) -> LedgerVerification:
-    """Recompute and check a case's custody hash chain (read-only).
+def _verify_chain_linkage(cur: Any, case_id: str) -> LedgerVerification:
+    """Recompute the chain LINKAGE over an ALREADY-OPEN cursor/transaction.
 
-    Walks ``evidence_custody_events`` in ``seq`` order and recomputes the chain
-    LINKAGE deterministically: ``seq`` must be contiguous from 1 and each event's
-    ``prev_hash`` must equal the ``event_hash`` of its immediate predecessor (the
-    genesis event's ``prev_hash`` is ``''``) — exactly the invariant
-    ``app.custody_append_event`` establishes on write. A structural break (a
-    tampered/reordered/missing event) is reported at the first ``seq`` where the
-    linkage fails; it never mutates a row. Fail-closed: no case/DSN or any DB
-    error is reported as inconsistent rather than raising.
+    Shared core for :func:`verify_ledger` (its own short-lived connection) and
+    :func:`generate_export` (one connection/transaction for the whole export,
+    §5 "one authenticated PostgreSQL snapshot" — repair round 1, MUST-FIX 4:
+    a separate connection here would let a custody mutation commit between
+    this read and the export's objects/manifests/events reads, so
+    ``verification.head_seq``/``head_hash`` could disagree with the embedded
+    ``custody_events`` list). ``seq`` must be contiguous from 1 and each
+    event's ``prev_hash`` must equal the ``event_hash`` of its immediate
+    predecessor (the genesis event's ``prev_hash`` is ``''``) — exactly the
+    invariant ``app.custody_append_event`` establishes on write. A structural
+    break (a tampered/reordered/missing event) is reported at the first
+    ``seq`` where the linkage fails; it never mutates a row.
     """
-    if not case_id or not dsn:
-        return LedgerVerification(consistent=False, head_seq=0, head_hash="")
-    try:
-        import psycopg
-    except ImportError as exc:  # pragma: no cover - deployment env
-        logger.error("verify_ledger: psycopg unavailable: %s", exc)
-        return LedgerVerification(consistent=False, head_seq=0, head_hash="")
-    try:
-        with psycopg.connect(dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    select seq, prev_hash, event_hash
-                    from app.evidence_custody_events
-                    where case_id = %s
-                    order by seq
-                    """,
-                    (case_id,),
-                )
-                rows = cur.fetchall()
-    except Exception as exc:
-        logger.error("verify_ledger: query failed for %s: %s", case_id, exc)
-        return LedgerVerification(consistent=False, head_seq=0, head_hash="")
+    cur.execute(
+        """
+        select seq, prev_hash, event_hash
+        from app.evidence_custody_events
+        where case_id = %s
+        order by seq
+        """,
+        (case_id,),
+    )
+    rows = cur.fetchall()
 
     previous_hash = ""
     for expected_seq, row in enumerate(rows, start=1):
@@ -135,6 +126,29 @@ def verify_ledger(*, case_id: str, dsn: str | None) -> LedgerVerification:
     return LedgerVerification(
         consistent=True, head_seq=len(rows), head_hash=previous_hash
     )
+
+
+def verify_ledger(*, case_id: str, dsn: str | None) -> LedgerVerification:
+    """Recompute and check a case's custody hash chain (read-only).
+
+    Fail-closed: no case/DSN or any DB error is reported as inconsistent
+    rather than raising. See :func:`_verify_chain_linkage` for the recomputed
+    invariant.
+    """
+    if not case_id or not dsn:
+        return LedgerVerification(consistent=False, head_seq=0, head_hash="")
+    try:
+        import psycopg
+    except ImportError as exc:  # pragma: no cover - deployment env
+        logger.error("verify_ledger: psycopg unavailable: %s", exc)
+        return LedgerVerification(consistent=False, head_seq=0, head_hash="")
+    try:
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                return _verify_chain_linkage(cur, case_id)
+    except Exception as exc:
+        logger.error("verify_ledger: query failed for %s: %s", case_id, exc)
+        return LedgerVerification(consistent=False, head_seq=0, head_hash="")
 
 
 # ---------------------------------------------------------------------------
@@ -155,9 +169,17 @@ def generate_export(
         raise ValueError("generate_export requires an active case and DSN")
     import psycopg
 
-    verification = verify_ledger(case_id=case_id, dsn=dsn)
+    # repair round 1, MUST-FIX 4 (§5 "one authenticated PostgreSQL snapshot"):
+    # the chain-linkage recomputation and the objects/manifests/events/receipts
+    # reads all run in ONE connection/transaction at REPEATABLE READ, so a
+    # custody mutation committing mid-export cannot make verification.head_seq/
+    # head_hash disagree with the embedded custody_events list — every read
+    # below sees the exact same snapshot. SET TRANSACTION ISOLATION LEVEL is
+    # issued as the first statement, before any query acquires a snapshot.
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
+            cur.execute("set transaction isolation level repeatable read")
+            verification = _verify_chain_linkage(cur, case_id)
             cur.execute(
                 """
                 select o.id::text, o.display_name, o.display_path, o.status,
@@ -209,7 +231,54 @@ def generate_export(
             )
             receipt_rows = cur.fetchall()
 
-    objects = [
+            objects = _export_objects(object_rows)
+            manifest_versions = _export_manifest_versions(manifest_rows)
+            custody_events = _export_custody_events(event_rows)
+            solana_receipts = _export_solana_receipts(receipt_rows)
+            manifest_version = manifest_versions[-1]["manifest_version"] if manifest_versions else 0
+
+            document: dict[str, Any] = {
+                "schema_version": EXPORT_SCHEMA_VERSION,
+                "case_id": case_id,
+                "objects": objects,
+                "manifest_versions": manifest_versions,
+                "custody_events": custody_events,
+                "verification": {
+                    "consistent": verification.consistent,
+                    "head_seq": verification.head_seq,
+                    "head_hash": verification.head_hash,
+                    "broken_at_seq": verification.broken_at_seq,
+                },
+                "solana_receipts": solana_receipts,
+            }
+            export_digest = "sha256:" + hashlib.sha256(_canonical_bytes(document)).hexdigest()
+
+            # Recording the export stays in the SAME transaction/snapshot as
+            # the reads above — no correctness reason to split it into a
+            # second connection, and this keeps the whole export to one round
+            # trip's worth of network connections.
+            cur.execute(
+                "select app.custody_record_export(%s, %s, %s, %s, %s, null)",
+                (
+                    case_id,
+                    export_digest,
+                    verification.head_hash or None,
+                    manifest_version or None,
+                    session.actor_user_id,
+                ),
+            )
+        conn.commit()
+
+    return CustodyExport(
+        schema_version=EXPORT_SCHEMA_VERSION,
+        export_digest=export_digest,
+        source_ledger_head=verification.head_hash,
+        document=document,
+    )
+
+
+def _export_objects(object_rows: Any) -> list[dict[str, Any]]:
+    return [
         {
             "evidence_object_id": r[0],
             "display_name": r[1],
@@ -231,7 +300,10 @@ def generate_export(
         }
         for r in object_rows
     ]
-    manifest_versions = [
+
+
+def _export_manifest_versions(manifest_rows: Any) -> list[dict[str, Any]]:
+    return [
         {
             "manifest_version": r[0],
             "manifest_hash": r[1],
@@ -240,7 +312,10 @@ def generate_export(
         }
         for r in manifest_rows
     ]
-    custody_events = [
+
+
+def _export_custody_events(event_rows: Any) -> list[dict[str, Any]]:
+    return [
         {
             "seq": r[0],
             "event_type": r[1],
@@ -253,7 +328,10 @@ def generate_export(
         }
         for r in event_rows
     ]
-    solana_receipts = [
+
+
+def _export_solana_receipts(receipt_rows: Any) -> list[dict[str, Any]]:
+    return [
         {
             "status": r[0],
             "tx_signature": r[1],
@@ -263,44 +341,6 @@ def generate_export(
         }
         for r in receipt_rows
     ]
-    manifest_version = manifest_versions[-1]["manifest_version"] if manifest_versions else 0
-
-    document: dict[str, Any] = {
-        "schema_version": EXPORT_SCHEMA_VERSION,
-        "case_id": case_id,
-        "objects": objects,
-        "manifest_versions": manifest_versions,
-        "custody_events": custody_events,
-        "verification": {
-            "consistent": verification.consistent,
-            "head_seq": verification.head_seq,
-            "head_hash": verification.head_hash,
-            "broken_at_seq": verification.broken_at_seq,
-        },
-        "solana_receipts": solana_receipts,
-    }
-    export_digest = "sha256:" + hashlib.sha256(_canonical_bytes(document)).hexdigest()
-
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "select app.custody_record_export(%s, %s, %s, %s, %s, null)",
-                (
-                    case_id,
-                    export_digest,
-                    verification.head_hash or None,
-                    manifest_version or None,
-                    session.actor_user_id,
-                ),
-            )
-        conn.commit()
-
-    return CustodyExport(
-        schema_version=EXPORT_SCHEMA_VERSION,
-        export_digest=export_digest,
-        source_ledger_head=verification.head_hash,
-        document=document,
-    )
 
 
 # ---------------------------------------------------------------------------
