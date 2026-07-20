@@ -150,6 +150,46 @@ Reconciliation authority and cadence:
 - Before the first committed Seal, and inside an open staging window, reconciliation runs only on
   operator request (Refresh) or on an agent dispatch attempt.
 
+### Evidence-access enforcement architecture (source of truth)
+
+The admission steps above are enforced at exactly one place and cover a deliberately closed set of
+surfaces. This section records the as-built enforcement so it is never re-derived from source.
+
+- **Bounded evidence-access surface.** Only two agent-facing surfaces read evidence bytes:
+  `run_command`/`run_command_job`, and the OpenSearch ingestion/inspection tools
+  (`opensearch_ingest`, `opensearch_inspect_container`). Every other MCP tool operates on the
+  derived OpenSearch index or on PostgreSQL and never opens an evidence file. Future ingestion
+  features extend the OpenSearch ingest surface; they do not introduce new evidence-reading surfaces.
+- **Single admission chokepoint.** Step 6 (resolve every evidence reference to an active sealed
+  Evidence Version) is enforced in one pre-dispatch chokepoint — the Gateway evidence-gate
+  middleware — for every evidence-bearing tool: `sealed -> admit; pending / ignored / retired /
+  missing / changed -> deny before dispatch`. The authority consulted is the custody database
+  (sealed `evidence_versions` + the append-only custody-event chain); no separate index is
+  maintained, and an "Ignored" or "Retired" entry that survives on disk is therefore inaccessible
+  to every agent surface by this lookup, not by per-tool convention.
+- **Per-surface enforcement depth (why the two surfaces differ):**
+  - `run_command`/`run_command_job` accept an agent-controlled command string, so beyond the
+    sealed-version lookup they access evidence ONLY through gateway-resolved sealed-binding
+    inherited file descriptors, revalidated per read. The command can never reach a non-sealed
+    path. This descriptor jail is required precisely because the command surface is agent-controlled
+    and could otherwise be steered at arbitrary paths.
+  - OpenSearch ingestion/inspection accept a data selection (an evidence reference) only — no
+    command, no executable, no shell. The pre-dispatch sealed-version lookup is therefore
+    sufficient: the tool cannot be steered anywhere except the reference it names, and that
+    reference is denied unless it resolves to an active sealed version; the fixed internal pipeline
+    then opens only the resolved sealed path. This asymmetry (fd jail for the command surface,
+    lookup-only for the data-selection surface) is intentional, not a gap.
+- **Closed-set invariant (must remain true as tools evolve).** The set of evidence-reference-
+  accepting tools is closed and conformance-tested: any tool that accepts an evidence path or
+  reference MUST declare it and route it through the single sealed-version lookup, or CI fails. A
+  new tool can never silently reintroduce an unchecked evidence read.
+- **Gateway-owned execution boundary.** `run_command` is the only surface for agent-arbitrary
+  command execution (principle 6). Trusted, gateway-owned internal pipelines whose executable and
+  arguments are fully gateway-determined — the agent supplies only a sealed-evidence data selection,
+  never a command — are not a "second execution path" under principle 6; the OpenSearch ingest
+  worker is such a pipeline. Routing ingestion through `run_command` instead would enlarge, not
+  shrink, the agent-controlled execution surface.
+
 ## Custody Lifecycle State Machine
 
 This machine is normative: Portal screens, Gateway behavior, and implementation packets must
