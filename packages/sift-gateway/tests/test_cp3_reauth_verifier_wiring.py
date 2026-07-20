@@ -265,6 +265,116 @@ def test_unconfigured_create_app_resets_stale_verifier_to_none(
 
 
 # ---------------------------------------------------------------------------
+# repair-2 — app-owned retirement (identity compare-and-clear) + startup readiness
+# ---------------------------------------------------------------------------
+def test_older_app_retire_does_not_clobber_newer_apps_live_verifier() -> None:
+    """Exact overlap ordering (the repair-2 blocking defect): app A installs A,
+    app B installs B (superseding/closing A), then app A's OWN lifespan retire
+    runs. It must NOT close or unset B — B stays alive and current, `_VERIFIER`
+    still points to B. Then B retires through its own callback and fully tears
+    down, fail-closed."""
+    b_closed = {"n": 0}
+
+    async def _b_aclose():
+        b_closed["n"] += 1
+
+    ctx_a = server._CustodyReauthContext(_noop_reverify, _noop_aclose)
+    server._install_custody_reauth_context(ctx_a)
+    ctx_b = server._CustodyReauthContext(_noop_reverify, _b_aclose)
+    server._install_custody_reauth_context(ctx_b)  # B supersedes A (closes A)
+    try:
+        # app A's lifespan ends and retires A's OWN context — B must be untouched.
+        server._retire_custody_reauth_context(ctx_a)
+        assert server._CUSTODY_REAUTH_CTX is ctx_b
+        assert getattr(reauth._VERIFIER, "__self__", None) is ctx_b
+        assert ctx_b._thread.is_alive()          # B still live/current
+        assert not ctx_a._thread.is_alive()      # A closed (by supersession)
+        assert b_closed["n"] == 0                # B's client NOT closed by A's retire
+    finally:
+        server._retire_custody_reauth_context(ctx_b)  # B's own lifespan retire
+    # B retired through its OWN callback: client/loop/thread closed, fail-closed.
+    assert server._CUSTODY_REAUTH_CTX is None
+    assert reauth._VERIFIER is None
+    assert not ctx_b._thread.is_alive()
+    assert b_closed["n"] == 1
+
+
+def test_parameterless_shutdown_retires_current_showing_why_app_owned_retire() -> None:
+    """Documents the repair-2 defect and why app lifespan must use the app-owned
+    retire. The parameterless ``_shutdown_custody_reauth_context`` retires whatever
+    is CURRENT — so if an OLDER app's lifespan called it after a NEWER app (B)
+    superseded it, it would wrongly close B. The app-owned
+    ``_retire_custody_reauth_context(ctx_a)`` (proven above) does not."""
+    ctx_a = server._CustodyReauthContext(_noop_reverify, _noop_aclose)
+    server._install_custody_reauth_context(ctx_a)
+    ctx_b = server._CustodyReauthContext(_noop_reverify, _noop_aclose)
+    server._install_custody_reauth_context(ctx_b)
+    try:
+        # The pre-repair-2 parameterless path retires the CURRENT context (B) —
+        # exactly the clobbering bug when an OLDER app calls it at its shutdown.
+        server._shutdown_custody_reauth_context()
+        assert server._CUSTODY_REAUTH_CTX is None
+        assert reauth._VERIFIER is None
+        assert not ctx_b._thread.is_alive()
+    finally:
+        server._retire_custody_reauth_context(ctx_a)
+        server._retire_custody_reauth_context(ctx_b)
+
+
+def test_retire_is_idempotent_and_stale_retire_never_touches_current() -> None:
+    a_closed = {"n": 0}
+
+    async def _a_aclose():
+        a_closed["n"] += 1
+
+    ctx_a = server._CustodyReauthContext(_noop_reverify, _a_aclose)
+    server._install_custody_reauth_context(ctx_a)
+    server._retire_custody_reauth_context(ctx_a)
+    assert server._CUSTODY_REAUTH_CTX is None
+    assert reauth._VERIFIER is None
+    assert a_closed["n"] == 1
+    assert not ctx_a._thread.is_alive()
+
+    # Repeated retire of an already-retired context is a no-op (no re-close).
+    server._retire_custody_reauth_context(ctx_a)
+    assert a_closed["n"] == 1
+
+    # A stale retire (a context that is not the current global) only closes itself
+    # and never clears a DIFFERENT current verifier.
+    ctx_b = server._CustodyReauthContext(_noop_reverify, _noop_aclose)
+    server._install_custody_reauth_context(ctx_b)
+    try:
+        server._retire_custody_reauth_context(ctx_a)  # stale / not current
+        assert server._CUSTODY_REAUTH_CTX is ctx_b
+        assert getattr(reauth._VERIFIER, "__self__", None) is ctx_b
+    finally:
+        server._retire_custody_reauth_context(ctx_b)
+
+    # Retiring None never touches the global.
+    server._retire_custody_reauth_context(None)
+    assert reauth._VERIFIER is None
+
+
+def test_startup_readiness_timeout_fails_closed_without_leak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dedicated loop that never becomes ready must NOT be installed: `ready` is
+    False and cleanup leaves no live thread and a closed loop (fail-closed)."""
+    monkeypatch.setattr(server, "_CUSTODY_REAUTH_TIMEOUT_S", 0.3)
+
+    class _NeverReadyContext(server._CustodyReauthContext):
+        def _run(self):  # never signal ready; close the loop so it cannot leak
+            self._loop.close()
+
+    ctx = _NeverReadyContext(_noop_reverify, _noop_aclose)
+    assert ctx.ready is False
+    # Deterministic cleanup: bounded close leaves no live thread and a closed loop.
+    ctx.close()
+    assert not ctx._thread.is_alive()
+    assert ctx._loop.is_closed()
+
+
+# ---------------------------------------------------------------------------
 # REGRESSION (fail-on-revert): dedicated ownership under concurrent main-loop
 # identity-client activity, and the b7d6f094 cross-loop shape fails.
 # ---------------------------------------------------------------------------
