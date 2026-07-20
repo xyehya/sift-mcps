@@ -198,6 +198,7 @@ def begin_seal(
     import psycopg
     from psycopg.types.json import Jsonb
 
+    evidence_dir: Path | None = None
     with psycopg.connect(_dsn()) as conn, conn.cursor() as cur:
         # opens_staging_window is DERIVED server-side: a committed sealed set means
         # this begin is adding evidence to a sealed case (SPEC D2). Never trusted
@@ -218,9 +219,20 @@ def begin_seal(
         )
         row = _fetchone(cur)
         operation_id, phase, window = str(row[0]), str(row[1]), bool(row[2])
+        if window:
+            # Resolve the dir inside the txn so we can lift its immutable flag for
+            # staging once the window open is durably recorded (below).
+            evidence_dir = _evidence_dir(cur, case_id)
         cur.execute("select app.custody_gate_state(%s)", (case_id,))
         gate = _fetchone(cur)[0]
         conn.commit()
+
+    # D2: lift the evidence-directory immutable flag ONLY after the window open is
+    # committed — the directory is mutable only inside the window (SEAL_WINDOW_OPENED
+    # was appended by custody_seal_begin). Fail toward immutable on a crash between
+    # the DB commit and this lift; a same-key resume re-runs begin and re-lifts.
+    if window and evidence_dir is not None:
+        _set_directory_immutable(evidence_dir, immutable=False)
 
     return SealResult(
         operation_id=operation_id,
@@ -477,6 +489,32 @@ def _hash_fd(fd: int) -> tuple[str, int]:
     return "sha256:" + digest.hexdigest(), size
 
 
+def _set_directory_immutable(evidence_dir: Path, *, immutable: bool) -> None:
+    """Apply or lift the evidence-DIRECTORY immutable flag (SPEC D2).
+
+    A committed seal leaves the evidence directory itself create/delete/rename
+    protected (immutable), so unprivileged force-adds are physically impossible
+    (SPEC Add-and-Seal amendment); the flag is lifted ONLY inside a reauthorized
+    staging window. fd-based and ``O_NOFOLLOW``; when applying, the flag is
+    verified. Monkeypatchable at the ``sift_core.evidence_posture`` seam (hosts
+    without CAP_LINUX_IMMUTABLE).
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    dir_fd = os.open(
+        evidence_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | nofollow
+    )
+    try:
+        if not set_immutable_flag_fd(dir_fd, immutable):
+            raise SealError("seal_protect_failed", http_status=500)
+        if immutable and get_immutable_flag_fd(dir_fd) is not True:
+            raise SealError("seal_protect_failed", http_status=409)
+    finally:
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass
+
+
 def _protect_and_verify(
     evidence_dir: Path,
     targets: Sequence[SealTarget],
@@ -572,6 +610,15 @@ def _protect_and_verify(
                     "supersedes_object_id": target.supersedes_object_id,
                 }
             )
+        # D2: with every file protected, make the evidence DIRECTORY itself
+        # immutable (create/delete/rename lock) so unprivileged force-adds are
+        # physically impossible; verify it took. Re-applied at a staging-window
+        # re-commit (this runs for both the fresh commit and the window commit),
+        # restoring the posture the window temporarily lifted.
+        if not set_immutable_flag_fd(root_fd, True):
+            raise SealError("seal_protect_failed", http_status=500)
+        if get_immutable_flag_fd(root_fd) is not True:
+            raise SealError("seal_protect_failed", http_status=409)
         return facts
     finally:
         for fd in open_fds:

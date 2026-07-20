@@ -13,10 +13,13 @@ tests prove acceptance through the public functions on a real database.
 
 from __future__ import annotations
 
+import getpass
+import os
+import stat
 from dataclasses import dataclass
 
 import pytest
-from sift_gateway.custody import reauth
+from sift_gateway.custody import reauth, seal
 from sift_gateway.custody.actions import ActionError, FindingDisposition, resolve
 from sift_gateway.custody.reauth import ReauthError, build_binding
 from sift_gateway.custody.seal import SealError, SealTarget, begin_seal, commit_seal
@@ -112,6 +115,52 @@ def test_run_verifier_correct_password_binds_identity(
             "expected_auth_user_id": "auth-uid",
         }
     ]
+
+
+# ---------------------------------------------------------------------------
+# D2 — evidence-DIRECTORY immutable protection (DB-independent; runs everywhere)
+# ---------------------------------------------------------------------------
+def _dir_flag_recorder(monkeypatch: pytest.MonkeyPatch) -> list[tuple[bool, bool]]:
+    """Record (is_directory, immutable) for every set_immutable_flag_fd call."""
+    calls: list[tuple[bool, bool]] = []
+
+    def _set(fd: int, immutable: bool) -> bool:
+        calls.append((stat.S_ISDIR(os.fstat(fd).st_mode), bool(immutable)))
+        return True
+
+    monkeypatch.setattr(seal, "set_immutable_flag_fd", _set)
+    monkeypatch.setattr(seal, "get_immutable_flag_fd", lambda fd: True)
+    return calls
+
+
+def test_protect_and_verify_makes_directory_immutable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    # Closes the D2 test blindness: the directory fd itself must get +i at protect,
+    # AFTER every file fd — asserted against a real temp dir, no DB.
+    calls = _dir_flag_recorder(monkeypatch)
+    monkeypatch.setenv("SIFT_GATEWAY_SERVICE_USER", getpass.getuser())
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    f = evidence_dir / "img.raw"
+    f.write_bytes(b"evidence bytes")
+    os.chmod(f, 0o644)
+
+    facts = seal._protect_and_verify(evidence_dir, [SealTarget("evidence/img.raw", 1)], {})
+    assert len(facts) == 1
+    assert (False, True) in calls  # the file fd was made immutable
+    assert (True, True) in calls  # the DIRECTORY fd was made immutable (D2)
+    assert calls[-1] == (True, True)  # directory +i comes after every file +i
+
+
+def test_set_directory_immutable_lifts_the_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    calls = _dir_flag_recorder(monkeypatch)
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    seal._set_directory_immutable(evidence_dir, immutable=False)
+    assert calls == [(True, False)]  # exactly one directory-fd call, lifting +i
 
 
 # ---------------------------------------------------------------------------

@@ -28,13 +28,14 @@ from __future__ import annotations
 
 import getpass
 import os
+import stat
 import uuid
 from dataclasses import dataclass
 
 import pytest
 from sift_core.execute.evidence_binding import classify_inventory_entries
 from sift_gateway.custody import reauth, seal
-from sift_gateway.custody.actions import FindingDisposition, resolve
+from sift_gateway.custody.actions import ActionError, FindingDisposition, resolve
 from sift_gateway.custody.seal import SealTarget, begin_seal, commit_seal, seal_status
 
 pytestmark = pytest.mark.integration
@@ -72,14 +73,43 @@ class _Verifier:
             raise ValueError("gotrue rejected the password")
 
 
-def _install(monkeypatch: pytest.MonkeyPatch, verifier: object | None) -> None:
-    """Wire the verifier seam + a no-op immutable-flag primitive for the run."""
+class _FlagRecorder:
+    """Records every immutable-flag CALL so tests can assert the directory fd got
+    ``+i`` at commit and was lifted at window-open (real ``chattr +i`` is
+    unavailable in CI, so we assert the calls, not the on-disk flag). Each recorded
+    call is ``(is_directory, immutable)`` — the directory fd is distinguished from
+    file fds by ``S_ISDIR`` on the live fd at call time."""
+
+    def __init__(self) -> None:
+        self.set_calls: list[tuple[bool, bool]] = []
+
+    def set(self, fd: int, immutable: bool) -> bool:
+        self.set_calls.append((stat.S_ISDIR(os.fstat(fd).st_mode), bool(immutable)))
+        return True
+
+    def get(self, fd: int) -> bool:  # commit re-verifies get(...) is True.
+        return True
+
+    def dir_calls(self) -> list[bool]:
+        """The immutable-values applied to DIRECTORY fds, in call order."""
+        return [immutable for (is_dir, immutable) in self.set_calls if is_dir]
+
+
+def _install(
+    monkeypatch: pytest.MonkeyPatch, verifier: object | None
+) -> _FlagRecorder:
+    """Wire the verifier seam + a CALL-RECORDING immutable-flag primitive.
+
+    Returns the recorder so a test can assert the directory-fd ``+i`` calls (D2).
+    """
     monkeypatch.setattr(reauth, "_VERIFIER", verifier)
-    monkeypatch.setattr(seal, "set_immutable_flag_fd", lambda fd, immutable: True)
-    monkeypatch.setattr(seal, "get_immutable_flag_fd", lambda fd: True)
+    recorder = _FlagRecorder()
+    monkeypatch.setattr(seal, "set_immutable_flag_fd", recorder.set)
+    monkeypatch.setattr(seal, "get_immutable_flag_fd", recorder.get)
     # The evidence files are created by THIS process, so the seal's service-owner
     # check must resolve to the current user.
     monkeypatch.setenv("SIFT_GATEWAY_SERVICE_USER", getpass.getuser())
+    return recorder
 
 
 def _new_operator(cur) -> str:
@@ -146,7 +176,7 @@ _ROCBA = ["Rocba-Memory.raw", "rocba-cdrive.e01"]
 # ===========================================================================
 def test_ec6_mixed_case_rocba_seal_succeeds(monkeypatch, tmp_path) -> None:
     verifier = _Verifier()
-    _install(monkeypatch, verifier)
+    recorder = _install(monkeypatch, verifier)
     with _conn() as conn, conn.cursor() as cur:
         case_id, op_id, snap = _setup(cur, tmp_path, _ROCBA)
         conn.commit()
@@ -168,6 +198,9 @@ def test_ec6_mixed_case_rocba_seal_succeeds(monkeypatch, tmp_path) -> None:
     assert len(committed.sealed_object_ids) == 2
     # Happy-path single-shot: ONE password (verified at begin, consumed at commit).
     assert len(verifier.calls) == 1
+    # D2: the evidence DIRECTORY itself is made immutable at COMMITTED — a fresh
+    # case opens no window, so the only directory-fd call is the commit +i (True).
+    assert recorder.dir_calls() == [True]
 
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -398,29 +431,30 @@ def test_snapshot_toctou_stale_rejected(monkeypatch, tmp_path) -> None:
 # ===========================================================================
 def test_d2_staging_window_on_sealed_case(monkeypatch, tmp_path) -> None:
     verifier = _Verifier()
-    _install(monkeypatch, verifier)
+    recorder = _install(monkeypatch, verifier)
     with _conn() as conn, conn.cursor() as cur:
         case_id, op_id, snap = _setup(cur, tmp_path, _ROCBA)
         conn.commit()
     session = _Session(op_id)
-    # First seal (fresh case): no window.
+    # First seal (fresh case): no window; the directory is made immutable at commit.
     begin_seal(
         session=session, case_id=case_id, password="pw", reason="seal",
         idempotency_key="k1", targets=_targets(_ROCBA, snap),
     )
     commit_seal(session=session, case_id=case_id, idempotency_key="k1", targets=_targets(_ROCBA, snap))
+    assert recorder.dir_calls() == [True]  # directory +i at the first COMMITTED
 
-    # Add a new file, Refresh, then begin a seal to ADD it: opens the window.
-    _make_evidence(tmp_path, ["extra-image.e01"])
-    with _conn() as conn, conn.cursor() as cur:
-        snap2 = _reconcile(cur, case_id, str(tmp_path))
-        conn.commit()
-    add_targets = _targets(["extra-image.e01"], snap2)
+    # SPEC scenario 12 order: the window OPENS FIRST (begin to ADD a new file the
+    # operator has not staged yet), which lifts the directory immutable flag; only
+    # THEN is the file staged. The extra file does NOT exist on disk at begin_seal.
+    add_targets = _targets(["extra-image.e01"], snap)
     begun = begin_seal(
         session=session, case_id=case_id, password="pw", reason="add evidence",
         idempotency_key="k2", targets=add_targets,
     )
     assert begun.staging_window_open is True  # server-derived: committed set exists
+    # D2: the directory immutable flag was LIFTED (False) when the window opened.
+    assert recorder.dir_calls() == [True, False]
     with _conn() as conn, conn.cursor() as cur:
         cur.execute("select app.custody_gate_state(%s)", (case_id,))
         assert cur.fetchone()[0] != "OPEN"  # gate blocked during the window
@@ -431,12 +465,23 @@ def test_d2_staging_window_on_sealed_case(monkeypatch, tmp_path) -> None:
         )
         assert cur.fetchone()[0] == 1
         conn.rollback()
-    # Closing the window (a staging-window commit) demands a fresh reauth.
+
+    # NOW stage the new file inside the open window and Refresh (post-window snapshot).
+    _make_evidence(tmp_path, ["extra-image.e01"])
+    with _conn() as conn, conn.cursor() as cur:
+        snap2 = _reconcile(cur, case_id, str(tmp_path))
+        conn.commit()
+    commit_targets = _targets(["extra-image.e01"], snap2)
+
+    # Closing the window (a staging-window commit) demands a fresh reauth and
+    # re-applies the directory immutable flag.
     committed = commit_seal(
-        session=session, case_id=case_id, idempotency_key="k2", targets=add_targets,
+        session=session, case_id=case_id, idempotency_key="k2", targets=commit_targets,
         password="pw", reason="add evidence",
     )
     assert committed.phase == "COMMITTED"
+    # D2: directory immutability RE-APPLIED (True) at the window re-commit.
+    assert recorder.dir_calls() == [True, False, True]
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             "select count(*) from app.evidence_custody_events "
@@ -500,4 +545,53 @@ def test_ec2_failed_action_then_new_action_succeeds(monkeypatch, tmp_path) -> No
             (case_id,),
         )
         assert cur.fetchone()[0] == "ignored"
+        conn.rollback()
+
+
+# ===========================================================================
+# EC-2b — DB-only action overlapping an active Seal's target set is rejected;
+# a disjoint target proceeds (SPEC Custody Lifecycle scenario 11)
+# ===========================================================================
+def test_ec2b_overlap_rejected_disjoint_permitted(monkeypatch, tmp_path) -> None:
+    _install(monkeypatch, _Verifier())
+    with _conn() as conn, conn.cursor() as cur:
+        case_id, op_id, snap = _setup(cur, tmp_path, ["stray-a.txt", "stray-b.txt"])
+        conn.commit()
+    session = _Session(op_id)
+    # An ACTIVE (non-committed) Seal whose target set is exactly {evidence/stray-a.txt}.
+    begin_seal(
+        session=session, case_id=case_id, password="pw", reason="seal a",
+        idempotency_key="ks", targets=_targets(["stray-a.txt"], snap),
+    )
+
+    # EC-2b: a DB-only action whose target is INSIDE the active Seal's set is
+    # rejected shaped before any mutation.
+    with pytest.raises(ActionError) as exc:
+        resolve(
+            session=session, case_id=case_id, password="pw", reason="ignore a",
+            dispositions=[FindingDisposition(verb="IGNORE", target="evidence/stray-a.txt")],
+            batch_key="bk-overlap",
+        )
+    assert exc.value.reason == "seal_in_progress"
+
+    # EC-2b: the same action on a DISJOINT target proceeds during the active Seal.
+    receipts = resolve(
+        session=session, case_id=case_id, password="pw", reason="ignore b",
+        dispositions=[FindingDisposition(verb="IGNORE", target="evidence/stray-b.txt")],
+        batch_key="bk-disjoint",
+    )
+    assert len(receipts) == 1 and receipts[0].action == "IGNORE"
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "select disposition from app.evidence_inventory "
+            "where case_id=%s and display_path='evidence/stray-b.txt'",
+            (case_id,),
+        )
+        assert cur.fetchone()[0] == "ignored"  # disjoint action took effect
+        cur.execute(
+            "select disposition from app.evidence_inventory "
+            "where case_id=%s and display_path='evidence/stray-a.txt'",
+            (case_id,),
+        )
+        assert cur.fetchone()[0] == "pending"  # overlapping action was rejected
         conn.rollback()

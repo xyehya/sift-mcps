@@ -329,6 +329,7 @@ def _ignore(
 
     with psycopg.connect(_dsn()) as conn, conn.cursor() as cur:
         actor = _reauth_actor(cur, reauth_id)
+        _reject_if_seal_overlap(cur, case_id, display_path)  # EC-2b overlap guard
         cur.execute(
             "select r.id::text from app.custody_ignore(%s,%s,%s,%s,%s,%s,null) r",
             (case_id, display_path, batch.reason, reauth_id, key, actor),
@@ -353,6 +354,9 @@ def _retire(
 
     with psycopg.connect(_dsn()) as conn, conn.cursor() as cur:
         actor = _reauth_actor(cur, reauth_id)
+        _reject_if_seal_overlap(  # EC-2b overlap guard (resolve object -> path)
+            cur, case_id, _object_display_path(cur, case_id, evidence_object_id)
+        )
         cur.execute(
             "select r.id::text from app.custody_retire(%s,%s,%s,%s,%s,%s,null) r",
             (case_id, evidence_object_id, batch.reason, reauth_id, key, actor),
@@ -379,6 +383,9 @@ def _reprotect(
 
     with psycopg.connect(_dsn()) as conn, conn.cursor() as cur:
         actor = _reauth_actor(cur, reauth_id)
+        _reject_if_seal_overlap(  # EC-2b overlap guard (resolve object -> path)
+            cur, case_id, _object_display_path(cur, case_id, evidence_object_id)
+        )
         # Reprotect is available ONLY for identical bytes: verify the on-disk
         # digest equals the committed Evidence Version before restoring posture
         # (SPEC §Verify and Reprotect). The RPC re-derives its binding from
@@ -424,6 +431,46 @@ def _reauth_actor(cur: Any, reauth_id: str) -> str:
     if not row or not row[0]:
         raise ActionError("reauth_scope_mismatch", http_status=403)
     return str(row[0])
+
+
+def _object_display_path(cur: Any, case_id: str, evidence_object_id: str) -> str | None:
+    """Resolve an object's display path for the EC-2b overlap check (read-only)."""
+    cur.execute(
+        "select display_path from app.evidence_objects where id = %s and case_id = %s",
+        (evidence_object_id, case_id),
+    )
+    row = cur.fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def _reject_if_seal_overlap(cur: Any, case_id: str, display_path: str | None) -> None:
+    """Reject a DB-only action whose target is inside an ACTIVE Seal's set (EC-2b).
+
+    Python read-then-reject BEFORE any mutation: SELECT the active (non-committed)
+    seal operation for the case and test membership of ``display_path`` in its
+    recorded target array (``jsonb_exists`` == the ``?`` element test). A target
+    INSIDE the set is rejected shaped ``seal_in_progress``; a DISJOINT target
+    proceeds — EC-2b permits non-overlapping DB-only actions during an active Seal
+    (SPEC Custody Lifecycle scenario 11). A ``None`` display path (unresolved
+    object) cannot overlap by path.
+
+    Residual TOCTOU (documented — NOT a migration edit): this Python pre-check
+    catches the normal case; the atomic backstops are the one-active-Seal-per-case
+    unique constraint and seal-commit's D1 from-disk re-verification, so a race
+    that slips the pre-check surfaces as a seal-commit inconsistency, never silent
+    corruption. Truly-atomic RPC-level enforcement would be a CP3 stop-and-amend
+    migration, out of the CP2A lane (the frozen CP1 RPCs are not edited here).
+    """
+    if display_path is None:
+        return
+    cur.execute(
+        "select exists(select 1 from app.custody_seal_operations s "
+        "where s.case_id = %s and s.phase <> 'COMMITTED' "
+        "and jsonb_exists(s.targets, %s))",
+        (case_id, display_path),
+    )
+    if _fetchone(cur)[0]:
+        raise ActionError("seal_in_progress", http_status=409)
 
 
 def _gate(cur: Any, case_id: str) -> str:
