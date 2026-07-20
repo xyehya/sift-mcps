@@ -234,7 +234,8 @@ def test_gate_status_scans_bare_case_dir_and_reports_unregistered(tmp_path, monk
     )
 
     service = EvidenceAuthorityService("postgresql://unused")
-    result = service.gate_status("case-1")
+    # Explicit operator Refresh path (reconcile=True) — the only read that scans.
+    result = service.gate_status("case-1", reconcile=True)
 
     _assert_scanned_real_evidence_dir(captured)
     assert result["gate_state"] == "BLOCKED_PENDING"
@@ -262,7 +263,8 @@ def test_list_evidence_scans_bare_case_dir(tmp_path, monkeypatch):
     )
 
     service = EvidenceAuthorityService("postgresql://unused")
-    inventory = service.list_evidence("case-1")
+    # Explicit operator Refresh path (reconcile=True) — the only read that scans.
+    inventory = service.list_evidence("case-1", reconcile=True)
 
     _assert_scanned_real_evidence_dir(captured)
     assert len(inventory) == 1
@@ -300,6 +302,66 @@ def test_custody_status_route_scans_bare_case_dir(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Passive-read must NOT reconcile (CP3 round 2 poll-mutation fix) — no database.
+# The 15s chain-status poll and the operator Refresh call the SAME endpoints;
+# only Refresh (reconcile=True) may scan/persist. A revert that reconciles on the
+# default path would regrow app.admission_observations on every poll.
+# ---------------------------------------------------------------------------
+def _reconcile_counter(counter: dict):
+    def spy(*_a, **_k):
+        counter["reconcile"] = counter.get("reconcile", 0) + 1
+        raise AssertionError("passive read must not reconcile")
+
+    return spy
+
+
+def _gate_state_stub(counter: dict, state: str = "BLOCKED_PENDING"):
+    def stub(case_id, dsn):
+        counter["gate_state"] = counter.get("gate_state", 0) + 1
+        return admission._gate_result(state, 0)
+
+    return stub
+
+
+def test_gate_status_passive_read_does_not_reconcile(monkeypatch):
+    counter: dict = {}
+    monkeypatch.setattr(admission, "reconcile", _reconcile_counter(counter))
+    monkeypatch.setattr(admission, "gate_state", _gate_state_stub(counter))
+    monkeypatch.setattr(
+        EvidenceAuthorityService,
+        "_connect",
+        lambda self: _FakeConn([("evidence/img.E01",)]),
+    )
+
+    service = EvidenceAuthorityService("postgresql://unused")
+    result = service.gate_status("case-1")  # default: passive
+
+    assert counter.get("reconcile", 0) == 0  # never scanned/persisted
+    assert counter.get("gate_state", 0) == 1  # pure computed-gate read
+    assert result["gate_state"] == "BLOCKED_PENDING"
+    assert result["unregistered"] == ["evidence/img.E01"]
+
+
+def test_list_evidence_passive_read_does_not_reconcile(monkeypatch):
+    counter: dict = {}
+    monkeypatch.setattr(admission, "reconcile", _reconcile_counter(counter))
+    detected_row = (
+        "id-1", "img.E01", "evidence/img.E01", None, None, "detected",
+        None, None, None, None, None,
+    )
+    monkeypatch.setattr(
+        EvidenceAuthorityService, "_connect", lambda self: _FakeConn([detected_row])
+    )
+
+    service = EvidenceAuthorityService("postgresql://unused")
+    inventory = service.list_evidence("case-1")  # default: passive
+
+    assert counter.get("reconcile", 0) == 0  # never scanned/persisted
+    assert [item["display_path"] for item in inventory] == ["evidence/img.E01"]
+    assert inventory[0]["status"] == "detected"
+
+
+# ---------------------------------------------------------------------------
 # End-to-end proof against real PostgreSQL (DSN-gated, integration).
 # ---------------------------------------------------------------------------
 @pytest.mark.integration
@@ -325,12 +387,12 @@ def test_refresh_on_real_case_dir_yields_pending_not_unavailable(tmp_path):
 
     service = EvidenceAuthorityService(dsn)
 
-    gate = service.gate_status(case_id)
+    gate = service.gate_status(case_id, reconcile=True)
     assert gate["gate_state"] != "BLOCKED_UNAVAILABLE"
     assert gate["gate_state"] == "BLOCKED_PENDING"
     assert "evidence/img.E01" in gate["unregistered"]
 
-    inventory = service.list_evidence(case_id)
+    inventory = service.list_evidence(case_id, reconcile=True)
     by_path = {item["display_path"]: item for item in inventory}
     assert "evidence/img.E01" in by_path
     assert by_path["evidence/img.E01"]["seal_status"] == "unsealed"

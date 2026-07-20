@@ -409,3 +409,23 @@ describe('Custody proof export flow', () => {
     expect(screen.queryByRole('button', { name: /Generate Proof Export/i })).not.toBeInTheDocument()
   })
 })
+
+// ── 7. Refresh custody status (CP3 r2 — explicit reconcile intent) ───────────
+describe('Refresh custody status', () => {
+  it('sends { refresh: true } so ONLY the explicit Refresh reconciles server-side', async () => {
+    seed({ status: 'ok', authority: 'db', unregistered: [] })
+    render(<EvidenceTab />)
+    // Let mount-time passive refreshData settle (it calls the endpoints with no
+    // args), then isolate the Refresh click.
+    await waitFor(() => expect(endpoints.getEvidence).toHaveBeenCalled())
+    endpoints.getChainStatus.mockClear()
+    endpoints.getEvidence.mockClear()
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Refresh custody status/i })[0])
+
+    await waitFor(() =>
+      expect(endpoints.getChainStatus).toHaveBeenCalledWith({ refresh: true }),
+    )
+    expect(endpoints.getEvidence).toHaveBeenCalledWith({ refresh: true })
+  })
+})

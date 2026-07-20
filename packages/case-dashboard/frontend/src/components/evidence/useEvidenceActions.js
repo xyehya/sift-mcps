@@ -70,9 +70,12 @@ export function useEvidenceActions({
   async function handleRefreshCustody() {
     try {
       addToast('Refreshing custody status…', 'info')
-      const freshStatus = await getChainStatus()
+      // Explicit operator Refresh is the ONLY read that reconciles (scans the
+      // evidence dir → DB). The passive 15s poll calls these endpoints with no
+      // args and stays a pure, non-mutating read (CP3 r2; SPEC pre-seal staging).
+      const freshStatus = await getChainStatus({ refresh: true })
       if (freshStatus) setChainStatus(freshStatus)
-      const ev = await getEvidence()
+      const ev = await getEvidence({ refresh: true })
       setEvidence(ev || [])
       addToast('Custody status refreshed', 'success')
     } catch (ex) {
