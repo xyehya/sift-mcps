@@ -6,6 +6,9 @@ import {
   humanizeGap,
   TIMELINE_TYPE_CLASS,
   TIMELINE_TYPE_BG,
+  extractDate,
+  extractTime,
+  parseTimestamp,
 } from '@/components/common/entity-utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -42,7 +45,7 @@ export function TimelineEvent({ ev, prev, showDateSep, onNavigate }) {
   const dotClass = TIMELINE_TYPE_BG[typeKey] ?? TIMELINE_TYPE_BG.other
   const typeTextClass = TIMELINE_TYPE_CLASS[typeKey] ?? TIMELINE_TYPE_CLASS.other
 
-  const gap = prev ? new Date(ev.timestamp).getTime() - new Date(prev.timestamp).getTime() : 0
+  const gap = prev ? parseTimestamp(ev.timestamp) - parseTimestamp(prev.timestamp) : 0
   const showGap = gap > GAP_THRESHOLD_MS
 
   const relatedFindings = (ev.related_findings ?? []).filter((fid) => fid !== ev.auto_created_from)
@@ -64,7 +67,7 @@ export function TimelineEvent({ ev, prev, showDateSep, onNavigate }) {
       {showDateSep && (
         <div className="mb-2 mt-4 flex items-center gap-3">
           <span className="mono whitespace-nowrap text-[10px] uppercase tracking-[.1em] text-muted-foreground">
-            {new Date(ev.timestamp).toISOString().substring(0, 10)}
+            {extractDate(ev.timestamp)}
             {ev.host && ` · ${ev.host}`}
           </span>
           <div className="h-px flex-1 bg-border-faint" />
@@ -77,7 +80,7 @@ export function TimelineEvent({ ev, prev, showDateSep, onNavigate }) {
 
         {/* time — fixed column */}
         <span className="mono text-[11px] tabular-nums text-muted-foreground">
-          {new Date(ev.timestamp).toISOString().substring(11, 19)}
+          {extractTime(ev.timestamp)}
         </span>
 
         {/* type tag — its own fixed column so persistence/lateral/etc read clearly */}
