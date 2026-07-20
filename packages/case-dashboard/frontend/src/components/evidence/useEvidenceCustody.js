@@ -4,11 +4,11 @@ import { useEvidenceActions } from '@/components/evidence/useEvidenceActions'
 // ─────────────────────────────────────────────────────────────────────────
 // useEvidenceCustody — STABLE public entry (§11). Composes the data-load hook
 // (useEvidenceData: evidence list + chain status) and the action-handlers hook
-// (useEvidenceActions: full database-custody verify · seal · ignore · delete · retire ·
-// replace · restore · recovery completion · anchor · proof-export · per-item verify) into the single
-// combined surface EvidenceTab consumes. Behaviour-identical to the prior
-// monolith; the split is structural (§7 hook ceiling). Keeps EvidenceTab a thin
-// orchestrator. Mock/real split lives at the API adapter layer (AGENTS §3).
+// (useEvidenceActions: Add/Seal · Full Verify Evidence · the unified D4
+// Resolve batch (Ignore/Retire) · anchor · proof-export · per-item verify)
+// into the single combined surface EvidenceTab consumes. The split is
+// structural (§7 hook ceiling). Keeps EvidenceTab a thin orchestrator.
+// Mock/real split lives at the API adapter layer (AGENTS §3).
 // ─────────────────────────────────────────────────────────────────────────
 
 export function useEvidenceCustody({
@@ -18,7 +18,7 @@ export function useEvidenceCustody({
   modalPassword,
   modalReason,
   sealIntentId,
-  pendingPath,
+  pendingDispositions,
   unregisteredMetadata,
   setModalLoading,
   setModalError,
@@ -38,7 +38,7 @@ export function useEvidenceCustody({
     modalPassword,
     modalReason,
     sealIntentId,
-    pendingPath,
+    pendingDispositions,
     unregisteredMetadata,
     setModalLoading,
     setModalError,

@@ -17,13 +17,6 @@ export function FullVerifyBar({ chainStatus, onVerifyClick }) {
   const lastVerifiedBy = chainStatus.last_verified_by
   const hasActiveManifest =
     Number(chainStatus.manifest_version || 0) > 0 && Number(chainStatus.active_count || 0) > 0
-  const virginExternalBootstrap =
-    chainStatus.storage_profile === 'EXTERNALLY_READ_ONLY' &&
-    Number(chainStatus.manifest_version) === 0 &&
-    Number(chainStatus.active_count) === 0 &&
-    chainStatus.storage_source_identity == null &&
-    chainStatus.storage_verified_mount_instance == null &&
-    chainStatus.storage_verified_generation == null
   const Icon = needed ? AlertTriangle : CheckCircle2
 
   return (
@@ -39,9 +32,7 @@ export function FullVerifyBar({ chainStatus, onVerifyClick }) {
         <Icon className="size-4 shrink-0" aria-hidden />
         <span>
           {needed
-            ? virginExternalBootstrap
-              ? 'Add & Seal establishes the first full-hash source and mount receipt. Full Verify becomes available after the active manifest exists.'
-              : lastVerifiedAt
+            ? lastVerifiedAt
               ? `Full evidence verification is overdue (last: ${formatTime(lastVerifiedAt)}).`
               : 'Evidence has not yet been fully verified against database custody authority.'
             : `Evidence fully verified against database custody authority${

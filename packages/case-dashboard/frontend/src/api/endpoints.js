@@ -47,26 +47,26 @@ export const postDelta = (body) => apiPost('/api/delta', body)
 export const deleteDelta = (id) => apiDelete(`/api/delta/${id}`)
 export const postCommit = (body) => apiPost('/api/commit', body, REAUTH_OPTS)
 
-// --- Evidence chain ---
+// --- Evidence chain (legacy path — still DB-authority-backed via
+// portal_services.EvidenceAuthorityService; Seal/Full-Verify/Anchor/Proof-
+// Export wire contracts are unchanged by P4.23 CP2B) ---
 export const getChainStatus = () => apiFetch('/api/evidence/chain/status')
 export const postChainSeal = (body) => apiPost('/api/evidence/chain/seal', body, REAUTH_HASH_OPTS)
 export const postChainSealResume = (body) => apiPost('/api/evidence/chain/seal/resume', body, REAUTH_HASH_OPTS)
 export const postChainAnchor = (body) => apiPost('/api/evidence/chain/anchor', body)
 export const postChainProofExport = (body) => apiPost('/api/evidence/chain/proof-export', body, { timeoutMs: LONG_TIMEOUT_MS })
-export const postVerifyLedger = () => apiPost('/api/evidence/chain/verify-ledger', {})
-export const postRotateSigningKey = (body) => apiPost('/api/evidence/chain/signing-key/rotate', body, REAUTH_OPTS)
 export const postFullVerifyEvidence = (body = {}) => apiPost('/api/evidence/chain/full-verify', body, { timeoutMs: LONG_TIMEOUT_MS })
 export const postVerifyEvidence = (path) => apiPost(`/api/evidence/${encodeURIComponent(path)}/verify`, {})
-export const postChainIgnore = (body) => apiPost('/api/evidence/chain/ignore', body, REAUTH_OPTS)
-export const postChainDelete = (body) => apiPost('/api/evidence/chain/delete', body, REAUTH_HASH_OPTS)
-export const postChainRetire = (body) => apiPost('/api/evidence/chain/retire', body, REAUTH_OPTS)
-export const postDispositionResume = (body) => apiPost('/api/evidence/chain/disposition/resume', body, REAUTH_HASH_OPTS)
-// Re-acquire re-hashes the mounted replacement bytes synchronously (large
-// disk/memory images) — long timeout like seal.
-export const postReplaceBegin = (body) => apiPost('/api/evidence/chain/replace/begin', body, REAUTH_HASH_OPTS)
-export const postRestoreBegin = (body) => apiPost('/api/evidence/chain/restore/begin', body, REAUTH_HASH_OPTS)
-export const postRecoveryComplete = (body) => apiPost('/api/evidence/chain/recovery/complete', body, REAUTH_HASH_OPTS)
-export const postEvidenceStorageProfile = (body) => apiPost('/api/evidence/storage/profile', body, REAUTH_OPTS)
+
+// --- Custody Resolve (P4.23 CP2B target contract — the unified D4 batch
+// flow has no legacy equivalent) — sift_gateway/portal/custody_routes.py.
+// Zero business logic on the server side: parse -> authorize -> ONE domain
+// call -> shaped response. EC-3: every failure is a shaped {error:{code,
+// message, audit_id}} body, never a raw SQLSTATE/PL-pgSQL dump. One password
+// + one reason covers N selected targets; the honest per-target verb
+// (IGNORE / RETIRE / REPROTECT / ADD_SEAL) travels in `dispositions`, never
+// collapsed into a single generic action.
+export const postCustodyResolve = (body) => apiPost('/custody/resolve', body, REAUTH_OPTS)
 
 // --- Response guard ---
 export const getResponseGuardStatus = () => apiFetch('/api/response-guard/status')

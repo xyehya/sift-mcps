@@ -99,9 +99,13 @@ fixing anything. Known-resolved since that audit:
 ## 11. Guardrails — never break (security + frozen contracts)
 - **No `dangerouslySetInnerHTML` on untrusted data.** All finding/report text
   renders as escaped React text nodes.
-- **Custody recovery stays green:** `src/test/EvidenceRecovery.test.jsx` protects
-  durable Replace/Reacquire and exact Restore. The store contract
-  `src/test/useStore.interface.test.js` stays byte-identical.
+- **P4.23 CP2B superseded the custody-recovery freeze:** Replace/Reacquire,
+  exact Restore, Delete Stray, and installation signing-key rotation are
+  permanently out of scope (EVIDENCE-CUSTODY-SPEC.md "Out of Scope");
+  `src/test/EvidenceRecovery.test.jsx` was deleted with those screens
+  (version-history coverage moved into `src/test/EvidenceCustody.test.jsx`).
+  The store contract `src/test/useStore.interface.test.js` stays
+  byte-identical.
 - **Frozen public contracts:** do not add/remove top-level `useStore` keys; store
   / api / hooks module paths are stable (legacy feature components must keep
   resolving). Auth / JWT / crypto = behavior-preserving **port**, not a rewrite.

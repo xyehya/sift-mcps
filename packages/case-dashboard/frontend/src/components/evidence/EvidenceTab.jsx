@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 
 import { useStoreSlice } from '@/store/useStore'
 import { useMotionVariants } from '@/lib/motion'
+import { Button } from '@/components/ui/button'
 import { sortEvidence } from '@/components/evidence/evidence-utils'
 import { useEvidenceCustody } from '@/components/evidence/useEvidenceCustody'
 import { EvidenceHeader } from '@/components/evidence/EvidenceHeader'
@@ -13,19 +14,24 @@ import { UnregisteredFiles } from '@/components/evidence/UnregisteredFiles'
 import { SealedEvidenceTable } from '@/components/evidence/SealedEvidenceTable'
 import { EvidenceModals } from '@/components/evidence/EvidenceModals'
 import { IncompleteCustodyOperation } from '@/components/evidence/IncompleteCustodyOperation'
-import { StorageProfileStatus } from '@/components/evidence/StorageProfileStatus'
 
 // ─────────────────────────────────────────────────────────────────────────
 // EvidenceTab — chain-of-custody dashboard (Mission Control reskin of the
 // legacy single-column custody view). ONE primary scroll owner; no master-
-// detail. Top→bottom IA: Header → full-verification bar → custody status grid (write-block ·
-// Solana · proof-export) → custody violations → unregistered files →
-// registered-evidence table → modals. Reskinned to orange tokens, lucide icons,
-// framer-motion, shadcn primitives, ≤400-line decomposed files.
+// detail. Top→bottom IA: Header → full-verification bar → custody status grid
+// (write-block · Solana · proof-export) → custody violations → unregistered
+// files → registered-evidence table → modals. Reskinned to orange tokens,
+// lucide icons, framer-motion, shadcn primitives, ≤400-line decomposed files.
+//
+// D4 — unified Resolve: CustodyViolations (missing/modified → Retire) and
+// UnregisteredFiles (pending → Ignore) render a selection checkbox instead of
+// a per-row action button; `resolveSelection` (target -> verb) is the shared
+// batch, submitted through ONE password/reason Resolve modal. Replace/
+// Reacquire, exact Restore, Delete Stray, storage-profile change, and
+// signing-key rotation are permanently out of scope (SPEC) and have no UI
+// here — see EVIDENCE-CUSTODY-SPEC.md "Out of Scope".
 //
 // FROZEN CONTRACTS (must remain green):
-//   EvidenceRecovery.test.jsx covers Replace/Reacquire, exact Restore,
-//   recovery completion, and version history; standalone Unseal is obsolete.
 //   useStore.interface.test.js — store public surface frozen; this tab reads
 //     chain/evidence via useStoreSlice only (no new top-level keys).
 //
@@ -50,9 +56,26 @@ export function EvidenceTab() {
   const [sortCol, setSortCol] = useState('path')
   const [sortAsc, setSortAsc] = useState(true)
 
-  // Modal state includes durable replace/restore begin and recovery completion.
+  // resolveSelection: { [target]: 'IGNORE' | 'RETIRE' } — the shared D4 batch
+  // selection fed by CustodyViolations (Retire) and UnregisteredFiles (Ignore).
+  const [resolveSelection, setResolveSelection] = useState({})
+  const dispositions = useMemo(
+    () => Object.entries(resolveSelection).map(([target, verb]) => ({ target, verb })),
+    [resolveSelection],
+  )
+
+  function toggleResolveTarget(target, verb) {
+    setResolveSelection((prev) => {
+      if (prev[target]) {
+        const next = { ...prev }
+        delete next[target]
+        return next
+      }
+      return { ...prev, [target]: verb }
+    })
+  }
+
   const [activeModal, setActiveModal] = useState(null)
-  const [pendingPath, setPendingPath] = useState(null)
   const [modalPassword, setModalPassword] = useState('')
   const [modalReason, setModalReason] = useState('')
   const [modalLoading, setModalLoading] = useState(false)
@@ -60,23 +83,17 @@ export function EvidenceTab() {
   const [modalResult, setModalResult] = useState(null)
   const [sealIntentId, setSealIntentId] = useState(null)
 
-  function openModal(name, path = null) {
+  function openModal(name) {
     setActiveModal(name)
-    setPendingPath(path)
     setModalPassword('')
     setModalReason('')
     setModalError('')
     setModalResult(null)
-    setSealIntentId(
-      ['seal', 'replace', 'restore', 'ignore', 'delete', 'retire', 'storage_profile'].includes(name)
-        ? crypto.randomUUID()
-        : null,
-    )
+    setSealIntentId(['seal', 'resolve'].includes(name) ? crypto.randomUUID() : null)
   }
 
   function closeModal() {
     setActiveModal(null)
-    setPendingPath(null)
     setModalPassword('')
     setModalReason('')
     setModalError('')
@@ -88,6 +105,7 @@ export function EvidenceTab() {
   function afterSuccess(refreshData, delayMs = 1500) {
     setTimeout(() => {
       closeModal()
+      setResolveSelection({})
       refreshData()
     }, delayMs)
   }
@@ -99,7 +117,7 @@ export function EvidenceTab() {
     modalPassword,
     modalReason,
     sealIntentId,
-    pendingPath,
+    pendingDispositions: dispositions,
     unregisteredMetadata,
     setModalLoading,
     setModalError,
@@ -131,34 +149,23 @@ export function EvidenceTab() {
       >
         <EvidenceHeader chainStatus={chainStatus} onRefresh={custody.handleRefreshCustody} />
 
-        <IncompleteCustodyOperation operation={chainStatus?.incomplete_operation} onResume={(operation) => openModal(
-          operation.action === 'ADD_SEAL'
-            ? 'resume_seal'
-            : ['IGNORE', 'DELETE_STRAY', 'RETIRE'].includes(operation.action)
-              ? 'resume_disposition'
-              : 'complete_recovery',
-          operation.operation_id,
-        )} />
+        <IncompleteCustodyOperation
+          operation={chainStatus?.incomplete_operation}
+          onResume={() => openModal('resume_seal')}
+        />
 
         <FullVerifyBar chainStatus={chainStatus} onVerifyClick={() => openModal('full_verify')} />
-
-        <StorageProfileStatus
-          chainStatus={chainStatus}
-          onChange={(profile) => openModal('storage_profile', profile)}
-        />
 
         <CustodyStatusGrid
           chainStatus={chainStatus}
           onAnchor={custody.handleTriggerAnchor}
           onProofExport={custody.handleProofExport}
-          onRotateSigningKey={() => openModal('rotate_signing_key')}
         />
 
         <CustodyViolations
           chainStatus={chainStatus}
-          onRetire={(path) => openModal('retire', path)}
-          onReplace={(path) => openModal('replace', path)}
-          onRestore={(path) => openModal('restore', path)}
+          selectedTargets={new Set(Object.keys(resolveSelection).filter((t) => resolveSelection[t] === 'RETIRE'))}
+          onToggleTarget={(path) => toggleResolveTarget(path, 'RETIRE')}
         />
 
         <UnregisteredFiles
@@ -170,21 +177,30 @@ export function EvidenceTab() {
               [path]: { ...prev[path], [field]: val },
             }))
           }
-          onIgnore={(path) => openModal('ignore', path)}
-          onDelete={(path) => openModal('delete', path)}
+          selectedTargets={new Set(Object.keys(resolveSelection).filter((t) => resolveSelection[t] === 'IGNORE'))}
+          onToggleTarget={(path) => toggleResolveTarget(path, 'IGNORE')}
           onSeal={() => openModal('seal')}
         />
+
+        {dispositions.length > 0 && (
+          <div className="flex items-center justify-between rounded-lg border border-primary/40 bg-primary/5 p-3">
+            <span className="mono text-xs font-semibold text-primary">
+              {dispositions.length} finding{dispositions.length === 1 ? '' : 's'} selected
+            </span>
+            <Button type="button" size="sm" onClick={() => openModal('resolve')} className="text-xs font-semibold">
+              Resolve Selected
+            </Button>
+          </div>
+        )}
 
         <SealedEvidenceTable
           evidence={sortedEvidence}
           evidenceLoading={custody.evidenceLoading}
           evidenceError={custody.evidenceError}
-          chainStatus={chainStatus}
           verifyStatus={custody.verifyStatus}
           sortCol={sortCol}
           sortAsc={sortAsc}
           onSort={handleSort}
-          onReplace={(path) => openModal('replace', path)}
           onVerify={custody.handleVerifyEvidence}
           onRefresh={custody.handleRefreshCustody}
           onNavigateFinding={(rid) => {
@@ -197,7 +213,7 @@ export function EvidenceTab() {
 
       <EvidenceModals
         activeModal={activeModal}
-        pendingPath={pendingPath}
+        dispositions={dispositions}
         password={modalPassword}
         reason={modalReason}
         loading={modalLoading}
@@ -208,17 +224,9 @@ export function EvidenceTab() {
           onReasonChange: setModalReason,
           onClose: closeModal,
           onFullVerifyEvidence: custody.handleFullVerifyEvidence,
-          onStorageProfileChange: custody.handleStorageProfileChange,
-          onRotateSigningKey: custody.handleRotateSigningKey,
           onSeal: custody.handleSealEvidence,
           onResumeSeal: custody.handleResumeSeal,
-          onIgnore: custody.handleIgnoreEvidence,
-          onDelete: custody.handleDeleteEvidence,
-          onRetire: custody.handleRetireEvidence,
-          onReplaceBegin: custody.handleReplaceBegin,
-          onRestoreBegin: custody.handleRestoreBegin,
-          onRecoveryComplete: custody.handleRecoveryComplete,
-          onDispositionResume: custody.handleDispositionResume,
+          onResolveFindings: custody.handleResolveFindings,
         }}
       />
     </div>

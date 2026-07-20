@@ -5,21 +5,20 @@ import {
   getChainStatus,
   postChainAnchor,
   postChainProofExport,
-  postVerifyLedger,
-  postRotateSigningKey,
   postVerifyEvidence,
 } from '@/api/endpoints'
 
 import { useCustodySealActions } from '@/components/evidence/useCustodySealActions'
-import { useCustodyLedgerActions } from '@/components/evidence/useCustodyLedgerActions'
+import { useResolveActions } from '@/components/evidence/useResolveActions'
 
 // ─────────────────────────────────────────────────────────────────────────
 // useEvidenceActions — composes the custody action handlers: the password-
-// guarded Add/Seal and Full Verify Evidence pair (useCustodySealActions), the reason-guarded
-// ledgered mutations (useCustodyLedgerActions), plus the unguarded async-toast
-// actions (refresh · anchor · proof-export · per-item verify) it owns directly.
-// Reads the evidence list/refresh from useEvidenceData; modal field state stays
-// in the tab. Mock/real split is at the API adapter layer (AGENTS §3).
+// guarded Add/Seal and Full Verify Evidence pair (useCustodySealActions), the
+// batch-reauth D4 Resolve flow (useResolveActions), plus the unguarded
+// async-toast actions (refresh · anchor · proof-export · per-item verify) it
+// owns directly. Reads the evidence list/refresh from useEvidenceData; modal
+// field state stays in the tab. Mock/real split is at the API adapter layer
+// (AGENTS §3).
 // ─────────────────────────────────────────────────────────────────────────
 
 export function useEvidenceActions({
@@ -31,7 +30,7 @@ export function useEvidenceActions({
   modalPassword,
   modalReason,
   sealIntentId,
-  pendingPath,
+  pendingDispositions,
   unregisteredMetadata,
   setModalLoading,
   setModalError,
@@ -48,7 +47,6 @@ export function useEvidenceActions({
     modalPassword,
     modalReason,
     sealIntentId,
-    pendingPath,
     unregisteredMetadata,
     setModalLoading,
     setModalError,
@@ -56,13 +54,13 @@ export function useEvidenceActions({
     afterSuccess,
   })
 
-  const ledgerActions = useCustodyLedgerActions({
+  const resolveActions = useResolveActions({
     refreshData,
     addToast,
     modalPassword,
     modalReason,
     sealIntentId,
-    pendingPath,
+    dispositions: pendingDispositions,
     setModalLoading,
     setModalError,
     setModalResult,
@@ -117,33 +115,6 @@ export function useEvidenceActions({
     }
   }
 
-  async function handleVerifyLedger() {
-    try {
-      addToast('Verifying custody ledger and signatures…', 'info')
-      const result = await postVerifyLedger()
-      addToast(result.verified ? 'Custody ledger verified.' : 'Custody ledger verification found violations.', result.verified ? 'success' : 'warning')
-      return result
-    } catch (err) {
-      addToast(err.message || 'Ledger verification failed', 'error')
-      return null
-    }
-  }
-
-  async function handleRotateSigningKey() {
-    try {
-      setModalLoading(true)
-      const result = await postRotateSigningKey({ password: modalPassword, reason: modalReason })
-      addToast(`Custody signing key rotated: ${(result.rotation?.key_id || '').slice(0, 22)}`, 'success')
-      await refreshData()
-      return result
-    } catch (err) {
-      setModalError(err.message || 'Signing-key rotation failed')
-      return null
-    } finally {
-      setModalLoading(false)
-    }
-  }
-
   async function handleVerifyEvidence(path) {
     setVerifyStatus((prev) => ({ ...prev, [path]: 'checking' }))
     try {
@@ -165,12 +136,10 @@ export function useEvidenceActions({
   return {
     verifyStatus,
     ...sealActions,
-    ...ledgerActions,
+    ...resolveActions,
     handleRefreshCustody,
     handleTriggerAnchor,
     handleProofExport,
-    handleVerifyLedger,
-    handleRotateSigningKey,
     handleVerifyEvidence,
   }
 }

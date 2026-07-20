@@ -7,12 +7,25 @@ import { Button } from '@/components/ui/button'
 import { formatTime, shortHash } from './evidence-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
-// SealedEvidenceTable — the sealed custody registry (legacy IA
-// parity §6). Sortable columns (Path · SHA-256 · Description · Registered At ·
+// SealedEvidenceTable — the sealed custody registry (legacy IA parity §6).
+// Sortable columns (Path · SHA-256 · Description · Registered At ·
 // Registered By · Referenced By · Action). Referenced-by chips deep-link to
-// Findings. Action cell exposes durable per-item Replace/Reacquire, verification,
-// and path-free append-only Evidence Version history.
+// Findings. Action cell exposes per-item verification and path-free
+// append-only Evidence Version history (Replace/Reacquire is permanently out
+// of scope — SPEC).
+//
+// EC-4: an entry renders here ONLY when the backend already reports it
+// COMMITTED (a genuine sealed version + manifest membership) — the `status`/
+// `seal_status` fields portal_services.EvidenceAuthorityService.list_evidence
+// returns are gated on that join, never the raw evidence_objects columns. This
+// component still filters defensively (belt-and-suspenders) so a
+// detected-only/digestless object can never render as sealed even if a future
+// caller passes an unfiltered list.
 // ─────────────────────────────────────────────────────────────────────────
+
+function isSealed(item) {
+  return item.status === 'sealed' || item.seal_status === 'sealed'
+}
 
 const COLUMNS = [
   { key: 'path', label: 'Path' },
@@ -104,22 +117,21 @@ export function SealedEvidenceTable({
   evidence,
   evidenceLoading,
   evidenceError,
-  chainStatus,
   verifyStatus,
   sortCol,
   sortAsc,
   onSort,
-  onReplace,
   onVerify,
   onNavigateFinding,
   onRefresh,
 }) {
-  const sealedPaths = chainStatus?.ok ?? []
+  // EC-4: never render a detected-only/digestless object as sealed.
+  const sealed = evidence.filter(isSealed)
 
   return (
     <div className="space-y-3">
       <h3 className="mono text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        Sealed Evidence ({evidence.length} file{evidence.length === 1 ? '' : 's'})
+        Sealed Evidence ({sealed.length} file{sealed.length === 1 ? '' : 's'})
       </h3>
 
       {evidenceError && (
@@ -130,7 +142,7 @@ export function SealedEvidenceTable({
 
       {evidenceLoading ? (
         <SkeletonBlock rows={5} gap={8} />
-      ) : evidence.length === 0 ? (
+      ) : sealed.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-border-soft bg-card py-12 text-center">
           <Archive className="mb-3 size-12 text-muted-foreground opacity-30" aria-hidden />
           <p className="text-sm font-semibold text-foreground">No evidence files registered.</p>
@@ -162,7 +174,7 @@ export function SealedEvidenceTable({
               </tr>
             </thead>
             <tbody className="divide-y divide-border-faint">
-              {evidence.map((ev) => (
+              {sealed.map((ev) => (
                 <tr key={ev.path} className="text-foreground transition-colors hover:bg-secondary/40">
                   <td className="mono break-all px-3 py-2">{ev.path}</td>
                   <td className="mono px-3 py-2" title={ev.sha256}>
@@ -190,17 +202,6 @@ export function SealedEvidenceTable({
                     </div>
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-right">
-                    {sealedPaths.includes(ev.path) && (
-                      <button
-                        type="button"
-                        data-testid={`replace-btn-${ev.path}`}
-                        onClick={() => onReplace(ev.path)}
-                        className="mono mr-2 rounded border border-border-hard px-2 py-1 text-[10px] font-semibold text-muted-foreground transition-colors hover:border-status-pending hover:text-status-pending focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                        title="Begin a durable Replace/Reacquire operation; the custody gate blocks before protection changes"
-                      >
-                        Replace/Reacquire
-                      </button>
-                    )}
                     <VerifyCell status={verifyStatus[ev.path]} onVerify={onVerify} path={ev.path} />
                     {ev.evidence_id && <EvidenceHistory objectId={ev.evidence_id} />}
                   </td>

@@ -213,7 +213,7 @@ function ProofExport({ chainStatus, onProofExport }) {
   )
 }
 
-export function CustodyStatusGrid({ chainStatus, onAnchor, onProofExport, onRotateSigningKey }) {
+export function CustodyStatusGrid({ chainStatus, onAnchor, onProofExport }) {
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       <StatusPanel label="Write Block Status">
@@ -226,14 +226,6 @@ export function CustodyStatusGrid({ chainStatus, onAnchor, onProofExport, onRota
 
       {chainStatus?.authority === 'db' && (
         <ProofExport chainStatus={chainStatus} onProofExport={onProofExport} />
-      )}
-      {chainStatus?.authority === 'db' && (
-        <StatusPanel label="Custody Signing Key">
-          <p className="text-xs text-muted-foreground">Rotation requires a reason and fresh examiner re-authentication.</p>
-          <Button type="button" variant="outline" size="sm" onClick={onRotateSigningKey} className="mono mt-3 text-[10px]">
-            Rotate Signing Key
-          </Button>
-        </StatusPanel>
       )}
     </div>
   )

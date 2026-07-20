@@ -7,12 +7,13 @@ import { EvidenceTab } from '@/components/evidence/EvidenceTab'
 
 // ─────────────────────────────────────────────────────────────────────────
 // EvidenceCustody.test.jsx — interaction coverage for custody flows outside
-// EvidenceRecovery.test.jsx (seal · ignore · delete · retire · Full Verify Evidence ·
-// per-item verify · anchor · proof-export).
+// EvidenceHistory.test.jsx (seal · the unified D4 Resolve batch · Full Verify
+// Evidence · per-item verify · anchor · proof-export).
 // Locks functionality without a backend.
 //
-// Mocking mirrors EvidenceRecovery.test.jsx: mock @/api/endpoints, seed the store
-// so panels render.
+// Replace/Reacquire, exact Restore, Delete Stray, storage-profile change, and
+// signing-key rotation are permanently out of scope (SPEC "Out of Scope") and
+// have no coverage here — see EVIDENCE-CUSTODY-SPEC.md.
 //
 // SUBMIT GATING: every required field carries the HTML `required` attribute, so
 // the form will not submit (and the endpoint is never called) until the
@@ -31,26 +32,25 @@ vi.mock('@/api/endpoints', async (importOriginal) => {
     getChainStatus: vi.fn(),
     postChainSeal: vi.fn(),
     postChainSealResume: vi.fn(),
-    postChainIgnore: vi.fn(),
-    postChainDelete: vi.fn(),
-    postChainRetire: vi.fn(),
-    postReplaceBegin: vi.fn(),
-    postRestoreBegin: vi.fn(),
-    postRecoveryComplete: vi.fn(),
+    postCustodyResolve: vi.fn(),
     getEvidenceHistory: vi.fn(),
     postFullVerifyEvidence: vi.fn(),
-    postEvidenceStorageProfile: vi.fn(),
     postVerifyEvidence: vi.fn(),
     postChainAnchor: vi.fn(),
     postChainProofExport: vi.fn(),
   }
 })
 
+// EC-4: `status: 'sealed'` is required for this row to render in the Sealed
+// Evidence table at all — a detected-only/digestless object never does.
 const EVIDENCE = [
   {
+    evidence_id: 'obj-1',
     path: 'evidence/disk.img',
     sha256: 'abc123def4567890',
     description: 'disk',
+    status: 'sealed',
+    seal_status: 'sealed',
     registered_at: null,
     registered_by: 'examiner',
   },
@@ -163,209 +163,119 @@ describe('Seal manifest flow', () => {
       incomplete_operation: {
         operation_id: 'op-1',
         action: 'ADD_SEAL',
-        phase: 'FAILED_RECOVERABLE',
-        failed_from_phase: 'FILESYSTEM_APPLYING',
-        recoverable: true,
+        phase: 'REQUESTED',
       },
     })
     render(<EvidenceTab />)
 
     const notice = await screen.findByRole('region', { name: 'Incomplete custody operation' })
-    expect(within(notice).getByText('State: FAILED_RECOVERABLE')).toBeInTheDocument()
-    expect(within(notice).getByText('Interrupted from: FILESYSTEM_APPLYING')).toBeInTheDocument()
-    expect(within(notice).getByText(/Retry Add & Seal with the same intent/i)).toBeInTheDocument()
+    expect(within(notice).getByText('State: REQUESTED')).toBeInTheDocument()
+    expect(within(notice).getByText(/Retry Add & Seal to continue/i)).toBeInTheDocument()
     expect(notice).not.toHaveTextContent('evidence/')
   })
 
-  it('labels interrupted Restore completion without teaching Add & Seal retry', async () => {
+  it.each(['REQUESTED', 'PROTECTED'])(
+    'resumes the same server operation after a fresh component state in %s',
+    async (phase) => {
+      const operation = { operation_id: '33333333-3333-3333-3333-333333333333', action: 'ADD_SEAL', phase }
+      seed({ status: 'unsealed', unregistered: [], incomplete_operation: operation })
+      const first = render(<EvidenceTab />)
+      await screen.findByText(`State: ${phase}`)
+      first.unmount()
+      endpoints.postChainSealResume.mockResolvedValue({ sealed: true, manifest_version: 8, operation_id: operation.operation_id })
+      render(<EvidenceTab />)
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Resume Add & Seal' }))
+      const modal = await screen.findByRole('dialog')
+      fireEvent.change(within(modal).getByPlaceholderText('Enter password...'), { target: { value: 'fresh-password' } })
+      fireEvent.click(within(modal).getByRole('button', { name: 'Resume' }))
+      await waitFor(() => expect(endpoints.postChainSealResume).toHaveBeenCalledWith({
+        password: 'fresh-password', operation_id: operation.operation_id,
+      }))
+      expect(endpoints.postChainSealResume).toHaveBeenCalledTimes(1)
+      expect(endpoints.postChainSeal).not.toHaveBeenCalled()
+    },
+  )
+})
+
+// ── 2. Resolve findings (D4 — unified batch, heterogeneous verbs) ───────────
+describe('Resolve findings flow', () => {
+  beforeEach(() =>
     seed({
-      status: 'violated', unregistered: [],
-      incomplete_operation: {
-        operation_id: 'op-restore', action: 'RESTORE_EXACT',
-        phase: 'FAILED_RECOVERABLE', failed_from_phase: 'FILESYSTEM_VERIFIED',
-        recoverable: true,
-      },
+      status: 'violated',
+      missing: ['evidence/lost.img'],
+      unregistered: ['evidence/temp.log'],
+      write_protected: true,
+    }),
+  )
+
+  it('selects a missing file and a pending file into one batch and resolves both under one password', async () => {
+    endpoints.postCustodyResolve.mockResolvedValue({
+      receipts: [
+        { action: 'RETIRE', receipt_id: 'r1', audit_id: 'a1', gate_state: 'OPEN' },
+        { action: 'IGNORE', receipt_id: 'r2', audit_id: 'a2', gate_state: 'OPEN' },
+      ],
     })
     render(<EvidenceTab />)
 
-    const notice = await screen.findByRole('region', { name: 'Incomplete custody operation' })
-    expect(within(notice).getByText('Exact Restore is incomplete')).toBeInTheDocument()
-    expect(within(notice).getByText(/Retry Exact Restore completion with fresh re-authentication/i)).toBeInTheDocument()
-    expect(notice).not.toHaveTextContent('Retry Add & Seal')
-  })
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select evidence/lost.img to retire' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select evidence/temp.log to ignore' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Resolve Selected' }))
 
-  it.each(['GATE_BLOCKED', 'FILESYSTEM_APPLYING', 'FILESYSTEM_VERIFIED', 'FAILED_RECOVERABLE'])(
-  'resumes the same server operation after a fresh component state in %s', async (phase) => {
-    const operation = { operation_id: '33333333-3333-3333-3333-333333333333', action: 'ADD_SEAL', phase, recoverable: true }
-    seed({ status: 'unsealed', unregistered: [], incomplete_operation: operation })
-    const first = render(<EvidenceTab />)
-    await screen.findByText(`State: ${phase}`)
-    first.unmount()
-    endpoints.postChainSealResume.mockResolvedValue({ sealed: true, manifest_version: 8, operation_id: operation.operation_id })
-    render(<EvidenceTab />)
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Resume Add & Seal' }))
     const modal = await screen.findByRole('dialog')
-    fireEvent.change(within(modal).getByPlaceholderText('Enter password...'), { target: { value: 'fresh-password' } })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Resume' }))
-    await waitFor(() => expect(endpoints.postChainSealResume).toHaveBeenCalledWith({
-      password: 'fresh-password', operation_id: operation.operation_id,
-    }))
-    expect(endpoints.postChainSealResume).toHaveBeenCalledTimes(1)
-    expect(endpoints.postChainSeal).not.toHaveBeenCalled()
-  })
-})
-
-// ── 2. Ignore ────────────────────────────────────────────────────────────────
-describe('Ignore unregistered file flow', () => {
-  beforeEach(() => seed({ status: 'ok', unregistered: ['evidence/temp.log'], write_protected: true }))
-
-  it('opens ignore modal, requires reason + password, then calls postChainIgnore', async () => {
-    endpoints.postChainIgnore.mockResolvedValue({ ignored: true })
-    render(<EvidenceTab />)
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Ignore' }))
-    const modal = await screen.findByRole('dialog')
-    expect(within(modal).getByText('Ignore Unregistered File')).toBeInTheDocument()
-
-    // Gate 1: all fields empty → endpoint NOT called (required attrs block submit).
-    fireEvent.click(within(modal).getByRole('button', { name: 'Ignore File' }))
-    expect(endpoints.postChainIgnore).not.toHaveBeenCalled()
-
-    // Gate 2: reason filled but password still empty → still NOT called.
-    fillModal({ reason: 'temp scan file' })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Ignore File' }))
-    expect(endpoints.postChainIgnore).not.toHaveBeenCalled()
-
-    // Happy path.
-    fillModal({ password: 'pw' })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Ignore File' }))
-    await waitFor(() => {
-      expect(endpoints.postChainIgnore).toHaveBeenCalledWith(expect.objectContaining({
-        password: 'pw',
-        path: 'evidence/temp.log',
-        reason: 'temp scan file',
-        idempotency_key: expect.any(String),
-      }))
-    })
-    expect(await within(modal).findByText(/marked as ignored successfully/i)).toBeInTheDocument()
-  })
-})
-
-// ── 3. Delete ────────────────────────────────────────────────────────────────
-describe('Delete stray file flow', () => {
-  beforeEach(() => seed({ status: 'ok', unregistered: ['evidence/stray.bin'], write_protected: true }))
-
-  it('opens delete modal, requires reason + password, then calls postChainDelete', async () => {
-    endpoints.postChainDelete.mockResolvedValue({ deleted: true, file_removed: true })
-    render(<EvidenceTab />)
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
-    const modal = await screen.findByRole('dialog')
-    expect(within(modal).getByText('Delete Stray File')).toBeInTheDocument()
+    // Honest verbs surfaced per target — not a generic bulk action.
+    expect(within(modal).getByText('evidence/lost.img')).toBeInTheDocument()
+    expect(within(modal).getByText('RETIRE')).toBeInTheDocument()
+    expect(within(modal).getByText('evidence/temp.log')).toBeInTheDocument()
+    expect(within(modal).getByText('IGNORE')).toBeInTheDocument()
 
     // Gate: empty required fields → endpoint NOT called.
-    fireEvent.click(within(modal).getByRole('button', { name: 'Delete File' }))
-    expect(endpoints.postChainDelete).not.toHaveBeenCalled()
+    fireEvent.click(within(modal).getByRole('button', { name: 'Resolve' }))
+    expect(endpoints.postCustodyResolve).not.toHaveBeenCalled()
 
-    fillModal({ reason: 'unauthorized file', password: 'pw' })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Delete File' }))
+    fillModal({ reason: 'Post-triage disposition', password: 'pw' })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Resolve' }))
+
     await waitFor(() => {
-      expect(endpoints.postChainDelete).toHaveBeenCalledWith(expect.objectContaining({
+      expect(endpoints.postCustodyResolve).toHaveBeenCalledWith({
         password: 'pw',
-        path: 'evidence/stray.bin',
-        reason: 'unauthorized file',
-        idempotency_key: expect.any(String),
-      }))
+        reason: 'Post-triage disposition',
+        batch_key: expect.any(String),
+        dispositions: expect.arrayContaining([
+          { verb: 'RETIRE', target: 'evidence/lost.img' },
+          { verb: 'IGNORE', target: 'evidence/temp.log' },
+        ]),
+      })
     })
-    expect(await within(modal).findByText(/File deleted from evidence/i)).toBeInTheDocument()
-  })
-})
-
-// ── 4. Retire (custody violation: missing) ───────────────────────────────────
-describe('Retire missing file flow', () => {
-  beforeEach(() => seed({ status: 'violated', missing: ['evidence/lost.img'], write_protected: true }))
-
-  it('opens retire modal from a missing-file violation and calls postChainRetire', async () => {
-    endpoints.postChainRetire.mockResolvedValue({ retired: true, manifest_version: 5 })
-    render(<EvidenceTab />)
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Retire File' }))
-    const modal = await screen.findByRole('dialog')
-    expect(within(modal).getByText('Retire Missing File')).toBeInTheDocument()
-
-    // Gate: empty required fields → endpoint NOT called.
-    fireEvent.click(within(modal).getByRole('button', { name: 'Retire File' }))
-    expect(endpoints.postChainRetire).not.toHaveBeenCalled()
-
-    fillModal({ reason: 'removed from scope', password: 'pw' })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Retire File' }))
-    await waitFor(() => {
-      expect(endpoints.postChainRetire).toHaveBeenCalledWith(expect.objectContaining({
-        password: 'pw',
-        path: 'evidence/lost.img',
-        reason: 'removed from scope',
-        idempotency_key: expect.any(String),
-      }))
-    })
-    expect(await within(modal).findByText(/File retired successfully/i)).toBeInTheDocument()
+    expect(await within(modal).findByText(/Resolved 2 finding/i)).toBeInTheDocument()
   })
 
-  it('renders the modal error banner when postChainRetire rejects', async () => {
-    endpoints.postChainRetire.mockRejectedValue(new Error('Retire endpoint unavailable'))
+  it('renders the modal error banner when postCustodyResolve rejects (the ?mock=1 no-backend path)', async () => {
+    endpoints.postCustodyResolve.mockRejectedValue(new Error('Resolve endpoint unavailable'))
     render(<EvidenceTab />)
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Retire File' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select evidence/lost.img to retire' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Resolve Selected' }))
     const modal = await screen.findByRole('dialog')
     fillModal({ reason: 'x', password: 'pw' })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Retire File' }))
+    fireEvent.click(within(modal).getByRole('button', { name: 'Resolve' }))
 
-    expect(await within(modal).findByText('Retire endpoint unavailable')).toBeInTheDocument()
+    expect(await within(modal).findByText('Resolve endpoint unavailable')).toBeInTheDocument()
   })
 
-  it('rejects ambiguous retire responses without retired true', async () => {
-    endpoints.postChainRetire.mockResolvedValue({ ignored: true, manifest_version: 5 })
+  it('deselecting a checkbox drops it from the next batch', async () => {
     render(<EvidenceTab />)
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Retire File' }))
-    const modal = await screen.findByRole('dialog')
-    fillModal({ reason: 'removed from scope', password: 'pw' })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Retire File' }))
+    const checkbox = await screen.findByRole('checkbox', { name: 'Select evidence/lost.img to retire' })
+    fireEvent.click(checkbox)
+    expect(await screen.findByRole('button', { name: 'Resolve Selected' })).toBeInTheDocument()
 
-    expect(await within(modal).findByText('Retire failed')).toBeInTheDocument()
-    expect(within(modal).queryByText(/File retired successfully/i)).not.toBeInTheDocument()
+    fireEvent.click(checkbox)
+    expect(screen.queryByRole('button', { name: 'Resolve Selected' })).not.toBeInTheDocument()
   })
 })
 
-// ── 5. Exact Restore (custody violation: modified) ────────────────────────────
-describe('Exact Restore modified file flow', () => {
-  beforeEach(() => seed({ status: 'violated', modified: ['evidence/changed.img'], write_protected: true }))
-
-  it('opens exact Restore and records a durable begin intent', async () => {
-    endpoints.postRestoreBegin.mockResolvedValue({ ready_for_replacement: true, operation_id: 'op-1' })
-    render(<EvidenceTab />)
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Exact Restore' }))
-    const modal = await screen.findByRole('dialog')
-    expect(within(modal).getByRole('heading', { name: 'Begin Exact Restore' })).toBeInTheDocument()
-
-    // Gate: empty required fields → endpoint NOT called.
-    fireEvent.click(within(modal).getByRole('button', { name: 'Begin Exact Restore' }))
-    expect(endpoints.postRestoreBegin).not.toHaveBeenCalled()
-
-    fillModal({ reason: 'corrupted; re-imaged', password: 'pw' })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Begin Exact Restore' }))
-    await waitFor(() => {
-      expect(endpoints.postRestoreBegin).toHaveBeenCalledWith(expect.objectContaining({
-        password: 'pw',
-        path: 'evidence/changed.img',
-        reason: 'corrupted; re-imaged',
-      }))
-    })
-  })
-})
-
-// ── 6. Full database-custody verification (both result branches) ─────────────
+// ── 3. Full database-custody verification ─────────────────────────────────
 describe('Full Verify Evidence flow', () => {
   beforeEach(() => seed({
     status: 'ok',
@@ -404,155 +314,26 @@ describe('Full Verify Evidence flow', () => {
     expect(await within(modal).findByText(/Full verification failed with 1 issue/i)).toBeInTheDocument()
     expect(within(modal).getByText('digest mismatch')).toBeInTheDocument()
   })
+})
 
-  it('guides virgin external intake and disables Full Verify until a manifest exists', async () => {
-    seed({
-      status: 'unsealed',
-      seal_status: 'unsealed',
-      storage_profile: 'EXTERNALLY_READ_ONLY',
-      storage_availability: 'FULL_VERIFY_REQUIRED',
-      storage_remediation: 'FULL_VERIFY',
-      manifest_version: 0,
-      active_count: 0,
-      verification_needed: true,
-      unregistered: ['evidence/external.raw'],
-      write_protected: true,
+// ── Evidence version history (append-only, path-free) ───────────────────────
+describe('Evidence version history flow', () => {
+  beforeEach(() => seed({ status: 'sealed', ok: [], write_protected: true }))
+
+  it('shows append-only Evidence Version and custody-event history by object ID', async () => {
+    endpoints.getEvidenceHistory.mockResolvedValue({
+      versions: [{ evidence_version_id: 'v1', manifest_version: 3, sha256: 'sha256:abcdef', bytes: 10 }],
+      events: [{ event_id: 'e1', seq: 7, event_type: 'MANIFEST_SEALED' }],
     })
-
     render(<EvidenceTab />)
-
-    expect(await screen.findByText(/Add & Seal establishes the first full-hash source and mount receipt/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Full Verify Evidence' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /Seal Manifest \(1 file\)/i })).toBeEnabled()
-    expect(endpoints.postFullVerifyEvidence).not.toHaveBeenCalled()
-  })
-
-  it('does not label a nonvirgin zero-active manifest as first external intake', async () => {
-    seed({
-      status: 'violated',
-      seal_status: 'violated',
-      storage_profile: 'EXTERNALLY_READ_ONLY',
-      storage_source_identity: 'already-established-source',
-      storage_verified_mount_instance: 'prior-mount',
-      storage_verified_generation: 1,
-      manifest_version: 2,
-      active_count: 0,
-      verification_needed: true,
-      unregistered: [],
-    })
-
-    render(<EvidenceTab />)
-
-    expect(await screen.findByText(/Evidence has not yet been fully verified/i)).toBeInTheDocument()
-    expect(screen.queryByText(/Add & Seal establishes the first full-hash source and mount receipt/i)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Full Verify Evidence' })).toBeDisabled()
+    fireEvent.click(await screen.findByRole('button', { name: 'Version history' }))
+    expect(await screen.findByText(/v3 ·/)).toBeInTheDocument()
+    expect(screen.getByText(/#7 · MANIFEST_SEALED/)).toBeInTheDocument()
+    expect(endpoints.getEvidenceHistory).toHaveBeenCalledWith(EVIDENCE[0].evidence_id)
   })
 })
 
-describe('Evidence storage profile flow', () => {
-  beforeEach(() => seed({
-    status: 'sealed',
-    storage_profile: 'LOCAL_IMMUTABLE',
-    storage_availability: 'AVAILABLE',
-    storage_remediation: 'NONE',
-    write_protected: true,
-  }))
-
-  it('shows only safe posture state and requires scoped re-auth to change profile', async () => {
-    endpoints.postEvidenceStorageProfile.mockResolvedValue({
-      storage_profile: 'EXTERNALLY_READ_ONLY',
-      storage_availability: 'FULL_VERIFY_REQUIRED',
-      storage_remediation: 'FULL_VERIFY',
-    })
-    render(<EvidenceTab />)
-
-    expect(await screen.findByText('Local immutable')).toBeInTheDocument()
-    expect(screen.getByText(/State: AVAILABLE/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Change profile' }))
-    const modal = await screen.findByRole('dialog')
-    expect(within(modal).getByText(/Change to Externally Read-Only/)).toBeInTheDocument()
-
-    fillModal({ reason: 'Move to hardware read-only evidence', password: 'pw' })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Change Profile' }))
-    await waitFor(() => {
-      expect(endpoints.postEvidenceStorageProfile).toHaveBeenCalledWith({
-        password: 'pw',
-        profile: 'EXTERNALLY_READ_ONLY',
-        reason: 'Move to hardware read-only evidence',
-        idempotency_key: expect.any(String),
-      })
-    })
-    expect(await within(modal).findByText(/Storage profile changed\. Full Verify Evidence is required/)).toBeInTheDocument()
-  })
-
-  it('renders current database storage values after the status refresh', async () => {
-    endpoints.getChainStatus.mockResolvedValue({
-      status: 'sealed',
-      storage_profile: 'EXTERNALLY_READ_ONLY',
-      storage_availability: 'AVAILABLE',
-      storage_remediation: 'NONE',
-      storage_last_full_verified_at: '2026-07-14T12:34:56+00:00',
-      write_protected: true,
-    })
-
-    render(<EvidenceTab />)
-
-    expect(await screen.findByText('Externally read-only')).toBeInTheDocument()
-    expect(screen.getByText(/State: AVAILABLE · Remediation: NONE/)).toBeInTheDocument()
-    expect(screen.getByText(/Last full verify: 2026-07-14T12:34:56\+00:00/)).toBeInTheDocument()
-    expect(screen.queryByText(/State: UNAVAILABLE/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/Last full verify: never/)).not.toBeInTheDocument()
-  })
-
-  it('shows unavailable authority truth without profile mutation controls', async () => {
-    endpoints.getChainStatus.mockResolvedValue({
-      authority: 'db',
-      status: 'no_case',
-      storage_profile: 'UNKNOWN',
-      storage_availability: 'UNAVAILABLE',
-      storage_remediation: 'FULL_VERIFY',
-      storage_last_full_verified_at: null,
-    })
-
-    render(<EvidenceTab />)
-
-    expect(await screen.findByText('Storage profile unavailable')).toBeInTheDocument()
-    expect(screen.getByText(/State: UNAVAILABLE · Remediation: FULL_VERIFY/)).toBeInTheDocument()
-    expect(screen.getByText(/Last full verify: never/)).toBeInTheDocument()
-    expect(screen.queryByText('Local immutable')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Change profile' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Authorize current source' })).not.toBeInTheDocument()
-  })
-
-  it('offers explicit source authorization without conflating it with a profile toggle', async () => {
-    seed({
-      status: 'violated',
-      storage_profile: 'EXTERNALLY_READ_ONLY',
-      storage_availability: 'IDENTITY_DRIFT',
-      storage_remediation: 'AUTHORIZE_SOURCE_CHANGE',
-      write_protected: true,
-    })
-    endpoints.postEvidenceStorageProfile.mockResolvedValue({
-      storage_profile: 'EXTERNALLY_READ_ONLY',
-      storage_availability: 'FULL_VERIFY_REQUIRED',
-      storage_remediation: 'FULL_VERIFY',
-    })
-    render(<EvidenceTab />)
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Authorize current source' }))
-    const modal = await screen.findByRole('dialog')
-    fillModal({ reason: 'Examiner authorizes this replacement source', password: 'pw' })
-    fireEvent.click(within(modal).getByRole('button', { name: 'Change Profile' }))
-    await waitFor(() => expect(endpoints.postEvidenceStorageProfile).toHaveBeenCalledWith({
-      password: 'pw',
-      profile: 'EXTERNALLY_READ_ONLY',
-      reason: 'Examiner authorizes this replacement source',
-      idempotency_key: expect.any(String),
-    }))
-  })
-})
-
-// ── 7. Per-item Verify (registered table) ────────────────────────────────────
+// ── 4. Per-item Verify (registered table) ────────────────────────────────────
 describe('Per-item evidence verify flow', () => {
   beforeEach(() => seed({ status: 'sealed', ok: [], write_protected: true }))
 
@@ -591,7 +372,7 @@ describe('Per-item evidence verify flow', () => {
   })
 })
 
-// ── 8. Anchor ────────────────────────────────────────────────────────────────
+// ── 5. Anchor ────────────────────────────────────────────────────────────────
 describe('Solana anchor flow', () => {
   beforeEach(() =>
     seed({
@@ -610,7 +391,7 @@ describe('Solana anchor flow', () => {
   })
 })
 
-// ── 9. Proof export (DB authority only) ──────────────────────────────────────
+// ── 6. Proof export (DB authority only) ──────────────────────────────────────
 describe('Custody proof export flow', () => {
   it('renders the proof-export panel under authority:db and triggers postChainProofExport', async () => {
     seed({ status: 'sealed', authority: 'db', write_protected: true })
