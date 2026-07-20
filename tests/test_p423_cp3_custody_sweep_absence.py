@@ -166,6 +166,23 @@ def test_uninstall_sh_covers_legacy_delete_broker_and_mount_observer_teardown() 
     assert "/etc/sift/custody-delete-dsn" in systemd_and_users
 
 
+def test_uninstall_sh_stops_and_disables_legacy_mount_observer_before_removal() -> None:
+    # CP3.5-R2: on a pre-CP1 VM, sift-mount-observer.service may still be
+    # enabled/running. If teardown removes its unit file/AppArmor profile
+    # without stopping it first, the process can survive the wipe and a
+    # stale multi-user.target.wants symlink can remain. stop_sift_services
+    # must stop + disable it, and must run before both removal steps.
+    text = _read(_REPO_ROOT / "scripts" / "uninstall.sh")
+
+    stop_block = text.split("stop_sift_services() {", 1)[1].split("\n}", 1)[0]
+    assert "systemctl stop sift-mount-observer.service" in stop_block
+    assert "systemctl disable sift-mount-observer.service" in stop_block
+
+    main = text.split("\nmain() {", 1)[1]
+    assert main.index("stop_sift_services") < main.index("teardown_apparmor")
+    assert main.index("stop_sift_services") < main.index("teardown_systemd_and_users")
+
+
 def test_production_install_hardening_migrations_have_no_legacy_custody_wiring() -> None:
     # The other side of the CP3.5 repair: legacy delete-broker/mount-observer
     # names are permitted ONLY in uninstall.sh teardown (proved above) and in

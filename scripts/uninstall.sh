@@ -284,6 +284,15 @@ stop_sift_services() {
     sudo_if_needed systemctl stop sift-gateway.service sift-job-worker.service 2>/dev/null || true
     sudo_if_needed systemctl disable sift-gateway.service sift-job-worker.service 2>/dev/null || true
   fi
+  # Legacy CP1-removed unit: on a pre-CP1 deployment it may still be enabled
+  # and running. Stop + disable it here, before teardown_systemd_and_users
+  # deletes its unit file and teardown_apparmor unloads its profile, so the
+  # process cannot survive and no stale wants-symlink is left behind.
+  action "systemctl stop + disable" "sift-mount-observer.service (legacy)"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    sudo_if_needed systemctl stop sift-mount-observer.service 2>/dev/null || true
+    sudo_if_needed systemctl disable sift-mount-observer.service 2>/dev/null || true
+  fi
   if [[ ${#_os_workers[@]} -gt 0 ]]; then
     action "systemctl stop + disable" "OpenSearch workers: ${_os_workers[*]}"
     if [[ "$DRY_RUN" -eq 0 ]]; then
