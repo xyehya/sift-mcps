@@ -6,7 +6,7 @@ import dataclasses
 import logging
 import threading
 import time
-from collections.abc import Callable
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any
 
 from fastapi import FastAPI
@@ -28,75 +28,135 @@ from sift_gateway.auth import AuthMiddleware
 # Bounded, non-secret source label handed to the async reverify callback for its
 # audit context. It is NOT an IP and carries no password/token material.
 _CUSTODY_REAUTH_SOURCE = "custody-reauth"
-# Upper bound on how long the sync reauth bridge waits for the async identity
-# verifier (the underlying HTTP client already enforces a ~10s timeout); past
-# this the bridge fails closed rather than blocking the caller indefinitely.
+# Upper bound on how long a custody reauth call waits for the identity verifier
+# (the underlying HTTP client already enforces a ~10s timeout); past this the
+# call fails closed rather than blocking the caller indefinitely. Also bounds
+# dedicated-loop startup and the shutdown client-close / thread-join.
 _CUSTODY_REAUTH_TIMEOUT_S = 30.0
 
 
-def _make_custody_reauth_verifier(
-    reverify: Any,
-) -> Callable[..., None]:
-    """Build the sync ``reauth._VERIFIER`` bridge over async ``reverify_password``.
+class _CustodyReauthContext:
+    """A dedicated event loop + thread that exclusively owns custody reauth's
+    async execution context and its own identity ``httpx.AsyncClient``.
 
-    Custody seal/actions run their state machine synchronously (psycopg), and the
-    Portal custody routes call that machine synchronously from an ``async def``
-    handler — so this verifier is invoked ON the Gateway event-loop thread. It
-    must therefore drive the async identity verifier WITHOUT touching the current
-    loop: it runs the coroutine to completion on a short-lived worker thread that
-    owns its own event loop and blocks only this call on it. That avoids both the
-    ``asyncio.run() cannot be called from a running event loop`` RuntimeError and
-    a self-deadlock on the running loop; a caller that is NOT already on a loop
-    runs the coroutine inline. The contract mirrors
-    ``SupabaseAuthCallbacks.reverify_password``: it returns ``None`` on success and
-    raises on any denial (wrong password, identity mismatch, disabled operator,
-    timeout, or control-plane failure), which :func:`reauth._run_verifier` maps to
-    a fail-closed custody denial. Password/token material is never logged; only the
-    bounded, non-secret source label is passed as request context.
+    Why this exists (CP3 repair-1). The gateway's Portal/MCP JWT resolution drives
+    the SHARED ``SupabaseAuthClient`` (an ``httpx.AsyncClient``) on the gateway
+    MAIN event loop. An ``httpx`` connection pool binds to the loop that first
+    uses it, and its async pool waiters are only correctly woken on that loop. The
+    custody state machine runs synchronously from an ``async`` Portal handler ON
+    the main-loop thread, so driving that shared client from a throwaway loop
+    reaches ``PoolTimeout`` under pool contention and spuriously denies a valid
+    operator password — fail-closed, but a blocking reliability defect on a
+    security-critical mutation path.
+
+    This context gives custody reauth ONE correctly-owned async context: its own
+    loop, its own thread, and a DEDICATED ``SupabaseAuthClient`` whose pool binds
+    to and is only ever driven by this loop. The gateway's shared client is never
+    touched from another loop. A reauth call is submitted with
+    ``run_coroutine_threadsafe`` and blocks only the *calling* thread (reauth is
+    not hot-path); it never drives the main loop's client and never deadlocks,
+    because the coroutine runs on a different loop/thread than the caller.
     """
 
-    def _verify(*, email: str, password: str, expected_auth_user_id: str | None = None) -> None:
-        def _run() -> None:
-            # Discard the returned session dict: the contract is None-on-success.
-            asyncio.run(
-                reverify(
-                    email,
-                    password,
-                    _CUSTODY_REAUTH_SOURCE,
-                    expected_auth_user_id=expected_auth_user_id,
-                )
-            )
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # No event loop is running on this thread: run one here directly.
-            _run()
-            return
-
-        # Already on the Gateway event-loop thread: run on a throwaway thread with
-        # its own loop and block only this call, never the running loop.
-        box: dict[str, BaseException] = {}
-
-        def _worker() -> None:
-            try:
-                _run()
-            except BaseException as exc:  # re-raised on the calling thread
-                box["error"] = exc
-
-        thread = threading.Thread(
-            target=_worker, name="custody-reauth-verify", daemon=True
+    def __init__(self, reverify: Any, aclose: Any) -> None:
+        # reverify: async (email, password, source, *, expected_auth_user_id) -> Any
+        # aclose:   async () -> None  — closes the dedicated client ON this loop.
+        self._reverify = reverify
+        self._aclose = aclose
+        self._loop = asyncio.new_event_loop()
+        self._ready = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="custody-reauth-loop", daemon=True
         )
-        thread.start()
-        thread.join(_CUSTODY_REAUTH_TIMEOUT_S)
-        if thread.is_alive():
-            from sift_gateway.custody.reauth import ReauthError
+        self._thread.start()
+        # Bounded: never block gateway startup indefinitely on a wedged loop.
+        self._ready.wait(_CUSTODY_REAUTH_TIMEOUT_S)
 
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.call_soon(self._ready.set)
+        try:
+            self._loop.run_forever()
+        finally:
+            self._loop.close()
+
+    def verify(
+        self, *, email: str, password: str, expected_auth_user_id: str | None = None
+    ) -> None:
+        """Run one operator-password reauth on the dedicated loop, fail-closed.
+
+        Mirrors the ``reauth._VERIFIER`` contract: returns ``None`` on success and
+        raises on any denial (wrong password, identity mismatch, disabled operator,
+        timeout, or control-plane failure), which :func:`reauth._run_verifier` maps
+        to a shaped custody denial. The returned session dict is discarded. Password
+        and token material are never logged or persisted; only the bounded,
+        non-secret source label is passed as request context.
+        """
+        from sift_gateway.custody.reauth import ReauthError
+
+        if not self._thread.is_alive() or self._loop.is_closed():
             raise ReauthError("reauth_unavailable", http_status=503)
-        if "error" in box:
-            raise box["error"]
+        future = asyncio.run_coroutine_threadsafe(
+            self._reverify(
+                email,
+                password,
+                _CUSTODY_REAUTH_SOURCE,
+                expected_auth_user_id=expected_auth_user_id,
+            ),
+            self._loop,
+        )
+        try:
+            future.result(_CUSTODY_REAUTH_TIMEOUT_S)
+        except FuturesTimeoutError:
+            future.cancel()
+            raise ReauthError("reauth_unavailable", http_status=503) from None
+        return None
 
-    return _verify
+    def close(self) -> None:
+        """Close the dedicated client on its loop, stop the loop, join the thread.
+
+        Bounded and idempotent; safe from any thread that does not run the
+        dedicated loop. Cleanup never raises.
+        """
+        if not self._thread.is_alive():
+            return
+        try:
+            future = asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
+            future.result(_CUSTODY_REAUTH_TIMEOUT_S)
+        except Exception as exc:  # cleanup must never raise
+            logger.warning("custody reauth client close failed: %s", exc)
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(_CUSTODY_REAUTH_TIMEOUT_S)
+
+
+# The single live custody-reauth context for this process. create_app installs a
+# fresh one when Supabase auth is configured and tears down any prior one, so a
+# later unconfigured app instance (or shutdown) can never inherit a stale verifier
+# or leak the dedicated loop/thread/client (fail-closed).
+_CUSTODY_REAUTH_CTX: "_CustodyReauthContext | None" = None
+
+
+def _install_custody_reauth_context(ctx: "_CustodyReauthContext | None") -> None:
+    """Publish ``ctx`` as the process custody-reauth authority, retiring any prior.
+
+    Tears down the previous context (bounded) so there is never a second live
+    dedicated loop, then points ``reauth._VERIFIER`` at the new context's
+    ``verify`` (or ``None`` when ``ctx`` is ``None`` — fail-closed). ``record_reauth``
+    then either verifies through the dedicated context or raises
+    ``reauth_unavailable`` and records nothing.
+    """
+    global _CUSTODY_REAUTH_CTX
+    from sift_gateway.custody import reauth as _reauth
+
+    prior, _CUSTODY_REAUTH_CTX = _CUSTODY_REAUTH_CTX, ctx
+    if prior is not None and prior is not ctx:
+        prior.close()
+    _reauth._VERIFIER = ctx.verify if ctx is not None else None
+
+
+def _shutdown_custody_reauth_context() -> None:
+    """Retire the process custody-reauth context and unset ``reauth._VERIFIER``."""
+    _install_custody_reauth_context(None)
 
 
 class _PortalHTTPSGuard:
@@ -1587,12 +1647,12 @@ class Gateway:
             watcher_task = None
 
             yield
-            # CP3: on shutdown, clear the custody reauth verifier so a later
+            # CP3 (repair-1): on shutdown, retire the dedicated custody reauth
+            # context — close its dedicated client on its own loop, stop the loop,
+            # join the thread (bounded) — and unset reauth._VERIFIER so a later
             # unconfigured lifecycle in the same process cannot reuse a stale
-            # configured verifier (fail-closed).
-            from sift_gateway.custody import reauth as _reauth_shutdown
-
-            _reauth_shutdown._VERIFIER = None
+            # verifier or leak the dedicated loop/thread/client (fail-closed).
+            _shutdown_custody_reauth_context()
             if reaper_task is not None:
                 reaper_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -1716,21 +1776,33 @@ class Gateway:
         # only wired when Supabase auth is configured, so step-up is a no-op on
         # pure legacy / single-user deployments.
         app.state.auth_config = auth_config
-        # CP3: wire the frozen custody reauth verifier seam (reauth._VERIFIER) to
-        # the SAME identity-authority callback the portal uses. ALWAYS assign it —
-        # the bridge when Supabase auth is configured, else back to None — so a
-        # later unconfigured app instance in the same process can never inherit a
-        # stale configured verifier. Unset == fail closed: record_reauth then
-        # raises reauth_unavailable and records nothing.
-        from sift_gateway.custody import reauth as _custody_reauth
-
+        # CP3 (repair-1): wire the custody reauth verifier seam (reauth._VERIFIER)
+        # to a DEDICATED identity execution context. reauth runs the async verifier
+        # on a dedicated loop/thread that exclusively owns a dedicated
+        # SupabaseAuthClient, so it never drives the shared main-loop httpx client
+        # that Portal/MCP JWT resolution uses (which caused cross-loop PoolTimeout
+        # denials). ALWAYS (re)install — the dedicated context when Supabase auth is
+        # configured, else None — so a later unconfigured app instance can never
+        # inherit a stale verifier and no dedicated loop/thread/client leaks. Unset
+        # == fail closed: record_reauth then raises reauth_unavailable and records
+        # nothing. The shared reverify stays exposed for the /api/v1 step-up path.
         if supabase_callbacks is not None and hasattr(supabase_callbacks, "reverify_password"):
             app.state.supabase_reverify = supabase_callbacks.reverify_password
-            _custody_reauth._VERIFIER = _make_custody_reauth_verifier(
-                supabase_callbacks.reverify_password
+            from sift_gateway.supabase_auth import SupabaseAuthClient
+
+            _custody_reauth_client = SupabaseAuthClient(auth_config)
+            _custody_reauth_callbacks = supabase_callbacks._with_dedicated_client(
+                _custody_reauth_client
             )
+            _custody_ctx = _CustodyReauthContext(
+                _custody_reauth_callbacks.reverify_password,
+                _custody_reauth_client.aclose,
+            )
+            app.state.custody_reauth_context = _custody_ctx
+            _install_custody_reauth_context(_custody_ctx)
         else:
-            _custody_reauth._VERIFIER = None
+            app.state.custody_reauth_context = None
+            _shutdown_custody_reauth_context()
 
         async def _sanitized_error(request, exc):
             """Global unhandled exception handler — never leak file paths or tracebacks."""
