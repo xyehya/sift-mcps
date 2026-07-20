@@ -70,6 +70,18 @@ _CURRENT_ACTIVE_CASE: ContextVar[ActiveCase | None] = ContextVar(
     default=None,
 )
 
+# Closed evidence-reading surface (SPEC: Evidence-access enforcement architecture).
+# Every agent-supplied evidence path/reference must be declared here and is resolved
+# to an active sealed Evidence Version by EvidenceGateMiddleware before dispatch.
+# ``command`` is derived through command_evidence_references; the other arguments
+# carry direct references and are normalized to the DB-resolved display path.
+EVIDENCE_REFERENCE_ARGUMENTS: Mapping[str, tuple[str, ...]] = {
+    "run_command": ("evidence_refs", "command"),
+    "run_command_job": ("evidence_refs", "command"),
+    "opensearch_ingest": ("path",),
+    "opensearch_inspect_container": ("path",),
+}
+
 
 class AuditWriterProtocol(Protocol):
     def log(self, **kwargs: Any) -> None: ...
@@ -121,6 +133,31 @@ def _tool_name(context: Any) -> str:
 def _tool_args(context: Any) -> dict:
     args = getattr(context.message, "arguments", None)
     return args if isinstance(args, dict) else {}
+
+
+def _evidence_references_for_tool(
+    name: str, args: Mapping[str, Any], *, case_dir: str
+) -> dict[str, list[str]]:
+    """Extract every declared/direct or command-derived evidence reference."""
+    references: dict[str, list[str]] = {}
+    for argument_name in EVIDENCE_REFERENCE_ARGUMENTS.get(name, ()):
+        if argument_name == "command":
+            values = command_evidence_references(
+                args.get(argument_name),
+                case_dir=case_dir,
+                working_dir=args.get("working_dir"),
+            )
+        else:
+            raw = args.get(argument_name)
+            if isinstance(raw, str):
+                values = [raw] if raw.strip() else []
+            elif isinstance(raw, (list, tuple)):
+                values = [str(item) for item in raw if str(item).strip()]
+            else:
+                values = []
+        if values:
+            references[argument_name] = list(dict.fromkeys(values))
+    return references
 
 
 def _request_context() -> dict:
@@ -615,24 +652,21 @@ class EvidenceGateMiddleware(Middleware):
             check_evidence_gate_db, case.case_id, dsn, case_dir
         )
         if not gate["blocked"]:
-            refs: list[str] = []
             args = _tool_args(context)
+            refs_by_argument = _evidence_references_for_tool(
+                name, args, case_dir=case_dir or ""
+            )
+            refs = list(
+                dict.fromkeys(
+                    ref
+                    for argument_refs in refs_by_argument.values()
+                    for ref in argument_refs
+                )
+            )
             admitted: list[AdmittedEvidenceBinding] = []
+            resolved_by_ref: dict[str, AdmittedEvidenceBinding] = {}
             try:
-                if name in {"run_command", "run_command_job"}:
-                    declared = args.get("evidence_refs")
-                    if isinstance(declared, str):
-                        refs.append(declared)
-                    elif isinstance(declared, (list, tuple)):
-                        refs.extend(str(item) for item in declared if str(item).strip())
-                    refs.extend(
-                        command_evidence_references(
-                            args.get("command"),
-                            case_dir=case_dir or "",
-                            working_dir=args.get("working_dir"),
-                        )
-                    )
-                for ref in dict.fromkeys(refs):
+                for ref in refs:
                     # Every evidence operand must resolve to an active sealed
                     # version and pin to its exact on-disk identity, else deny.
                     item = admission.resolve_sealed_version(
@@ -641,6 +675,7 @@ class EvidenceGateMiddleware(Middleware):
                     if item is None:
                         raise RuntimeError("evidence input is not an active sealed version")
                     admitted.append(item)
+                    resolved_by_ref[ref] = item
             except Exception:
                 logger.info("evidence_admission: sealed-version authorization denied")
                 gate = {
@@ -651,6 +686,20 @@ class EvidenceGateMiddleware(Middleware):
                     "manifest_version": gate["manifest_version"],
                 }
             else:
+                # Direct evidence-reference arguments are normalized to the
+                # DB-resolved active sealed display path. Command strings are
+                # deliberately untouched; their operands remain bound through
+                # the existing inherited-fd execution jail below.
+                for argument_name, argument_refs in refs_by_argument.items():
+                    if argument_name == "command":
+                        continue
+                    resolved_paths = [
+                        resolved_by_ref[ref]["display_path"] for ref in argument_refs
+                    ]
+                    if isinstance(args.get(argument_name), str):
+                        args[argument_name] = resolved_paths[0]
+                    else:
+                        args[argument_name] = resolved_paths
                 try:
                     mounted_token = inventory_token(case_dir or "")
                 except OSError:
@@ -672,7 +721,7 @@ class EvidenceGateMiddleware(Middleware):
                     )
                     authority_stack: ExitStack | None = None
                     try:
-                        if name in {"run_command", "run_command_job"}:
+                        if "command" in EVIDENCE_REFERENCE_ARGUMENTS.get(name, ()):
                             # LOCAL_IMMUTABLE final-open revalidation: re-read the
                             # computed gate at the last parent-side open so a
                             # drift after admission still denies the read. The

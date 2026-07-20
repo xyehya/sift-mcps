@@ -22,7 +22,7 @@ from case_dashboard.session_jwt import (
     SESSION_ENVELOPE_COOKIE_NAME,
     generate_session_envelope,
 )
-from sift_gateway.custody import actions, admission
+from sift_gateway.custody import actions, admission, ledger
 from sift_gateway.portal.custody_routes import custody_routes_list
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -365,3 +365,113 @@ def test_authenticated_examiner_seal_rejects_malformed_body_as_invalid_request()
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "invalid_request"
+
+
+def test_anchor_route_empty_body_requires_reauth_without_writing_receipt(monkeypatch):
+    """F3 fail-on-revert: POST {} can never select the internal auto-anchor mode."""
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        ledger, "anchor_manifest_head", lambda **kwargs: calls.append(kwargs)
+    )
+    case = _ActiveCase("case-1", artifact_path="/cases/case-1")
+    client = _client(_Gateway(case=case, evidence_service=_EvidenceService([])))
+
+    response = client.post("/anchor", json={})
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "reauth_required"
+    assert calls == []
+
+
+def test_anchor_route_partial_reauth_is_invalid_without_writing_receipt(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        ledger, "anchor_manifest_head", lambda **kwargs: calls.append(kwargs)
+    )
+    case = _ActiveCase("case-1", artifact_path="/cases/case-1")
+    client = _client(_Gateway(case=case, evidence_service=_EvidenceService([])))
+
+    response = client.post(
+        "/anchor", json={"reason": "finalize", "idempotency_key": "anchor-1"}
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+    assert calls == []
+
+
+def test_anchor_route_full_reauth_reaches_manual_anchor(monkeypatch):
+    calls: list[dict] = []
+    anchorer = object()
+    monkeypatch.setattr(
+        ledger, "_build_solana_anchorer", lambda **_kwargs: anchorer
+    )
+
+    def _anchor(**kwargs):
+        calls.append(kwargs)
+        return ledger.AnchorReceipt(
+            status="confirmed",
+            tx_signature="tx-1",
+            anchored_head_digest="sha256:" + "a" * 64,
+            error_category=None,
+        )
+
+    monkeypatch.setattr(ledger, "anchor_manifest_head", _anchor)
+    case = _ActiveCase("case-1", artifact_path="/cases/case-1")
+    client = _client(_Gateway(case=case, evidence_service=_EvidenceService([])))
+
+    response = client.post(
+        "/anchor",
+        json={
+            "password": "correct horse battery staple",
+            "reason": "final custody anchor",
+            "idempotency_key": "anchor-1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["anchored"] is True
+    assert len(calls) == 1
+    assert calls[0]["anchorer"] is anchorer
+    assert calls[0]["session"].actor_user_id == _EXAMINER_PRINCIPAL["principal_id"]
+    assert calls[0]["password"] == "correct horse battery staple"
+
+
+def test_readonly_session_may_use_read_class_verify_and_export(monkeypatch):
+    """A-F3: observation/export appends stay read-class, not examiner mutations."""
+    verify_calls: list[str] = []
+    export_calls: list[str] = []
+
+    def _verify(*, session, case_id):
+        verify_calls.append(case_id)
+        return actions.VerifyResult(
+            gate_state="OPEN",
+            verified=True,
+            verification_id="verify-1",
+        )
+
+    def _export(*, session, case_id, dsn):
+        export_calls.append(case_id)
+        return ledger.CustodyExport(
+            schema_version="custody_export_v1",
+            export_digest="sha256:" + "b" * 64,
+            source_ledger_head="sha256:" + "c" * 64,
+            document={"case_id": case_id},
+        )
+
+    monkeypatch.setattr(actions, "full_verify", _verify)
+    monkeypatch.setattr(ledger, "generate_export", _export)
+    case = _ActiveCase("case-1", artifact_path="/cases/case-1")
+    client = _real_auth_app(
+        _Gateway(case=case, evidence_service=_EvidenceService([])),
+        tokens={"ro-token": _READONLY_PRINCIPAL},
+    )
+    client.cookies.set(SESSION_ENVELOPE_COOKIE_NAME, _envelope_cookie("ro-token"))
+
+    verify_response = client.post("/verify")
+    export_response = client.get("/export")
+
+    assert verify_response.status_code == 200
+    assert export_response.status_code == 200
+    assert verify_calls == ["case-1"]
+    assert export_calls == ["case-1"]

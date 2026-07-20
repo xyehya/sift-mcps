@@ -68,6 +68,7 @@ CUSTODY_ERROR_CODES = (
     "reauth_scope_mismatch",
     "target_not_pending",
     "storage_unavailable",
+    "reauth_required",
     "invalid_request",
     "custody_internal",
 )
@@ -292,6 +293,9 @@ async def custody_status(request: Request) -> JSONResponse:
     if case_error is not None or case is None:
         return case_error  # type: ignore[return-value]
 
+    # Read-class by design: Refresh may append inventory observations/audit rows,
+    # but it grants no custody mutation authority and intentionally admits an
+    # authenticated readonly operator (SPEC Full Verify/Export/Refresh contract).
     gateway = request.app.state.gateway
     evidence_dir = f"{case.artifact_path}/evidence" if case.artifact_path else None
     gate = admission.reconcile(
@@ -523,6 +527,8 @@ async def custody_verify(request: Request) -> JSONResponse:
     case, case_error = _require_active_case(request)
     if case_error is not None or case is None:
         return case_error  # type: ignore[return-value]
+    # Read-class by design: Full Verify appends an observation/verification row,
+    # but it changes no bytes, metadata, manifest membership, or gate by assertion.
     session = _operator_session(request)
     if session is None:
         return _shaped_error(
@@ -544,6 +550,8 @@ async def custody_export(request: Request) -> JSONResponse:
     case, case_error = _require_active_case(request)
     if case_error is not None or case is None:
         return case_error  # type: ignore[return-value]
+    # Read-class by design: export records its derived digest/audit correlation,
+    # but neither that append nor the artifact is custody authority.
     session = _operator_session(request)
     if session is None:
         return _shaped_error(
@@ -572,10 +580,10 @@ async def custody_anchor(request: Request) -> JSONResponse:
 
     Anchoring is unconfigured (and this returns ``anchored: false``) unless
     ``SIFT_SOLANA_KEYPAIR`` names a service-only fee-payer key; anchoring failure
-    never blocks (SPEC §Solana). ``password``/``reason``/``idempotency_key``
-    present together select the manual/final mode; absent together select the
-    automatic mode. A partial set is a shaped ``invalid_request``, never silently
-    treated as either mode.
+    never blocks (SPEC §Solana). This browser/operator route is manual-only and
+    always requires session + password + reason + idempotency_key. Automatic
+    anchoring is server-internal and may run only after an authorized
+    manifest-changing transaction; this route can never select that mode.
     """
     auth_error = _require_examiner(request)
     if auth_error is not None:
@@ -591,9 +599,32 @@ async def custody_anchor(request: Request) -> JSONResponse:
     reason = body.get("reason")
     idempotency_key = body.get("idempotency_key")
     report_digest = body.get("report_digest")
-    manual = any(value is not None for value in (password, reason, idempotency_key))
-    session = _operator_session(request) if manual else None
-    if manual and session is None:
+    reauth_fields = (password, reason, idempotency_key)
+    if not any(value is not None for value in reauth_fields):
+        return _shaped_error(
+            code="reauth_required",
+            message=(
+                "Fresh password reauthentication, a reason, and an "
+                "idempotency_key are required to anchor custody."
+            ),
+            audit_id=_new_audit_id(),
+            status_code=403,
+        )
+    if (
+        not isinstance(password, str)
+        or not password
+        or not isinstance(reason, str)
+        or not reason
+        or not isinstance(idempotency_key, str)
+        or not idempotency_key
+    ):
+        return _shaped_error(
+            code="invalid_request",
+            message="password, reason, and idempotency_key are required together.",
+            audit_id=_new_audit_id(),
+        )
+    session = _operator_session(request)
+    if session is None:
         return _shaped_error(
             code="invalid_request",
             message="Operator identity is required for a manual anchor.",

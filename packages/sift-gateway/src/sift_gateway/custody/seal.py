@@ -515,6 +515,28 @@ def _set_directory_immutable(evidence_dir: Path, *, immutable: bool) -> None:
             pass
 
 
+def _apply_fixed_file_posture(fd: int) -> None:
+    """Apply the one supported sealed-file posture to a pinned descriptor.
+
+    The sequence is fixed and shared by Seal and Verify-and-Reprotect: clear the
+    immutable flag, set mode ``0644``, restore the immutable flag, then verify
+    both properties. The caller owns identity/link/digest checks on the same fd.
+    """
+    if not set_immutable_flag_fd(fd, False):
+        raise SealError("seal_protect_failed", http_status=500)
+    try:
+        os.fchmod(fd, 0o644)
+    except OSError as exc:
+        raise SealError("seal_protect_failed", http_status=500) from exc
+    if not set_immutable_flag_fd(fd, True):
+        raise SealError("seal_protect_failed", http_status=500)
+    if (
+        stat.S_IMODE(os.fstat(fd).st_mode) != 0o644
+        or get_immutable_flag_fd(fd) is not True
+    ):
+        raise SealError("seal_protect_failed", http_status=409)
+
+
 def _protect_and_verify(
     evidence_dir: Path,
     targets: Sequence[SealTarget],
@@ -578,8 +600,7 @@ def _protect_and_verify(
                 raise SealError("seal_target_changed", http_status=409)
 
             sha256, size = _hash_fd(fd)
-            if not set_immutable_flag_fd(fd, True):
-                raise SealError("seal_protect_failed", http_status=500)
+            _apply_fixed_file_posture(fd)
 
             st2 = os.fstat(fd)
             sha256_after, size_after = _hash_fd(fd)
