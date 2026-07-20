@@ -369,12 +369,11 @@ def anchor_manifest_head(
       Fresh reauthentication is verified via ``reauth.record_reauth`` before any
       anchor attempt (SPEC §Reauthentication: manual Solana Anchor is a retained
       reauth-bound mutation).
-    * **Automatic anchor** — invoked right after an already-authorized
-      manifest-changing operation: ALL reauth fields are ``None`` and
-      ``report_digest`` is absent. A call that supplies SOME but not all reauth
-      fields is rejected as malformed (never silently treated as either mode) —
-      this closes the "an unauthenticated call is shaped like an auto-anchor" gap
-      the CP1 stub flagged.
+    * **Automatic anchor** — a server-internal-only call made right after an
+      already-authorized manifest-changing operation: ALL reauth fields are
+      ``None`` and ``report_digest`` is absent. No HTTP/MCP route may expose this
+      branch. A call that supplies SOME but not all reauth fields is rejected as
+      malformed (never silently treated as either mode).
 
     Returns ``None`` when anchoring is disabled (no ``anchorer`` supplied) OR
     when ``anchorer`` construction/availability itself is the failure — in both

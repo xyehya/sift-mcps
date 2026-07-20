@@ -14,12 +14,13 @@ tests prove acceptance through the public functions on a real database.
 from __future__ import annotations
 
 import getpass
+import hashlib
 import os
 import stat
 from dataclasses import dataclass
 
 import pytest
-from sift_gateway.custody import reauth, seal
+from sift_gateway.custody import actions, reauth, seal
 from sift_gateway.custody.actions import ActionError, FindingDisposition, resolve
 from sift_gateway.custody.reauth import ReauthError, build_binding
 from sift_gateway.custody.seal import SealError, SealTarget, begin_seal, commit_seal
@@ -161,6 +162,145 @@ def test_set_directory_immutable_lifts_the_flag(
     evidence_dir.mkdir()
     seal._set_directory_immutable(evidence_dir, immutable=False)
     assert calls == [(True, False)]  # exactly one directory-fd call, lifting +i
+
+
+def test_reprotect_restores_fixed_posture_and_rehashes_same_pinned_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A-F1 fail-on-revert: Reprotect is an on-disk posture repair, not an assertion."""
+    evidence_dir = tmp_path / "case" / "evidence"
+    evidence_dir.mkdir(parents=True)
+    target = evidence_dir / "disk.E01"
+    target.write_bytes(b"custody bytes")
+    os.chmod(target, 0o600)
+    st = target.stat()
+    committed_sha256 = "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest()
+
+    class _Cursor:
+        row = None
+
+        def execute(self, sql, _params):
+            if "from app.evidence_objects" in sql:
+                self.row = (
+                    "evidence/disk.E01",
+                    committed_sha256,
+                    st.st_size,
+                    st.st_dev,
+                    st.st_ino,
+                )
+            elif "select legacy_case_dir" in sql:
+                self.row = (str(tmp_path / "case"),)
+            else:  # pragma: no cover - catches unexpected query growth
+                raise AssertionError(sql)
+
+        def fetchone(self):
+            return self.row
+
+    immutable = {"value": False}
+    transitions: list[bool] = []
+
+    def _set_flag(_fd: int, enabled: bool) -> bool:
+        transitions.append(enabled)
+        immutable["value"] = enabled
+        return True
+
+    monkeypatch.setattr(seal, "set_immutable_flag_fd", _set_flag)
+    monkeypatch.setattr(
+        seal, "get_immutable_flag_fd", lambda _fd: immutable["value"]
+    )
+
+    posture = actions._restore_reprotect_posture(
+        _Cursor(), "case-1", "evidence-object-1"
+    )
+
+    assert transitions == [False, True]
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+    assert target.read_bytes() == b"custody bytes"
+    assert posture == {
+        "sha256": committed_sha256,
+        "mode": "0644",
+        "immutable": True,
+    }
+
+
+def test_reprotect_domain_uses_posture_restore_before_recording(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The honest REPROTECT verb cannot regress to the former hash-only precheck."""
+    import psycopg
+
+    class _Cursor:
+        def __init__(self) -> None:
+            self.row = None
+            self.executions: list[tuple[str, object]] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, sql, params=None):
+            self.executions.append((sql, params))
+            if "select actor_user_id" in sql:
+                self.row = ("operator-1",)
+            elif "select display_path" in sql or "select o.display_path" in sql:
+                self.row = ("evidence/disk.E01",)
+            elif "select exists" in sql:
+                self.row = (False,)
+            elif "custody_reprotect" in sql:
+                self.row = ("receipt-1",)
+            elif "custody_gate_state" in sql:
+                self.row = ("OPEN",)
+            else:  # pragma: no cover - catches unexpected query growth
+                raise AssertionError(sql)
+
+        def fetchone(self):
+            return self.row
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.cur = _Cursor()
+            self.committed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def cursor(self):
+            return self.cur
+
+        def commit(self):
+            self.committed = True
+
+    connection = _Connection()
+    monkeypatch.setenv("SIFT_CONTROL_PLANE_DSN", "postgresql://unused")
+    monkeypatch.setattr(psycopg, "connect", lambda _dsn: connection)
+    restored: list[tuple[str, str]] = []
+
+    def _restore(_cur, case_id, evidence_object_id):
+        restored.append((case_id, evidence_object_id))
+        return {"sha256": "sha256:" + "a" * 64, "mode": "0644", "immutable": True}
+
+    monkeypatch.setattr(actions, "_restore_reprotect_posture", _restore)
+    receipt = actions._reprotect(
+        case_id="case-1",
+        evidence_object_id="evidence-object-1",
+        batch=reauth.BatchReauth(
+            batch_key="batch-1",
+            case_id="case-1",
+            reason="restore posture",
+            entries=(("REPROTECT", "evidence-object-1", "reauth-1"),),
+        ),
+        reauth_id="reauth-1",
+    )
+
+    assert restored == [("case-1", "evidence-object-1")]
+    assert any("custody_reprotect" in sql for sql, _ in connection.cur.executions)
+    assert connection.committed is True
+    assert receipt.action == "REPROTECT"
 
 
 # ---------------------------------------------------------------------------

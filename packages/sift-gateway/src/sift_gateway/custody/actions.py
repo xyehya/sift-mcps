@@ -56,6 +56,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from sift_gateway.custody import seal as custody_seal
 from sift_gateway.custody.reauth import (
     BatchReauth,
     OperatorSession,
@@ -386,11 +387,10 @@ def _reprotect(
         _reject_if_seal_overlap(  # EC-2b overlap guard (resolve object -> path)
             cur, case_id, _object_display_path(cur, case_id, evidence_object_id)
         )
-        # Reprotect is available ONLY for identical bytes: verify the on-disk
-        # digest equals the committed Evidence Version before restoring posture
-        # (SPEC §Verify and Reprotect). The RPC re-derives its binding from
-        # ``verified_posture->>'reason'``, so it MUST carry the batch reason.
-        posture = _verify_reprotect_precondition(cur, case_id, evidence_object_id)
+        # Reprotect is available ONLY for identical bytes and safe identity/link
+        # posture. Restore the fixed sealed-file posture on the same pinned fd,
+        # then re-hash before the RPC records EVIDENCE_REPROTECTED.
+        posture = _restore_reprotect_posture(cur, case_id, evidence_object_id)
         posture["reason"] = batch.reason
         cur.execute(
             "select r.id::text from app.custody_reprotect(%s,%s,%s,%s,%s,%s,null) r",
@@ -497,14 +497,20 @@ def _hash_path(path: Path) -> tuple[str, int] | None:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
             return None
-        digest = hashlib.sha256()
-        size = 0
-        while chunk := os.read(fd, 1024 * 1024):
-            digest.update(chunk)
-            size += len(chunk)
-        return "sha256:" + digest.hexdigest(), size
+        return _hash_fd(fd)
     finally:
         os.close(fd)
+
+
+def _hash_fd(fd: int) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    os.lseek(fd, 0, os.SEEK_SET)
+    while chunk := os.read(fd, 1024 * 1024):
+        digest.update(chunk)
+        size += len(chunk)
+    os.lseek(fd, 0, os.SEEK_SET)
+    return "sha256:" + digest.hexdigest(), size
 
 
 def _verify_one(
@@ -568,14 +574,15 @@ def _verify_one(
     return findings
 
 
-def _verify_reprotect_precondition(
+def _restore_reprotect_posture(
     cur: Any, case_id: str, evidence_object_id: str
 ) -> dict[str, Any]:
-    """Prove identical bytes before Reprotect; else fail shaped (no repair path)."""
+    """Verify bytes, restore fixed posture, then verify bytes again on one fd."""
     cur.execute(
         """
-        select o.display_path, o.current_sha256
+        select o.display_path, v.sha256, v.bytes, v.st_dev, v.st_ino
         from app.evidence_objects o
+        join app.evidence_versions v on v.id = o.current_version_id
         where o.id = %s and o.case_id = %s and o.current_version_id is not null
         """,
         (evidence_object_id, case_id),
@@ -584,14 +591,71 @@ def _verify_reprotect_precondition(
     if not row:
         raise ActionError("target_not_pending", http_status=409)
     display_path, committed_sha256 = str(row[0]), str(row[1])
+    committed_bytes, committed_dev, committed_ino = row[2], row[3], row[4]
     evidence_dir = _evidence_dir_opt(cur, case_id)
     if evidence_dir is None:
         raise ActionError("storage_unavailable", http_status=409)
-    hashed = _hash_path(evidence_dir / display_path.split("/", 1)[-1])
-    if hashed is None or hashed[0] != committed_sha256:
-        # Reprotect cannot repair changed bytes (SPEC) — direct to Retire.
+
+    parts = Path(display_path).parts
+    if len(parts) != 2 or parts[0] != "evidence" or parts[1] in ("", ".", ".."):
         raise ActionError("reprotect_bytes_changed", http_status=409)
-    return {"sha256": committed_sha256, "mode": "0644", "immutable": True}
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        root_fd = os.open(
+            evidence_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | nofollow
+        )
+    except OSError as exc:
+        raise ActionError("reprotect_bytes_changed", http_status=409) from exc
+
+    try:
+        try:
+            fd = os.open(
+                parts[1], os.O_RDONLY | os.O_CLOEXEC | nofollow, dir_fd=root_fd
+            )
+        except OSError as exc:
+            raise ActionError("reprotect_bytes_changed", http_status=409) from exc
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                raise ActionError("reprotect_bytes_changed", http_status=409)
+            if committed_dev is not None and int(committed_dev) != before.st_dev:
+                raise ActionError("reprotect_bytes_changed", http_status=409)
+            if committed_ino is not None and int(committed_ino) != before.st_ino:
+                raise ActionError("reprotect_bytes_changed", http_status=409)
+            before_sha256, before_size = _hash_fd(fd)
+            if before_sha256 != committed_sha256 or (
+                committed_bytes is not None and int(committed_bytes) != before_size
+            ):
+                raise ActionError("reprotect_bytes_changed", http_status=409)
+
+            try:
+                custody_seal._apply_fixed_file_posture(fd)
+            except custody_seal.SealError as exc:
+                raise ActionError("custody_internal", http_status=500) from exc
+
+            after = os.fstat(fd)
+            after_sha256, after_size = _hash_fd(fd)
+            if (
+                after_sha256 != before_sha256
+                or after_size != before_size
+                or after.st_dev != before.st_dev
+                or after.st_ino != before.st_ino
+                or after.st_nlink != 1
+                or stat.S_IMODE(after.st_mode) != 0o644
+                or custody_seal.get_immutable_flag_fd(fd) is not True
+            ):
+                raise ActionError("custody_internal", http_status=500)
+            return {
+                "sha256": committed_sha256,
+                "mode": "0644",
+                "immutable": True,
+            }
+        except OSError as exc:
+            raise ActionError("reprotect_bytes_changed", http_status=409) from exc
+        finally:
+            os.close(fd)
+    finally:
+        os.close(root_fd)
 
 
 def _mode_str(mode: int) -> str:

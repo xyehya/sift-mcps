@@ -8,6 +8,7 @@ import json
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -83,10 +84,11 @@ class _EvidenceService:
             "storage_verification_receipt_id": "receipt-1",
         }
 
-    def resolve_evidence_reference(self, case_id, ref):
+    def resolve_evidence_reference(self, case_id, ref, *_authority):
         path = self.case_dir / "evidence" / "disk.E01"
         st = path.stat()
         return {
+            "ref": str(ref),
             "evidence_id": "ev-1",
             "version_id": "ver-1",
             "display_path": "evidence/disk.E01",
@@ -635,6 +637,7 @@ async def test_opensearch_ingest_dry_run_false_is_not_intercepted_by_gateway(tmp
 
     case_dir = tmp_path / "case"
     (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
     gateway = _Gateway(case_dir)
 
     dispatched = {"called": False}
@@ -656,6 +659,9 @@ async def test_opensearch_ingest_dry_run_false_is_not_intercepted_by_gateway(tmp
     ), patch(
         "sift_gateway.policy_middleware.check_evidence_gate_db",
         return_value={"blocked": False, "status": "ok", "issues": [], "manifest_version": 2},
+    ), patch(
+        "sift_gateway.policy_middleware.admission.resolve_sealed_version",
+        side_effect=gateway.evidence_service.resolve_evidence_reference,
     ):
         gateway.control_plane_dsn = "postgresql://x"
         result = await middleware.on_call_tool(context, call_next)
@@ -709,3 +715,144 @@ async def test_evidence_gate_still_blocks_opensearch_ingest_when_unsealed(tmp_pa
     # A block payload (not a dispatch) was returned for the unsealed chain.
     text = json.dumps(body)
     assert "unsealed" in text or "evidence" in text.lower()
+
+
+def test_evidence_reference_argument_map_is_the_closed_registered_surface():
+    """Fail if a registered evidence-reference input escapes the one map."""
+    from opensearch_mcp.registry import REGISTRY
+    from sift_core.agent_tools import core_tool_specs
+    from sift_gateway.policy_middleware import EVIDENCE_REFERENCE_ARGUMENTS
+
+    expected = {
+        "run_command": ("evidence_refs", "command"),
+        "run_command_job": ("evidence_refs", "command"),
+        "opensearch_ingest": ("path",),
+        "opensearch_inspect_container": ("path",),
+    }
+    assert dict(EVIDENCE_REFERENCE_ARGUMENTS) == expected
+
+    schemas = {spec.name: spec.input_schema for spec in core_tool_specs()}
+    schemas.update(
+        {spec["name"]: spec["parameters"] for spec in gateway_job_tool_specs()}
+    )
+    schemas.update(
+        {tool.name: tool.in_model.model_json_schema() for tool in REGISTRY}
+    )
+
+    discovered: set[str] = set()
+    for tool_name, schema in schemas.items():
+        for argument_name, argument_schema in schema.get("properties", {}).items():
+            description = str(argument_schema.get("description") or "").lower()
+            if (
+                argument_name in {"path", "evidence_refs"}
+                or "evidence path" in description
+                or "evidence reference" in description
+                or "sealed original" in description
+            ):
+                discovered.add(tool_name)
+    assert discovered == set(expected)
+    for tool_name, argument_names in expected.items():
+        assert set(argument_names) <= set(schemas[tool_name]["properties"])
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("run_command", {"command": "cat evidence/disk.E01"}),
+        ("run_command_job", {"command": "cat evidence/disk.E01"}),
+        ("opensearch_ingest", {"path": "disk.E01", "dry_run": False}),
+        ("opensearch_inspect_container", {"path": "disk.E01"}),
+    ],
+)
+async def test_every_declared_evidence_tool_resolves_before_dispatch(
+    tmp_path, tool_name, arguments
+):
+    """The map is executable policy: every declared tool reaches the resolver."""
+    from sift_gateway.policy_middleware import EvidenceGateMiddleware
+
+    case_dir = tmp_path / "case"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
+    gateway = _Gateway(case_dir)
+    context = SimpleNamespace(
+        message=SimpleNamespace(name=tool_name, arguments=dict(arguments))
+    )
+    dispatched = {"called": False, "path": None}
+
+    async def call_next(ctx):
+        dispatched["called"] = True
+        dispatched["path"] = ctx.message.arguments.get("path")
+        return ToolResult(content=[TextContent(type="text", text='{"status":"ok"}')])
+
+    with patch(
+        "sift_gateway.policy_middleware._current_gateway_active_case",
+        return_value=_case(case_dir),
+    ), patch(
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
+        return_value=_SEALED_GATE,
+    ), patch(
+        "sift_gateway.policy_middleware.command_evidence_references",
+        return_value=["evidence/disk.E01"],
+    ), patch(
+        "sift_gateway.policy_middleware.admission.resolve_sealed_version",
+        side_effect=gateway.evidence_service.resolve_evidence_reference,
+    ) as resolver:
+        result = await EvidenceGateMiddleware(cast(Any, gateway)).on_call_tool(
+            cast(Any, context), cast(Any, call_next)
+        )
+
+    assert result.is_error is not True
+    assert dispatched["called"] is True
+    assert resolver.call_count == 1
+    assert resolver.call_args.args == (
+        _case(case_dir).case_id,
+        "evidence/disk.E01" if "command" in arguments else "disk.E01",
+        str(case_dir),
+        gateway.control_plane_dsn,
+    )
+    if tool_name.startswith("opensearch_"):
+        assert dispatched["path"] == "evidence/disk.E01"
+
+
+@pytest.mark.parametrize(
+    "tool_name", ["opensearch_ingest", "opensearch_inspect_container"]
+)
+async def test_opensearch_present_unsealed_reference_denies_before_dispatch(
+    tmp_path, tool_name
+):
+    """An OPEN case cannot make a present ignored/retired/pending path readable."""
+    from sift_gateway.policy_middleware import EvidenceGateMiddleware
+
+    case_dir = tmp_path / "case"
+    (case_dir / "evidence").mkdir(parents=True)
+    (case_dir / "evidence" / "unsealed.E01").write_bytes(b"present but not sealed")
+    gateway = _Gateway(case_dir)
+    context = SimpleNamespace(
+        message=SimpleNamespace(
+            name=tool_name, arguments={"path": "evidence/unsealed.E01"}
+        )
+    )
+    dispatched = {"called": False}
+
+    async def call_next(_context):
+        dispatched["called"] = True
+        raise AssertionError("unsealed evidence must be denied before dispatch")
+
+    with patch(
+        "sift_gateway.policy_middleware._current_gateway_active_case",
+        return_value=_case(case_dir),
+    ), patch(
+        "sift_gateway.policy_middleware.check_evidence_gate_db",
+        return_value=_SEALED_GATE,
+    ), patch(
+        "sift_gateway.policy_middleware.admission.resolve_sealed_version",
+        return_value=None,
+    ) as resolver:
+        result = await EvidenceGateMiddleware(cast(Any, gateway)).on_call_tool(
+            cast(Any, context), cast(Any, call_next)
+        )
+
+    assert dispatched["called"] is False
+    assert result.is_error is True
+    assert resolver.call_args.args[1] == "evidence/unsealed.E01"
+    assert "active sealed version" in json.dumps(result.structured_content).lower()
