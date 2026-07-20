@@ -1531,6 +1531,9 @@ class Gateway:
         routes = []
         routes.extend(health_routes())
         routes.extend(rest_routes())
+        from sift_gateway.portal.custody_routes import custody_routes_list
+
+        routes.extend(custody_routes_list())
 
         # Examiner Portal (optional — installed separately)
         try:

@@ -30,11 +30,22 @@ covering N selected targets); the recorded custody verbs underneath stay distinc
 
 from __future__ import annotations
 
+import dataclasses
+import logging
+import os
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.routing import Route
+
+from sift_gateway.active_case import ActiveCase, ActiveCaseError
+from sift_gateway.auth import require_control_plane_operator
+from sift_gateway.custody import actions, admission, ledger, seal
+
+logger = logging.getLogger(__name__)
 
 # Stable machine-readable custody error codes (extended by CP2B as needed). Raw DB
 # diagnostics are mapped onto these; they are never surfaced verbatim (EC-3).
@@ -47,7 +58,19 @@ CUSTODY_ERROR_CODES = (
     "custody_internal",
 )
 
+_MAX_REQUEST_BYTES = 10 * 1024 * 1024
+
 _CustodyRoute = Callable[[Request], Awaitable[JSONResponse]]
+
+
+def _new_audit_id() -> str:
+    """A fresh correlation id for a failure that has no DB audit event.
+
+    Never persisted material — a bare correlation handle the operator can quote
+    and an operator can grep logs by (:func:`_custody_route` logs it alongside
+    the exception it shaped).
+    """
+    return str(uuid.uuid4())
 
 
 def _shaped_error(
@@ -75,10 +98,7 @@ def _custody_route(handler: _CustodyRoute) -> _CustodyRoute:
     Guarantees a shaped body on EVERY path: a handler that raises a mapped custody
     error is shaped to its stable code; ANY other exception is shaped as
     ``custody_internal`` with a fresh audit id and no raw DB text, so SQLSTATE /
-    PL-pgSQL / stack text can never reach an operator surface. CP2B's real bodies
-    map known DB errors to :data:`CUSTODY_ERROR_CODES` inside this boundary; the
-    stub bodies below still ``raise NotImplementedError`` (re-raised here so the
-    unimplemented contract stays honest) until CP2B wires them.
+    PL-pgSQL / stack text can never reach an operator surface.
     """
 
     async def wrapped(request: Request) -> JSONResponse:
@@ -86,44 +106,263 @@ def _custody_route(handler: _CustodyRoute) -> _CustodyRoute:
             return await handler(request)
         except NotImplementedError:
             raise
-        except Exception:  # the single boundary that shapes every failure
-            # CP2B maps known SQLSTATE/RPC errors to a specific code + audit id
-            # before this catch-all; anything unmapped is shaped generically with
-            # NO raw diagnostic text.
-            # CP2B: this catch-all fallback emits audit_id="" with no next-action
-            # message. CP2B fixes it privately (record a correlation/audit id for
-            # the unexpected failure and name a recovery action) — no signature
-            # change to _shaped_error or the routes.
+        except Exception as exc:  # the single boundary that shapes every failure
+            audit_id = _new_audit_id()
+            logger.error(
+                "custody route %s failed (audit_id=%s): %s",
+                request.url.path,
+                audit_id,
+                exc,
+            )
             return _shaped_error(
                 code="custody_internal",
-                message="The custody operation could not be completed.",
-                audit_id="",
+                message=(
+                    "The custody operation could not be completed. Retry, and "
+                    f"quote correlation id {audit_id} if it recurs."
+                ),
+                audit_id=audit_id,
                 status_code=500,
             )
 
     return wrapped
 
 
+# ---------------------------------------------------------------------------
+# Request-scoped helpers (parse / authorize only — no business logic).
+# ---------------------------------------------------------------------------
+async def _read_json_body(request: Request) -> tuple[dict[str, Any] | None, JSONResponse | None]:
+    raw_body = await request.body()
+    if len(raw_body) > _MAX_REQUEST_BYTES:
+        return None, _shaped_error(
+            code="invalid_request",
+            message="Request body too large.",
+            audit_id=_new_audit_id(),
+            status_code=413,
+        )
+    import json
+
+    try:
+        body = json.loads(raw_body or b"{}")
+    except json.JSONDecodeError:
+        return None, _shaped_error(
+            code="invalid_request",
+            message="The request body must be valid JSON.",
+            audit_id=_new_audit_id(),
+        )
+    if not isinstance(body, dict):
+        return None, _shaped_error(
+            code="invalid_request",
+            message="The request body must be a JSON object.",
+            audit_id=_new_audit_id(),
+        )
+    return body, None
+
+
+def _require_active_case(request: Request) -> tuple[ActiveCase | None, JSONResponse | None]:
+    gateway = request.app.state.gateway
+    active_case_service = getattr(gateway, "active_case_service", None)
+    if active_case_service is None:
+        return None, _shaped_error(
+            code="storage_unavailable",
+            message="Case authority is unavailable.",
+            audit_id=_new_audit_id(),
+            status_code=503,
+        )
+    try:
+        case = active_case_service.get_active_case(getattr(request.state, "identity", None))
+    except ActiveCaseError as exc:
+        return None, _shaped_error(
+            code="invalid_request",
+            message="No active case — activate a case before working with custody.",
+            audit_id=_new_audit_id(),
+            status_code=exc.http_status,
+        )
+    return case, None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _RequestOperatorSession:
+    """The minimal :class:`~sift_gateway.custody.reauth.OperatorSession` this
+    request satisfies, built from the authenticated bearer identity."""
+
+    actor_user_id: str
+    session_id: str
+
+
+def _operator_session(request: Request) -> _RequestOperatorSession | None:
+    identity = getattr(request.state, "identity", None)
+    principal_id = getattr(identity, "principal_id", None)
+    if not principal_id:
+        return None
+    return _RequestOperatorSession(
+        actor_user_id=str(principal_id),
+        session_id=str(getattr(identity, "token_id", None) or ""),
+    )
+
+
+def _asdict(value: Any) -> dict[str, Any]:
+    return dataclasses.asdict(value)
+
+
+# ---------------------------------------------------------------------------
+# Routes.
+# ---------------------------------------------------------------------------
 @_custody_route
 async def custody_status(request: Request) -> JSONResponse:
     """GET the active case's custody status: gate state + inventory + sealed set.
 
     Drives an operator Refresh reconciliation and renders sealed/pending/ignored/
     retired strictly per EC-4, scoped to the active case.
-
-    NOT IMPLEMENTED in CP1 — CP2B implements this over ``custody.admission``.
     """
-    raise NotImplementedError("CP2B implements the custody status route")
+    auth_error = require_control_plane_operator(request)
+    if auth_error is not None:
+        return auth_error
+    case, case_error = _require_active_case(request)
+    if case_error is not None or case is None:
+        return case_error  # type: ignore[return-value]
+
+    gateway = request.app.state.gateway
+    evidence_dir = f"{case.artifact_path}/evidence" if case.artifact_path else None
+    gate = admission.reconcile(
+        case.case_id, evidence_dir, gateway.control_plane_dsn, trigger="refresh"
+    )
+
+    evidence_service = getattr(gateway, "evidence_service", None)
+    inventory = evidence_service.list_evidence(case.case_id) if evidence_service else []
+    return JSONResponse(
+        {
+            "gate_state": gate["gate_state"],
+            "manifest_version": gate["manifest_version"],
+            "issues": gate["issues"],
+            # EC-4: EvidenceAuthorityService.list_evidence gates "sealed" on a
+            # COMMITTED version with ACTIVE manifest membership — a detected-only
+            # or digestless object is classified pending, never sealed.
+            "sealed": [item for item in inventory if item["status"] == "sealed"],
+            "pending": [
+                item for item in inventory if item["status"] in ("detected", "registered")
+            ],
+            "ignored": [item for item in inventory if item["status"] == "ignored"],
+            "retired": [item for item in inventory if item["status"] == "retired"],
+        }
+    )
 
 
 @_custody_route
 async def custody_seal(request: Request) -> JSONResponse:
     """POST Add and Seal (begin/commit): reauth + targets -> ``custody.seal``.
 
-    NOT IMPLEMENTED in CP1 — CP2B implements this over
-    ``custody.seal.begin_seal`` / ``commit_seal``.
+    Body carries an explicit ``phase`` ("begin" | "commit") so the route dispatch
+    is a plain lookup, not an inferred business decision. ``targets`` is a list of
+    ``{display_path, snapshot_observation_id, display_name?, source?,
+    supersedes_object_id?}`` from the most recent Refresh snapshot.
     """
-    raise NotImplementedError("CP2B implements the seal route")
+    auth_error = require_control_plane_operator(request)
+    if auth_error is not None:
+        return auth_error
+    body, body_error = await _read_json_body(request)
+    if body_error is not None or body is None:
+        return body_error  # type: ignore[return-value]
+    case, case_error = _require_active_case(request)
+    if case_error is not None or case is None:
+        return case_error  # type: ignore[return-value]
+    session = _operator_session(request)
+    if session is None:
+        return _shaped_error(
+            code="invalid_request",
+            message="Operator identity is required to seal evidence.",
+            audit_id=_new_audit_id(),
+            status_code=401,
+        )
+
+    phase = body.get("phase")
+    if phase not in ("begin", "commit"):
+        return _shaped_error(
+            code="invalid_request",
+            message="phase must be 'begin' or 'commit'.",
+            audit_id=_new_audit_id(),
+        )
+    idempotency_key = body.get("idempotency_key")
+    if not isinstance(idempotency_key, str) or not idempotency_key:
+        return _shaped_error(
+            code="invalid_request",
+            message="idempotency_key is required.",
+            audit_id=_new_audit_id(),
+        )
+    raw_targets = body.get("targets")
+    targets = None
+    if raw_targets is not None:
+        if not isinstance(raw_targets, list):
+            return _shaped_error(
+                code="invalid_request",
+                message="targets must be a list.",
+                audit_id=_new_audit_id(),
+            )
+        parsed_targets = []
+        for item in raw_targets:
+            if (
+                not isinstance(item, dict)
+                or not isinstance(item.get("display_path"), str)
+                or not isinstance(item.get("snapshot_observation_id"), int)
+            ):
+                return _shaped_error(
+                    code="invalid_request",
+                    message="Each target requires display_path and snapshot_observation_id.",
+                    audit_id=_new_audit_id(),
+                )
+            parsed_targets.append(
+                seal.SealTarget(
+                    display_path=item["display_path"],
+                    snapshot_observation_id=item["snapshot_observation_id"],
+                    display_name=item.get("display_name"),
+                    source=item.get("source"),
+                    supersedes_object_id=item.get("supersedes_object_id"),
+                )
+            )
+        targets = tuple(parsed_targets)
+
+    if phase == "begin":
+        password = body.get("password")
+        reason = body.get("reason")
+        if not isinstance(password, str) or not password or not isinstance(reason, str) or not reason:
+            return _shaped_error(
+                code="invalid_request",
+                message="password and reason are required to begin a Seal.",
+                audit_id=_new_audit_id(),
+            )
+        result = seal.begin_seal(
+            session=session,
+            case_id=case.case_id,
+            password=password,
+            reason=reason,
+            idempotency_key=idempotency_key,
+            targets=targets,
+        )
+    else:
+        if targets is None:
+            return _shaped_error(
+                code="invalid_request",
+                message="targets is required to commit a Seal.",
+                audit_id=_new_audit_id(),
+            )
+        resume = bool(body.get("resume", False))
+        password = body.get("password") if resume else None
+        reason = body.get("reason") if resume else None
+        if resume and (not isinstance(password, str) or not password or not isinstance(reason, str) or not reason):
+            return _shaped_error(
+                code="invalid_request",
+                message="password and reason are required to resume a Seal.",
+                audit_id=_new_audit_id(),
+            )
+        result = seal.commit_seal(
+            session=session,
+            case_id=case.case_id,
+            idempotency_key=idempotency_key,
+            targets=targets,
+            password=password,
+            reason=reason,
+            resume=resume,
+        )
+    return JSONResponse(_asdict(result))
 
 
 @_custody_route
@@ -133,34 +372,197 @@ async def resolve_findings(request: Request) -> JSONResponse:
     One password covers N selected targets; the route makes ONE domain call —
     ``custody.actions.resolve`` — which dispatches each finding to the honest
     custody verb (Ignore / Retire / Verify-and-Reprotect). Zero business logic in
-    the route. NOT IMPLEMENTED in CP1 — CP2B implements it.
+    the route.
     """
-    raise NotImplementedError("CP2B implements the resolve route")
+    auth_error = require_control_plane_operator(request)
+    if auth_error is not None:
+        return auth_error
+    body, body_error = await _read_json_body(request)
+    if body_error is not None or body is None:
+        return body_error  # type: ignore[return-value]
+    case, case_error = _require_active_case(request)
+    if case_error is not None or case is None:
+        return case_error  # type: ignore[return-value]
+    session = _operator_session(request)
+    if session is None:
+        return _shaped_error(
+            code="invalid_request",
+            message="Operator identity is required to resolve findings.",
+            audit_id=_new_audit_id(),
+            status_code=401,
+        )
+
+    password = body.get("password")
+    reason = body.get("reason")
+    batch_key = body.get("batch_key")
+    raw_dispositions = body.get("dispositions")
+    if (
+        not isinstance(password, str)
+        or not password
+        or not isinstance(reason, str)
+        or not reason
+        or not isinstance(batch_key, str)
+        or not batch_key
+        or not isinstance(raw_dispositions, list)
+        or not raw_dispositions
+    ):
+        return _shaped_error(
+            code="invalid_request",
+            message="password, reason, batch_key, and dispositions are required.",
+            audit_id=_new_audit_id(),
+        )
+    dispositions = []
+    for item in raw_dispositions:
+        if (
+            not isinstance(item, dict)
+            or item.get("verb") not in ("IGNORE", "RETIRE", "REPROTECT", "ADD_SEAL")
+            or not isinstance(item.get("target"), str)
+            or not item.get("target")
+        ):
+            return _shaped_error(
+                code="invalid_request",
+                message="Each disposition requires a known verb and a target.",
+                audit_id=_new_audit_id(),
+            )
+        dispositions.append(
+            actions.FindingDisposition(
+                verb=item["verb"],
+                target=item["target"],
+                supersedes_object_id=item.get("supersedes_object_id"),
+            )
+        )
+
+    receipts = actions.resolve(
+        session=session,
+        case_id=case.case_id,
+        password=password,
+        reason=reason,
+        dispositions=tuple(dispositions),
+        batch_key=batch_key,
+    )
+    return JSONResponse({"receipts": [_asdict(receipt) for receipt in receipts]})
 
 
 @_custody_route
 async def custody_verify(request: Request) -> JSONResponse:
-    """POST Full Verify (read-only, no fresh password) -> ``custody.actions``.
-
-    NOT IMPLEMENTED in CP1 — CP2B implements this over ``custody.actions.full_verify``.
-    """
-    raise NotImplementedError("CP2B implements the verify route")
+    """POST Full Verify (read-only, no fresh password) -> ``custody.actions``."""
+    auth_error = require_control_plane_operator(request)
+    if auth_error is not None:
+        return auth_error
+    case, case_error = _require_active_case(request)
+    if case_error is not None or case is None:
+        return case_error  # type: ignore[return-value]
+    session = _operator_session(request)
+    if session is None:
+        return _shaped_error(
+            code="invalid_request",
+            message="Operator identity is required to run Full Verify.",
+            audit_id=_new_audit_id(),
+            status_code=401,
+        )
+    result = actions.full_verify(session=session, case_id=case.case_id)
+    return JSONResponse(_asdict(result))
 
 
 @_custody_route
 async def custody_export(request: Request) -> JSONResponse:
-    """POST/GET the derived ``custody_export_v1`` -> ``custody.ledger``.
-
-    NOT IMPLEMENTED in CP1 — CP2B implements this over ``custody.ledger.generate_export``.
-    """
-    raise NotImplementedError("CP2B implements the export route")
+    """POST/GET the derived ``custody_export_v1`` -> ``custody.ledger``."""
+    auth_error = require_control_plane_operator(request)
+    if auth_error is not None:
+        return auth_error
+    case, case_error = _require_active_case(request)
+    if case_error is not None or case is None:
+        return case_error  # type: ignore[return-value]
+    session = _operator_session(request)
+    if session is None:
+        return _shaped_error(
+            code="invalid_request",
+            message="Operator identity is required to generate a custody export.",
+            audit_id=_new_audit_id(),
+            status_code=401,
+        )
+    gateway = request.app.state.gateway
+    export = ledger.generate_export(
+        session=session, case_id=case.case_id, dsn=gateway.control_plane_dsn
+    )
+    return JSONResponse(
+        {
+            "schema_version": export.schema_version,
+            "export_digest": export.export_digest,
+            "source_ledger_head": export.source_ledger_head,
+            "document": export.document,
+        }
+    )
 
 
 @_custody_route
 async def custody_anchor(request: Request) -> JSONResponse:
     """POST an optional, non-authoritative Solana anchor -> ``custody.ledger``.
 
-    NOT IMPLEMENTED in CP1 — CP2B implements this over
-    ``custody.ledger.anchor_manifest_head``; anchoring failure never blocks.
+    Anchoring is unconfigured (and this returns ``anchored: false``) unless
+    ``SIFT_SOLANA_KEYPAIR`` names a service-only fee-payer key; anchoring failure
+    never blocks (SPEC §Solana). ``password``/``reason``/``idempotency_key``
+    present together select the manual/final mode; absent together select the
+    automatic mode. A partial set is a shaped ``invalid_request``, never silently
+    treated as either mode.
     """
-    raise NotImplementedError("CP2B implements the anchor route")
+    auth_error = require_control_plane_operator(request)
+    if auth_error is not None:
+        return auth_error
+    body, body_error = await _read_json_body(request)
+    if body_error is not None or body is None:
+        return body_error  # type: ignore[return-value]
+    case, case_error = _require_active_case(request)
+    if case_error is not None or case is None:
+        return case_error  # type: ignore[return-value]
+
+    password = body.get("password")
+    reason = body.get("reason")
+    idempotency_key = body.get("idempotency_key")
+    report_digest = body.get("report_digest")
+    manual = any(value is not None for value in (password, reason, idempotency_key))
+    session = _operator_session(request) if manual else None
+    if manual and session is None:
+        return _shaped_error(
+            code="invalid_request",
+            message="Operator identity is required for a manual anchor.",
+            audit_id=_new_audit_id(),
+            status_code=401,
+        )
+
+    gateway = request.app.state.gateway
+    anchorer = ledger._build_solana_anchorer(
+        keypair_path=os.environ.get("SIFT_SOLANA_KEYPAIR", "").strip() or None,
+        rpc_url=os.environ.get("SIFT_SOLANA_RPC_URL", "").strip() or None,
+        cluster=os.environ.get("SIFT_SOLANA_CLUSTER", "mainnet").strip() or "mainnet",
+    )
+    try:
+        receipt = ledger.anchor_manifest_head(
+            case_id=case.case_id,
+            dsn=gateway.control_plane_dsn,
+            anchorer=anchorer,
+            session=session,
+            password=password,
+            reason=reason,
+            idempotency_key=idempotency_key,
+            report_digest=report_digest,
+        )
+    except ValueError as exc:
+        return _shaped_error(
+            code="invalid_request", message=str(exc), audit_id=_new_audit_id()
+        )
+    if receipt is None:
+        return JSONResponse({"anchored": False, "reason": "solana_anchoring_disabled"})
+    return JSONResponse({"anchored": True, **_asdict(receipt)})
+
+
+def custody_routes_list() -> list[Route]:
+    """The custody route table — registered into the app by ``server.py``."""
+    return [
+        Route("/portal/custody/status", custody_status, methods=["GET"]),
+        Route("/portal/custody/seal", custody_seal, methods=["POST"]),
+        Route("/portal/custody/resolve", resolve_findings, methods=["POST"]),
+        Route("/portal/custody/verify", custody_verify, methods=["POST"]),
+        Route("/portal/custody/export", custody_export, methods=["POST", "GET"]),
+        Route("/portal/custody/anchor", custody_anchor, methods=["POST"]),
+    ]
