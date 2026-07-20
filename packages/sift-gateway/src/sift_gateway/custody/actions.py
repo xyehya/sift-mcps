@@ -33,15 +33,38 @@ committed Evidence Version. **Full Verify** (:func:`full_verify`) is read-only a
 requires no fresh password: it recomputes the full SHA-256 and validates
 identity/posture/membership, changing no bytes, metadata, manifests, or custody
 history; the gate opens only from verified facts.
+
+**ADD_SEAL in a Resolve batch — type reconciliation (CP2A delta close).** The
+frozen :class:`FindingDisposition` carries NO ``snapshot_observation_id``, but a
+real ``seal.SealTarget`` requires one (it is the snapshot authority that closes
+the snapshot->seal TOCTOU). An ``ADD_SEAL`` disposition therefore cannot build a
+seal target inside :func:`resolve`; the "new entry -> Add and Seal" choice is
+driven through the seal machine (``seal.begin_seal`` / ``commit_seal``) with
+snapshot-bound targets and its own single reauth. :func:`resolve` owns the three
+DB-only verbs; an ``ADD_SEAL`` disposition is rejected shaped BEFORE any reauth is
+recorded, so no orphaned authorization is written.
 """
 
 from __future__ import annotations
 
+import hashlib
+import logging
+import os
+import stat
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
-from sift_gateway.custody.reauth import BatchReauth, OperatorSession
+from sift_gateway.custody.reauth import (
+    BatchReauth,
+    OperatorSession,
+    _batch_target_key,
+    _dsn,
+    record_batch_reauth,
+)
+
+logger = logging.getLogger(__name__)
 
 # The honest drift-resolution verbs, kept distinct in the recorded chain (SPEC).
 ResolveVerb = Literal["IGNORE", "RETIRE", "REPROTECT", "ADD_SEAL"]
@@ -53,6 +76,23 @@ VerifyFindingCode = Literal[
     "UNSAFE_ENTRY",
     "STORAGE_UNAVAILABLE",
 ]
+
+# The DB-only verbs :func:`resolve` dispatches (ADD_SEAL is the seal machine's).
+_DB_ONLY_VERBS: frozenset[str] = frozenset({"IGNORE", "RETIRE", "REPROTECT"})
+
+
+class ActionError(Exception):
+    """A fail-closed DB-only custody-action failure, shaped by the CP2B route.
+
+    Carries a stable machine-readable ``reason`` + ``http_status``; an error
+    signal, not part of the frozen ≤6 callable/data interface (the route boundary
+    duck-types ``.reason``). Raw database diagnostics never travel on it.
+    """
+
+    def __init__(self, reason: str, *, http_status: int = 409) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.http_status = http_status
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,31 +172,142 @@ def resolve(
     ``reauth.record_batch_reauth`` -> one
     :class:`~sift_gateway.custody.reauth.BatchReauth` receipt whose per-target
     ``(action, target, reauth_id)`` entries carry a distinct reauth event PER
-    finding — so a HETEROGENEOUS batch (Ignore / Retire / Add and Seal / Reprotect
-    mixed) is expressible. It then dispatches each :class:`FindingDisposition` to
-    its honest, DISTINCT recorded verb (:func:`_ignore` / :func:`_retire` /
-    :func:`_reprotect`, or Add and Seal via ``custody.seal``) using that target's
-    bound ``reauth_id``; each RPC independently recomputes and compares its own
-    single-target binding (no cross-target replay). Each verb is one atomic
-    transaction with no persistent failure state; a verb that rolls back never
-    blocks the others or the case. Returns one :class:`ActionReceipt` per
+    finding — so a HETEROGENEOUS batch (Ignore / Retire / Reprotect mixed) is
+    expressible. It then dispatches each :class:`FindingDisposition` to its honest,
+    DISTINCT recorded verb (:func:`_ignore` / :func:`_retire` / :func:`_reprotect`)
+    using that target's bound ``reauth_id``; each RPC independently recomputes and
+    compares its own single-target binding (no cross-target replay). Each verb is
+    one atomic transaction with no persistent failure state; a verb that rolls
+    back never leaves the case blocked. Returns one :class:`ActionReceipt` per
     disposition, in input order.
 
-    NOT IMPLEMENTED in CP1 — CP2A implements the batch dispatch. The single-entry
-    / one-password-one-reason / distinct-per-target-recorded-verb contract is
-    frozen here.
+    New-file Add-and-Seal is NOT dispatched here (a ``FindingDisposition`` has no
+    snapshot binding — see the module docstring); an ``ADD_SEAL`` verb is rejected
+    shaped before any reauth is recorded.
     """
-    raise NotImplementedError("CP2A implements the unified Resolve flow")
+    if not dispositions:
+        raise ActionError("invalid_request", http_status=400)
+    # Reject ADD_SEAL up front so no orphaned batch reauth is written for a verb
+    # that must go through the snapshot-bound seal machine.
+    if any(d.verb not in _DB_ONLY_VERBS for d in dispositions):
+        raise ActionError("invalid_request", http_status=400)
+
+    batch_targets = [(str(d.verb), d.target) for d in dispositions]
+    batch = record_batch_reauth(
+        session=session,
+        password=password,
+        case_id=case_id,
+        reason=reason,
+        targets=batch_targets,
+        batch_key=batch_key,
+    )
+    reauth_by: dict[tuple[str, str], str] = {
+        (action, target): reauth_id for (action, target, reauth_id) in batch.entries
+    }
+
+    receipts: list[ActionReceipt] = []
+    for disposition in dispositions:
+        reauth_id = reauth_by[(str(disposition.verb), disposition.target)]
+        if disposition.verb == "IGNORE":
+            receipts.append(
+                _ignore(
+                    case_id=case_id,
+                    display_path=disposition.target,
+                    batch=batch,
+                    reauth_id=reauth_id,
+                )
+            )
+        elif disposition.verb == "RETIRE":
+            receipts.append(
+                _retire(
+                    case_id=case_id,
+                    evidence_object_id=disposition.target,
+                    batch=batch,
+                    reauth_id=reauth_id,
+                )
+            )
+        else:  # REPROTECT (the only remaining DB-only verb).
+            receipts.append(
+                _reprotect(
+                    case_id=case_id,
+                    evidence_object_id=disposition.target,
+                    batch=batch,
+                    reauth_id=reauth_id,
+                )
+            )
+    return tuple(receipts)
 
 
 def full_verify(*, session: OperatorSession, case_id: str) -> VerifyResult:
     """Read-only Full Verify of the active sealed set (no fresh password).
 
-    NOT IMPLEMENTED in CP1 — CP2A implements this over reconciliation + a full
-    from-disk digest/posture check. The read-only, structured-finding contract is
-    frozen here.
+    Recomputes the full SHA-256 from disk for every active sealed object and
+    validates identity/link-safety/posture against its committed Evidence Version,
+    producing structured findings. It changes no bytes, metadata, manifests, or
+    custody history; the gate is READ (computed), never asserted. Records one
+    verification audit event and returns its id as the correlation handle.
+    Fail-closed: an unavailable evidence directory yields a ``STORAGE_UNAVAILABLE``
+    finding and a blocked gate.
     """
-    raise NotImplementedError("CP2A implements Full Verify")
+    dsn = _dsn()
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    findings: list[VerifyFinding] = []
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        evidence_dir = _evidence_dir_opt(cur, case_id)
+        cur.execute(
+            """
+            select o.id::text, o.display_path, o.current_sha256,
+                   v.bytes, v.st_dev, v.st_ino, v.mode
+            from app.evidence_objects o
+            join app.evidence_versions v on v.id = o.current_version_id
+            where o.case_id = %s and o.status = 'sealed'
+            """,
+            (case_id,),
+        )
+        sealed = cur.fetchall()
+        if evidence_dir is None:
+            findings.append(VerifyFinding(code="STORAGE_UNAVAILABLE"))
+        else:
+            for obj_id, display_path, sha256, vbytes, vdev, vino, vmode in sealed:
+                findings.extend(
+                    _verify_one(
+                        evidence_dir, str(obj_id), str(display_path),
+                        str(sha256), vbytes, vdev, vino, vmode,
+                    )
+                )
+
+        cur.execute("select app.custody_gate_state(%s)", (case_id,))
+        gate = str(_fetchone(cur)[0] or "BLOCKED_PENDING")
+        verified = not findings and gate == "OPEN"
+        cur.execute(
+            """
+            insert into app.audit_events
+              (case_id, event_type, actor_type, actor_user_id, source, status,
+               summary, details)
+            values (%s, 'custody.full_verify', 'user', %s, 'portal', %s,
+                    'operator full verify',
+                    jsonb_build_object('gate', %s, 'verified', %s,
+                                       'findings', %s))
+            returning id::text
+            """,
+            (
+                case_id, session.actor_user_id,
+                "success" if verified else "warning",
+                gate, verified,
+                Jsonb([_finding_json(f) for f in findings]),
+            ),
+        )
+        verification_id = str(_fetchone(cur)[0])
+        conn.commit()
+
+    return VerifyResult(
+        gate_state=gate,
+        verified=verified,
+        verification_id=verification_id,
+        findings=tuple(findings),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +324,21 @@ def _ignore(
 
     NOT IMPLEMENTED in CP1 — CP2A implements this over ``app.custody_ignore``.
     """
-    raise NotImplementedError("CP2A implements Ignore")
+    key = _batch_target_key(batch.batch_key, "IGNORE", display_path)
+    import psycopg
+
+    with psycopg.connect(_dsn()) as conn, conn.cursor() as cur:
+        actor = _reauth_actor(cur, reauth_id)
+        cur.execute(
+            "select r.id::text from app.custody_ignore(%s,%s,%s,%s,%s,%s,null) r",
+            (case_id, display_path, batch.reason, reauth_id, key, actor),
+        )
+        receipt_id = str(_fetchone(cur)[0])
+        gate = _gate(cur, case_id)
+        conn.commit()
+    return ActionReceipt(
+        action="IGNORE", receipt_id=receipt_id, audit_id=reauth_id, gate_state=gate
+    )
 
 
 def _retire(
@@ -183,7 +348,21 @@ def _retire(
 
     NOT IMPLEMENTED in CP1 — CP2A implements this over ``app.custody_retire``.
     """
-    raise NotImplementedError("CP2A implements Retire")
+    key = _batch_target_key(batch.batch_key, "RETIRE", evidence_object_id)
+    import psycopg
+
+    with psycopg.connect(_dsn()) as conn, conn.cursor() as cur:
+        actor = _reauth_actor(cur, reauth_id)
+        cur.execute(
+            "select r.id::text from app.custody_retire(%s,%s,%s,%s,%s,%s,null) r",
+            (case_id, evidence_object_id, batch.reason, reauth_id, key, actor),
+        )
+        receipt_id = str(_fetchone(cur)[0])
+        gate = _gate(cur, case_id)
+        conn.commit()
+    return ActionReceipt(
+        action="RETIRE", receipt_id=receipt_id, audit_id=reauth_id, gate_state=gate
+    )
 
 
 def _reprotect(
@@ -194,4 +373,188 @@ def _reprotect(
     NOT IMPLEMENTED in CP1 — CP2A implements this over ``app.custody_reprotect``,
     verifying the digest before and after.
     """
-    raise NotImplementedError("CP2A implements Verify and Reprotect")
+    key = _batch_target_key(batch.batch_key, "REPROTECT", evidence_object_id)
+    import psycopg
+    from psycopg.types.json import Jsonb
+
+    with psycopg.connect(_dsn()) as conn, conn.cursor() as cur:
+        actor = _reauth_actor(cur, reauth_id)
+        # Reprotect is available ONLY for identical bytes: verify the on-disk
+        # digest equals the committed Evidence Version before restoring posture
+        # (SPEC §Verify and Reprotect). The RPC re-derives its binding from
+        # ``verified_posture->>'reason'``, so it MUST carry the batch reason.
+        posture = _verify_reprotect_precondition(cur, case_id, evidence_object_id)
+        posture["reason"] = batch.reason
+        cur.execute(
+            "select r.id::text from app.custody_reprotect(%s,%s,%s,%s,%s,%s,null) r",
+            (
+                case_id, evidence_object_id, Jsonb(posture), reauth_id, key, actor,
+            ),
+        )
+        receipt_id = str(_fetchone(cur)[0])
+        gate = _gate(cur, case_id)
+        conn.commit()
+    return ActionReceipt(
+        action="REPROTECT", receipt_id=receipt_id, audit_id=reauth_id, gate_state=gate
+    )
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers.
+# ---------------------------------------------------------------------------
+def _fetchone(cur: Any) -> Any:
+    """Fetch a row that MUST exist (RPC/aggregate always returns one), else fail."""
+    row = cur.fetchone()
+    if row is None:
+        raise ActionError("custody_internal", http_status=500)
+    return row
+
+
+def _reauth_actor(cur: Any, reauth_id: str) -> str:
+    """The actor bound to a reauth event (the verb has no ``session`` argument).
+
+    The honest-verb signatures carry no ``session``; the RPC's ``p_actor_user_id``
+    must equal the reauth event's ``actor_user_id`` (which it re-checks by scalar
+    equality), so the actor is derived from the authorization being consumed.
+    """
+    cur.execute(
+        "select actor_user_id::text from app.audit_events where id = %s", (reauth_id,)
+    )
+    row = cur.fetchone()
+    if not row or not row[0]:
+        raise ActionError("reauth_scope_mismatch", http_status=403)
+    return str(row[0])
+
+
+def _gate(cur: Any, case_id: str) -> str:
+    cur.execute("select app.custody_gate_state(%s)", (case_id,))
+    row = cur.fetchone()
+    return str(row[0]) if row and row[0] else "BLOCKED_PENDING"
+
+
+def _evidence_dir_opt(cur: Any, case_id: str) -> Path | None:
+    cur.execute("select legacy_case_dir from app.cases where id = %s", (case_id,))
+    row = cur.fetchone()
+    if not row or not row[0]:
+        return None
+    evidence_dir = Path(str(row[0])) / "evidence"
+    return evidence_dir if evidence_dir.is_dir() else None
+
+
+def _hash_path(path: Path) -> tuple[str, int] | None:
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            return None
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(fd, 1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+        return "sha256:" + digest.hexdigest(), size
+    finally:
+        os.close(fd)
+
+
+def _verify_one(
+    evidence_dir: Path,
+    obj_id: str,
+    display_path: str,
+    committed_sha256: str,
+    vbytes: Any,
+    vdev: Any,
+    vino: Any,
+    vmode: Any,
+) -> list[VerifyFinding]:
+    """Read-only per-object verification against the committed version."""
+    name = display_path.split("/", 1)[-1]
+    path = evidence_dir / name
+    try:
+        st = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return [
+            VerifyFinding(
+                code="SEALED_EVIDENCE_MISSING",
+                evidence_object_id=obj_id,
+                display_path=display_path,
+            )
+        ]
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+        return [
+            VerifyFinding(
+                code="UNSAFE_ENTRY", evidence_object_id=obj_id, display_path=display_path
+            )
+        ]
+    hashed = _hash_path(path)
+    if hashed is None:
+        return [
+            VerifyFinding(
+                code="UNSAFE_ENTRY", evidence_object_id=obj_id, display_path=display_path
+            )
+        ]
+    sha256, size = hashed
+    if sha256 != committed_sha256 or (vbytes is not None and int(vbytes) != size):
+        return [
+            VerifyFinding(
+                code="CONTENT_CHANGED",
+                evidence_object_id=obj_id,
+                display_path=display_path,
+            )
+        ]
+    findings: list[VerifyFinding] = []
+    if (
+        (vino is not None and int(vino) != st.st_ino)
+        or (vdev is not None and int(vdev) != st.st_dev)
+        or (vmode is not None and str(vmode) != _mode_str(st.st_mode))
+    ):
+        findings.append(
+            VerifyFinding(
+                code="POSTURE_DRIFT",
+                evidence_object_id=obj_id,
+                display_path=display_path,
+            )
+        )
+    return findings
+
+
+def _verify_reprotect_precondition(
+    cur: Any, case_id: str, evidence_object_id: str
+) -> dict[str, Any]:
+    """Prove identical bytes before Reprotect; else fail shaped (no repair path)."""
+    cur.execute(
+        """
+        select o.display_path, o.current_sha256
+        from app.evidence_objects o
+        where o.id = %s and o.case_id = %s and o.current_version_id is not null
+        """,
+        (evidence_object_id, case_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise ActionError("target_not_pending", http_status=409)
+    display_path, committed_sha256 = str(row[0]), str(row[1])
+    evidence_dir = _evidence_dir_opt(cur, case_id)
+    if evidence_dir is None:
+        raise ActionError("storage_unavailable", http_status=409)
+    hashed = _hash_path(evidence_dir / display_path.split("/", 1)[-1])
+    if hashed is None or hashed[0] != committed_sha256:
+        # Reprotect cannot repair changed bytes (SPEC) — direct to Retire.
+        raise ActionError("reprotect_bytes_changed", http_status=409)
+    return {"sha256": committed_sha256, "mode": "0644", "immutable": True}
+
+
+def _mode_str(mode: int) -> str:
+    return oct(stat.S_IMODE(mode)).replace("0o", "0")
+
+
+def _finding_json(finding: VerifyFinding) -> dict[str, Any]:
+    return {
+        "code": finding.code,
+        "evidence_object_id": finding.evidence_object_id,
+        "display_path": finding.display_path,
+        "detail": finding.detail,
+    }
