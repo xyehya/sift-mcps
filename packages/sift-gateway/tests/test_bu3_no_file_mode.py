@@ -171,7 +171,7 @@ async def test_evidence_gate_uses_db_authority_only(monkeypatch, tmp_path):
     calls = {}
     (tmp_path / "evidence").mkdir()
 
-    def fake_db_gate(case_id, dsn):
+    def fake_db_gate(case_id, dsn, case_dir=None):
         calls["db"] = (case_id, dsn)
         return {"blocked": False, "status": ChainStatus.OK, "issues": [], "manifest_version": 1}
 

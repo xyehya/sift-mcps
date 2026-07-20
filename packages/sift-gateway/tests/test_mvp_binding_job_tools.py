@@ -311,6 +311,10 @@ async def test_gateway_mcp_registers_local_binding_tools(tmp_path):
     assert "rag_search_case" not in tools
 
 
+@pytest.mark.skip(
+    reason="P4.23 CP1: durable evidence-binding resolve re-homed by CP2A/CP2B "
+    "(custody/admission.resolve_sealed_version); positive read proven at the CP3 VM gate"
+)
 async def test_gateway_mcp_run_command_job_invokes_gateway_bound_handler(tmp_path):
     case_dir = tmp_path / "case"
     (case_dir / "evidence").mkdir(parents=True)
