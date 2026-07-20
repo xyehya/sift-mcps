@@ -109,6 +109,13 @@ def _job(case_dir, token):
     )
 
 
+@pytest.mark.skip(
+    reason="P4.23 CP1: the durable custody validator's as-built SQL (evidence_gate_"
+    "status/observe_admission/external-storage authority) is replaced by app.custody_"
+    "gate_state + app.custody_reconcile; the durable-routing invariant is covered by "
+    "test_cp1_admission.test_durable_admission_routes_through_computed_gate_not_latched "
+    "and the CP3 VM gate. CP2A/CP2B rewrite the mock-SQL detail with the binding re-home."
+)
 def test_durable_revalidation_records_force_added_sibling_before_denial(
     tmp_path, monkeypatch
 ):
@@ -140,6 +147,10 @@ def test_durable_revalidation_records_force_added_sibling_before_denial(
     assert not any("app.evidence_gate_status" in call[0] for call in cursor.calls)
 
 
+@pytest.mark.skip(
+    reason="P4.23 CP1: durable gate check now reads app.custody_gate_state ('OPEN'); "
+    "invariant covered by test_cp1_admission + CP3 VM gate. CP2A/CP2B rewrite mock-SQL."
+)
 def test_durable_revalidation_checks_gate_at_both_phases(tmp_path, monkeypatch):
     case_dir = tmp_path / "case"
     (case_dir / "evidence").mkdir(parents=True)
@@ -159,6 +170,11 @@ def test_durable_revalidation_checks_gate_at_both_phases(tmp_path, monkeypatch):
     assert sum("app.evidence_gate_status" in call[0] for call in cursor.calls) == 2
 
 
+@pytest.mark.skip(
+    reason="P4.23 CP1: durable drift observation now routes through app.custody_"
+    "reconcile; invariant covered by test_cp1_admission + CP3 VM gate. CP2A/CP2B "
+    "rewrite mock-SQL with the binding re-home."
+)
 def test_durable_revalidation_classifies_changed_sealed_identity(tmp_path, monkeypatch):
     case_dir = tmp_path / "case"
     evidence = case_dir / "evidence"

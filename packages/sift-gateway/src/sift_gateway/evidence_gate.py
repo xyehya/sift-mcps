@@ -1,29 +1,32 @@
 """Evidence chain gate for the MCP endpoint.
 
-check_evidence_gate_db(case_id, dsn) → {blocked, status, issues, manifest_version}
+check_evidence_gate_db(case_id, dsn) → {blocked, gate_state, status, issues,
+manifest_version}
 
-Gate behaviour:
-  - UNSEALED or any violation → blocked=True, structured response for Hermes
-  - OK → blocked=False, proceed to backend
+This is the thin, stable read shim in front of the P4.23 target custody gate.
+The authoritative decision is the computed four-state ``app.custody_gate_state``
+projection, resolved through :func:`sift_gateway.custody.admission.gate_state`.
+This module keeps the legacy ``{blocked, status, issues, manifest_version}``
+envelope so the middleware and orientation response shaping are unchanged during
+the rewire (the four-state value is also carried as ``gate_state``).
 
-DB-authority resolution path (BATCH-C1; sole path as of BU3/XYE-21):
-  - check_evidence_gate_db() resolves seal status from Postgres
-    (app.evidence_gate_status) by case_id, NOT from files. Postgres is the
-    authority; file manifests/proofs are exports.
-  - BU3 removed the file-backed ``check_evidence_gate()`` entirely: the gateway
-    is the only policy boundary and has no file-mode fallback (no control-plane
-    DSN ⇒ the gateway refuses to serve DFIR tools), so the only evidence-gate
-    path that can govern a DFIR tool call is this DB-authority one.
-  - Fail-closed: any DB/resolution error → blocked=True (UNSEALED).
-  - The agent never receives a local path; case_id is opaque and resolves to a
-    mount path only inside broker/worker code.
+  - OPEN → blocked=False, proceed to backend.
+  - BLOCKED_PENDING / BLOCKED_VIOLATION / BLOCKED_UNAVAILABLE → blocked=True.
+  - Fail-closed: a missing case/DSN or any DB error → blocked=True.
+
+Postgres is the sole authority; the agent never receives a local path — case_id
+is opaque and resolves to a local path only inside Gateway/worker code.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+from typing import Any
 
 from sift_core.custody_types import ChainStatus
+
+from sift_gateway.custody import admission
 
 logger = logging.getLogger(__name__)
 
@@ -33,101 +36,37 @@ PORTAL_REMEDIATION = (
 )
 
 
-# ---------------------------------------------------------------------------
-# DB-authority resolution path (BATCH-C1)
-# ---------------------------------------------------------------------------
-# Maps the Postgres aggregate seal_status onto the same gate result shape used
-# by the file-backed path so callers/response shaping are unchanged.
-_DB_STATUS_MAP = {
-    "sealed": ChainStatus.OK,
-    "unsealed": ChainStatus.UNSEALED,
-    "violated": ChainStatus.LEDGER_ERROR,
-}
+def check_evidence_gate_db(
+    case_id: str | None, dsn: str | None, case_dir: str | None = None
+) -> dict:
+    """Resolve the computed custody gate for a case_id (fail-closed).
 
-
-def check_evidence_gate_db(case_id: str | None, dsn: str | None) -> dict:
-    """Resolve the evidence gate from Postgres authority for a case_id.
-
-    Reads app.evidence_gate_status(case_id) via the service DSN. Returns the
-    standard {blocked, status, issues, manifest_version} shape. Fail-closed:
-    a missing case_id, missing DSN, or any DB error returns a blocked result.
-
-    Postgres is the authority here; file manifests/proofs are exports only. The
-    agent never receives a local path — case_id is opaque and resolves to a
-    mount path only inside broker/worker code.
+    This is the single gate seam for the policy chain. When ``case_dir`` is given
+    (dispatch), it performs reconcile-before-dispatch through
+    :func:`sift_gateway.custody.admission.reconcile` — a read-only scan that
+    persists the inventory snapshot + observation and returns the computed
+    four-state gate. With no ``case_dir`` (orientation reads: case_info/
+    evidence_info) it is a pure computed-gate read. Both return the standard
+    ``{blocked, gate_state, status, issues, manifest_version}`` envelope.
     """
-    if not case_id or not dsn:
-        return {
-            "blocked": True,
-            "status": ChainStatus.UNSEALED,
-            "issues": ["No active case — create a case in the portal first"],
-            "manifest_version": 0,
-        }
-
-    try:
-        import psycopg
-    except ImportError as exc:  # pragma: no cover - deployment env
-        logger.error("evidence_gate_db: psycopg unavailable: %s", exc)
-        return {
-            "blocked": True,
-            "status": ChainStatus.LEDGER_ERROR,
-            "issues": ["Evidence authority unavailable"],
-            "manifest_version": 0,
-        }
-
-    try:
-        with psycopg.connect(dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "select seal_status, manifest_version, issues "
-                    "from app.evidence_gate_status(%s)",
-                    (case_id,),
-                )
-                row = cur.fetchone()
-    except Exception as exc:
-        logger.error("evidence_gate_db: status query failed for %s: %s", case_id, exc)
-        return {
-            "blocked": True,
-            "status": ChainStatus.LEDGER_ERROR,
-            "issues": ["Evidence authority unavailable"],
-            "manifest_version": 0,
-        }
-
-    if not row:
-        # Fail-closed: no head row means nothing sealed for this case yet.
-        return {
-            "blocked": True,
-            "status": ChainStatus.UNSEALED,
-            "issues": ["No sealed evidence for this case"],
-            "manifest_version": 0,
-        }
-
-    seal_status, manifest_version, issues = row
-    status = _DB_STATUS_MAP.get(seal_status, ChainStatus.UNSEALED)
-    issue_list = issues if isinstance(issues, list) else []
-    if status != ChainStatus.OK and not issue_list:
-        issue_list = (
-            ["No sealed evidence manifest"]
-            if status == ChainStatus.UNSEALED
-            else ["Evidence integrity violation recorded"]
-        )
-    return {
-        "blocked": status != ChainStatus.OK,
-        "status": status,
-        "issues": issue_list,
-        "manifest_version": manifest_version or 0,
-    }
+    if case_dir is not None:
+        return dict(admission.reconcile(case_id, case_dir, dsn))
+    return dict(admission.gate_state(case_id, dsn))
 
 
-def build_block_response(tool_name: str, gate: dict) -> dict:
-    """Build the structured block response returned to Hermes."""
+def build_block_response(tool_name: str, gate: Mapping[str, Any]) -> dict:
+    """Build the structured block response returned to the agent."""
+    gate_state = gate.get("gate_state")
     status = gate["status"]
-    if status == ChainStatus.UNSEALED:
+    if gate_state == "BLOCKED_PENDING" or status == ChainStatus.UNSEALED:
         reason = "evidence_chain_unsealed"
         detail = (
-            "No sealed evidence manifest. This tool requires evidence to be registered "
-            "and sealed before it can be used."
+            "Unadmitted or unsealed local evidence. This tool requires evidence "
+            "to be sealed through the Portal before it can be used."
         )
+    elif gate_state == "BLOCKED_UNAVAILABLE":
+        reason = "evidence_storage_unavailable"
+        detail = "The canonical evidence directory is unavailable."
     else:
         reason = "evidence_chain_violation"
         detail = "Evidence integrity check failed."
@@ -136,6 +75,7 @@ def build_block_response(tool_name: str, gate: dict) -> dict:
         "reason": reason,
         "tool": tool_name,
         "status": status,
+        "gate_state": gate_state,
         "issues": gate["issues"],
         "manifest_version": gate["manifest_version"],
         "detail": detail,

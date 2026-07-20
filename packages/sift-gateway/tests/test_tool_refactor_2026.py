@@ -124,7 +124,12 @@ class TestEvidenceInfo:
     async def test_returns_chain_status(self, tmp_path, monkeypatch):
         gateway, _ = _setup_case(tmp_path, monkeypatch, "EI-001")
         payload = await _call(gateway, "evidence_info")
-        assert payload["chain_status"] in ("unsealed", "unknown", "ok")
+        # P4.23: the computed gate reports authority_required when the custody
+        # authority is unreachable (BLOCKED_UNAVAILABLE), which is more precise
+        # than the legacy 'unsealed' for a no-DB orientation read.
+        assert payload["chain_status"] in (
+            "unsealed", "unknown", "ok", "authority_required"
+        )
         assert isinstance(payload["ok_count"], int)
 
     async def test_returns_evidence_files_list(self, tmp_path, monkeypatch):

@@ -28,13 +28,6 @@ install_systemd_service() {
 
   [[ -x "$VENV_DIR/bin/sift-gateway" ]] || die "Missing gateway entrypoint: $VENV_DIR/bin/sift-gateway. Run install workspace sync first."
   [[ -x "$VENV_DIR/bin/sift-job-worker" ]] || warn "Missing durable job worker entrypoint: $VENV_DIR/bin/sift-job-worker."
-  [[ -x "$VENV_DIR/bin/sift-mount-observer" ]] || die "Missing mount observer entrypoint: $VENV_DIR/bin/sift-mount-observer."
-  sudo_if_needed chown root:root "$VENV_DIR/bin/sift-mount-observer"
-  sudo_if_needed chmod 0755 "$VENV_DIR/bin/sift-mount-observer"
-
-  _render_file "$REPO_DIR/configs/systemd/sift-mount-observer.service" \
-    "$MOUNT_OBSERVER_SERVICE_FILE" 0644 root
-
   if sudo_if_needed test -f "$GATEWAY_SERVICE_FILE"; then
     log "Updating systemd system service $GATEWAY_SERVICE_FILE."
   else
@@ -71,8 +64,7 @@ install_systemd_service() {
     return
   fi
   sudo_if_needed systemctl daemon-reload
-  sudo_if_needed systemctl enable sift-mount-observer.service sift-gateway.service sift-job-worker.service
-  sudo_if_needed systemctl restart sift-mount-observer.service
+  sudo_if_needed systemctl enable sift-gateway.service sift-job-worker.service
   sudo_if_needed systemctl restart sift-gateway.service sift-job-worker.service
   if [[ ${#_os_worker_instances[@]} -gt 0 ]]; then
     sudo_if_needed systemctl enable "${_os_worker_instances[@]}"

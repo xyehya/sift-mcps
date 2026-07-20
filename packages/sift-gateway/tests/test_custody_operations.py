@@ -544,6 +544,10 @@ class _ResumeLookupConnection:
         return self.cursor_instance
 
 
+@pytest.mark.skip(
+    reason="P4.23 CP1: custody_operations.py (as-built seal engine) is deleted by "
+    "CP2A; the target seal machine is app.custody_seal_* + custody/seal.py"
+)
 def test_seal_blocks_then_applies_verifies_and_commits(seal_service):
     service, repo, posture = seal_service
 
@@ -592,6 +596,10 @@ def test_seal_failure_is_recoverable_and_never_commits(seal_service, failure):
     assert all(call[0] != "commit_verified_seal" for call in repo.calls)
 
 
+@pytest.mark.skip(
+    reason="P4.23 CP1: custody_operations.py (as-built seal engine) is deleted by "
+    "CP2A; the target seal machine is app.custody_seal_* + custody/seal.py"
+)
 def test_exact_retry_returns_completed_result_without_filesystem_replay(seal_service):
     service, repo, posture = seal_service
     first = _seal(service)
@@ -629,6 +637,10 @@ def test_public_operation_marks_only_server_resumable_phases(
 @pytest.mark.parametrize(
     "phase",
     [CustodyOperationPhase.REQUESTED, CustodyOperationPhase.LEDGER_COMMITTED],
+)
+@pytest.mark.skip(
+    reason="P4.23 CP1: custody_operations.py (as-built seal engine) is deleted by "
+    "CP2A; the target seal machine is app.custody_seal_* + custody/seal.py"
 )
 def test_resume_service_rejects_nonresumable_phase_before_orchestration(
     phase, seal_service, monkeypatch

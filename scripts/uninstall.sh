@@ -101,7 +101,6 @@ SUPABASE_PROJECT_DIR="${SIFT_SUPABASE_PROJECT_DIR:-$HOME/.sift/supabase-project}
 SYSTEMD_SYSTEM_DIR="${SYSTEMD_SYSTEM_DIR:-/etc/systemd/system}"
 GATEWAY_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-gateway.service"
 JOB_WORKER_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-job-worker.service"
-MOUNT_OBSERVER_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-mount-observer.service"
 OPENSEARCH_WORKER_SERVICE_FILE="$SYSTEMD_SYSTEM_DIR/sift-opensearch-worker@.service"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -280,10 +279,10 @@ stop_sift_services() {
     [[ -e "$_wlink" ]] || continue
     _os_workers+=("$(basename "$_wlink")")
   done
-  action "systemctl stop + disable" "sift-gateway.service sift-job-worker.service sift-mount-observer.service"
+  action "systemctl stop + disable" "sift-gateway.service sift-job-worker.service"
   if [[ "$DRY_RUN" -eq 0 ]]; then
-    sudo_if_needed systemctl stop sift-gateway.service sift-job-worker.service sift-mount-observer.service 2>/dev/null || true
-    sudo_if_needed systemctl disable sift-gateway.service sift-job-worker.service sift-mount-observer.service 2>/dev/null || true
+    sudo_if_needed systemctl stop sift-gateway.service sift-job-worker.service 2>/dev/null || true
+    sudo_if_needed systemctl disable sift-gateway.service sift-job-worker.service 2>/dev/null || true
   fi
   if [[ ${#_os_workers[@]} -gt 0 ]]; then
     action "systemctl stop + disable" "OpenSearch workers: ${_os_workers[*]}"
@@ -520,7 +519,6 @@ teardown_apparmor() {
   local profile_dst
   for profile_dst in \
     /etc/apparmor.d/sift-gateway \
-    /etc/apparmor.d/sift-mount-observer \
     /etc/apparmor.d/sift-custody-delete-broker \
     /etc/apparmor.d/dfir-exec; do
     if sudo_if_needed test -f "$profile_dst" 2>/dev/null; then
@@ -561,7 +559,7 @@ teardown_auditd() {
 teardown_systemd_and_users() {
   local f _wlink
 
-  for f in "$GATEWAY_SERVICE_FILE" "$JOB_WORKER_SERVICE_FILE" "$MOUNT_OBSERVER_SERVICE_FILE" "$OPENSEARCH_WORKER_SERVICE_FILE"; do
+  for f in "$GATEWAY_SERVICE_FILE" "$JOB_WORKER_SERVICE_FILE" "$OPENSEARCH_WORKER_SERVICE_FILE"; do
     if sudo_if_needed test -f "$f" 2>/dev/null; then
       action "remove" "$f"
       run_if_live sudo_if_needed rm -f "$f"

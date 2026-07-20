@@ -3,6 +3,13 @@
 The scanner and Postgres repository deliberately live outside this module. Callers
 provide server-resolved facts; the classifier returns deterministic gate facts and
 never performs filesystem, database, Portal, or MCP work.
+
+DEPRECATED (P4.23 CP1, 2026-07-20): DORMANT — no longer on any live admission
+path. Drift classification is now the computed ``app.custody_gate_state`` SQL
+function, read through ``sift_gateway.custody.admission``. This module survives
+only because ``portal_services.py`` still imports ``classify_inventory`` et al.
+DELETER: **CP2B** — remove this module when the ``portal_services.py`` custody
+slice is rewritten onto ``custody/admission.py``.
 """
 
 from __future__ import annotations

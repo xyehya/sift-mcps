@@ -611,6 +611,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
     def reconcile_for_admission(self, case_id: str) -> dict[str, Any]:
         """Observe the mounted inventory and persist custody state, fail closed.
 
+        DEPRECATED (P4.23 CP1, 2026-07-20): DORMANT — the live sync + durable
+        admission paths now reconcile through ``sift_gateway.custody.admission``
+        (``app.custody_reconcile`` + the computed gate). This method still queries
+        the removed external-storage tables and is no longer called on any live
+        path. DELETER: **CP2B** — remove when the portal_services custody slice is
+        rewritten onto ``custody/admission.py`` + ``portal/custody_routes.py``.
+
+
         This method performs no filesystem mutation.  Every direct entry is
         observed, including unsafe or unreadable entries; unknown regular files
         become DETECTED and therefore block the aggregate gate.  Sealed entries
@@ -1392,6 +1400,13 @@ class EvidenceAuthorityService(_BasePortalDbService):
         )
 
     def gate_status(self, case_id: str) -> dict[str, Any]:
+        # CP2B-OWNED interim inconsistency (P4.23): this Portal read still queries
+        # the dormant pre-CP1 path (app.evidence_gate_status + the external-storage
+        # authorities), NOT the target computed gate (app.custody_gate_state via
+        # sift_gateway.custody.admission). CP2B rewires gate_status()/list_evidence()
+        # onto custody.admission; until then this is a known dormant-path read, not
+        # a live bug. The agent-facing enforcement already routes through the target
+        # gate (see EvidenceGateMiddleware / evidence_gate.check_evidence_gate_db).
         reconciliation = self.reconcile_for_admission(case_id)
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -1468,6 +1483,10 @@ class EvidenceAuthorityService(_BasePortalDbService):
         }
 
     def list_evidence(self, case_id: str) -> list[dict[str, Any]]:
+        # CP2B-OWNED interim inconsistency (P4.23): still lists from the dormant
+        # pre-CP1 evidence_objects shape rather than the target inventory/manifest
+        # membership model. CP2B rewires this onto custody.admission (EC-4 sealed
+        # rendering). Known dormant-path read, not a live bug — see gate_status().
         self.reconcile_for_admission(case_id)
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -1595,6 +1614,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
         The returned absolute path is private Gateway/worker state only. Public
         serializers must omit ``path``; the private durable-job serializer is
         expected to retain it for final descriptor binding.
+
+        DEPRECATED (P4.23 CP1, 2026-07-20): DORMANT — sealed-version resolution +
+        descriptor pinning are now ``sift_gateway.custody.admission.resolve_sealed_version``
+        (LOCAL_IMMUTABLE). This method still queries the removed external-storage /
+        latched-head tables and is off the live path. DELETER: **CP2B**.
         """
         self.reconcile_for_admission(case_id)
         display_path = None

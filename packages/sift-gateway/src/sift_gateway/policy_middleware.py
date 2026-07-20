@@ -9,7 +9,7 @@ import os
 import time
 import uuid
 from collections.abc import Iterable, Mapping
-from contextlib import AbstractContextManager, ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from typing import Any, Protocol, cast
 
@@ -38,10 +38,10 @@ from sift_gateway.audit_helpers import (
 from sift_gateway.audit_helpers import (
     _summarize_result as _summarize_audit_result,
 )
+from sift_gateway.custody import admission
 from sift_gateway.evidence_admission import (
     bind_admitted_refs,
     command_evidence_references,
-    current_storage_authority,
     reset_admitted_refs,
 )
 from sift_gateway.evidence_gate import (
@@ -605,55 +605,19 @@ class EvidenceGateMiddleware(Middleware):
         case = _current_gateway_active_case()
         if case is None:
             return await call_next(context)
-        service = getattr(self.gateway, "evidence_service", None)
-        reconcile = getattr(service, "reconcile_for_admission", None)
-        if not callable(reconcile):
-            gate = {
-                "blocked": True,
-                "status": ChainStatus.LEDGER_ERROR,
-                "issues": ["Evidence authority unavailable"],
-                "manifest_version": 0,
-            }
-        else:
-            try:
-                reconciliation = await asyncio.to_thread(reconcile, case.case_id)
-            except Exception:
-                logger.exception("evidence_admission: inventory reconciliation failed")
-                gate = {
-                    "blocked": True,
-                    "status": ChainStatus.LEDGER_ERROR,
-                    "issues": ["Evidence inventory reconciliation unavailable"],
-                    "manifest_version": 0,
-                }
-            else:
-                if (
-                    not isinstance(reconciliation, dict)
-                    or reconciliation.get("state", "available") != "available"
-                ):
-                    unavailable_issues = (
-                        reconciliation.get("issues")
-                        if isinstance(reconciliation, dict)
-                        else None
-                    )
-                    gate = {
-                        "blocked": True,
-                        "status": ChainStatus.LEDGER_ERROR,
-                        "issues": (
-                            [str(item) for item in unavailable_issues]
-                            if isinstance(unavailable_issues, list)
-                            else ["Evidence inventory reconciliation unavailable"]
-                        ),
-                        "manifest_version": 0,
-                    }
-                else:
-                    gate = check_evidence_gate_db(
-                        case.case_id, getattr(self.gateway, "control_plane_dsn", None)
-                    )
+        # Reconcile-before-dispatch through the target admission module: scan the
+        # evidence directory read-only, persist the snapshot + observation, and
+        # read the computed four-state custody gate. This is the sole enforcement
+        # authority; an agent can never read drifted or unadmitted evidence.
+        dsn = getattr(self.gateway, "control_plane_dsn", None)
+        case_dir = str(case.artifact_path) if case.artifact_path else None
+        gate = await asyncio.to_thread(
+            check_evidence_gate_db, case.case_id, dsn, case_dir
+        )
         if not gate["blocked"]:
             refs: list[str] = []
             args = _tool_args(context)
             admitted: list[AdmittedEvidenceBinding] = []
-            resolver = getattr(service, "resolve_evidence_reference", None)
             try:
                 if name in {"run_command", "run_command_job"}:
                     declared = args.get("evidence_refs")
@@ -664,56 +628,43 @@ class EvidenceGateMiddleware(Middleware):
                     refs.extend(
                         command_evidence_references(
                             args.get("command"),
-                            case_dir=str(case.artifact_path or ""),
+                            case_dir=case_dir or "",
                             working_dir=args.get("working_dir"),
                         )
                     )
                 for ref in dict.fromkeys(refs):
-                    if not callable(resolver):
-                        raise RuntimeError("evidence resolver unavailable")
-                    item = resolver(case.case_id, ref)
-                    if not isinstance(item, dict):
-                        raise RuntimeError("evidence resolver returned invalid data")
-                    admitted.append(cast(AdmittedEvidenceBinding, {"ref": ref, **item}))
+                    # Every evidence operand must resolve to an active sealed
+                    # version and pin to its exact on-disk identity, else deny.
+                    item = admission.resolve_sealed_version(
+                        case.case_id, ref, case_dir, dsn
+                    )
+                    if item is None:
+                        raise RuntimeError("evidence input is not an active sealed version")
+                    admitted.append(item)
             except Exception:
                 logger.info("evidence_admission: sealed-version authorization denied")
                 gate = {
                     "blocked": True,
+                    "gate_state": "BLOCKED_PENDING",
                     "status": ChainStatus.UNSEALED,
                     "issues": ["Evidence input is not an active sealed version"],
                     "manifest_version": gate["manifest_version"],
                 }
             else:
                 try:
-                    mounted_token = inventory_token(str(case.artifact_path or ""))
+                    mounted_token = inventory_token(case_dir or "")
                 except OSError:
                     gate = {
                         "blocked": True,
-                        "status": ChainStatus.LEDGER_ERROR,
+                        "gate_state": "BLOCKED_UNAVAILABLE",
+                        "status": ChainStatus.MISSING,
                         "issues": ["Evidence inventory reconciliation unavailable"],
                         "manifest_version": gate["manifest_version"],
                     }
                 else:
-                    execution_authority = (
-                        reconciliation.get("execution_authority")
-                        if isinstance(reconciliation, dict)
-                        and isinstance(reconciliation.get("execution_authority"), dict)
-                        else None
+                    execution_authority = admission.current_storage_authority(
+                        admitted[0] if admitted else None
                     )
-                    if execution_authority is None or any(
-                        any(item.get(key) != value for key, value in execution_authority.items())
-                        for item in admitted
-                    ):
-                        gate = {
-                            "blocked": True,
-                            "status": ChainStatus.UNSEALED,
-                            "issues": ["Evidence storage authority binding changed"],
-                            "manifest_version": gate["manifest_version"],
-                        }
-                        continue_dispatch = False
-                    else:
-                        continue_dispatch = True
-                if not gate["blocked"] and continue_dispatch:
                     token = bind_admitted_refs(
                         admitted,
                         inventory_token=mounted_token,
@@ -722,54 +673,24 @@ class EvidenceGateMiddleware(Middleware):
                     authority_stack: ExitStack | None = None
                     try:
                         if name in {"run_command", "run_command_job"}:
-                            expected_authority = current_storage_authority()
-                            revalidate = getattr(
-                                service, "revalidate_execution_authority", None
-                            )
-                            if not expected_authority or not callable(revalidate):
-                                raise RuntimeError("storage authority unavailable")
-                            await asyncio.to_thread(
-                                revalidate, case.case_id, expected_authority
-                            )
-                            hold_authority = getattr(
-                                service, "hold_execution_authority", None
-                            )
-                            if not callable(hold_authority):
-                                raise RuntimeError(
-                                    "storage authority lock unavailable"
-                                )
-
+                            # LOCAL_IMMUTABLE final-open revalidation: re-read the
+                            # computed gate at the last parent-side open so a
+                            # drift after admission still denies the read. The
+                            # per-descriptor identity/immutable posture is
+                            # re-verified separately by validate_binding_fd.
                             def final_open_revalidate(
                                 expected: dict[str, Any],
                             ) -> None:
-                                revalidate(case.case_id, expected)
+                                del expected
+                                if admission.gate_state(case.case_id, dsn)["blocked"]:
+                                    raise ValueError("custody gate closed before open")
 
                             authority_stack = ExitStack()
-                            authority_stack.enter_context(
-                                cast(
-                                    AbstractContextManager[None],
-                                    hold_authority(
-                                        case.case_id, expected_authority
-                                    ),
-                                )
-                            )
                             authority_stack.enter_context(
                                 use_final_open_authority_validator(
                                     final_open_revalidate
                                 )
                             )
-                    except Exception:
-                        logger.info(
-                            "execution authority changed before dispatch",
-                            exc_info=True,
-                        )
-                        gate = {
-                            "blocked": True,
-                            "status": ChainStatus.UNSEALED,
-                            "issues": ["Storage authority changed before dispatch"],
-                            "manifest_version": gate["manifest_version"],
-                        }
-                    else:
                         try:
                             # Keep execution errors outside the custody-acquisition
                             # handler so they retain their original semantics.
