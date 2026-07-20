@@ -3,6 +3,32 @@
 import { parseTimestamp } from '@/lib/timestamp-utils'
 
 export { parseTimestamp } from '@/lib/timestamp-utils'
+
+/**
+ * Fast-path date extraction (YYYY-MM-DD) avoiding Date allocations for valid ISO strings.
+ */
+export function extractDate(value) {
+  if (!value) return ''
+  if (typeof value === 'string' && value.length >= 10 && value[4] === '-' && value[7] === '-') {
+    return value.substring(0, 10)
+  }
+  const ms = parseTimestamp(value)
+  if (Number.isNaN(ms)) return ''
+  return new Date(ms).toISOString().substring(0, 10)
+}
+
+/**
+ * Fast-path time extraction (HH:MM:SS) avoiding Date allocations for valid ISO strings.
+ */
+export function extractTime(value) {
+  if (!value) return ''
+  if (typeof value === 'string' && value.length >= 19 && value[10] === 'T') {
+    return value.substring(11, 19)
+  }
+  const ms = parseTimestamp(value)
+  if (Number.isNaN(ms)) return ''
+  return new Date(ms).toISOString().substring(11, 19)
+}
 // Entity helpers — pure logic + static token-class maps shared by the four
 // entity tabs (Timeline · Hosts · Accounts · IOCs). No JSX, no store, so the
 // aggregation/sort/format logic is unit-testable and the .jsx files stay clean

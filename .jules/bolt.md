@@ -1,0 +1,3 @@
+## 2024-05-28 - Avoid Date Allocation Overhead in UI Render Hot Loops
+**Learning:** In frontend React components that render large lists (e.g. `TimelineTab`, `TimelineEvent`), formatting and comparing `ev.timestamp` values using `new Date(ev.timestamp).toISOString()` or `new Date(ev.timestamp).toDateString()` creates excessive `Date` object allocations which slows down rendering and increases garbage collection overhead.
+**Action:** Use fast-path string extraction (`extractDate` and `extractTime` in `entity-utils.js`) for valid ISO timestamp strings to avoid `Date` allocations, safely falling back to standard `Date` parsing when necessary.
