@@ -264,14 +264,12 @@ main() {
   # warn) so a prior teardown's leftover evidence never collides or is clobbered.
   backup_preexisting_data_if_fresh
   install_state_dirs
-  provision_custody_signing_authority
   configure_agent_runtime
   # agent_runtime is created by configure_agent_runtime (setup-agent-runtime.sh);
   # add it to the shared `sift` group AFTER, so it can write the vol symbol cache.
   # This grants NOTHING else — `sift` is used only for that 2775 cache dir.
   join_shared_symbol_group
   configure_ingest_mount_sudoers
-  configure_custody_delete_broker
   configure_fuse
   generate_tls
   write_default_examiner
@@ -287,7 +285,6 @@ main() {
     # apply_db_migrations, so it only exists now. Mint its password + write the
     # scoped SIFT_AUDIT_WRITER_DSN so least-privilege is ACTIVE (fail-soft).
     provision_audit_writer
-    provision_custody_delete_broker
   else
     DB_MIGRATIONS_RESULT="failed"
   fi

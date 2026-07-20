@@ -1,0 +1,1 @@
+import{D as e,ft as t}from"./vendor-C1S9yDhC.js";function n(...n){return e(t(n))}export{n as t};

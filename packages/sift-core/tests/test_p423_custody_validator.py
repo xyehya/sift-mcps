@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sift_core.evidence_storage import ExternalStorageFacts
 from sift_core.execute.job_worker import ClaimedJob, FatalJobError
 from sift_core.execute.run_command_job import _inventory_token, build_custody_validator
 
@@ -220,76 +219,3 @@ def test_durable_revalidation_classifies_changed_sealed_identity(tmp_path, monke
     assert violations
     assert violations[0][1][1:3] == ("sealed-object", "sealed_evidence_changed")
     assert violations[0][1][4] == "job-1"
-
-
-@pytest.mark.parametrize("with_refs", [False, True])
-@pytest.mark.parametrize("drift", ["source", "mount", "read_write"])
-def test_durable_revalidation_denies_live_external_storage_drift_before_gate(
-    tmp_path, monkeypatch, with_refs, drift
-):
-    case_dir = tmp_path / "case"
-    (case_dir / "evidence").mkdir(parents=True)
-    token = _inventory_token(str(case_dir))
-    source = "a" * 64
-    mount = "b" * 64
-    cursor = _Cursor()
-    original_execute = cursor.execute
-
-    def execute(sql, params):
-        original_execute(sql, params)
-        if "from app.evidence_storage_authorities a" in " ".join(sql.split()):
-            cursor._one = (
-                "EXTERNALLY_READ_ONLY",
-                source,
-                mount,
-                "AVAILABLE",
-                2,
-                2,
-                True,
-                4,
-                "sha256:manifest",
-                "receipt-2",
-            )
-
-    cursor.execute = execute
-    monkeypatch.setitem(
-        sys.modules,
-        "psycopg",
-        SimpleNamespace(connect=lambda _dsn: _Connection(cursor)),
-    )
-    facts = ExternalStorageFacts(
-        source_identity=("c" * 64 if drift == "source" else source),
-        mount_instance_identity=("d" * 64 if drift == "mount" else mount),
-        filesystem_type="nfs4",
-        read_only=drift != "read_write",
-    )
-
-    def exact_root_facts(_fd, **kwargs):
-        assert kwargs.get("expected_mount_path") == case_dir / "evidence"
-        return facts
-
-    monkeypatch.setattr(
-        "sift_core.execute.run_command_job.external_storage_facts",
-        exact_root_facts,
-    )
-    job = _job(case_dir, token)
-    job.spec_internal["storage_execution_authority"] = {
-        "storage_profile": "EXTERNALLY_READ_ONLY",
-        "storage_source_identity": source,
-        "mount_instance_identity": mount,
-        "storage_generation": 2,
-        "storage_verified_generation": 2,
-        "storage_manifest_version": 4,
-        "storage_manifest_hash": "sha256:manifest",
-        "storage_verification_receipt_id": "receipt-2",
-    }
-    job.spec_internal["resolved_evidence_refs"] = (
-        [{"evidence_id": "ev", "version_id": "ver", "sha256": "sha256:x"}]
-        if with_refs
-        else []
-    )
-
-    with pytest.raises(FatalJobError, match="custody_admission_denied"):
-        build_custody_validator("postgresql://unused")(job, "claim")
-
-    assert not any("app.evidence_gate_status" in sql for sql, _ in cursor.calls)

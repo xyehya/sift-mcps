@@ -19,11 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, LiteralString
 
-from sift_core.evidence_storage import (
-    StorageAuthorityError,
-    StorageProfile,
-    external_storage_facts,
-)
+from sift_core.evidence_storage import StorageProfile
 
 from sift_gateway.custody import admission as custody_admission
 
@@ -230,21 +226,6 @@ def _collapse_activity_rows(
         if details.get("phase") == "pre_dispatch" and details.get("arguments"):
             grouped[key]["_pre_details"] = details
     return [grouped[key] for key in order[:limit]]
-
-
-def _actor_columns(actor: Any) -> tuple[str, str | None, str | None, str | None]:
-    if not isinstance(actor, dict):
-        return "system", None, None, None
-    ptype = str(actor.get("principal_type") or "")
-    pid = str(actor.get("principal_id") or "") or None
-    agent_id = str(actor.get("agent_id") or "") or None
-    if ptype in ("operator", "user"):
-        return "user", pid, None, None
-    if ptype == "agent":
-        return "agent", None, agent_id or pid, None
-    if ptype == "service":
-        return "service", None, None, pid
-    return "system", None, None, None
 
 
 def _safe_item_id(row: dict[str, Any], fallback_prefix: str, idx: int) -> str:
@@ -516,45 +497,6 @@ class contextlib_suppress_oserror:
 class EvidenceAuthorityService(_BasePortalDbService):
     """DB evidence/custody adapter over the C1 RPCs."""
 
-    def change_storage_profile(
-        self,
-        *,
-        case_id: str,
-        profile: str,
-        reason: str,
-        idempotency_key: str,
-        reauth_audit_event_id: str,
-        actor: Any,
-    ) -> dict[str, Any]:
-        try:
-            selected = StorageProfile(profile)
-        except ValueError as exc:
-            raise PortalServiceError(
-                "invalid_storage_profile", http_status=400
-            ) from exc
-        actor_type, actor_user, _actor_agent, actor_service = _actor_columns(actor)
-        if actor_type != "user" or not actor_user or actor_service:
-            raise PortalServiceError("storage_profile_actor_required", http_status=403)
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """select app.evidence_storage_change_profile(
-                         %s,%s,%s,%s,%s,%s)""",
-                    (
-                        case_id,
-                        selected.value,
-                        reason,
-                        idempotency_key,
-                        reauth_audit_event_id,
-                        actor_user,
-                    ),
-                )
-                row = cur.fetchone()
-            conn.commit()
-        if not row or not isinstance(row[0], dict):
-            raise PortalServiceError("storage_profile_change_failed", http_status=503)
-        return dict(row[0])
-
     def storage_execution_authority(self, case_id: str) -> dict[str, Any]:
         """Return and live-check the DB-authoritative execution snapshot.
 
@@ -605,37 +547,6 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 "external_storage_full_verify_required", http_status=403
             )
         profile = StorageProfile(str(row[0]))
-        if profile is StorageProfile.EXTERNALLY_READ_ONLY:
-            case_dir = self._case_artifact_path(case_id)
-            if case_dir is None:
-                raise PortalServiceError(
-                    "evidence_storage_unavailable", http_status=409
-                )
-            root_fd: int | None = None
-            try:
-                root_fd = os.open(
-                    case_dir / "evidence",
-                    os.O_RDONLY
-                    | os.O_CLOEXEC
-                    | os.O_DIRECTORY
-                    | getattr(os, "O_NOFOLLOW", 0),
-                )
-                facts = external_storage_facts(
-                    root_fd, expected_mount_path=case_dir / "evidence"
-                )
-            except (OSError, StorageAuthorityError) as exc:
-                raise PortalServiceError(
-                    "evidence_storage_unavailable", http_status=409
-                ) from exc
-            finally:
-                if root_fd is not None:
-                    os.close(root_fd)
-            if (
-                facts.source_identity != str(row[1])
-                or facts.mount_instance_identity != str(row[2])
-                or row[6] is not True
-            ):
-                raise PortalServiceError("evidence_posture_changed", http_status=403)
         return {
             "storage_profile": profile.value,
             "storage_source_identity": str(row[1] or ""),

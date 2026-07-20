@@ -13,11 +13,7 @@ from pathlib import Path
 from typing import Any, NotRequired, Required, TypedDict
 
 from sift_core.evidence_posture import get_immutable_flag_fd
-from sift_core.evidence_storage import (
-    StorageAuthorityError,
-    StorageProfile,
-    external_storage_facts,
-)
+from sift_core.evidence_storage import StorageProfile
 
 
 class AdmittedEvidenceBinding(TypedDict, total=False):
@@ -173,22 +169,12 @@ def validate_binding_fd(fd: int, binding: AdmittedEvidenceBinding) -> os.stat_re
     if expected != actual:
         raise ValueError("admitted evidence identity changed")
     profile = str(binding.get("storage_profile") or StorageProfile.LOCAL_IMMUTABLE)
-    if profile == StorageProfile.LOCAL_IMMUTABLE:
-        if binding.get("immutable_required") and get_immutable_flag_fd(fd) is not True:
-            raise ValueError("admitted evidence immutable posture changed")
-    elif profile == StorageProfile.EXTERNALLY_READ_ONLY:
-        if not binding.get("read_only_required"):
-            raise ValueError("external admitted evidence lacks read-only authority")
-        try:
-            facts = external_storage_facts(fd)
-        except StorageAuthorityError as exc:
-            raise ValueError("external admitted evidence posture changed") from exc
-        if facts.source_identity != binding.get(
-            "storage_source_identity"
-        ) or facts.mount_instance_identity != binding.get("mount_instance_identity"):
-            raise ValueError("external admitted evidence mount identity changed")
-    else:
+    if profile != StorageProfile.LOCAL_IMMUTABLE:
+        # Local immutable is the only supported profile (P4.23). Any other value
+        # is denied fail-closed — there is no external/by-reference posture.
         raise ValueError("admitted evidence storage profile is invalid")
+    if binding.get("immutable_required") and get_immutable_flag_fd(fd) is not True:
+        raise ValueError("admitted evidence immutable posture changed")
     return current
 
 

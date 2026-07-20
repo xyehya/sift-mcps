@@ -4,7 +4,10 @@ import asyncio
 import contextlib
 import dataclasses
 import logging
+import threading
 import time
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from typing import Any
 
 from fastapi import FastAPI
 from fastmcp.utilities.lifespan import combine_lifespans
@@ -21,6 +24,184 @@ from starlette.responses import PlainTextResponse, RedirectResponse
 from starlette.routing import Mount, Route
 
 from sift_gateway.auth import AuthMiddleware
+
+# Bounded, non-secret source label handed to the async reverify callback for its
+# audit context. It is NOT an IP and carries no password/token material.
+_CUSTODY_REAUTH_SOURCE = "custody-reauth"
+# Upper bound on how long a custody reauth call waits for the identity verifier
+# (the underlying HTTP client already enforces a ~10s timeout); past this the
+# call fails closed rather than blocking the caller indefinitely. Also bounds
+# dedicated-loop startup and the shutdown client-close / thread-join.
+_CUSTODY_REAUTH_TIMEOUT_S = 30.0
+
+
+class _CustodyReauthContext:
+    """A dedicated event loop + thread that exclusively owns custody reauth's
+    async execution context and its own identity ``httpx.AsyncClient``.
+
+    Why this exists (CP3 repair-1). The gateway's Portal/MCP JWT resolution drives
+    the SHARED ``SupabaseAuthClient`` (an ``httpx.AsyncClient``) on the gateway
+    MAIN event loop. An ``httpx`` connection pool binds to the loop that first
+    uses it, and its async pool waiters are only correctly woken on that loop. The
+    custody state machine runs synchronously from an ``async`` Portal handler ON
+    the main-loop thread, so driving that shared client from a throwaway loop
+    reaches ``PoolTimeout`` under pool contention and spuriously denies a valid
+    operator password — fail-closed, but a blocking reliability defect on a
+    security-critical mutation path.
+
+    This context gives custody reauth ONE correctly-owned async context: its own
+    loop, its own thread, and a DEDICATED ``SupabaseAuthClient`` whose pool binds
+    to and is only ever driven by this loop. The gateway's shared client is never
+    touched from another loop. A reauth call is submitted with
+    ``run_coroutine_threadsafe`` and blocks only the *calling* thread (reauth is
+    not hot-path); it never drives the main loop's client and never deadlocks,
+    because the coroutine runs on a different loop/thread than the caller.
+    """
+
+    def __init__(self, reverify: Any, aclose: Any) -> None:
+        # reverify: async (email, password, source, *, expected_auth_user_id) -> Any
+        # aclose:   async () -> None  — closes the dedicated client ON this loop.
+        self._reverify = reverify
+        self._aclose = aclose
+        self._loop = asyncio.new_event_loop()
+        self._ready = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run, name="custody-reauth-loop", daemon=True
+        )
+        self._thread.start()
+        # Bounded: never block gateway startup indefinitely on a wedged loop.
+        # ``ready`` records whether the dedicated loop actually came up; create_app
+        # GATES on it (an unready loop is torn down and never installed).
+        self._ready_ok = self._ready.wait(_CUSTODY_REAUTH_TIMEOUT_S)
+
+    @property
+    def ready(self) -> bool:
+        """Whether the dedicated loop signalled readiness within the bound."""
+        return self._ready_ok
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.call_soon(self._ready.set)
+        try:
+            self._loop.run_forever()
+        finally:
+            self._loop.close()
+
+    def verify(
+        self, *, email: str, password: str, expected_auth_user_id: str | None = None
+    ) -> None:
+        """Run one operator-password reauth on the dedicated loop, fail-closed.
+
+        Mirrors the ``reauth._VERIFIER`` contract: returns ``None`` on success and
+        raises on any denial (wrong password, identity mismatch, disabled operator,
+        timeout, or control-plane failure), which :func:`reauth._run_verifier` maps
+        to a shaped custody denial. The returned session dict is discarded. Password
+        and token material are never logged or persisted; only the bounded,
+        non-secret source label is passed as request context.
+        """
+        from sift_gateway.custody.reauth import ReauthError
+
+        if not self._thread.is_alive() or self._loop.is_closed():
+            raise ReauthError("reauth_unavailable", http_status=503)
+        future = asyncio.run_coroutine_threadsafe(
+            self._reverify(
+                email,
+                password,
+                _CUSTODY_REAUTH_SOURCE,
+                expected_auth_user_id=expected_auth_user_id,
+            ),
+            self._loop,
+        )
+        try:
+            future.result(_CUSTODY_REAUTH_TIMEOUT_S)
+        except FuturesTimeoutError:
+            future.cancel()
+            raise ReauthError("reauth_unavailable", http_status=503) from None
+        return None
+
+    def close(self) -> None:
+        """Close the dedicated client on its loop, stop the loop, join the thread.
+
+        Bounded and idempotent; safe from any thread that does not run the
+        dedicated loop. Cleanup never raises. Also reclaims a loop that never
+        became ready (a wedged/failed startup) so nothing leaks.
+        """
+        if self._thread.is_alive():
+            # Only drive the loop when it actually came up; otherwise there is no
+            # bound client pool to close and no running loop to submit onto.
+            if self._ready_ok and not self._loop.is_closed():
+                try:
+                    future = asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
+                    future.result(_CUSTODY_REAUTH_TIMEOUT_S)
+                except Exception as exc:  # cleanup must never raise
+                    logger.warning("custody reauth client close failed: %s", exc)
+            with contextlib.suppress(RuntimeError):
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join(_CUSTODY_REAUTH_TIMEOUT_S)
+        # Reclaim a loop that never ran run_forever() (its own finally closes it in
+        # the normal path); guard against double-close.
+        if not self._loop.is_closed():
+            self._loop.close()
+
+
+# The single current custody-reauth context for this process. create_app installs
+# a fresh one when Supabase auth is configured (superseding + closing any prior),
+# so a later app instance never inherits a stale verifier and no dedicated
+# loop/thread/client leaks. Each app additionally OWNS the context it installed
+# (see ``_owned_reauth_ctx`` in create_app) and retires only that exact context at
+# its own shutdown via identity compare-and-clear (repair-2), so an older app's
+# closure can never clobber a newer app's active verifier.
+_CUSTODY_REAUTH_CTX: "_CustodyReauthContext | None" = None
+
+
+def _install_custody_reauth_context(ctx: "_CustodyReauthContext | None") -> None:
+    """Publish ``ctx`` as the process custody-reauth authority, retiring any prior.
+
+    Tears down the previous context (bounded) so there is never a second live
+    dedicated loop, then points ``reauth._VERIFIER`` at the new context's
+    ``verify`` (or ``None`` when ``ctx`` is ``None`` — fail-closed). ``record_reauth``
+    then either verifies through the dedicated context or raises
+    ``reauth_unavailable`` and records nothing.
+    """
+    global _CUSTODY_REAUTH_CTX
+    from sift_gateway.custody import reauth as _reauth
+
+    prior, _CUSTODY_REAUTH_CTX = _CUSTODY_REAUTH_CTX, ctx
+    if prior is not None and prior is not ctx:
+        prior.close()
+    _reauth._VERIFIER = ctx.verify if ctx is not None else None
+
+
+def _shutdown_custody_reauth_context() -> None:
+    """Retire the CURRENT process custody-reauth context and unset ``_VERIFIER``.
+
+    Parameterless (retires whatever is current); used by test cleanup. App lifespan
+    shutdown must NOT use this — it uses :func:`_retire_custody_reauth_context` with
+    the app's OWN context so it cannot clobber a newer app's verifier.
+    """
+    _install_custody_reauth_context(None)
+
+
+def _retire_custody_reauth_context(ctx: "_CustodyReauthContext | None") -> None:
+    """Retire a SPECIFIC app's custody-reauth context (repair-2 app-owned lifecycle).
+
+    Each app closure retires only the context it created. The process
+    ``reauth._VERIFIER`` is cleared ONLY when ``ctx`` is still the current global
+    (identity compare-and-clear), so an older or unconfigured app instance whose
+    lifespan ends later can never close or unset a NEWER app's active verifier.
+    ``ctx`` itself is always closed (bounded, idempotent), and the verifier is
+    cleared before the close so the teardown window stays fail-closed. A ``None``
+    ``ctx`` (an app that installed no context) never touches the global.
+    """
+    if ctx is None:
+        return
+    global _CUSTODY_REAUTH_CTX
+    from sift_gateway.custody import reauth as _reauth
+
+    if _CUSTODY_REAUTH_CTX is ctx:
+        _CUSTODY_REAUTH_CTX = None
+        _reauth._VERIFIER = None
+    ctx.close()
 
 
 class _PortalHTTPSGuard:
@@ -1450,6 +1631,12 @@ class Gateway:
             verifier_owns_identity=verifier_owns_identity,
         )
 
+        # repair-2: this app instance OWNS the custody-reauth context it installs.
+        # The wiring below sets ["ctx"]; app_lifespan shutdown retires exactly that
+        # context (identity compare-and-clear), so an older app's later shutdown
+        # can never close or unset a newer app's active verifier.
+        _owned_reauth_ctx: dict[str, _CustodyReauthContext | None] = {"ctx": None}
+
         @contextlib.asynccontextmanager
         async def app_lifespan(app):
             """Start gateway metadata/background tasks around the FastAPI app."""
@@ -1511,6 +1698,13 @@ class Gateway:
             watcher_task = None
 
             yield
+            # CP3 (repair-2): on shutdown, retire THIS app's OWN custody reauth
+            # context — close its dedicated client on its own loop, stop the loop,
+            # join the thread (bounded) — and unset reauth._VERIFIER only if this
+            # exact context is still current (identity compare-and-clear). A newer
+            # app that superseded this one keeps its live verifier; an older app's
+            # later shutdown never clobbers it.
+            _retire_custody_reauth_context(_owned_reauth_ctx["ctx"])
             if reaper_task is not None:
                 reaper_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -1634,8 +1828,48 @@ class Gateway:
         # only wired when Supabase auth is configured, so step-up is a no-op on
         # pure legacy / single-user deployments.
         app.state.auth_config = auth_config
+        # CP3 (repair-1): wire the custody reauth verifier seam (reauth._VERIFIER)
+        # to a DEDICATED identity execution context. reauth runs the async verifier
+        # on a dedicated loop/thread that exclusively owns a dedicated
+        # SupabaseAuthClient, so it never drives the shared main-loop httpx client
+        # that Portal/MCP JWT resolution uses (which caused cross-loop PoolTimeout
+        # denials). ALWAYS (re)install — the dedicated context when Supabase auth is
+        # configured, else None — so a later unconfigured app instance can never
+        # inherit a stale verifier and no dedicated loop/thread/client leaks. Unset
+        # == fail closed: record_reauth then raises reauth_unavailable and records
+        # nothing. The shared reverify stays exposed for the /api/v1 step-up path.
         if supabase_callbacks is not None and hasattr(supabase_callbacks, "reverify_password"):
             app.state.supabase_reverify = supabase_callbacks.reverify_password
+            from sift_gateway.supabase_auth import SupabaseAuthClient
+
+            _custody_reauth_client = SupabaseAuthClient(auth_config)
+            _custody_reauth_callbacks = supabase_callbacks._with_dedicated_client(
+                _custody_reauth_client
+            )
+            _custody_ctx = _CustodyReauthContext(
+                _custody_reauth_callbacks.reverify_password,
+                _custody_reauth_client.aclose,
+            )
+            if _custody_ctx.ready:
+                app.state.custody_reauth_context = _custody_ctx
+                _owned_reauth_ctx["ctx"] = _custody_ctx
+                _install_custody_reauth_context(_custody_ctx)
+            else:
+                # Startup-readiness gate (repair-2): the dedicated loop did not come
+                # up. NEVER install an unready context — fail closed (reauth stays
+                # unavailable) with deterministic cleanup of the half-started
+                # loop/thread/client.
+                logger.error(
+                    "custody reauth loop did not become ready; reauth is unavailable"
+                )
+                _custody_ctx.close()
+                app.state.custody_reauth_context = None
+                _owned_reauth_ctx["ctx"] = None
+                _install_custody_reauth_context(None)
+        else:
+            app.state.custody_reauth_context = None
+            _owned_reauth_ctx["ctx"] = None
+            _install_custody_reauth_context(None)
 
         async def _sanitized_error(request, exc):
             """Global unhandled exception handler — never leak file paths or tracebacks."""

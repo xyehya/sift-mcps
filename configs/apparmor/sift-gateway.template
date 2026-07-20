@@ -50,14 +50,6 @@ profile sift-gateway flags=(attach_disconnected) {
   /var/lib/sift/.sift/                    r,
   /var/lib/sift/.sift/**                  r,
 
-  # Installation-held custody signing authority.  These exact read-only
-  # traversals deliberately sit outside service-writable state; no /etc write
-  # grant or wildcard is allowed for custody key material.
-  /etc/                                      r,
-  /etc/sift/                                 r,
-  /etc/sift/custody/                         r,
-  /etc/sift/custody/ed25519-private.pem      r,
-
   # sift state directory (read + write for passwords, tokens, verification)
   /var/lib/sift/                          rw,
   /var/lib/sift/**                        rw,
@@ -154,7 +146,6 @@ profile sift-gateway flags=(attach_disconnected) {
   /usr/bin/python3*                          rix,
   /usr/local/sbin/sift-run-command-systemd-scope px -> sift-run-command-scope,
   /usr/local/sbin/sift-addon-systemd-sandbox px -> sift-addon-broker,
-  /usr/local/sbin/sift-custody-delete-broker px -> sift-custody-delete-broker,
   /usr/local/sbin/sift-addon-stdio-relay        rix,
   /run/sift-addon-client/                       rw,
   /run/sift-addon-client/**                     rwk,

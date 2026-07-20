@@ -1035,6 +1035,27 @@ class SupabaseAuthCallbacks:
         except Exception as exc:  # pragma: no cover - audit must never break auth
             logger.warning("portal auth audit write failed: %s", exc)
 
+    def _with_dedicated_client(self, client: SupabaseAuthClient) -> SupabaseAuthCallbacks:
+        """Return a sibling callbacks that drives a DEDICATED ``SupabaseAuthClient``.
+
+        CP3 repair-1: custody reauth must not drive the gateway's shared main-loop
+        ``httpx.AsyncClient`` from another event loop. This returns a callbacks that
+        reuses this instance's repository/resolver/audit/issuance collaborators but
+        performs its HTTP identity grant on ``client`` — a client whose connection
+        pool is owned by the dedicated custody-reauth loop. ``reverify_password``
+        only touches ``self._client``, ``self._repository`` (thread-offloaded), and
+        ``self._audit_log`` (synchronous), so sharing the other collaborators is
+        safe and introduces no cross-loop client use.
+        """
+        return SupabaseAuthCallbacks(
+            self._config,
+            client,
+            self._repository,
+            self._resolver,
+            audit=self._audit,
+            agent_issuance=self._issuance,
+        )
+
     # -- login ------------------------------------------------------------
 
     async def login(self, email: str, password: str, source_ip: str | None) -> dict[str, Any]:

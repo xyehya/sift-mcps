@@ -15,7 +15,9 @@ import pytest
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
 from sift_core.custody_types import ChainStatus
+from sift_core.execute.evidence_binding import AdmittedEvidenceBinding
 from sift_gateway.active_case import ActiveCase
+from sift_gateway.evidence_admission import bind_admitted_refs, reset_admitted_refs
 from sift_gateway.job_tools import (
     GATEWAY_JOB_TOOLS,
     gateway_job_tool_specs,
@@ -199,18 +201,36 @@ def test_run_command_job_enqueues_public_args_and_internal_case_dir(tmp_path):
     (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
     gateway = _Gateway(case_dir)
 
-    result = asyncio.run(
-        handle_run_command_job(
-            gateway,
-            {
-                "command": "cat evidence/disk.E01",
-                "purpose": "list filesystem",
-                "evidence_refs": ["evidence/disk.E01"],
-                "output_ref": "fls",
-            },
-            "agent-1",
-        )
+    # Single admission authority: the evidence-gate middleware resolves the sealed
+    # ref and pins it into the admission ContextVar (bind_admitted_refs) BEFORE the
+    # handler runs. Mirror that here so current_admitted_refs() populates the
+    # durable spec — there is no per-service resolver fallback in the handler.
+    admitted = cast(
+        AdmittedEvidenceBinding,
+        gateway.evidence_service.resolve_evidence_reference(
+            gateway.active_case_service.case.case_id, "evidence/disk.E01"
+        ),
     )
+    token = bind_admitted_refs(
+        [admitted],
+        inventory_token="tok-1",
+        storage_authority=gateway.evidence_service.authority,
+    )
+    try:
+        result = asyncio.run(
+            handle_run_command_job(
+                gateway,
+                {
+                    "command": "cat evidence/disk.E01",
+                    "purpose": "list filesystem",
+                    "evidence_refs": ["evidence/disk.E01"],
+                    "output_ref": "fls",
+                },
+                "agent-1",
+            )
+        )
+    finally:
+        reset_admitted_refs(token)
 
     body = _payload(result)
     assert body["job_id"] == "job-1"
@@ -473,19 +493,28 @@ def test_overlay_evidence_info_lists_db_evidence_without_paths(tmp_path):
     assert "path" not in listed
 
 
-def test_prepare_run_command_args_resolves_db_refs_and_strips_private(tmp_path):
+def test_prepare_run_command_args_uses_admitted_refs_and_strips_private(tmp_path):
+    """A5: ``_prepare_core_tool_arguments(tool_name, arguments)`` injects the
+    run_command evidence binding SOLELY from the admission ContextVar
+    (bind_admitted_refs) and strips any client-supplied ``_resolved_evidence_refs``.
+    A caller cannot smuggle its own path binding past the single admission
+    authority."""
     from sift_gateway import mcp_server
 
     case_dir = tmp_path / "case"
     (case_dir / "evidence").mkdir(parents=True)
     (case_dir / "evidence" / "disk.E01").write_bytes(b"disk")
     gateway = _Gateway(case_dir)
-    with patch(
-        "sift_gateway.policy_middleware._current_gateway_active_case",
-        return_value=_case(case_dir),
-    ):
+
+    admitted = cast(
+        AdmittedEvidenceBinding,
+        gateway.evidence_service.resolve_evidence_reference(
+            gateway.active_case_service.case.case_id, "ev-1"
+        ),
+    )
+    token = bind_admitted_refs([admitted], inventory_token="tok-1")
+    try:
         prepared = mcp_server._prepare_core_tool_arguments(
-            gateway,
             "run_command",
             {
                 "command": "cat evidence/disk.E01",
@@ -494,6 +523,8 @@ def test_prepare_run_command_args_resolves_db_refs_and_strips_private(tmp_path):
                 "_resolved_evidence_refs": [{"path": "/tmp/client-controlled"}],
             },
         )
+    finally:
+        reset_admitted_refs(token)
 
     assert prepared["_resolved_evidence_refs"] == [
         {
@@ -514,6 +545,8 @@ def test_prepare_run_command_args_resolves_db_refs_and_strips_private(tmp_path):
         }
     ]
     assert "_evidence_ref_error" not in prepared
+    # The client-injected path binding never survives the strip-and-inject.
+    assert {"path": "/tmp/client-controlled"} not in prepared["_resolved_evidence_refs"]
 
 
 def test_overlay_blocks_when_db_gate_violated(tmp_path):
