@@ -124,15 +124,80 @@ def test_hardening_sh_has_no_broker_apparmor_or_signing_wiring() -> None:
         assert forbidden not in text, f"lib/hardening.sh must not reference {forbidden}"
 
 
-def test_uninstall_sh_has_no_broker_cleanup() -> None:
+def test_uninstall_sh_has_no_ln_broker_cleanup() -> None:
+    # The unrelated `ln`-aliased broker alias (a DIFFERENT, earlier helper
+    # generation than sift-custody-delete-broker; see CP2A DELETION-MANIFEST
+    # §2) never existed on this branch and must never reappear. This is
+    # distinct from sift-custody-delete-broker itself, whose legacy teardown
+    # coverage is intentionally REQUIRED — see
+    # test_uninstall_sh_covers_legacy_delete_broker_and_mount_observer_teardown
+    # below (CP3.5 residue repair).
     text = _read(_REPO_ROOT / "scripts" / "uninstall.sh")
     for forbidden in (
-        "sift-custody-delete-broker",
         "/etc/apparmor.d/ln",
         "/etc/sudoers.d/ln",
         "/usr/local/sbin/ln",
     ):
         assert forbidden not in text, f"scripts/uninstall.sh must not reference {forbidden}"
+
+
+def test_uninstall_sh_covers_legacy_delete_broker_and_mount_observer_teardown() -> None:
+    # CP3.5 residue repair: after a CP3 fast reset + exact-source reinstall,
+    # these privileged artifacts from an OLDER deployment generation survived
+    # because the CP3 sweep deleted their teardown lines instead of keeping
+    # them as legacy-only cleanup. The uninstaller must unload/remove every
+    # one of them even though current source never (re)installs them.
+    text = _read(_REPO_ROOT / "scripts" / "uninstall.sh")
+
+    apparmor = text.split("teardown_apparmor()", 1)[1].split("\n}", 1)[0]
+    assert "/etc/apparmor.d/sift-custody-delete-broker" in apparmor
+    assert "/etc/apparmor.d/sift-mount-observer" in apparmor
+    # Both legacy profiles go through the same unload-then-remove branch as
+    # the live sift-gateway/dfir-exec profiles (apparmor_parser -R before rm).
+    assert "apparmor_parser -R" in apparmor
+
+    systemd_and_users = text.split("teardown_systemd_and_users()", 1)[1].split(
+        "\nteardown_fuse_conf", 1
+    )[0]
+    assert "sift-mount-observer.service" in systemd_and_users
+    assert "/etc/sudoers.d/sift-custody-delete-broker" in systemd_and_users
+    assert "/usr/local/sbin/sift-custody-delete-broker" in systemd_and_users
+    assert "/etc/sift/custody-delete.json" in systemd_and_users
+    assert "/etc/sift/custody-delete-dsn" in systemd_and_users
+
+
+def test_production_install_hardening_migrations_have_no_legacy_custody_wiring() -> None:
+    # The other side of the CP3.5 repair: legacy delete-broker/mount-observer
+    # names are permitted ONLY in uninstall.sh teardown (proved above) and in
+    # tests/comments — never in anything that installs, provisions, or wires
+    # them back into a running system.
+    for rel_path, forbidden_names in (
+        (
+            "install.sh",
+            ("configure_custody_delete_broker", "sift-mount-observer"),
+        ),
+        (
+            "lib/hardening.sh",
+            (
+                "sift-custody-delete-broker",
+                "configure_custody_delete_broker",
+                "sift-mount-observer",
+            ),
+        ),
+        (
+            "lib/migrations.sh",
+            (
+                "provision_custody_delete_broker",
+                "custody_delete_broker_receipts",
+                "sift_custody_delete_broker",
+            ),
+        ),
+        ("lib/services.sh", ("sift-mount-observer",)),
+    ):
+        path = _REPO_ROOT / rel_path
+        text = _read(path)
+        for forbidden in forbidden_names:
+            assert forbidden not in text, f"{rel_path} must not reference {forbidden}"
 
 
 def test_gateway_apparmor_profile_has_no_broker_transition_or_signing_key() -> None:

@@ -514,12 +514,18 @@ teardown_docker_images() {
   fi
 }
 
-# --- 5e AppArmor (gateway + dfir-exec)
+# --- 5e AppArmor (gateway + dfir-exec + legacy CP3 transition profiles)
 teardown_apparmor() {
   local profile_dst
   for profile_dst in \
     /etc/apparmor.d/sift-gateway \
-    /etc/apparmor.d/dfir-exec; do
+    /etc/apparmor.d/dfir-exec \
+    /etc/apparmor.d/sift-custody-delete-broker \
+    /etc/apparmor.d/sift-mount-observer; do
+    # The last two are legacy CP3 transition profiles: current source never
+    # installs/registers them (SPEC Out of Scope), but an older deployment
+    # fast-reset onto this source must still unload them, not just leave a
+    # stray privileged profile loaded.
     if sudo_if_needed test -f "$profile_dst" 2>/dev/null; then
       action "AppArmor unload + remove" "$profile_dst"
       if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -558,7 +564,11 @@ teardown_auditd() {
 teardown_systemd_and_users() {
   local f _wlink
 
-  for f in "$GATEWAY_SERVICE_FILE" "$JOB_WORKER_SERVICE_FILE" "$OPENSEARCH_WORKER_SERVICE_FILE"; do
+  for f in "$GATEWAY_SERVICE_FILE" "$JOB_WORKER_SERVICE_FILE" "$OPENSEARCH_WORKER_SERVICE_FILE" \
+    "$SYSTEMD_SYSTEM_DIR/sift-mount-observer.service"; do
+    # sift-mount-observer.service is a legacy CP1-removed unit (no standalone
+    # watcher in the current target) — kept here only so an older deployment's
+    # unit file does not survive a transition onto this source.
     if sudo_if_needed test -f "$f" 2>/dev/null; then
       action "remove" "$f"
       run_if_live sudo_if_needed rm -f "$f"
@@ -581,7 +591,11 @@ teardown_systemd_and_users() {
     /etc/sudoers.d/sift-agent-runtime \
     /etc/sudoers.d/sift-ingest-mount \
     /etc/sudoers.d/sift-run-command-systemd-scope \
-    /etc/sudoers.d/sift-addon-systemd-sandbox; do
+    /etc/sudoers.d/sift-addon-systemd-sandbox \
+    /etc/sudoers.d/sift-custody-delete-broker; do
+    # sift-custody-delete-broker is a legacy CP3-removed sudoers drop-in — kept
+    # here only so an older deployment's no-arg sudo grant does not survive a
+    # transition onto this source (current source never (re)installs it).
     if sudo_if_needed test -f "$f" 2>/dev/null; then
       action "remove" "$f (sudoers drop-in)"
       run_if_live sudo_if_needed rm -f "$f"
@@ -591,7 +605,20 @@ teardown_systemd_and_users() {
   for f in \
     /usr/local/sbin/sift-run-command-systemd-scope \
     /usr/local/sbin/sift-addon-systemd-sandbox \
-    /usr/local/sbin/sift-addon-stdio-relay; do
+    /usr/local/sbin/sift-addon-stdio-relay \
+    /usr/local/sbin/sift-custody-delete-broker; do
+    # sift-custody-delete-broker: legacy CP3-removed fixed no-arg helper (see
+    # sudoers note above) — teardown-only, never reinstalled.
+    if sudo_if_needed test -e "$f" 2>/dev/null; then
+      action "remove" "$f"
+      run_if_live sudo_if_needed rm -f "$f"
+    fi
+  done
+
+  for f in \
+    /etc/sift/custody-delete.json \
+    /etc/sift/custody-delete-dsn; do
+    # Legacy CP3-removed delete-broker config/DSN files — teardown-only.
     if sudo_if_needed test -e "$f" 2>/dev/null; then
       action "remove" "$f"
       run_if_live sudo_if_needed rm -f "$f"
