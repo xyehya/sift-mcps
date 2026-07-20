@@ -428,6 +428,10 @@ def _request_host_mount_observation(
     *,
     socket_path: str = _MOUNT_OBSERVER_SOCKET,
 ) -> HostMountObservation:
+    # DEPRECATED (P4.23 CP1, 2026-07-20): DORMANT — the sift-mount-observer daemon
+    # + its service unit are deleted (no standalone watcher in the target; SPEC D3).
+    # This external-storage client is dead on every live path (LOCAL_IMMUTABLE only).
+    # DELETER: **CP2A/CP2B** — remove with the external-storage machinery.
     request_id = os.urandom(16).hex()
     request = (
         json.dumps(

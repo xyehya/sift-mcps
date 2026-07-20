@@ -1,7 +1,6 @@
 [Unit]
 Description=sift-mcps Gateway - MCP server runtime for digital forensics
-Requires=sift-mount-observer.service
-After=network.target sift-mount-observer.service
+After=network.target
 
 [Service]
 Type=simple
