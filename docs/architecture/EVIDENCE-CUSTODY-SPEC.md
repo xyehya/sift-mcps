@@ -1,6 +1,10 @@
 # Evidence Custody Specification
 
-**Status:** Accepted — 2026-07-19
+**Status:** Accepted — 2026-07-19 · **Amended — 2026-07-20** (operator-approved amendment
+folding the P0 live bring-up findings EC-1…EC-6 into the target behavior and adding the
+normative Custody Lifecycle State Machine: pre-seal staging window, refresh snapshot,
+directory immutability, drift-resolution verbs, canonical reauthentication binding, and
+operator surface invariants)
 
 **Scope:** P4.23 evidence custody, operator bootstrap, and AI Agent admission
 
@@ -91,6 +95,23 @@ are missing or changed and the gate is blocked. Retire changes only PostgreSQL a
 the reason and actor, creates a new Manifest Version excluding the object, and appends one custody
 event. It never deletes, modifies, unprotects, or repairs bytes.
 
+### Pre-seal staging window
+
+After case creation and before the first committed Seal, the evidence directory is a free local
+staging area. No continuous observation runs and nothing is recorded in PostgreSQL until the
+operator requests custody status (Refresh), which performs one read-only reconciliation and
+populates the point-in-time Pending list. Files may be freely added, replaced, or removed during
+this window; a path absent from the current on-disk inventory is never surfaced as Pending and
+never demands disposition (present-on-disk truth). The custody proof begins at Seal: Seal
+recomputes every digest from disk under protection and commits what it verified, never what a
+prior snapshot displayed. Agent access remains fail-closed throughout — a case with no committed
+sealed set can never have an `OPEN` gate.
+
+The supported staging workflow makes files visible in the evidence directory only when complete:
+it stages into a sibling temporary location and atomically renames each complete file into place.
+Reconciliation additionally ignores partial-transfer artifacts. Staging a large file must produce
+zero transient Pending entries.
+
 ## Custody Gate and Admission
 
 The case-wide Custody Gate has exactly four public states:
@@ -117,6 +138,67 @@ Before every evidence-capable MCP dispatch, the Gateway must:
 Synchronous and durable execution must enforce equivalent admission. Durable work revalidates the
 authorization at execution time; an earlier successful request is not a permanent read lease.
 
+Reconciliation authority and cadence:
+
+- Reconcile-before-dispatch is the sole enforcement authority. An agent can never read drifted or
+  unadmitted evidence even when every other detection channel is dead.
+- A Gateway-internal periodic reconciliation (configurable interval) refreshes operator-visible
+  custody status for cases with a committed sealed set. It is visibility, not authority, and runs
+  inside the Gateway process — no standalone watcher service exists.
+- Reconciliation reflects present-on-disk truth: an entry absent from the current inventory is not
+  Pending and does not contribute to `BLOCKED_PENDING`. Observation history remains append-only.
+- Before the first committed Seal, and inside an open staging window, reconciliation runs only on
+  operator request (Refresh) or on an agent dispatch attempt.
+
+## Custody Lifecycle State Machine
+
+This machine is normative: Portal screens, Gateway behavior, and implementation packets must
+adhere to it. The four public gate states project from it; no other latched case state exists.
+
+```mermaid
+stateDiagram-v2
+    [*] --> STAGING: case created and activated
+    STAGING --> STAGING: stage/replace/remove files · Refresh snapshots Pending
+    STAGING --> SEALING: Add and Seal (reauth)
+    SEALING --> SEALING: interruption → same-key retry (resume pointer)
+    SEALING --> SEALED: COMMITTED (one atomic transaction)
+    SEALED --> BLOCKED: reconciliation finds drift
+    SEALED --> SEALING: add evidence (staging window inside REQUESTED)
+    BLOCKED --> BLOCKED: Resolve per finding (Ignore / Retire, batch reauth)
+    BLOCKED --> SEALING: reseal (new Manifest Version)
+    BLOCKED --> SEALED: posture-only drift → Verify and Reprotect + Full Verify
+```
+
+- `STAGING` — pre-seal free window. Gate never `OPEN`; no DB records until Refresh.
+- `SEALING` — the one `REQUESTED -> PROTECTED -> COMMITTED` machine; one active Seal per case;
+  gate blocked throughout.
+- `SEALED` — gate `OPEN` while reconciliation is clean; every sealed file carries immutable
+  protection and the evidence directory itself is create/delete/rename-protected.
+- `BLOCKED` — projects to `BLOCKED_PENDING`, `BLOCKED_VIOLATION`, or `BLOCKED_UNAVAILABLE` by
+  finding class; agent dispatch is denied before process creation, enqueue, or response data.
+
+Normative scenarios and end states:
+
+| # | Scenario | Path | End state |
+|---|---|---|---|
+| 1 | Fresh case: stage images, Refresh, Seal | STAGING → SEALING → SEALED | gate `OPEN` |
+| 2 | Refresh pressed mid-copy | atomic-rename staging keeps partial files invisible | zero transient Pending |
+| 3 | File staged then removed pre-seal | next Refresh reflects current disk only | nothing to disposition |
+| 4 | Mixed-case multi-file Seal | canonical binding, one builder | seal succeeds |
+| 5 | Crash between PROTECTED and COMMITTED | gate blocked; same-key retry completes | exactly one object/version/manifest/event set |
+| 6 | Force-add to a sealed case | next dispatch/poll reconciliation | `BLOCKED_PENDING`; dispatch denied first |
+| 7 | Sealed file modified (privileged actor) | `BLOCKED_VIOLATION` → Retire; optional reacquire at reseal as NEW object | honest chain, new manifest |
+| 8 | Sealed file deleted | `BLOCKED_VIOLATION` → Retire → reseal | new manifest |
+| 9 | Posture-only drift, identical bytes | Full Verify → Verify and Reprotect → Full Verify | gate `OPEN`, same version |
+| 10 | Ignore/Retire transaction fails | full rollback, nothing persisted | next attempt permitted; no block |
+| 11 | DB-only action during active Seal | non-overlapping target proceeds; overlapping target gets shaped rejection | no case-wide lock |
+| 12 | Add evidence to sealed case | Seal `REQUESTED` opens staging window (directory flag lifted, custody events, gate blocked, agent paused) → stage → Refresh → `PROTECTED`/`COMMITTED` | SEALED with new manifest |
+| 13 | Local storage unavailable | `BLOCKED_UNAVAILABLE` → restore → Full Verify | gate `OPEN` |
+| 14 | Case with nothing sealed | gate never `OPEN` | agent evidence work unavailable (fail closed) |
+
+`SEALED` with clean reconciliation is the only condition admitting agent evidence reads. Every
+`BLOCKED` projection denies before process creation, durable enqueue, or response data.
+
 ## Add and Seal
 
 Add and Seal is the only custody operation that crosses PostgreSQL and filesystem protection. It
@@ -139,6 +221,24 @@ REQUESTED -> PROTECTED -> COMMITTED
 No other action reuses this state machine. Ignore and Retire are database-only. Full Verify is
 read-only. Verify and Reprotect has its own narrow posture contract.
 
+Amendment 2026-07-20 — window, directory posture, and snapshot verification:
+
+- The Seal target set is selected from the most recent Refresh snapshot, but `PROTECTED`
+  recomputes every digest and identity from disk; the commit records what was verified under
+  protection. A selected target that vanished or changed since the snapshot fails with a shaped
+  error directing a new Refresh; there is no partial admission.
+- Sealing applies immutable protection to each file AND to the evidence directory itself. A
+  committed seal leaves the directory create/delete/rename-protected; unprivileged force-adds are
+  physically impossible and privileged tampering remains detected by reconciliation.
+- Adding evidence to a case with a committed sealed set happens inside this same machine: the
+  reauthorized `REQUESTED` phase opens a bounded staging window — it lifts directory immutability
+  only, appends custody events for window open and close, and keeps the gate blocked (agent work
+  is paused for the window's duration). `PROTECTED`/`COMMITTED` restore full posture. No separate
+  window operation or second state machine exists.
+- While a Seal operation is active, database-only actions on targets outside its target set remain
+  permitted as independent transactions; targets inside its set are rejected with a shaped
+  "seal in progress — resume it" error.
+
 ## Drift, Verification, and Recovery
 
 Reconciliation must detect at least:
@@ -156,6 +256,19 @@ Observations are append-only facts, but the public recovery model stays direct:
 | Missing/changed sealed object | Retire the old object; reacquire as a new object if required. |
 | Protection-only drift with identical bytes | Full Verify, then Verify and Reprotect. |
 | Unavailable local evidence directory | Restore local availability, then Full Verify. |
+
+Amendment 2026-07-20 — drift resolution and non-Seal failure:
+
+- Portal may present drift resolution as one uniform per-finding flow with batch
+  reauthentication (one password covering N selected targets), but the recorded custody verbs
+  stay distinct: new entry → Add and Seal or Ignore; deleted sealed object → Retire; changed
+  sealed object → Retire, with optional reacquisition of the current bytes as a NEW Evidence
+  Object at the next Seal. No disposition may leave an active manifest entry whose bytes differ
+  from its committed Evidence Version.
+- Ignore, Retire, and Verify and Reprotect are each one atomic transaction with no persistent
+  failure state: a failed attempt rolls back completely, records nothing that blocks the case,
+  and never prevents a subsequent attempt. Only Seal has an incomplete-operation record, and it
+  is a resume pointer, never a case-wide lock on other actions.
 
 ### Full Verify Evidence
 
@@ -197,6 +310,16 @@ record to the actor, case, action, target, and idempotency key. This applies to:
 There are no client-calculated HMAC challenges, begin/complete tickets, resume passwords, or
 action-specific challenge ceremonies. Automatic Solana anchoring does not request a second
 password because it follows an already authorized manifest-changing operation.
+
+Amendment 2026-07-20 — canonical binding (fold-in of live finding EC-6):
+
+The reauthentication audit binding is built by exactly ONE shared builder as canonical JSON:
+sorted object keys, and the target array ordered by raw byte order (UTF-8 code point;
+`COLLATE "C"` equivalent). Verification compares the stored binding verbatim; no component may
+re-derive the binding under a different language default, locale, or database collation. The
+as-built engine violated this — Python code-point sort against SQL locale collation — which
+denied every mixed-case multi-file seal. A mixed-case multi-file target set is the permanent
+regression fixture.
 
 ## Custody Ledger, Export, and Optional Solana Anchoring
 
@@ -310,6 +433,20 @@ connector or SIFT services. A downstream client that ignores the standard tool-l
 may require an MCP reconnect, not a Gateway or VM restart. Backend removal/disable may remain
 Gateway-restart-to-apply.
 
+## Operator Surface Invariants
+
+Amendment 2026-07-20 (fold-in of live findings EC-3 and EC-4):
+
+- Custody routes return shaped, actionable errors: an operator-meaningful message naming the next
+  action (for example "a Seal is in progress — resume it"), a stable machine-readable code, and a
+  correlation/audit id. Raw database diagnostics — SQLSTATE, constraint names, PL/pgSQL context,
+  stack text — never reach an operator surface.
+- An entry renders as sealed evidence — in Portal, MCP responses, and exports — only when a
+  `COMMITTED` Evidence Version with manifest membership exists in PostgreSQL. Pending entries
+  render only as Pending; Ignored and Retired render as their own states; nothing digestless may
+  ever appear sealed.
+- Every evidence panel is strictly scoped to the active case and refetches on active-case change.
+
 ## User Stories
 
 1. As an installation owner, I want first use to create my email and password in the trusted Portal,
@@ -367,6 +504,15 @@ implementation phases, and duplicated mocks are not acceptance surfaces.
   pairing phrase binding, expiry/revocation behavior, dynamic tool discovery, and local filtering.
 - Security tests prove that no MCP custody tool or second process-execution path is registered or
   reachable.
+- Amendment acceptance (EC fold-in, fail-on-revert per the surface harness where agent-visible):
+  a staged-then-removed path never surfaces as Pending (present-on-disk truth); staging a large
+  file yields zero transient Pending entries; a failed database-only action leaves no blocking
+  state and a subsequent action on the same case succeeds; a mixed-case multi-file reauth-and-seal
+  succeeds on a real migrated PostgreSQL and fails if either side's sort discipline changes;
+  custody routes return shaped error bodies, never raw SQLSTATE/PL-pgSQL text; a detected-only
+  object never appears in any sealed rendering; database-only actions on non-overlapping targets
+  succeed during an active Seal while overlapping targets are rejected shaped; directory
+  immutability is applied at `COMMITTED` and lifted only inside a reauthorized staging window.
 
 ### Custody Simplification Proof Gate
 
@@ -375,15 +521,16 @@ SIFT VM and prove the simplified custody core as one coherent matrix:
 
 1. Force-add an unadmitted file, immediately call synchronous and durable evidence-capable MCP, and
    prove denial before process creation/enqueue and before bytes or digest return.
-2. Add and Seal through Portal; interrupt after protection and before commit; restart all core
-   services; prove the gate remains blocked; retry; prove exactly one object, version, manifest
-   transition, and canonical event set.
+2. Add and Seal a mixed-case multi-file target set through Portal; interrupt after protection and
+   before commit; restart all core services; prove the gate remains blocked; retry; prove exactly
+   one object, version, manifest transition, and canonical event set.
 3. Prove the sealed object cannot be overwritten by any supported workflow and that reacquisition
    creates a new object with optional supersession linkage.
 4. Prove Ignore and Retire are database-only and do not alter bytes, ownership, mode, links,
    extended attributes, timestamps, or immutable posture.
 5. Prove pending, missing, changed, posture-only, unsafe-link, and unavailable-local-storage
-   classification against the four gate states.
+   classification against the four gate states, including directory-immutability posture and
+   present-on-disk truth for vanished pending entries.
 6. Prove Full Verify is read-only and Verify and Reprotect works only for identical bytes plus
    posture-only drift.
 7. Prove Verify Ledger, deterministic derived export, tamper rejection, and optional Solana failure
