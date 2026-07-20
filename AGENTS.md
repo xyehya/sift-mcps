@@ -87,6 +87,29 @@ git-tracked and portable, but the marketplace registration + plugin cache under
 re-run `/plugin marketplace add cosai-oasis/project-codeguard` then
 `/plugin install codeguard-security@project-codeguard` before it resolves.
 
+### Codex Chrome MCP for Portal / frontend work
+
+Codex agents doing rendered Portal/frontend troubleshooting, browser-based reproduction, or live UI
+verification must invoke **`$chrome-fast` at the start of the browser task** and use the globally
+configured **`codex-in-chrome-mcp`** tools (`mcp__codex_in_chrome_mcp__*`). The skill owns browser
+selection, isolated task-tab setup, batched interaction, DOM/accessibility inspection, screenshots,
+filtered console reads, narrow network inspection, and the reproduce → diagnose → fix → retest loop.
+
+- Put `Use $chrome-fast and codex-in-chrome-mcp for all browser work` in any spawned Codex browser
+  operator's prompt. The agent must load the skill before its first browser call.
+- If `$chrome-fast` or `mcp__codex_in_chrome_mcp__tabs_context_mcp` is absent, treat that as a stale
+  Codex task/tool snapshot: start a fresh Codex task and recheck. Report the capability gap instead of
+  silently substituting the separate built-in Browser/Chrome runtime or Playwright; fallback requires
+  explicit operator approval.
+- Follow the skill's required connected-browser selection even when only one browser is listed. Use a
+  fresh MCP task tab unless the operator explicitly asks to reuse an existing tab.
+- Browser control remains a **single leased resource**: only the root or one explicitly designated
+  browser operator may use the signed-in Portal session at a time. Never dispatch concurrent Chrome
+  agents.
+- This is host-global Codex tooling (`~/.codex/config.toml` and `~/.codex/skills/chrome-fast/`), not a
+  portable repo dependency. Never commit its machine-specific binary path, credentials, browser state,
+  or copied global configuration into this repository.
+
 Keep `~/.cursor/mcp.json` empty so project `.cursor/mcp.json` owns memory MCP.
 Do **not** commit absolute machine paths (`/Users/...`, `/home/...`) in MCP configs.
 Cursor: `${userHome}/.local/bin/codebase-memory-mcp` (GUI apps often lack `~/.local/bin` on `PATH`).
