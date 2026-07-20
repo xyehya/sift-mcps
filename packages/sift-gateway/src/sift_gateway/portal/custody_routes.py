@@ -297,9 +297,13 @@ async def custody_status(request: Request) -> JSONResponse:
     # but it grants no custody mutation authority and intentionally admits an
     # authenticated readonly operator (SPEC Full Verify/Export/Refresh contract).
     gateway = request.app.state.gateway
-    evidence_dir = f"{case.artifact_path}/evidence" if case.artifact_path else None
+    # Bare case directory: ``reconcile`` -> ``classify_inventory_entries`` appends
+    # ``/evidence`` itself, exactly as the MCP dispatch caller passes it. An
+    # already-suffixed path scanned ``.../evidence/evidence`` -> BLOCKED_UNAVAILABLE
+    # on Refresh (CP3).
+    case_dir = case.artifact_path or None
     gate = admission.reconcile(
-        case.case_id, evidence_dir, gateway.control_plane_dsn, trigger="refresh"
+        case.case_id, case_dir, gateway.control_plane_dsn, trigger="refresh"
     )
 
     evidence_service = getattr(gateway, "evidence_service", None)
