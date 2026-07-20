@@ -4,21 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 
 from sift_common.audit import AuditWriter
 
 from sift_core.active_case_context import ActiveCaseContext, use_active_case_context
 from sift_core.agent_tools import _run_command
-from sift_core.evidence_storage import (
-    StorageAuthorityError,
-    StorageProfile,
-    external_storage_facts,
-)
+from sift_core.evidence_storage import StorageProfile
 from sift_core.execute.evidence_binding import (
     classify_inventory_entries,
     use_final_open_authority_validator,
@@ -51,7 +45,7 @@ def build_custody_validator(dsn: str):
                         job.spec_internal.get("evidence_inventory_token") or ""
                     )
                     case_dir = str(job.spec_internal.get("case_dir") or "")
-                    _validate_storage_authority(cur, job, case_dir)
+                    _validate_storage_authority(job)
                     current_inventory = ""
                     try:
                         current_inventory = _inventory_token(case_dir)
@@ -139,7 +133,7 @@ def build_custody_validator(dsn: str):
 def _validate_custody_read_only(cur: Any, job: ClaimedJob) -> None:
     """Validate dispatch authority under the held lock without writing drift."""
     case_dir = str(job.spec_internal.get("case_dir") or "")
-    _validate_storage_authority(cur, job, case_dir)
+    _validate_storage_authority(job)
     expected_inventory = str(job.spec_internal.get("evidence_inventory_token") or "")
     try:
         current_inventory = _inventory_token(case_dir)
@@ -175,78 +169,18 @@ def _validate_custody_read_only(cur: Any, job: ClaimedJob) -> None:
             raise FatalJobError("custody_admission_denied")
 
 
-def _validate_storage_authority(cur: Any, job: ClaimedJob, case_dir: str) -> None:
-    """Validate current DB authority and external mount facts for every job."""
+def _validate_storage_authority(job: ClaimedJob) -> None:
+    """Deny any durable job whose storage authority is not local-immutable.
+
+    LOCAL_IMMUTABLE is the only supported storage profile (P4.23). Its guarantees
+    come from the sealed-version re-check + computed gate + the per-descriptor
+    identity/immutable pin, so no external-storage authority table is queried.
+    Any other profile is denied fail-closed.
+    """
     expected = job.spec_internal.get("storage_execution_authority")
     if not isinstance(expected, dict) or not expected:
         raise FatalJobError("custody_admission_denied")
-    # LOCAL_IMMUTABLE is the only supported target storage profile (P4.23). Its
-    # guarantees come from the sealed-version re-check + computed gate + the
-    # per-descriptor identity/immutable pin; the as-built external-storage
-    # authority tables are gone, so do not query them.
-    if str(expected.get("storage_profile")) == StorageProfile.LOCAL_IMMUTABLE:
-        return
-    cur.execute(
-        """select a.profile,a.source_identity,a.verified_mount_instance,a.state,
-                  a.generation,a.verified_generation,a.read_only,h.manifest_version,
-                  h.manifest_hash,
-                  (select v.id::text from app.evidence_storage_verifications v
-                   where v.case_id=a.case_id and v.outcome='SUCCESS'
-                     and v.generation=a.generation and v.profile=a.profile
-                     and v.manifest_version=h.manifest_version
-                     and v.manifest_hash=h.manifest_hash
-                   order by v.created_at desc,v.id desc limit 1)
-           from app.evidence_storage_authorities a
-           join app.evidence_chain_heads h on h.case_id=a.case_id
-           where a.case_id=%s""",
-        (job.case_id,),
-    )
-    row = cur.fetchone()
-    if not row:
-        raise FatalJobError("custody_admission_denied")
-    current = {
-        "storage_profile": str(row[0]),
-        "storage_source_identity": str(row[1] or ""),
-        "mount_instance_identity": str(row[2] or ""),
-        "storage_generation": int(row[4]),
-        "storage_verified_generation": int(row[5]) if row[5] is not None else -1,
-        "storage_manifest_version": int(row[7] or 0),
-        "storage_manifest_hash": str(row[8] or ""),
-        "storage_verification_receipt_id": str(row[9] or ""),
-    }
-    if str(row[3]) != "AVAILABLE" or row[5] != row[4] or current != expected:
-        raise FatalJobError("custody_admission_denied")
-    for item in job.spec_internal.get("resolved_evidence_refs") or []:
-        if not isinstance(item, dict) or any(
-            item.get(key) != value for key, value in current.items()
-        ):
-            raise FatalJobError("custody_admission_denied")
-    if current["storage_profile"] == StorageProfile.EXTERNALLY_READ_ONLY:
-        root_fd: int | None = None
-        try:
-            root_fd = os.open(
-                Path(case_dir) / "evidence",
-                os.O_RDONLY
-                | os.O_CLOEXEC
-                | os.O_DIRECTORY
-                | getattr(os, "O_NOFOLLOW", 0),
-            )
-            facts = external_storage_facts(
-                root_fd, expected_mount_path=Path(case_dir) / "evidence"
-            )
-        except (OSError, StorageAuthorityError) as exc:
-            raise FatalJobError("custody_admission_denied") from exc
-        finally:
-            if root_fd is not None:
-                os.close(root_fd)
-        if (
-            row[6] is not True
-            or facts.read_only is not True
-            or facts.source_identity != current["storage_source_identity"]
-            or facts.mount_instance_identity != current["mount_instance_identity"]
-        ):
-            raise FatalJobError("custody_admission_denied")
-    elif current["storage_profile"] != StorageProfile.LOCAL_IMMUTABLE:
+    if str(expected.get("storage_profile")) != StorageProfile.LOCAL_IMMUTABLE:
         raise FatalJobError("custody_admission_denied")
 
 

@@ -117,7 +117,10 @@ def test_apparmor_teardown_includes_dfir_exec() -> None:
     section = src.split("teardown_apparmor()", 1)[1].split("\n}", 1)[0]
     assert "/etc/apparmor.d/sift-gateway" in section
     assert "/etc/apparmor.d/dfir-exec" in section
-    assert "/etc/apparmor.d/sift-custody-delete-broker" in section
+    # CP3 custody sweep: the removed custody-delete broker profile must never
+    # reappear in the uninstall teardown (SPEC Out of Scope: no root custody
+    # -delete broker).
+    assert "sift-custody-delete-broker" not in src
 
 
 def test_addon_sandbox_sudoers_removed() -> None:

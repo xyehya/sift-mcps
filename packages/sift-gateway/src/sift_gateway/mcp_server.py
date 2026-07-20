@@ -20,7 +20,6 @@ from mcp.types import TextContent, ToolAnnotations
 from pydantic import PrivateAttr
 from sift_common.registry_helpers import tool_output_schema
 from sift_core.agent_tools import call_core_tool, core_tool_specs
-from sift_core.execute.evidence_binding import AdmittedEvidenceBinding
 
 from sift_gateway.backends.egress import (
     make_pinned_egress_factory,
@@ -199,8 +198,12 @@ def _apply_db_evidence_listing(gateway: Any, obj: dict[str, Any], case_id: str) 
     obj["listing_authority"] = "db"
 
 
-def _prepare_core_tool_arguments(gateway: Any, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Strip private fields from client args and inject Gateway-resolved refs."""
+def _prepare_core_tool_arguments(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Strip private fields from client args and inject admitted evidence refs.
+
+    Argument preparation draws evidence bindings solely from the admission
+    ContextVar (``current_admitted_refs``), never from a per-service resolver.
+    """
     from sift_gateway.evidence_admission import (
         current_admitted_refs,
         serialize_resolved_ref,
@@ -220,51 +223,13 @@ def _prepare_core_tool_arguments(gateway: Any, tool_name: str, arguments: dict[s
         ]
         prepared[_INTERNAL_RESOLVED_EVIDENCE_REFS] = normalized
         return prepared
-    if not prepared.get("evidence_refs"):
-        return prepared
-    try:
-        resolved = _resolve_db_evidence_refs(gateway, prepared.get("evidence_refs"))
-    except Exception as exc:
-        reason = getattr(exc, "reason", None) or str(exc) or "evidence_ref_resolution_failed"
-        prepared[_INTERNAL_EVIDENCE_REF_ERROR] = str(reason)
-        return prepared
-    if resolved:
-        prepared[_INTERNAL_RESOLVED_EVIDENCE_REFS] = resolved
+    # Single admission authority: the evidence-gate middleware
+    # (EvidenceGateMiddleware -> admission.resolve_sealed_version ->
+    # bind_admitted_refs) is the sole chokepoint that resolves an evidence
+    # reference to an active sealed version. If nothing was admitted, no evidence
+    # binding is injected — there is deliberately no second resolution path. Any
+    # client-supplied ``_resolved_evidence_refs`` was already stripped above.
     return prepared
-
-
-def _resolve_db_evidence_refs(
-    gateway: Any, evidence_refs: Any
-) -> list[AdmittedEvidenceBinding]:
-    if not evidence_refs:
-        return []
-    if isinstance(evidence_refs, str):
-        refs = [evidence_refs]
-    elif isinstance(evidence_refs, (list, tuple)):
-        refs = [str(ref) for ref in evidence_refs if str(ref).strip()]
-    else:
-        return []
-    from sift_gateway.evidence_admission import serialize_resolved_ref
-    from sift_gateway.policy_middleware import _current_gateway_active_case
-
-    case = _current_gateway_active_case()
-    service = getattr(gateway, "evidence_service", None)
-    resolver = getattr(service, "resolve_evidence_reference", None)
-    if case is None or not callable(resolver):
-        return []
-    resolved: list[AdmittedEvidenceBinding] = []
-    for ref in refs:
-        item = resolver(case.case_id, ref)
-        if not isinstance(item, dict):
-            raise _OrientationAuthorityError("DB evidence resolver returned invalid data")
-        try:
-            binding = serialize_resolved_ref(
-                cast(AdmittedEvidenceBinding, {"ref": ref, **item})
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise _OrientationAuthorityError("evidence_binding_incomplete") from exc
-        resolved.append(binding)
-    return resolved
 
 
 class GatewayLocalTool(Tool):
@@ -290,7 +255,7 @@ class GatewayLocalTool(Tool):
         if self._handler is not None:
             value = await self._handler(arguments, examiner)
         else:
-            arguments = _prepare_core_tool_arguments(self._gateway, self.name, arguments)
+            arguments = _prepare_core_tool_arguments(self.name, arguments)
             value = await asyncio.to_thread(
                 call_core_tool,
                 self.name,

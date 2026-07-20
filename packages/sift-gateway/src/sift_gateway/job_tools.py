@@ -11,10 +11,9 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any, cast
+from typing import Any
 
 from mcp.types import TextContent
-from sift_core.execute.evidence_binding import AdmittedEvidenceBinding
 
 logger = logging.getLogger(__name__)
 
@@ -139,13 +138,13 @@ async def handle_run_command_job(
             serialize_resolved_ref,
         )
 
+        # Single admission authority: only refs already admitted by the
+        # evidence-gate middleware (bound into current_admitted_refs) may bind a
+        # durable job. There is deliberately no second resolution path — an
+        # un-admitted client-supplied evidence_ref never resolves here.
         resolved_evidence = [
             serialize_resolved_ref(item) for item in current_admitted_refs()
         ]
-        if not resolved_evidence and arguments.get("evidence_refs"):
-            resolved_evidence = _resolve_evidence_refs(
-                gateway, case, arguments.get("evidence_refs")
-            )
         storage_authority = current_storage_authority()
         if not storage_authority:
             authority_reader = getattr(
@@ -251,41 +250,6 @@ def _active_case(gateway: Any) -> tuple[Any, Any]:
     if case is None or not getattr(case, "case_id", None):
         raise GatewayJobToolError("active_case_required", http_status=403)
     return case, identity
-
-
-def _resolve_evidence(gateway: Any, case: Any, ref: str) -> dict[str, Any]:
-    if not ref:
-        raise GatewayJobToolError("evidence_ref_required")
-    service = getattr(gateway, "evidence_service", None)
-    resolver = getattr(service, "resolve_evidence_reference", None)
-    if callable(resolver):
-        item = resolver(case.case_id, ref)
-        if isinstance(item, dict):
-            return item
-        raise GatewayJobToolError("evidence_authority_invalid", http_status=503)
-    raise GatewayJobToolError("evidence_authority_unavailable", http_status=503)
-
-
-def _resolve_evidence_refs(gateway: Any, case: Any, value: Any) -> list[dict[str, str]]:
-    refs = _string_list(value) or []
-    resolved: list[dict[str, str]] = []
-    for ref in refs:
-        item = _resolve_evidence(gateway, case, ref)
-        resolved.append(
-            _serialize_evidence_binding(
-                {
-                    "ref": ref,
-                    **item,
-                }
-            )
-        )
-    return resolved
-
-
-def _serialize_evidence_binding(item: dict[str, Any]) -> dict[str, Any]:
-    from sift_gateway.evidence_admission import serialize_resolved_ref
-
-    return dict(serialize_resolved_ref(cast(AdmittedEvidenceBinding, item)))
 
 
 def _relative_display_path(value: str) -> str:

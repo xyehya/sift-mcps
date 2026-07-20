@@ -362,7 +362,7 @@ class TestEvidenceChainStatus:
             seal_status="sealed",
             gate_state="OPEN",
             storage_status={
-                "storage_profile": "EXTERNALLY_READ_ONLY",
+                "storage_profile": "LOCAL_IMMUTABLE",
                 "storage_availability": "AVAILABLE",
                 "storage_remediation": "NONE",
                 "storage_source_identity": source_identity,
@@ -404,7 +404,7 @@ class TestEvidenceChainStatus:
                 "storage_last_full_verified_at",
             )
         } == {
-            "storage_profile": "EXTERNALLY_READ_ONLY",
+            "storage_profile": "LOCAL_IMMUTABLE",
             "storage_availability": "AVAILABLE",
             "storage_remediation": "NONE",
             "storage_source_identity": source_identity,
@@ -670,151 +670,6 @@ class TestEvidenceChainSeal:
         assert resp.status_code == 403
 
 
-# ---------------------------------------------------------------------------
-# storage profile endpoint
-# ---------------------------------------------------------------------------
-
-
-class TestEvidenceStorageProfile:
-    def test_profile_change_is_strict_reauthenticated_and_service_bound(
-        self, authed_client, evidence_db
-    ):
-        response = authed_client.post(
-            "/api/evidence/storage/profile",
-            json={
-                "password": GOOD_PASSWORD,
-                "profile": "EXTERNALLY_READ_ONLY",
-                "reason": "Case evidence is on a hardware read-only source",
-                "idempotency_key": "profile-change-1",
-            },
-        )
-        assert response.status_code == 200
-        assert response.json()["storage_profile"] == "EXTERNALLY_READ_ONLY"
-        assert evidence_db.reauth_calls[-1][2:] == (
-            "evidence_storage_profile_change",
-            {
-                "profile": "EXTERNALLY_READ_ONLY",
-                "reason": "Case evidence is on a hardware read-only source",
-                "idempotency_key": "profile-change-1",
-            },
-        )
-        assert evidence_db.storage_profile_calls[0][1:4] == (
-            "EXTERNALLY_READ_ONLY",
-            "Case evidence is on a hardware read-only source",
-            "profile-change-1",
-        )
-
-    @pytest.mark.parametrize("body", [
-        {},
-        {"password": GOOD_PASSWORD, "profile": "LOCAL_IMMUTABLE", "reason": "", "idempotency_key": "k"},
-        {"password": GOOD_PASSWORD, "profile": "UNKNOWN", "reason": "x", "idempotency_key": "k"},
-        {"password": GOOD_PASSWORD, "profile": "LOCAL_IMMUTABLE", "reason": "x", "idempotency_key": "k", "unknown": True},
-    ])
-    def test_profile_change_rejects_incomplete_unknown_or_open_input(
-        self, authed_client, evidence_db, body
-    ):
-        response = authed_client.post("/api/evidence/storage/profile", json=body)
-        assert response.status_code == 400
-        assert not evidence_db.storage_profile_calls
-
-
-# ---------------------------------------------------------------------------
-# ignore endpoint
-# ---------------------------------------------------------------------------
-
-
-class TestEvidenceChainDelete:
-    def test_no_auth_returns_403(self, client):
-        resp = client.post("/api/evidence/chain/delete", json={})
-        assert resp.status_code == 403
-
-    def test_missing_fields_returns_400(self, authed_client):
-        # No path/reason and no password -> 400 (path/reason validated first).
-        resp = authed_client.post("/api/evidence/chain/delete", json={})
-        assert resp.status_code == 400
-
-    @pytest.mark.parametrize("endpoint", ["ignore", "delete", "retire"])
-    @pytest.mark.parametrize(
-        "change",
-        [
-            {"idempotency_key": ""},
-            {"unknown": True},
-        ],
-    )
-    def test_disposition_rejects_empty_intent_or_unknown_fields(
-        self, authed_client, endpoint, change
-    ):
-        body = {
-            "password": GOOD_PASSWORD,
-            "path": "evidence/stray.bin",
-            "reason": "operator disposition",
-            "idempotency_key": "intent-1",
-        }
-        body.update(change)
-        response = authed_client.post(f"/api/evidence/chain/{endpoint}", json=body)
-        assert response.status_code == 400
-
-    def test_disposition_fails_closed_without_object_resolver(
-        self, authed_client, evidence_db, monkeypatch
-    ):
-        monkeypatch.setattr(evidence_db, "recovery_object_id", None)
-        response = authed_client.post(
-            "/api/evidence/chain/delete",
-            json={
-                "password": GOOD_PASSWORD,
-                "path": "evidence/stray.bin",
-                "reason": "operator disposition",
-                "idempotency_key": "resolver-required",
-            },
-        )
-        assert response.status_code == 503
-        assert not evidence_db.delete_calls
-
-    def test_delete_stray_file(self, authed_client, evidence_db):
-        """Deleting a stray file reaches the DB delete with a re-auth id and reports
-        the bytes were removed."""
-        resp = authed_client.post(
-            "/api/evidence/chain/delete",
-            json={
-                "password": GOOD_PASSWORD,
-                "path": "evidence/.planted-hidden",
-                "reason": "Unauthorized hidden file, not part of acquisition",
-                "idempotency_key": "delete-hidden-1",
-            },
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["deleted"] is True
-        assert data["authority"] == "db"
-        assert data["file_removed"] is True
-        assert evidence_db.delete_calls
-        assert evidence_db.delete_calls[0][0] == "evidence/.planted-hidden"
-        assert evidence_db.delete_calls[0][2] == "audit-evt-001"
-
-    def test_delete_wrong_password_returns_401(self, authed_client, evidence_db):
-        resp = authed_client.post(
-            "/api/evidence/chain/delete",
-            json={
-                "password": "wrong-password",
-                "path": "evidence/.planted-hidden",
-                "reason": "x",
-                "idempotency_key": "delete-hidden-2",
-            },
-        )
-        assert resp.status_code == 401
-        assert not evidence_db.delete_calls
-
-    def test_delete_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
-        """No DB service: delete degrades to the no-case response, never a 500."""
-        c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
-        resp = c.post(
-            "/api/evidence/chain/delete",
-            json={"password": GOOD_PASSWORD, "path": "evidence/f", "reason": "r", "idempotency_key": "delete-fresh"},
-        )
-        assert resp.status_code == 404
-        assert "active case" in resp.json()["error"].lower()
-
-
 class TestEvidenceChainIgnore:
     def test_no_auth_returns_403(self, client):
         resp = client.post("/api/evidence/chain/ignore", json={})
@@ -973,74 +828,26 @@ class TestEvidenceChainRetire:
 
 
 class TestEvidenceRecovery:
-    def test_legacy_unseal_and_reacquire_routes_are_absent(self, authed_client):
-        assert authed_client.post("/api/evidence/chain/unseal", json={}).status_code == 404
-        assert authed_client.post("/api/evidence/chain/reacquire", json={}).status_code == 404
-
-    def test_replace_begin_records_bound_intent(self, authed_client, evidence_db):
-        response = authed_client.post(
+    def test_removed_custody_recovery_routes_are_absent(self, authed_client):
+        # P4.23 CP3 custody sweep: same-object Replace/Reacquire, Exact Restore,
+        # the generic recovery engine, Delete Stray, external storage-profile
+        # change, and installation signing-key rotation are permanently out of
+        # scope (EVIDENCE-CUSTODY-SPEC.md "Out of Scope"). Their backend routes are
+        # deleted; an authenticated POST must 404 (route gone), never 200/401/403.
+        # Fail-on-revert at the HTTP surface — the source-level absence is locked
+        # by tests/test_p423_cp3_custody_sweep_absence.py.
+        removed_routes = (
+            "/api/evidence/chain/unseal",
+            "/api/evidence/chain/reacquire",
+            "/api/evidence/chain/delete",
             "/api/evidence/chain/replace/begin",
-            json={
-                "password": GOOD_PASSWORD, "path": "evidence/disk.raw",
-                "reason": "re-image from the same source device",
-                "idempotency_key": "replace-intent-1",
-            },
-        )
-        assert response.status_code == 200, response.text
-        assert response.json()["ready_for_replacement"] is True
-        assert evidence_db.reauth_calls[-1][2:] == (
-            "evidence_replace_begin",
-            {
-                "action": "REPLACE_REACQUIRE",
-                "evidence_object_id": "22222222-2222-4222-8222-222222222222",
-                "idempotency_key": "replace-intent-1",
-                "reason": "re-image from the same source device",
-            },
-        )
-        assert evidence_db.recovery_begin_calls[-1]["action"] == "REPLACE_REACQUIRE"
-
-    def test_exact_restore_begin_is_a_distinct_server_selected_action(
-        self, authed_client, evidence_db
-    ):
-        response = authed_client.post(
             "/api/evidence/chain/restore/begin",
-            json={
-                "password": GOOD_PASSWORD, "path": "evidence/disk.raw",
-                "reason": "restore original exact acquisition",
-                "idempotency_key": "restore-intent-1",
-            },
-        )
-        assert response.status_code == 200, response.text
-        assert evidence_db.recovery_begin_calls[-1]["action"] == "RESTORE_EXACT"
-        assert evidence_db.reauth_calls[-1][2] == "evidence_restore"
-
-    def test_complete_uses_db_action_and_operation_bound_fresh_reauth(
-        self, authed_client, evidence_db
-    ):
-        operation_id = "33333333-3333-4333-8333-333333333333"
-        response = authed_client.post(
             "/api/evidence/chain/recovery/complete",
-            json={"password": GOOD_PASSWORD, "operation_id": operation_id},
+            "/api/evidence/storage/profile",
+            "/api/evidence/chain/signing-key/rotate",
         )
-        assert response.status_code == 200, response.text
-        assert response.json()["reacquired"] is True
-        assert evidence_db.reauth_calls[-1][2:] == (
-            "evidence_replace_complete", {"operation_id": operation_id}
-        )
-        assert evidence_db.recovery_complete_calls[-1][
-            "completion_reauth_audit_event_id"
-        ] == "audit-evt-001"
-
-    def test_wrong_password_never_begins_recovery(self, authed_client, evidence_db):
-        response = authed_client.post(
-            "/api/evidence/chain/replace/begin",
-            json={
-                "password": "wrong-password", "path": "evidence/disk.raw",
-                "reason": "re-image", "idempotency_key": "replace-intent-2",
-            },
-        )
-        assert response.status_code == 401
-        assert not evidence_db.recovery_begin_calls
+        for route in removed_routes:
+            assert authed_client.post(route, json={}).status_code == 404, route
 
     def test_object_history_is_path_free_and_uuid_scoped(self, authed_client):
         object_id = "22222222-2222-4222-8222-222222222222"

@@ -818,7 +818,8 @@ def _empty_evidence_chain_status() -> dict:
 def _public_storage_status(value: object) -> dict:
     """Return the fixed path-free storage-authority status contract."""
     status = value if isinstance(value, dict) else {}
-    profiles = {"LOCAL_IMMUTABLE", "EXTERNALLY_READ_ONLY"}
+    # P4.23 local storage only: external/by-reference profiles were removed.
+    profiles = {"LOCAL_IMMUTABLE"}
     availability = {
         "AVAILABLE",
         "UNAVAILABLE",
@@ -1165,6 +1166,7 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     file_specs = body.get("file_specs", [])
     reason = " ".join(str(body.get("reason") or "").split())
     idempotency_key = str(body.get("idempotency_key") or "").strip()
+    # P4.23 local storage only: LOCAL_IMMUTABLE is the sole accepted profile.
     storage_profile = str(body.get("storage_profile") or "LOCAL_IMMUTABLE").strip()
 
     if not isinstance(file_specs, list):
@@ -1175,7 +1177,7 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
         return JSONResponse({"error": "reason is required (max 1000 characters)"}, status_code=400)
     if not idempotency_key or len(idempotency_key) > 128:
         return JSONResponse({"error": "idempotency_key is required (max 128 characters)"}, status_code=400)
-    if storage_profile not in {"LOCAL_IMMUTABLE", "EXTERNALLY_READ_ONLY"}:
+    if storage_profile not in {"LOCAL_IMMUTABLE"}:
         return JSONResponse({"error": "Invalid storage_profile"}, status_code=400)
 
     # CL3a: re-verify the operator's password against Supabase (fail closed).
@@ -1395,96 +1397,6 @@ async def post_evidence_chain_ignore(request: Request) -> JSONResponse:
     })
 
 
-async def post_evidence_chain_delete(request: Request) -> JSONResponse:
-    """Durably delete a non-sealed stray after gate block and pre-unlink proof.
-
-    Body: {password, path, reason, idempotency_key}. The server resolves the object,
-    binds fresh re-authentication, blocks the gate, records pinned hash/size/identity,
-    and only then unlinks the same directory entry. Sealed evidence is ineligible.
-    """
-    role_err = _require_examiner_role(request)
-    if role_err:
-        return role_err
-
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-
-    err = _must_reset_check(request)
-    if err:
-        return err
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-    if not isinstance(body, dict) or set(body) != {
-        "password", "path", "reason", "idempotency_key"
-    }:
-        return JSONResponse({"error": "Invalid delete request fields"}, status_code=400)
-
-    rel_path = str(body.get("path", "")).strip()
-    reason = str(body.get("reason", "")).strip()
-    idempotency_key = str(body.get("idempotency_key", "")).strip()
-
-    if not rel_path:
-        return JSONResponse({"error": "Missing path"}, status_code=400)
-    if not reason or len(reason) > 1000:
-        return JSONResponse({"error": "reason is required (max 1000 characters)"}, status_code=400)
-    if not idempotency_key or len(idempotency_key) > 128:
-        return JSONResponse({"error": "idempotency_key is required (max 128 characters)"}, status_code=400)
-
-    # CL3a: re-verify the operator's password against Supabase (fail closed).
-    reauth_err = await _supabase_reverify(request, body)
-    if reauth_err:
-        return reauth_err
-
-    # DB custody authority only. No file-backed fallback; degrade gracefully.
-    deleter = getattr(_EVIDENCE_DB, "delete_object", None) if _EVIDENCE_DB is not None else None
-    if not callable(deleter):
-        return _no_case_response()
-    resolver = getattr(_EVIDENCE_DB, "recovery_object_id", None)
-    if not callable(resolver):
-        return JSONResponse({"error": "Evidence object resolver unavailable"}, status_code=503)
-    try:
-        evidence_object_id = resolver(case_id=_active_case_id(), display_path=rel_path)
-    except Exception as exc:
-        return _active_case_error_response(exc, default=500)
-
-    reauth_id = _record_reauth_event(request, examiner, "evidence_delete", binding={
-        "action": "DELETE_STRAY", "evidence_object_id": evidence_object_id,
-        "idempotency_key": idempotency_key, "reason": reason,
-    })
-    if not reauth_id:
-        return JSONResponse(
-            {"error": "Re-auth audit event required for delete"},
-            status_code=403,
-        )
-    try:
-        result = deleter(
-            case_id=_active_case_id(),
-            display_path=rel_path,
-            reason=reason,
-            reauth_audit_event_id=reauth_id,
-            actor=_request_principal(request),
-            examiner=examiner,
-            idempotency_key=idempotency_key,
-        )
-    except Exception as exc:
-        return _active_case_error_response(exc, default=500)
-    result = result if isinstance(result, dict) else {}
-
-    return JSONResponse({
-        "deleted": True,
-        "authority": "db",
-        "path": rel_path,
-        "file_removed": result.get("file_removed", False),
-        "sha256": result.get("sha256"),
-        "bytes": result.get("bytes"),
-        "reauth_method": _MVP_REAUTH_METHOD,
-    })
-
-
 async def post_evidence_chain_retire(request: Request) -> JSONResponse:
     """Durably retire versioned evidence while retaining protected bytes/history.
 
@@ -1601,7 +1513,6 @@ async def post_evidence_chain_disposition_resume(request: Request) -> JSONRespon
         )
         events = {
             "IGNORE": "evidence_ignore_resume",
-            "DELETE_STRAY": "evidence_delete_resume",
             "RETIRE": "evidence_retire_resume",
         }
         if action not in events:
@@ -1620,142 +1531,6 @@ async def post_evidence_chain_disposition_resume(request: Request) -> JSONRespon
     except Exception as exc:
         return _active_case_error_response(exc, default=500)
     return JSONResponse({"completed": True, **(result if isinstance(result, dict) else {})})
-
-
-async def _post_evidence_recovery_begin(
-    request: Request, *, action: str, reauth_action: str
-) -> JSONResponse:
-    """Begin a fixed server-selected recovery action before any FS mutation."""
-    if (role_err := _require_examiner_role(request)) is not None:
-        return role_err
-    if (err := _must_reset_check(request)) is not None:
-        return err
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-    if not isinstance(body, dict) or set(body) - {
-        "password", "path", "reason", "idempotency_key"
-    }:
-        return JSONResponse({"error": "Unknown recovery request field"}, status_code=400)
-    path = str(body.get("path") or "").strip()
-    reason = " ".join(str(body.get("reason") or "").split())
-    idempotency_key = str(body.get("idempotency_key") or "").strip()
-    if not path or not reason or len(reason) > 1000:
-        return JSONResponse({"error": "Path and reason are required"}, status_code=400)
-    if not idempotency_key or len(idempotency_key) > 128:
-        return JSONResponse({"error": "idempotency_key is required"}, status_code=400)
-    if (reauth_err := await _supabase_reverify(request, body)) is not None:
-        return reauth_err
-    service = _EVIDENCE_DB
-    resolver = getattr(service, "recovery_object_id", None)
-    beginner = getattr(service, "begin_recovery", None)
-    if not callable(resolver) or not callable(beginner):
-        return _no_case_response()
-    try:
-        object_id = resolver(case_id=_active_case_id(), display_path=path)
-        reauth_id = _record_reauth_event(
-            request, examiner, reauth_action,
-            binding={
-                "action": action,
-                "evidence_object_id": object_id,
-                "idempotency_key": idempotency_key,
-                "reason": reason,
-            },
-        )
-        if not reauth_id:
-            return JSONResponse({"error": "Recovery re-auth audit required"}, status_code=403)
-        result = beginner(
-            case_id=_active_case_id(), display_path=path, action=action,
-            reason=reason, idempotency_key=idempotency_key,
-            reauth_audit_event_id=reauth_id, actor=_request_principal(request),
-            examiner=examiner,
-        )
-    except Exception as exc:
-        return _active_case_error_response(exc, default=500)
-    result = result if isinstance(result, dict) else {}
-    return JSONResponse({
-        "authority": "db", "operation_id": result.get("operation_id"),
-        "operation_phase": result.get("operation_phase"),
-        "action": result.get("action", action),
-        "ready_for_replacement": result.get("ready_for_replacement", False),
-    })
-
-
-async def post_evidence_replace_begin(request: Request) -> JSONResponse:
-    return await _post_evidence_recovery_begin(
-        request, action="REPLACE_REACQUIRE", reauth_action="evidence_replace_begin"
-    )
-
-
-async def post_evidence_restore_begin(request: Request) -> JSONResponse:
-    return await _post_evidence_recovery_begin(
-        request, action="RESTORE_EXACT", reauth_action="evidence_restore"
-    )
-
-
-async def post_evidence_recovery_complete(request: Request) -> JSONResponse:
-    """Freshly re-authenticate, full-hash, re-protect, and finalize recovery."""
-    if (role_err := _require_examiner_role(request)) is not None:
-        return role_err
-    if (err := _must_reset_check(request)) is not None:
-        return err
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-    if not isinstance(body, dict) or set(body) - {"password", "operation_id"}:
-        return JSONResponse({"error": "Unknown completion request field"}, status_code=400)
-    try:
-        operation_id = str(uuid.UUID(str(body.get("operation_id") or "")))
-    except (ValueError, AttributeError):
-        return JSONResponse({"error": "operation_id is required"}, status_code=400)
-    if (reauth_err := await _supabase_reverify(request, body)) is not None:
-        return reauth_err
-    service = _EVIDENCE_DB
-    action_reader = getattr(service, "recovery_operation_action", None)
-    completer = getattr(service, "complete_recovery", None)
-    if not callable(action_reader) or not callable(completer):
-        return _no_case_response()
-    try:
-        action = action_reader(case_id=_active_case_id(), operation_id=operation_id)
-        reauth_action = (
-            "evidence_replace_complete"
-            if action == "REPLACE_REACQUIRE"
-            else "evidence_restore_complete"
-        )
-        reauth_id = _record_reauth_event(
-            request, examiner, reauth_action, binding={"operation_id": operation_id}
-        )
-        if not reauth_id:
-            return JSONResponse({"error": "Completion re-auth audit required"}, status_code=403)
-        result = completer(
-            case_id=_active_case_id(), operation_id=operation_id,
-            completion_reauth_audit_event_id=reauth_id,
-            actor=_request_principal(request), examiner=examiner,
-        )
-    except Exception as exc:
-        return _active_case_error_response(exc, default=500)
-    result = result if isinstance(result, dict) else {}
-    return JSONResponse({
-        "authority": "db", "completed": True, "operation_id": operation_id,
-        "reacquired": bool(result.get("reacquired")),
-        "restored_exact": bool(result.get("restored_exact")),
-        "manifest_version": result.get("manifest_version"),
-        "evidence_version_id": result.get("evidence_version_id"),
-        "seal_status": result.get("seal_status"),
-    })
-
-
-# ---------------------------------------------------------------------------
-# Verify Ledger and Full Verify Evidence (legacy URL retained for compatibility)
-# ---------------------------------------------------------------------------
 
 
 async def post_evidence_chain_verify_ledger(request: Request) -> JSONResponse:
@@ -1868,60 +1643,6 @@ async def post_evidence_chain_full_verify(request: Request) -> JSONResponse:
     })
 
 
-async def post_evidence_storage_profile(request: Request) -> JSONResponse:
-    """Change or re-authorize the fixed case storage profile after scoped re-auth."""
-    if (role_err := _require_examiner_role(request)) is not None:
-        return role_err
-    if (reset_err := _must_reset_check(request)) is not None:
-        return reset_err
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-    required = {"password", "profile", "reason", "idempotency_key"}
-    if not isinstance(body, dict) or set(body) != required:
-        return JSONResponse({"error": "Invalid storage profile request fields"}, status_code=400)
-    profile = str(body.get("profile") or "")
-    reason = " ".join(str(body.get("reason") or "").split())
-    idempotency_key = str(body.get("idempotency_key") or "").strip()
-    if profile not in {"LOCAL_IMMUTABLE", "EXTERNALLY_READ_ONLY"}:
-        return JSONResponse({"error": "Invalid storage profile"}, status_code=400)
-    if not 1 <= len(reason) <= 1000:
-        return JSONResponse({"error": "reason is required (max 1000 characters)"}, status_code=400)
-    if not 1 <= len(idempotency_key) <= 128:
-        return JSONResponse({"error": "Invalid idempotency_key"}, status_code=400)
-    if (reauth_err := await _supabase_reverify(request, body)) is not None:
-        return reauth_err
-    changer = getattr(_EVIDENCE_DB, "change_storage_profile", None) if _EVIDENCE_DB else None
-    if not callable(changer):
-        return _no_case_response()
-    binding = {"profile": profile, "reason": reason, "idempotency_key": idempotency_key}
-    reauth_id = _record_reauth_event(
-        request, examiner, "evidence_storage_profile_change", binding=binding
-    )
-    if not reauth_id:
-        return JSONResponse({"error": "Storage profile re-auth audit required"}, status_code=403)
-    try:
-        result = changer(
-            case_id=_active_case_id(), profile=profile, reason=reason,
-            idempotency_key=idempotency_key, reauth_audit_event_id=reauth_id,
-            actor=_request_principal(request),
-        )
-    except Exception as exc:
-        return _active_case_error_response(exc, default=500)
-    if not isinstance(result, dict):
-        return JSONResponse({"error": "Storage profile change failed"}, status_code=500)
-    return JSONResponse({"authority": "db", **result})
-
-
-# ---------------------------------------------------------------------------
-# Solana anchor endpoint (Phase 16e — manual re-anchor)
-# ---------------------------------------------------------------------------
-
-
 async def post_evidence_chain_anchor(request: Request) -> JSONResponse:
     """Anchor current manifest on Solana. Session auth, no HMAC required.
 
@@ -1976,43 +1697,6 @@ async def post_evidence_chain_anchor(request: Request) -> JSONResponse:
         "explorer_url": anchor_info.get("explorer_url"),
         "proof_export": proof_info,
     })
-
-
-async def post_evidence_chain_signing_key_rotate(request: Request) -> JSONResponse:
-    """Rotate the installation signing public identity after scoped re-auth."""
-    if (role_err := _require_examiner_role(request)) is not None:
-        return role_err
-    if (reset_err := _must_reset_check(request)) is not None:
-        return reset_err
-    examiner = _resolve_examiner(request)
-    if not examiner:
-        return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-    if not isinstance(body, dict) or set(body) != {"password", "reason"}:
-        return JSONResponse({"error": "Invalid signing-key rotation fields"}, status_code=400)
-    reason = " ".join(str(body.get("reason") or "").split())
-    if not 1 <= len(reason) <= 1000:
-        return JSONResponse({"error": "rotation reason is required"}, status_code=400)
-    if (reauth_err := await _supabase_reverify(request, body)) is not None:
-        return reauth_err
-    reauth_id = _record_reauth_event(
-        request, examiner, "evidence_signing_key_rotate", binding={"reason": reason}
-    )
-    if not reauth_id:
-        return JSONResponse({"error": "Signing-key re-auth audit required"}, status_code=403)
-    rotator = getattr(_EVIDENCE_DB, "rotate_signing_key", None) if _EVIDENCE_DB else None
-    if not callable(rotator):
-        return _no_case_response()
-    principal = _request_principal(request)
-    actor_user = str(principal.get("principal_id") or "") if isinstance(principal, dict) else ""
-    try:
-        result = rotator(actor_user_id=actor_user, reauth_audit_event_id=reauth_id, reason=reason)
-    except Exception as exc:
-        return _active_case_error_response(exc, default=503)
-    return JSONResponse({"authority": "db", "rotation": result if isinstance(result, dict) else {}})
 
 
 async def post_evidence_chain_proof_export(request: Request) -> JSONResponse:
@@ -5930,17 +5614,11 @@ def _dashboard_api_routes() -> list[Route]:
         Route("/api/evidence/chain/seal", post_evidence_chain_seal, methods=["POST"]),
         Route("/api/evidence/chain/seal/resume", post_evidence_chain_seal_resume, methods=["POST"]),
         Route("/api/evidence/chain/ignore", post_evidence_chain_ignore, methods=["POST"]),
-        Route("/api/evidence/chain/delete", post_evidence_chain_delete, methods=["POST"]),
         Route("/api/evidence/chain/retire", post_evidence_chain_retire, methods=["POST"]),
         Route("/api/evidence/chain/disposition/resume", post_evidence_chain_disposition_resume, methods=["POST"]),
-        Route("/api/evidence/chain/replace/begin", post_evidence_replace_begin, methods=["POST"]),
-        Route("/api/evidence/chain/restore/begin", post_evidence_restore_begin, methods=["POST"]),
-        Route("/api/evidence/chain/recovery/complete", post_evidence_recovery_complete, methods=["POST"]),
         Route("/api/evidence/chain/full-verify", post_evidence_chain_full_verify, methods=["POST"]),
         Route("/api/evidence/chain/verify-ledger", post_evidence_chain_verify_ledger, methods=["POST"]),
-        Route("/api/evidence/storage/profile", post_evidence_storage_profile, methods=["POST"]),
         Route("/api/evidence/chain/anchor", post_evidence_chain_anchor, methods=["POST"]),
-        Route("/api/evidence/chain/signing-key/rotate", post_evidence_chain_signing_key_rotate, methods=["POST"]),
         Route("/api/evidence/chain/proof-export", post_evidence_chain_proof_export, methods=["POST"]),
         # Approach C: response-guard override
         Route("/api/response-guard/status", get_response_guard_status, methods=["GET"]),

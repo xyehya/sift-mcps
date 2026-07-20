@@ -15,11 +15,13 @@ from typing import cast
 import pytest
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
+from sift_core.execute.evidence_binding import AdmittedEvidenceBinding
 from sift_core.execute.security_policy import (
     build_security_policy,
     load_policy_from_env,
 )
 from sift_gateway.active_case import ActiveCase
+from sift_gateway.evidence_admission import bind_admitted_refs, reset_admitted_refs
 from sift_gateway.mcp_server import (
     _db_orientation_authority,
     _normalize_output_schema,
@@ -58,34 +60,33 @@ class _EvidenceService:
         return self.rows
 
 
-class _Resolver:
-    def __init__(self):
-        self.calls = []
-
-    def resolve_evidence_reference(self, case_id, reference):
-        self.calls.append((case_id, reference))
-        return {
-            "evidence_id": "ev-1",
-            "version_id": "ver-1",
-            "display_path": "evidence/disk.E01",
-            "path": "/cases/case-one/evidence/disk.E01",
-            "sha256": "sha256:" + "a" * 64,
-            "bytes": 4096,
-            "st_dev": 1,
-            "st_ino": 2,
-            "st_mtime_ns": 3,
-            "st_ctime_ns": 4,
-            "immutable_required": True,
-            "storage_profile": "LOCAL_IMMUTABLE",
-            "storage_source_identity": "",
-            "mount_instance_identity": "",
-            "read_only_required": False,
-            "storage_generation": 1,
-            "storage_verified_generation": 1,
-            "storage_manifest_version": 1,
-            "storage_manifest_hash": "sha256:manifest",
-            "storage_verification_receipt_id": "receipt-1",
-        }
+# One fully-populated admitted evidence binding, exactly as the evidence-gate
+# middleware pins it into the admission ContextVar (bind_admitted_refs) before
+# dispatch. serialize_resolved_ref round-trips this dict unchanged, so it is also
+# the expected _resolved_evidence_refs value.
+_ADMITTED_DISK_BINDING = {
+    "ref": "evidence/disk.E01",
+    "evidence_id": "ev-1",
+    "version_id": "ver-1",
+    "display_path": "evidence/disk.E01",
+    "path": "/cases/case-one/evidence/disk.E01",
+    "sha256": "sha256:" + "a" * 64,
+    "bytes": 4096,
+    "st_dev": 1,
+    "st_ino": 2,
+    "st_mtime_ns": 3,
+    "st_ctime_ns": 4,
+    "immutable_required": True,
+    "storage_profile": "LOCAL_IMMUTABLE",
+    "storage_source_identity": "",
+    "mount_instance_identity": "",
+    "read_only_required": False,
+    "storage_generation": 1,
+    "storage_verified_generation": 1,
+    "storage_manifest_version": 1,
+    "storage_manifest_hash": "sha256:manifest",
+    "storage_verification_receipt_id": "receipt-1",
+}
 
 
 def _gateway(*, dsn="postgresql://service@db/sift", evidence_service=None):
@@ -152,73 +153,52 @@ def test_db_orientation_fails_closed_when_evidence_service_is_unavailable(monkey
         _db_orientation_authority(_gateway(evidence_service=None), "evidence_info", "{}")
 
 
-def test_run_command_evidence_refs_are_resolved_only_by_active_case_service():
-    resolver = _Resolver()
-    supplied = {"evidence_refs": ["evidence/disk.E01"], "_resolved_evidence_refs": [{"path": "/attacker"}]}
-
-    with _use_gateway_active_case(_CASE):
-        prepared = _prepare_core_tool_arguments(_gateway(evidence_service=resolver), "run_command", supplied)
-
-    assert prepared["_resolved_evidence_refs"] == [{
-        "ref": "evidence/disk.E01",
-        "evidence_id": "ev-1",
-        "version_id": "ver-1",
-        "display_path": "evidence/disk.E01",
-        "path": "/cases/case-one/evidence/disk.E01",
-        "sha256": "sha256:" + "a" * 64,
-        "bytes": 4096,
-        "st_dev": 1,
-        "st_ino": 2,
-        "st_mtime_ns": 3,
-        "st_ctime_ns": 4,
-        "immutable_required": True,
-        "storage_profile": "LOCAL_IMMUTABLE",
-        "storage_source_identity": "",
-        "mount_instance_identity": "",
-        "read_only_required": False,
-        "storage_generation": 1,
-        "storage_verified_generation": 1,
-        "storage_manifest_version": 1,
-        "storage_manifest_hash": "sha256:manifest",
-        "storage_verification_receipt_id": "receipt-1",
-    }]
-    assert resolver.calls == [(_CASE.case_id, "evidence/disk.E01")]
-
-
-def test_run_command_reference_resolution_failure_is_internal_and_typed():
-    class _FailingResolver:
-        def resolve_evidence_reference(self, *_):
-            raise RuntimeError("evidence_not_registered")
-
-    with _use_gateway_active_case(_CASE):
+def test_run_command_evidence_refs_come_only_from_admitted_bindings():
+    """A5 (single admission authority): ``_prepare_core_tool_arguments`` draws the
+    run_command evidence binding SOLELY from the admission ContextVar that the
+    evidence-gate middleware populates via ``bind_admitted_refs`` — there is no
+    per-service resolver fallback. A client that injects its own
+    ``_resolved_evidence_refs`` has it stripped and REPLACED by the admitted
+    binding, so a caller can never smuggle an attacker-controlled path into the
+    downstream descriptor open."""
+    token = bind_admitted_refs(
+        [cast(AdmittedEvidenceBinding, dict(_ADMITTED_DISK_BINDING))],
+        inventory_token="tok-1",
+    )
+    try:
         prepared = _prepare_core_tool_arguments(
-            _gateway(evidence_service=_FailingResolver()),
             "run_command",
-            {"evidence_refs": "evidence/unknown.E01"},
+            {
+                "evidence_refs": ["evidence/disk.E01"],
+                "_resolved_evidence_refs": [{"path": "/attacker"}],
+            },
         )
+    finally:
+        reset_admitted_refs(token)
 
-    assert prepared["_evidence_ref_error"] == "evidence_not_registered"
+    # The admitted binding — not the client-injected {"path": "/attacker"} —
+    # is what reaches the core tool.
+    assert prepared["_resolved_evidence_refs"] == [_ADMITTED_DISK_BINDING]
+    assert {"path": "/attacker"} not in prepared["_resolved_evidence_refs"]
+    # evidence_refs is rewritten to the admitted evidence_id list.
+    assert prepared["evidence_refs"] == ["ev-1"]
+
+
+def test_run_command_without_admitted_refs_injects_no_binding():
+    """With nothing admitted (no middleware admission), the single-authority path
+    injects no evidence binding at all and still strips any client-supplied private
+    fields — there is deliberately no second resolution path."""
+    prepared = _prepare_core_tool_arguments(
+        "run_command",
+        {
+            "evidence_refs": ["evidence/disk.E01"],
+            "_resolved_evidence_refs": [{"path": "/attacker"}],
+        },
+    )
     assert "_resolved_evidence_refs" not in prepared
-
-
-def test_run_command_incomplete_authority_binding_fails_closed():
-    class _IncompleteResolver:
-        def resolve_evidence_reference(self, *_):
-            return {
-                "evidence_id": "ev-1",
-                "display_path": "evidence/disk.E01",
-                "path": "/cases/case-one/evidence/disk.E01",
-            }
-
-    with _use_gateway_active_case(_CASE):
-        prepared = _prepare_core_tool_arguments(
-            _gateway(evidence_service=_IncompleteResolver()),
-            "run_command",
-            {"evidence_refs": ["evidence/disk.E01"]},
-        )
-
-    assert prepared["_evidence_ref_error"] == "evidence_binding_incomplete"
-    assert "_resolved_evidence_refs" not in prepared
+    # The client-supplied evidence_refs is left untouched (no admitted rewrite),
+    # but the private injection field is gone.
+    assert prepared["evidence_refs"] == ["evidence/disk.E01"]
 
 
 @pytest.mark.parametrize(
