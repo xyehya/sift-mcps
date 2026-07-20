@@ -245,8 +245,30 @@ Never run two writer agents in the same working tree.
 
 ## Root orchestration contract
 
-This section applies only when the operator explicitly appoints the current agent as
-the root integration orchestrator and grants commit/push authority.
+This section is **inert unless the operator explicitly launches this session as the sift-mcps root
+sprint orchestrator** and grants commit/push authority — i.e. pastes the kickoff prompt, or says
+"run/continue as orchestrator" for `~/AI/sift-mcps`. Any other session (coding, review, a spawned
+agent, plain chat, a different repo) ignores this whole section. It lives here (not in the machine-
+global `~/.claude/CLAUDE.md`) so it is read by **both** Claude Code (via `CLAUDE.md`'s `@AGENTS.md`
+include) and Codex (which reads `AGENTS.md` natively) — the same trigger works in either tool.
+
+### Session bootstrap (read before doing anything)
+
+When triggered, **do not rediscover the workflow — read these first, in order, then resume from the
+recorded checkpoint:**
+
+1. `~/AI/sift-portal-ops/briefs/p423-evidence-custody/SPRINT-ORCHESTRATOR-PROMPT.md` — the role
+   contract + full read-order + the Execution Playbook (the per-packet loop, and the
+   maintain-three-things-and-notify + never-compact/checkpoint discipline, all baked in).
+2. `~/AI/sift-portal-ops/briefs/p423-evidence-custody/WORKTREE_LEDGER.md` — the resumable state;
+   reconcile against live git first, then resume at its "Context checkpoint note".
+
+**You orchestrate, never implement:** dispatch teammate agents (writers/reviewers), integrate + push
+`main` yourself, keep all state in files. The per-packet loop, the ledger·canvas·notify maintenance
+triad, and the context/checkpoint rule live in the prompt above — this file does not restate them
+(one source, no drift). The rest of this section is the standing authority / worktree-ledger /
+serialized-proof contract that the prompt's playbook builds on. (Currently scoped to the P4.23
+custody sprint; generalizes to future sprints by swapping the brief path above.)
 
 ### Authority and scheduling
 
