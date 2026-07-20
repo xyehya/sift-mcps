@@ -101,6 +101,56 @@ def inventory_token(case_dir: str) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
+# Leading-dot names and these suffixes are partial-transfer artifacts; a scan
+# reports them as 'partial' so an in-flight rsync/cp copy is never Pending (EC-5).
+_PARTIAL_SUFFIXES = (".part", ".partial", ".tmp", ".filepart", ".crdownload")
+
+
+def classify_inventory_entries(case_dir: str) -> list[dict[str, Any]] | None:
+    """Read-only classified scan of a case's canonical evidence directory.
+
+    Returns one dict per direct entry in the shape ``app.custody_reconcile``
+    consumes, or ``None`` when the directory is unavailable. Never follows a
+    symlink and never reads file bytes. This is the single canonical scanner used
+    by BOTH the Gateway sync admission path and the durable worker re-check, so
+    the computed custody gate classifies identical entry kinds on both seams.
+    """
+    evidence_dir = Path(case_dir).resolve() / "evidence"
+    try:
+        entries: list[dict[str, Any]] = []
+        with os.scandir(evidence_dir) as it:
+            for entry in sorted(it, key=lambda e: e.name):
+                st = entry.stat(follow_symlinks=False)
+                name = entry.name
+                if name.startswith(".") or name.endswith(_PARTIAL_SUFFIXES):
+                    kind = "partial"
+                elif stat.S_ISLNK(st.st_mode):
+                    kind = "symlink"
+                elif stat.S_ISDIR(st.st_mode):
+                    kind = "directory"
+                elif not stat.S_ISREG(st.st_mode):
+                    kind = "nonregular"
+                elif st.st_nlink != 1:
+                    kind = "multilink"
+                else:
+                    kind = "regular"
+                entries.append(
+                    {
+                        "display_path": f"evidence/{name}",
+                        "display_name": name,
+                        "entry_kind": kind,
+                        "bytes": int(st.st_size),
+                        "st_dev": int(st.st_dev),
+                        "st_ino": int(st.st_ino),
+                        "st_nlink": int(st.st_nlink),
+                        "st_mode": oct(stat.S_IMODE(st.st_mode)).replace("0o", "0"),
+                    }
+                )
+        return entries
+    except OSError:
+        return None
+
+
 def validate_binding_fd(fd: int, binding: AdmittedEvidenceBinding) -> os.stat_result:
     """Validate a pinned descriptor against the Gateway admission fingerprint."""
     current = os.fstat(fd)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,10 +20,11 @@ from sift_core.evidence_storage import (
     external_storage_facts,
 )
 from sift_core.execute.evidence_binding import (
-    inventory_token as _inventory_token,
+    classify_inventory_entries,
+    use_final_open_authority_validator,
 )
 from sift_core.execute.evidence_binding import (
-    use_final_open_authority_validator,
+    inventory_token as _inventory_token,
 )
 from sift_core.execute.job_worker import (
     ClaimedJob,
@@ -68,11 +68,11 @@ def build_custody_validator(dsn: str):
                         deny_after_commit = True
                     if not deny_after_commit:
                         cur.execute(
-                            "select seal_status from app.evidence_gate_status(%s)",
+                            "select app.custody_gate_state(%s)",
                             (job.case_id,),
                         )
                         gate = cur.fetchone()
-                        if not gate or gate[0] != "sealed":
+                        if not gate or gate[0] != "OPEN":
                             raise FatalJobError("custody_admission_denied")
                         for item in (
                             job.spec_internal.get("resolved_evidence_refs") or []
@@ -148,11 +148,11 @@ def _validate_custody_read_only(cur: Any, job: ClaimedJob) -> None:
     if not expected_inventory or current_inventory != expected_inventory:
         raise FatalJobError("custody_admission_denied")
     cur.execute(
-        "select seal_status from app.evidence_gate_status(%s)",
+        "select app.custody_gate_state(%s)",
         (job.case_id,),
     )
     gate = cur.fetchone()
-    if not gate or gate[0] != "sealed":
+    if not gate or gate[0] != "OPEN":
         raise FatalJobError("custody_admission_denied")
     for item in job.spec_internal.get("resolved_evidence_refs") or []:
         if not isinstance(item, dict):
@@ -180,6 +180,12 @@ def _validate_storage_authority(cur: Any, job: ClaimedJob, case_dir: str) -> Non
     expected = job.spec_internal.get("storage_execution_authority")
     if not isinstance(expected, dict) or not expected:
         raise FatalJobError("custody_admission_denied")
+    # LOCAL_IMMUTABLE is the only supported target storage profile (P4.23). Its
+    # guarantees come from the sealed-version re-check + computed gate + the
+    # per-descriptor identity/immutable pin; the as-built external-storage
+    # authority tables are gone, so do not query them.
+    if str(expected.get("storage_profile")) == StorageProfile.LOCAL_IMMUTABLE:
+        return
     cur.execute(
         """select a.profile,a.source_identity,a.verified_mount_instance,a.state,
                   a.generation,a.verified_generation,a.read_only,h.manifest_version,
@@ -245,89 +251,26 @@ def _validate_storage_authority(cur: Any, job: ClaimedJob, case_dir: str) -> Non
 
 
 def _record_inventory_change(cur: Any, job: ClaimedJob, case_dir: str) -> None:
-    """Persist read-only worker observations before denying a stale durable job."""
-    evidence_dir = Path(case_dir).resolve() / "evidence"
+    """Persist one read-only reconciliation before denying a stale durable job.
+
+    Routes through the same ``app.custody_reconcile`` RPC and the same canonical
+    scanner the Gateway sync path uses, so the durable worker's observation and
+    the computed gate stay consistent with reconcile-before-dispatch. Never reads
+    file bytes; never mutates evidence.
+    """
+    from psycopg.types.json import Jsonb
+
+    entries = classify_inventory_entries(case_dir)
     cur.execute(
-        """select id::text, display_path, status, seal_status, current_bytes, sealed_at
-           from app.evidence_objects where case_id = %s""",
-        (job.case_id,),
+        "select app.custody_reconcile(%s, %s, %s, %s, %s, null, null)",
+        (
+            job.case_id,
+            Jsonb(entries or []),
+            entries is not None,
+            "dispatch",
+            str(job.job_id),
+        ),
     )
-    known = {str(row[1]): row for row in cur.fetchall()}
-    live: set[str] = set()
-    with os.scandir(evidence_dir) as entries:
-        for entry in sorted(entries, key=lambda item: item.name):
-            rel = f"evidence/{entry.name}"
-            live.add(rel)
-            try:
-                st = entry.stat(follow_symlinks=False)
-                safe = stat.S_ISREG(st.st_mode) and st.st_nlink == 1
-            except OSError:
-                st = None
-                safe = False
-            if rel not in known:
-                cur.execute(
-                    "select app.evidence_observe_admission(%s, %s, %s, %s, %s, null, null)",
-                    (
-                        job.case_id,
-                        rel,
-                        entry.name,
-                        st.st_size if st else None,
-                        str(job.job_id),
-                    ),
-                )
-                detected = cur.fetchone()
-                if not safe:
-                    cur.execute(
-                        "select app.evidence_mark_admission_violation"
-                        "(%s, %s, %s, %s::jsonb, %s, null, null)",
-                        (
-                            job.case_id,
-                            detected[0] if detected else None,
-                            "unsafe_evidence_inventory_entry",
-                            json.dumps(["unsafe_evidence_inventory_entry"]),
-                            str(job.job_id),
-                        ),
-                    )
-            else:
-                row = known[rel]
-                if row[2] == "sealed" and row[3] == "sealed":
-                    sealed_at = row[5]
-                    sealed_ns = (
-                        int(sealed_at.timestamp() * 1_000_000_000)
-                        if hasattr(sealed_at, "timestamp")
-                        else 0
-                    )
-                    changed = (
-                        not safe
-                        or st is None
-                        or (row[4] is not None and st.st_size != int(row[4]))
-                        or (sealed_ns and st.st_ctime_ns > sealed_ns)
-                    )
-                    if changed:
-                        cur.execute(
-                            "select app.evidence_mark_admission_violation"
-                            "(%s, %s, %s, %s::jsonb, %s, null, null)",
-                            (
-                                job.case_id,
-                                row[0],
-                                "sealed_evidence_changed",
-                                json.dumps(["sealed_evidence_changed"]),
-                                str(job.job_id),
-                            ),
-                        )
-    for rel, row in known.items():
-        if row[2] == "sealed" and row[3] == "sealed" and rel not in live:
-            cur.execute(
-                "select app.evidence_mark_admission_violation"
-                "(%s, %s, %s, %s::jsonb, %s, null, null)",
-                (
-                    job.case_id,
-                    row[0],
-                    "sealed_evidence_missing",
-                    json.dumps(["sealed_evidence_missing"]),
-                    str(job.job_id),
-                ),
-            )
 
 
 def run_command_job_handler(job: ClaimedJob, ctx: JobContext) -> JobResult:
