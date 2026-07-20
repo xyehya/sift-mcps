@@ -1,11 +1,11 @@
 {
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "codebase-memory-mcp"
   ],
   "enabledPlugins": {
     "codeguard-security@project-codeguard": true,
-    "typescript-lsp@claude-plugins-official": true
-  },
-  "outputStyle": "Explanatory",
-  "enableAllProjectMcpServers": true
+    "typescript-lsp@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true
+  }
 }
