@@ -1,9 +1,9 @@
-[mcp_servers.codebase-memory-mcp]
-command = "codebase-memory-mcp"
-args = []
-
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
 [mcp_servers.siftmcp]
 url = "https://192.168.122.81:4508/mcp"
 bearer_token_env_var = "SIFT_AGENT_TOKEN"
-required = true
-startup_timeout_sec = 15
+startup_timeout_sec = 60
+
+[mcp_servers.codebase-memory-mcp]
+command = "/Users/yk/.local/bin/codebase-memory-mcp"

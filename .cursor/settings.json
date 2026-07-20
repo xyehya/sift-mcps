@@ -1,8 +1,5 @@
 {
   "plugins": {
-    "supabase-agent-skills/supabase": {
-      "enabled": true
-    },
     "cursor-public/opensearch-agent-skills": {
       "enabled": true
     },
@@ -12,7 +9,7 @@
     "pr-review-canvas": {
       "enabled": true
     },
-    "linear": {
+    "context7-plugin": {
       "enabled": true
     }
   }
