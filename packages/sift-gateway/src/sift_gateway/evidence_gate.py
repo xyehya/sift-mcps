@@ -36,16 +36,21 @@ PORTAL_REMEDIATION = (
 )
 
 
-def check_evidence_gate_db(case_id: str | None, dsn: str | None) -> dict:
+def check_evidence_gate_db(
+    case_id: str | None, dsn: str | None, case_dir: str | None = None
+) -> dict:
     """Resolve the computed custody gate for a case_id (fail-closed).
 
-    Delegates to the target admission module's computed gate reader
-    (``app.custody_gate_state``) and returns the standard
-    ``{blocked, gate_state, status, issues, manifest_version}`` envelope. The
-    reconcile-before-dispatch scan is driven separately by
-    :func:`sift_gateway.custody.admission.reconcile`; this is the pure gate read
-    used by the middleware and the orientation (case_info/evidence_info) path.
+    This is the single gate seam for the policy chain. When ``case_dir`` is given
+    (dispatch), it performs reconcile-before-dispatch through
+    :func:`sift_gateway.custody.admission.reconcile` — a read-only scan that
+    persists the inventory snapshot + observation and returns the computed
+    four-state gate. With no ``case_dir`` (orientation reads: case_info/
+    evidence_info) it is a pure computed-gate read. Both return the standard
+    ``{blocked, gate_state, status, issues, manifest_version}`` envelope.
     """
+    if case_dir is not None:
+        return dict(admission.reconcile(case_id, case_dir, dsn))
     return dict(admission.gate_state(case_id, dsn))
 
 

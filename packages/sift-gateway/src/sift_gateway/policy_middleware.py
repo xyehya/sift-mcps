@@ -46,6 +46,7 @@ from sift_gateway.evidence_admission import (
 )
 from sift_gateway.evidence_gate import (
     build_block_response,
+    check_evidence_gate_db,
 )
 from sift_gateway.mcp_endpoint import (
     _append_case_context,
@@ -611,7 +612,7 @@ class EvidenceGateMiddleware(Middleware):
         dsn = getattr(self.gateway, "control_plane_dsn", None)
         case_dir = str(case.artifact_path) if case.artifact_path else None
         gate = await asyncio.to_thread(
-            admission.reconcile, case.case_id, case_dir, dsn
+            check_evidence_gate_db, case.case_id, dsn, case_dir
         )
         if not gate["blocked"]:
             refs: list[str] = []
