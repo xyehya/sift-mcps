@@ -165,7 +165,11 @@ use the stated fallback instead of blocking or fabricating a tool verdict.
    `search_graph` / `trace_path` / `get_code_snippet` / `query_graph` / `get_architecture`
    for code discovery over grep/glob, plus the `codebase-memory` skill for query syntax.
    Never invoke its CLI. If a required MCP method is unavailable, report it; for
-   read-only discovery, fall back to `rg` and exact source reads.
+   read-only discovery, fall back to `rg` and exact source reads. **Index freely — the
+   derived graph store (`.codebase-memory/graph.db.zst`, `artifact.json`, `.gitattributes`)
+   is now git-ignored, so `index_repository` no longer dirties the tree; do NOT skip
+   indexing or fall back to `rg` over dirty-tree fears. Only `.codebase-memory/adr.md`
+   (the ADR mirror) is tracked — never commit the regenerated index.**
 3. **LSP validators on changed files before closing** — Python:
    `uv run --extra dev ruff check <paths>` + `uv run --extra dev pyright` (and
    targeted `uv run --extra dev pyright <file>` on each file touched); frontend:
