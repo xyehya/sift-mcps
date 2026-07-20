@@ -605,10 +605,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
         rewrite (see ``EvidenceGateMiddleware`` / ``evidence_gate.
         check_evidence_gate_db``) — this brings the Portal read in line with it.
         """
+        # Pass the bare case directory: ``reconcile`` -> ``classify_inventory_
+        # entries`` appends ``/evidence`` itself. This matches the MCP dispatch
+        # caller (``policy_middleware`` -> ``check_evidence_gate_db``); passing an
+        # already-suffixed path here scanned ``.../evidence/evidence`` and yielded
+        # a spurious BLOCKED_UNAVAILABLE on Refresh (CP3).
         case_dir = self._case_artifact_path(case_id)
-        evidence_dir = str(case_dir / "evidence") if case_dir else None
         gate = custody_admission.reconcile(
-            case_id, evidence_dir, self._dsn, trigger="refresh"
+            case_id, str(case_dir) if case_dir else None, self._dsn, trigger="refresh"
         )
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -643,9 +647,11 @@ class EvidenceAuthorityService(_BasePortalDbService):
         detected-only or digestless object keeps its raw ``status`` and reports
         no digest; ``manifest_version`` is additive (new consumers may use it).
         """
+        # Bare case directory — the scanner appends ``/evidence`` (see gate_status).
         case_dir = self._case_artifact_path(case_id)
-        evidence_dir = str(case_dir / "evidence") if case_dir else None
-        custody_admission.reconcile(case_id, evidence_dir, self._dsn, trigger="refresh")
+        custody_admission.reconcile(
+            case_id, str(case_dir) if case_dir else None, self._dsn, trigger="refresh"
+        )
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
