@@ -162,7 +162,18 @@ begin
 
   v_binding := app.custody_reauth_binding(p_idempotency_key, p_reason, p_targets);
 
-  -- Verify the stored reauth binding against the single canonical form (EC-6).
+  -- EC-6 single-source binding (proof). The reauth binding is bound in TWO
+  -- enforced parts, and neither side re-derives the other under a different
+  -- language/locale/collation default:
+  --   1. {idempotency_key, reason, targets} : the canonical JSON binding, built
+  --      ONLY by app.custody_reauth_binding (targets ordered COLLATE "C"). The
+  --      writer (record_reauth) persists THIS function's output into
+  --      details->'binding'; the verifier below re-derives THIS function and
+  --      compares `IS DISTINCT FROM` verbatim — writer==verifier by construction.
+  --   2. {actor, case, action} : bound here by SCALAR EQUALITY against the audit
+  --      row columns (actor_user_id / case_id / event_type), so they cannot drift
+  --      across a language/collation boundary either. They are deliberately NOT
+  --      inside the JSON binding.
   select * into v_reauth from app.audit_events
     where id = p_reauth_audit_event_id for share;
   if not found
@@ -321,6 +332,12 @@ begin
   end if;
 
   perform pg_advisory_xact_lock(hashtextextended(v_op.case_id::text, 0));
+
+  -- CP2A: defense-in-depth — cross-check that the committed p_items set matches
+  -- the reauthorized v_op.targets (and their snapshot), so a committed item can
+  -- never fall outside what the operator reauthenticated. Deferred to CP2A's
+  -- seal.py commit path (no caller yet in CP1); the reauth binding over targets
+  -- + the per-item posture invariants below are the CP1 authority.
 
   -- Enforce the sealed posture invariants on every item (SPEC PROTECTED facts).
   if exists (

@@ -1400,6 +1400,13 @@ class EvidenceAuthorityService(_BasePortalDbService):
         )
 
     def gate_status(self, case_id: str) -> dict[str, Any]:
+        # CP2B-OWNED interim inconsistency (P4.23): this Portal read still queries
+        # the dormant pre-CP1 path (app.evidence_gate_status + the external-storage
+        # authorities), NOT the target computed gate (app.custody_gate_state via
+        # sift_gateway.custody.admission). CP2B rewires gate_status()/list_evidence()
+        # onto custody.admission; until then this is a known dormant-path read, not
+        # a live bug. The agent-facing enforcement already routes through the target
+        # gate (see EvidenceGateMiddleware / evidence_gate.check_evidence_gate_db).
         reconciliation = self.reconcile_for_admission(case_id)
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -1476,6 +1483,10 @@ class EvidenceAuthorityService(_BasePortalDbService):
         }
 
     def list_evidence(self, case_id: str) -> list[dict[str, Any]]:
+        # CP2B-OWNED interim inconsistency (P4.23): still lists from the dormant
+        # pre-CP1 evidence_objects shape rather than the target inventory/manifest
+        # membership model. CP2B rewires this onto custody.admission (EC-4 sealed
+        # rendering). Known dormant-path read, not a live bug — see gate_status().
         self.reconcile_for_admission(case_id)
         with self._connect() as conn:
             with conn.cursor() as cur:

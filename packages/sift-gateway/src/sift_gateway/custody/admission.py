@@ -131,12 +131,22 @@ def reconcile(
                     ),
                 )
                 row = cur.fetchone()
+                # Real active manifest version (0 pre-seal); read in the same
+                # transaction so the reported value matches the reconciled state.
+                cur.execute(
+                    "select coalesce(max(manifest_version), 0) "
+                    "from app.manifest_versions where case_id = %s",
+                    (case_id,),
+                )
+                mv_row = cur.fetchone()
             conn.commit()
     except Exception as exc:
         logger.error("admission.reconcile: failed for %s: %s", case_id, exc)
         return _blocked("BLOCKED_UNAVAILABLE", ["Evidence reconciliation unavailable"])
 
-    return _gate_result(str(row[0]) if row and row[0] else "BLOCKED_PENDING")
+    state = str(row[0]) if row and row[0] else "BLOCKED_PENDING"
+    manifest_version = int(mv_row[0]) if mv_row and mv_row[0] is not None else 0
+    return _gate_result(state, manifest_version)
 
 
 def gate_state(case_id: str | None, dsn: str | None) -> GateResult:
@@ -157,12 +167,23 @@ def gate_state(case_id: str | None, dsn: str | None) -> GateResult:
     try:
         with psycopg.connect(dsn) as conn:
             with conn.cursor() as cur:
-                cur.execute("select app.custody_gate_state(%s)", (case_id,))
+                # One round-trip: the computed gate plus the real active manifest
+                # version (max over app.manifest_versions; 0 pre-seal). The gate
+                # function returns only the state string, so the operator/agent-
+                # facing manifest_version is read alongside it here, never faked.
+                cur.execute(
+                    "select app.custody_gate_state(%s), "
+                    "(select coalesce(max(manifest_version), 0) "
+                    " from app.manifest_versions where case_id = %s)",
+                    (case_id, case_id),
+                )
                 row = cur.fetchone()
     except Exception as exc:
         logger.error("admission.gate_state: query failed for %s: %s", case_id, exc)
         return _blocked("BLOCKED_UNAVAILABLE", ["Evidence authority unavailable"])
-    return _gate_result(str(row[0]) if row and row[0] else "BLOCKED_PENDING")
+    state = str(row[0]) if row and row[0] else "BLOCKED_PENDING"
+    manifest_version = int(row[1]) if row and row[1] is not None else 0
+    return _gate_result(state, manifest_version)
 
 
 def resolve_sealed_version(
@@ -279,7 +300,7 @@ def current_storage_authority(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-def _gate_result(state: str) -> GateResult:
+def _gate_result(state: str, manifest_version: int = 0) -> GateResult:
     gs: GateState = state if state in _GATE_TO_CHAIN_STATUS else "BLOCKED_PENDING"  # type: ignore[assignment]
     issues = [] if gs == "OPEN" else [_GATE_ISSUE.get(gs, "Evidence gate blocked")]
     return GateResult(
@@ -287,11 +308,13 @@ def _gate_result(state: str) -> GateResult:
         gate_state=gs,
         status=_GATE_TO_CHAIN_STATUS[gs],
         issues=issues,
-        manifest_version=0,
+        manifest_version=manifest_version,
     )
 
 
 def _blocked(state: GateState, issues: list[str]) -> GateResult:
+    # Fail-closed path: no case/DSN or a DB error means nothing authoritative is
+    # known, so the manifest version is genuinely 0 (not a faked value).
     return GateResult(
         blocked=True,
         gate_state=state,

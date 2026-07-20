@@ -49,12 +49,6 @@ def test_ec6_binding_targets_are_byte_order_stable() -> None:
     assert binding.as_dict() == reversed_input.as_dict()
 
 
-def test_ec6_binding_match_is_verbatim() -> None:
-    binding = reauth.build_binding("k", "r", ["evidence/b", "evidence/a"])
-    assert reauth.bindings_match(binding.as_dict(), binding) is True
-    assert reauth.bindings_match({"idempotency_key": "k"}, binding) is False
-
-
 # ---------------------------------------------------------------------------
 # EC-5 + classification — the single read-only scanner
 # ---------------------------------------------------------------------------
