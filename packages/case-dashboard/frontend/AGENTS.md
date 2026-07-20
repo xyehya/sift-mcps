@@ -101,10 +101,13 @@ fixing anything. Known-resolved since that audit:
   renders as escaped React text nodes.
 - **Store contract stays frozen:** keep `src/test/useStore.interface.test.js`
   byte-identical and green; do not add or remove top-level `useStore` keys.
-- **P4.23.3 superseded the obsolete Unseal test freeze:**
-  `src/test/EvidenceRecovery.test.jsx` protects durable gate-first
-  Replace/Reacquire, exact Restore completion, and version-history behavior.
-  Do not restore a standalone Unseal action or its old route contract.
+- **P4.23 CP2B superseded the P4.23.3 recovery-workflow freeze:** Replace/
+  Reacquire, exact Restore, Delete Stray, and installation signing-key
+  rotation are permanently out of scope (EVIDENCE-CUSTODY-SPEC.md "Out of
+  Scope"); `src/test/EvidenceRecovery.test.jsx` was deleted with those
+  screens (version-history coverage moved into
+  `src/test/EvidenceCustody.test.jsx`). Do not restore a standalone Unseal
+  action, the old Replace/Restore route contracts, or their UI.
 - **Frozen public contracts:** do not add/remove top-level `useStore` keys; store
   / api / hooks module paths are stable (legacy feature components must keep
   resolving). Auth / JWT / crypto = behavior-preserving **port**, not a rewrite.

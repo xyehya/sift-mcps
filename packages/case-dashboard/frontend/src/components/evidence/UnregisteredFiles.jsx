@@ -5,16 +5,18 @@ import { Button } from '@/components/ui/button'
 // ─────────────────────────────────────────────────────────────────────────
 // UnregisteredFiles — detected-but-unsealed files table (legacy IA parity §5).
 // Renders only when there are unregistered files. Each row: Path · Source-notes
-// input · Description input (both bound to unregisteredMetadata[path]) · per-row
-// Ignore / Delete. Header has "Seal Manifest (N file/s)" → opens the seal modal.
+// input · Description input (both bound to unregisteredMetadata[path]) · a
+// select-to-Ignore checkbox feeding the shared batch Resolve flow (D4; Delete
+// Stray is permanently out of scope, so Ignore is the only Resolve verb here).
+// Header has "Seal Manifest (N file/s)" → opens the seal modal.
 // ─────────────────────────────────────────────────────────────────────────
 
 export function UnregisteredFiles({
   chainStatus,
   unregisteredMetadata,
   onMetaChange,
-  onIgnore,
-  onDelete,
+  selectedTargets,
+  onToggleTarget,
   onSeal,
 }) {
   const unregistered = chainStatus?.unregistered ?? []
@@ -43,9 +45,9 @@ export function UnregisteredFiles({
           <thead>
             <tr className="border-b border-border-soft text-muted-foreground">
               <th className="w-1/3 py-2 pr-4 font-semibold">Path</th>
-              <th className="w-1/3 py-2 pr-4 font-semibold">Source Notes</th>
-              <th className="w-1/3 py-2 pr-4 font-semibold">Description</th>
-              <th className="py-2 text-right font-semibold">Action</th>
+              <th className="w-1/4 py-2 pr-4 font-semibold">Source Notes</th>
+              <th className="w-1/4 py-2 pr-4 font-semibold">Description</th>
+              <th className="py-2 text-right font-semibold">Ignore</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border-faint">
@@ -71,25 +73,13 @@ export function UnregisteredFiles({
                   />
                 </td>
                 <td className="whitespace-nowrap py-2 text-right">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="xs"
-                    onClick={() => onIgnore(path)}
-                    className="mono mr-2 text-[10px] text-muted-foreground hover:text-foreground hover:border-border-hard"
-                  >
-                    Ignore
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="xs"
-                    onClick={() => onDelete(path)}
-                    className="mono text-[10px] text-muted-foreground hover:text-destructive hover:border-destructive"
-                    title="Permanently delete this file's bytes from the evidence directory"
-                  >
-                    Delete
-                  </Button>
+                  <input
+                    type="checkbox"
+                    checked={selectedTargets.has(path)}
+                    onChange={() => onToggleTarget(path)}
+                    className="size-3.5 accent-status-pending"
+                    aria-label={`Select ${path} to ignore`}
+                  />
                 </td>
               </tr>
             ))}

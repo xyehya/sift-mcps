@@ -96,19 +96,6 @@ function ReasonField({ value, onChange, disabled, placeholder }) {
   )
 }
 
-function PathDisplay({ path }) {
-  return (
-    <div className="space-y-1">
-      <span className="mono block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        Target File Path
-      </span>
-      <div className="mono break-all rounded-lg border border-border-soft bg-bg-raised px-2 py-1 text-xs text-foreground">
-        {path}
-      </div>
-    </div>
-  )
-}
-
 function ModalError({ error }) {
   if (!error) return null
   return (
@@ -198,168 +185,32 @@ function ResumeSealModal({ password, onPasswordChange, loading, error, result, o
   return <ModalShell title="Resume Add & Seal"><p className="text-xs text-muted-foreground">Re-authenticate to resume the server-stored custody operation. No evidence paths or credentials are stored in this page.</p><form id="modal-resume-seal" onSubmit={onSubmit} className="space-y-4"><PasswordField value={password} onChange={onPasswordChange} disabled={loading} /><ModalError error={error} />{loading && <ModalLoading message="Resuming durable custody operation…" />}{result?.sealed && <ModalSuccess message={`Manifest version ${result.manifest_version} sealed successfully!`} />}<div className="flex justify-end gap-2"><CancelButton onClose={onClose} /><ConfirmButton formId="modal-resume-seal" label="Resume" tone="jade" disabled={loading} /></div></form></ModalShell>
 }
 
-function StorageProfileModal({ path, password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
-  const external = path === 'EXTERNALLY_READ_ONLY'
+// ── Resolve (D4 — unified batch, one password/reason, honest verbs) ────────
+function ResolveModal({ dispositions, password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
+  const count = dispositions?.length ?? 0
   return (
-    <ModalShell title="Change Evidence Storage Profile" titleTone="amber">
+    <ModalShell title={`Resolve ${count} Finding${count === 1 ? '' : 's'}`}>
       <p className="text-xs text-muted-foreground">
-        Change to {external ? 'Externally Read-Only' : 'Local Immutable'}. The custody gate blocks immediately,
-        and Full Verify Evidence is required before agent access can resume. Mount identity is observed by the server.
+        One password and reason authorizes every selected finding below. Each target keeps its own
+        distinct recorded custody verb — this is not a generic bulk action.
       </p>
-      <form id="modal-storage-profile" onSubmit={onSubmit} className="space-y-4">
-        <ReasonField value={reason} onChange={onReasonChange} disabled={loading} placeholder="Reason for storage profile change" />
+      <ul className="mono max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border-soft bg-bg-raised p-2 text-[11px]">
+        {(dispositions ?? []).map(({ verb, target }) => (
+          <li key={target} className="flex items-center justify-between gap-2">
+            <span className="break-all text-foreground">{target}</span>
+            <span className="shrink-0 font-semibold uppercase tracking-wider text-muted-foreground">{verb}</span>
+          </li>
+        ))}
+      </ul>
+      <form id="modal-resolve" onSubmit={onSubmit} className="space-y-4">
+        <ReasonField value={reason} onChange={onReasonChange} disabled={loading} placeholder="e.g. Post-triage disposition" />
         <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
         <ModalError error={error} />
-        {loading && <ModalLoading message="Blocking custody gate and changing storage authority…" />}
-        {result && <ModalSuccess message="Storage profile changed. Full Verify Evidence is required." />}
+        {loading && <ModalLoading message="Resolving selected findings…" />}
+        {result && <ModalSuccess message={`Resolved ${result.receipts?.length ?? 0} finding(s).`} />}
         <div className="flex justify-end gap-2">
-          <CancelButton onClose={onClose} />
-          <ConfirmButton formId="modal-storage-profile" label="Change Profile" tone="amber" disabled={loading} />
-        </div>
-      </form>
-    </ModalShell>
-  )
-}
-
-function RotateSigningKeyModal({ password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
-  return (
-    <ModalShell title="Rotate Custody Signing Key" titleTone="amber">
-      <p className="text-xs text-muted-foreground">Record an installation signing-key rotation. This requires a reason and fresh examiner re-authentication; private key material never enters this page.</p>
-      <form id="modal-rotate-signing-key" onSubmit={onSubmit} className="space-y-4">
-        <ReasonField value={reason} onChange={onReasonChange} disabled={loading} placeholder="Reason for signing-key rotation" />
-        <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
-        <ModalError error={error} />
-        {loading && <ModalLoading message="Recording signing-key rotation…" />}
-        {result && <ModalSuccess message="Signing-key rotation recorded." />}
-        <div className="flex justify-end gap-2"><CancelButton onClose={onClose} /><ConfirmButton formId="modal-rotate-signing-key" label="Rotate Key" tone="amber" disabled={loading} testId="rotate-signing-key-submit" /></div>
-      </form>
-    </ModalShell>
-  )
-}
-
-function ResumeDispositionModal({ password, onPasswordChange, loading, error, result, onClose, onSubmit }) {
-  return <ModalShell title="Resume Evidence Disposition"><p className="text-xs text-muted-foreground">Re-authenticate to resume the server-stored, gate-blocked disposition. The action and evidence object are selected from the immutable operation record.</p><form id="modal-resume-disposition" onSubmit={onSubmit} className="space-y-4"><PasswordField value={password} onChange={onPasswordChange} disabled={loading} /><ModalError error={error} />{loading && <ModalLoading message="Resuming durable disposition…" />}{result?.success && <ModalSuccess message="Custody disposition completed." />}<div className="flex justify-end gap-2"><CancelButton onClose={onClose} /><ConfirmButton formId="modal-resume-disposition" label="Resume" tone="jade" disabled={loading} /></div></form></ModalShell>
-}
-
-// ── Ignore ─────────────────────────────────────────────────────────────────
-function IgnoreModal({ path, password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
-  return (
-    <ModalShell title="Ignore Unregistered File">
-      <PathDisplay path={path} />
-      <p className="text-xs text-muted-foreground">
-        Marking this file as ignored will exclude it from seal and verification checks. This action
-        requires examiner justification and credentials.
-      </p>
-      <form id="modal-ignore" onSubmit={onSubmit} className="space-y-4">
-        <ReasonField value={reason} onChange={onReasonChange} disabled={loading} placeholder="e.g. Temporary scan/log file" />
-        <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
-        <ModalError error={error} />
-        {loading && <ModalLoading message="Submitting ignore request…" />}
-        {result && <ModalSuccess message="File marked as ignored successfully!" />}
-        <div className="flex justify-end gap-2">
-          <CancelButton onClose={onClose} />
-          <ConfirmButton formId="modal-ignore" label="Ignore File" tone="neutral" disabled={loading} />
-        </div>
-      </form>
-    </ModalShell>
-  )
-}
-
-// ── Delete ─────────────────────────────────────────────────────────────────
-function DeleteModal({ path, password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
-  return (
-    <ModalShell title="Delete Stray File" titleTone="crimson">
-      <PathDisplay path={path} />
-      <p className="text-xs text-muted-foreground">
-        This <strong className="text-destructive">permanently removes the file&apos;s bytes</strong> from the
-        evidence directory so it can no longer be read or indexed by the AI agent. Sealed evidence
-        cannot be deleted. The removed file&apos;s SHA-256 and size are recorded in the append-only custody
-        log. This action requires examiner justification and credentials.
-      </p>
-      <form id="modal-delete" onSubmit={onSubmit} className="space-y-4">
-        <ReasonField value={reason} onChange={onReasonChange} disabled={loading} placeholder="e.g. Stray/unauthorized file, not part of acquisition" />
-        <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
-        <ModalError error={error} />
-        {loading && <ModalLoading message="Deleting file…" />}
-        {result && <ModalSuccess message="File deleted from evidence." />}
-        <div className="flex justify-end gap-2">
-          <CancelButton onClose={onClose} />
-          <ConfirmButton formId="modal-delete" label="Delete File" tone="crimson" disabled={loading} />
-        </div>
-      </form>
-    </ModalShell>
-  )
-}
-
-// ── Retire ─────────────────────────────────────────────────────────────────
-function RetireModal({ path, password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
-  return (
-    <ModalShell title="Retire Missing File">
-      <PathDisplay path={path} />
-      <p className="text-xs text-muted-foreground">
-        Retiring a file will deactivate its entry in the manifest. The file will no longer be expected
-        during checks. This requires reason and credentials.
-      </p>
-      <form id="modal-retire" onSubmit={onSubmit} className="space-y-4">
-        <ReasonField value={reason} onChange={onReasonChange} disabled={loading} placeholder="e.g. Formally removed from scope" />
-        <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
-        <ModalError error={error} />
-        {loading && <ModalLoading message="Submitting retire request…" />}
-        {result && <ModalSuccess message="File retired successfully!" />}
-        <div className="flex justify-end gap-2">
-          <CancelButton onClose={onClose} />
-          <ConfirmButton formId="modal-retire" label="Retire File" tone="neutral" disabled={loading} />
-        </div>
-      </form>
-    </ModalShell>
-  )
-}
-
-// ── Re-acquire (Re-seal) ───────────────────────────────────────────────────
-function RecoveryBeginModal({ kind, path, password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
-  const restore = kind === 'restore'
-  return (
-    <ModalShell title={restore ? 'Begin Exact Restore' : 'Begin Replace/Reacquire'} titleTone={restore ? 'amber' : 'jade'}>
-      <PathDisplay path={path} />
-      <p className="text-xs text-muted-foreground">
-        {restore
-          ? 'Use this only to restore the original exact bytes. Completion rejects any hash or size mismatch and does not create a new evidence or manifest version.'
-          : 'Use this for a legitimate re-image of the same real-world Evidence Object. Completion requires changed bytes and creates a new Evidence Version while preserving every prior version.'}
-        {' '}The custody gate is durably blocked before write protection changes and remains blocked until a separately re-authenticated completion.
-      </p>
-      <p className="text-[11px] text-status-pending">
-        Large disk/memory images are hashed in full — this can take several minutes. Keep this window
-        open until it completes.
-      </p>
-      <form id="modal-recovery-begin" onSubmit={onSubmit} className="space-y-4">
-        <ReasonField value={reason} onChange={onReasonChange} disabled={loading} placeholder="e.g. Original acquisition corrupted; re-imaged from source drive" />
-        <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
-        <ModalError error={error} />
-        {loading && <ModalLoading message="Blocking custody gate and recording recovery intent…" />}
-        {result && <ModalSuccess message="Recovery intent recorded. Replace or restore the bytes, then use Complete Recovery." />}
-        <div className="flex justify-end gap-2">
-          <CancelButton onClose={onClose} />
-          <ConfirmButton formId="modal-recovery-begin" label={restore ? 'Begin Exact Restore' : 'Begin Replace/Reacquire'} tone={restore ? 'amber' : 'jade'} disabled={loading} />
-        </div>
-      </form>
-    </ModalShell>
-  )
-}
-
-function RecoveryCompleteModal({ path, password, onPasswordChange, loading, error, result, onClose, onSubmit }) {
-  return (
-    <ModalShell title="Complete Recovery" titleTone="jade">
-      <p className="text-xs text-muted-foreground">
-        Re-authenticate to hash all mounted bytes, restore immutable posture, and atomically finalize operation <span className="mono">{path}</span>. The custody gate remains blocked on any mismatch or interruption.
-      </p>
-      <form id="modal-recovery-complete" onSubmit={onSubmit} className="space-y-4">
-        <PasswordField value={password} onChange={onPasswordChange} disabled={loading} />
-        <ModalError error={error} />
-        {loading && <ModalLoading message="Hashing, restoring protection, and committing custody history…" />}
-        {result && <ModalSuccess message="Recovery completed and custody gate reopened." />}
-        <div className="flex justify-end gap-2">
-          <CancelButton onClose={onClose} />
-          <ConfirmButton formId="modal-recovery-complete" label="Complete Recovery" tone="jade" disabled={loading} testId="recovery-complete-submit" />
+          <CancelButton onClose={onClose} label={result ? 'Close' : 'Cancel'} />
+          {!result && <ConfirmButton formId="modal-resolve" label="Resolve" tone="primary" disabled={loading} testId="resolve-submit" />}
         </div>
       </form>
     </ModalShell>
@@ -370,7 +221,7 @@ function RecoveryCompleteModal({ path, password, onPasswordChange, loading, erro
 // One entry point so EvidenceTab stays the orchestrator and modal markup lives
 // here. `activeModal` selects which modal renders; AnimatePresence handles the
 // spring-in / fade-out (reduced-motion gated via useMotionVariants).
-export function EvidenceModals({ activeModal, pendingPath, password, reason, loading, error, result, handlers }) {
+export function EvidenceModals({ activeModal, pendingPath, dispositions, password, reason, loading, error, result, handlers }) {
   const common = {
     path: pendingPath,
     password,
@@ -388,23 +239,11 @@ export function EvidenceModals({ activeModal, pendingPath, password, reason, loa
       {activeModal === 'full_verify' && (
         <FullVerifyEvidenceModal key="full_verify" {...common} onSubmit={handlers.onFullVerifyEvidence} />
       )}
-      {activeModal === 'storage_profile' && (
-        <StorageProfileModal key="storage_profile" {...common} onSubmit={handlers.onStorageProfileChange} />
-      )}
-      {activeModal === 'rotate_signing_key' && <RotateSigningKeyModal key="rotate_signing_key" {...common} onSubmit={handlers.onRotateSigningKey} />}
       {activeModal === 'seal' && <EvidenceSealModal key="seal" {...common} onSubmit={handlers.onSeal} />}
       {activeModal === 'resume_seal' && <ResumeSealModal key="resume_seal" {...common} onSubmit={handlers.onResumeSeal} />}
-      {activeModal === 'resume_disposition' && <ResumeDispositionModal key="resume_disposition" {...common} onSubmit={handlers.onDispositionResume} />}
-      {activeModal === 'ignore' && <IgnoreModal key="ignore" {...common} onSubmit={handlers.onIgnore} />}
-      {activeModal === 'delete' && <DeleteModal key="delete" {...common} onSubmit={handlers.onDelete} />}
-      {activeModal === 'retire' && <RetireModal key="retire" {...common} onSubmit={handlers.onRetire} />}
-      {activeModal === 'replace' && (
-        <RecoveryBeginModal key="replace" kind="replace" {...common} onSubmit={handlers.onReplaceBegin} />
+      {activeModal === 'resolve' && (
+        <ResolveModal key="resolve" {...common} dispositions={dispositions} onSubmit={handlers.onResolveFindings} />
       )}
-      {activeModal === 'restore' && (
-        <RecoveryBeginModal key="restore" kind="restore" {...common} onSubmit={handlers.onRestoreBegin} />
-      )}
-      {activeModal === 'complete_recovery' && <RecoveryCompleteModal key="complete_recovery" {...common} onSubmit={handlers.onRecoveryComplete} />}
     </AnimatePresence>
   )
 }

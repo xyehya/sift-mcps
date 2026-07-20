@@ -1101,30 +1101,13 @@ def _db_export_proof_after_seal(request, examiner):
     if not case_id:
         return None, None
 
+    # P4.23 CP2B: sift_core.custody_anchor (Ed25519-proof-era Solana submission)
+    # is deleted — optional anchoring now lives behind custody/ledger.py's
+    # _Anchorer interface, invoked from the new sift_gateway.portal.custody_routes
+    # custody_anchor route, not from this legacy seal flow. Anchoring here is a
+    # no-op; it was never authoritative and its absence never blocks the seal.
     anchor_proof: dict | None = None
     anchor_info: dict | None = None
-    keypair_path = os.environ.get("SIFT_SOLANA_KEYPAIR", "").strip() or None
-    if keypair_path:
-        gate = getattr(_EVIDENCE_DB, "gate_status", None)
-        head = gate(case_id) if callable(gate) else {}
-        head = head if isinstance(head, dict) else {}
-        try:
-            from sift_core.custody_anchor import anchor_db_proof
-            anchor_proof = anchor_db_proof(
-                manifest_version=head.get("manifest_version", 0),
-                manifest_hash=head.get("head_hash", "") or "",
-                ledger_tip_hash=head.get("head_hash", "") or "",
-                keypair_path=keypair_path,
-                cluster=os.environ.get("SIFT_SOLANA_CLUSTER", "mainnet"),
-            )
-            anchor_info = {
-                "solana_tx": anchor_proof.get("solana_tx"),
-                "confirmed": anchor_proof.get("confirmed"),
-                "explorer_url": anchor_proof.get("explorer_url"),
-            }
-        except Exception as exc:
-            logger.warning("evidence seal: DB Solana anchor failed: %s", exc)
-            anchor_proof = None
 
     try:
         proof_info = exporter(

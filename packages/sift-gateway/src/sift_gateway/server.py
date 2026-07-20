@@ -1572,6 +1572,38 @@ class Gateway:
             )
             dashboard_app.state.gateway = self
 
+            # P4.23 CP2B repair-1: custody routes need a REAL authenticated
+            # Portal operator session (request.state.role/.principal), not the
+            # top-level AuthMiddleware — which deliberately sets identity=None
+            # for every /portal-prefixed path and defers to "the portal sub-app
+            # owns its own auth" (auth.py dispatch). Wrap them in their own tiny
+            # Starlette app under the SAME PortalSessionMiddleware dashboard_app
+            # uses (identical session cookie, secret, and Supabase resolver), so
+            # an unauthenticated caller is denied before a custody handler ever
+            # runs. Mounted at the more specific "/portal/custody" prefix and
+            # registered BEFORE Mount("/portal", ...) below so Starlette's
+            # first-match routing tries it first.
+            from case_dashboard.auth import PortalSessionMiddleware
+            from starlette.applications import Starlette
+            from starlette.middleware import Middleware
+
+            from sift_gateway.portal.custody_routes import custody_routes_list
+
+            custody_app = Starlette(
+                routes=custody_routes_list(),
+                middleware=[
+                    Middleware(
+                        PortalSessionMiddleware,
+                        session_secret=portal_secret,
+                        api_keys=api_keys,
+                        session_max_age=portal_max_age,
+                        supabase_auth=supabase_callbacks,
+                    ),
+                ],
+            )
+            custody_app.state.gateway = self
+            routes.append(Mount("/portal/custody", app=custody_app))
+
             # PT1/WI3: ergonomic root + bare-/portal redirects. Mount("/portal")
             # only serves "/portal/..."; a request for "/" or "/portal" (no
             # trailing slash) would otherwise 404. Redirect both to "/portal/".

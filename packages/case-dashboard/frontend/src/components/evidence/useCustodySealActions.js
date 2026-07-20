@@ -2,7 +2,6 @@ import {
   getChainStatus,
   postChainSeal,
   postChainSealResume,
-  postEvidenceStorageProfile,
   postFullVerifyEvidence,
 } from '@/api/endpoints'
 
@@ -25,7 +24,6 @@ export function useCustodySealActions({
   modalPassword,
   modalReason,
   sealIntentId,
-  pendingPath,
   unregisteredMetadata,
   setModalLoading,
   setModalError,
@@ -101,30 +99,9 @@ export function useCustodySealActions({
     }
   }
 
-  async function handleStorageProfileChange(e) {
-    e.preventDefault()
-    if (!guard(true)) return
-    try {
-      const res = await postEvidenceStorageProfile({
-        password: modalPassword,
-        profile: pendingPath,
-        reason: modalReason,
-        idempotency_key: sealIntentId,
-      })
-      setModalResult(res)
-      addToast('Storage profile changed. Full Verify Evidence is required.', 'warning')
-      afterSuccess(refreshData)
-    } catch (err) {
-      setModalError(err.message || 'Storage profile change failed')
-    } finally {
-      setModalLoading(false)
-    }
-  }
-
   return {
     handleFullVerifyEvidence,
     handleSealEvidence,
     handleResumeSeal,
-    handleStorageProfileChange,
   }
 }
