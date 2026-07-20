@@ -129,4 +129,11 @@ def anchor_manifest_head(
     NOT IMPLEMENTED in CP1 — CP2B implements the optional anchoring flow behind
     :class:`_Anchorer`. The manual/auto contract is frozen here.
     """
+    # CP2B: the reauth fields are independently optional, so an unauthenticated
+    # call is shaped like an auto-anchor. CP2B owns BOTH this ledger function and
+    # the anchor route (no other lane consumes it), so it should refine this to a
+    # DISCRIMINATED request — Manual{session,password,reason,idempotency_key} vs
+    # Auto{originating_operation_receipt} — and take a server-resolved report
+    # identifier rather than a raw caller-supplied report_digest, without a
+    # cross-lane break.
     raise NotImplementedError("CP2B implements optional Solana anchoring")

@@ -102,10 +102,17 @@ class VerifyFinding:
 
 @dataclass(frozen=True, slots=True)
 class VerifyResult:
-    """The read-only Full Verify outcome (no custody-state change by assertion)."""
+    """The read-only Full Verify outcome (no custody-state change by assertion).
+
+    ``verification_id`` is the PostgreSQL-authoritative verification/audit event id
+    the read recorded (re-frozen — mirrors :attr:`ActionReceipt.audit_id`), so a
+    Full Verify result can be correlated into export/audit without a later
+    return-type change.
+    """
 
     gate_state: str
     verified: bool
+    verification_id: str
     findings: tuple[VerifyFinding, ...] = field(default_factory=tuple)
 
 
@@ -114,23 +121,30 @@ def resolve(
     session: OperatorSession,
     case_id: str,
     password: str,
+    reason: str,
     dispositions: Sequence[FindingDisposition],
     batch_key: str,
 ) -> tuple[ActionReceipt, ...]:
     """Run the unified per-finding Resolve flow under ONE password (D4).
 
     The single domain entry the ``resolve_findings`` route calls. Verifies
-    ``password`` exactly once via ``reauth.record_batch_reauth`` -> one
-    :class:`~sift_gateway.custody.reauth.BatchReauth` receipt carrying the target
-    array, then dispatches each :class:`FindingDisposition` to its honest,
-    DISTINCT recorded verb (:func:`_ignore` / :func:`_retire` / :func:`_reprotect`,
-    or Add and Seal via ``custody.seal``) using the per-target ``reauth_id`` from
-    the batch. Each verb is one atomic transaction with no persistent failure
-    state; a verb that rolls back never blocks the others or the case. Returns one
-    :class:`ActionReceipt` per disposition, in input order.
+    ``password`` exactly once (with the single batch ``reason``) via
+    ``reauth.record_batch_reauth`` -> one
+    :class:`~sift_gateway.custody.reauth.BatchReauth` receipt whose per-target
+    ``(action, target, reauth_id)`` entries carry a distinct reauth event PER
+    finding — so a HETEROGENEOUS batch (Ignore / Retire / Add and Seal / Reprotect
+    mixed) is expressible. It then dispatches each :class:`FindingDisposition` to
+    its honest, DISTINCT recorded verb (:func:`_ignore` / :func:`_retire` /
+    :func:`_reprotect`, or Add and Seal via ``custody.seal``) using that target's
+    bound ``reauth_id``; each RPC independently recomputes and compares its own
+    single-target binding (no cross-target replay). Each verb is one atomic
+    transaction with no persistent failure state; a verb that rolls back never
+    blocks the others or the case. Returns one :class:`ActionReceipt` per
+    disposition, in input order.
 
     NOT IMPLEMENTED in CP1 — CP2A implements the batch dispatch. The single-entry
-    / one-password / distinct-recorded-verb contract is frozen here.
+    / one-password-one-reason / distinct-per-target-recorded-verb contract is
+    frozen here.
     """
     raise NotImplementedError("CP2A implements the unified Resolve flow")
 

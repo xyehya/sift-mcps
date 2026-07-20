@@ -51,6 +51,14 @@ from typing import Any, Protocol, runtime_checkable
 # The custody actions that carry a reauth binding (SPEC §Reauthentication).
 CustodyAction = str  # one of: ADD_SEAL | IGNORE | RETIRE | REPROTECT | ANCHOR
 
+# One batch-reauth request target: (action, case-relative target). A single D4
+# Resolve batch is HETEROGENEOUS — it mixes verbs across targets.
+BatchTarget = tuple[CustodyAction, str]
+# One recorded per-target authorization in a batch: (action, target, reauth_id).
+# reauth_id is the single-target reauth audit event that authorizes `action` on
+# `target`; it is what the honest verb consumes.
+BatchReauthEntry = tuple[CustodyAction, str, str]
+
 
 @runtime_checkable
 class OperatorSession(Protocol):
@@ -102,27 +110,32 @@ class ReauthBinding:
 
 @dataclass(frozen=True, slots=True)
 class BatchReauth:
-    """One password verification covering N targets (D4 — the batch receipt).
+    """One password verification covering a HETEROGENEOUS batch (D4 receipt).
 
     FROZEN. The unified Portal Resolve flow verifies the operator password ONCE
-    and this value is the pre-authorized batch receipt the domain verbs consume.
-    Because each custody RPC (``custody_ignore``/``custody_retire``/
-    ``custody_reprotect``) verifies a SINGLE-target binding, one password yields
-    N per-target reauth audit events (one per target, each a distinct
-    ``idempotency_key`` derived from ``batch_key`` so the reauth-idempotency
-    unique index never collides). ``reauth_ids[i]`` is the audit event id that
-    authorizes the verb acting on ``targets[i]``; ``batch_key`` correlates them.
+    (with one batch ``reason``, per the uniform reauth model) and this value is
+    the pre-authorized batch receipt the domain verbs consume. A batch mixes verbs
+    across targets — new files (Ignore / Add and Seal), deleted sealed objects
+    (Retire), changed sealed objects (Retire) — so the authorization is per
+    target, not batch-wide.
 
-    This carries the target ARRAY (SPEC §Drift, batch reauthentication) and the
-    per-target authorizations the verbs consume — NOT a shared password or any
-    reauthentication secret.
+    ``entries`` is one :data:`BatchReauthEntry` ``(action, target, reauth_id)``
+    per target. Because each custody RPC (``custody_ignore`` / ``custody_retire``
+    / ``custody_reprotect``) independently recomputes and compares its own
+    SINGLE-target binding, one password yields N per-target reauth audit events —
+    each with a distinct ``idempotency_key`` derived from ``batch_key`` so the
+    reauth-idempotency unique index never collides and no cross-target replay is
+    possible. ``entries[i][2]`` is the reauth event the honest verb for
+    ``entries[i][0]`` acting on ``entries[i][1]`` consumes.
+
+    This carries the per-target authorizations the verbs consume — NOT a shared
+    password or any reauthentication secret.
     """
 
     batch_key: str
     case_id: str
-    action: CustodyAction
-    targets: tuple[str, ...]
-    reauth_ids: tuple[str, ...]
+    reason: str
+    entries: tuple[BatchReauthEntry, ...]
 
 
 def build_binding(
@@ -174,23 +187,25 @@ def record_batch_reauth(
     *,
     session: OperatorSession,
     password: str,
-    action: CustodyAction,
     case_id: str,
-    targets: Sequence[str],
+    reason: str,
+    targets: Sequence[BatchTarget],
     batch_key: str,
 ) -> BatchReauth:
     """Verify the password ONCE and record N per-target reauth events (D4).
 
-    The single seam behind the unified Resolve flow's "one password covers N
-    selected targets". Verifies ``password`` a single time against the identity
-    authority, then records one single-target reauth audit event per target —
-    each with a distinct ``idempotency_key`` derived from ``batch_key`` (so the
-    reauth-idempotency unique index never collides) and a single-target SQL
-    binding — and returns the :class:`BatchReauth` receipt the domain verbs
-    consume. Fail-closed: a failed verification records nothing and authorizes no
-    verb.
+    The single seam behind the unified Resolve flow's "one password + one reason
+    covers a heterogeneous batch of N targets". Verifies ``password`` a single
+    time against the identity authority, then for each ``(action, target)`` in
+    ``targets`` records one single-target reauth audit event — each with a
+    distinct ``idempotency_key`` derived from ``batch_key`` (so the reauth-
+    idempotency unique index never collides) and its own single-target SQL binding
+    — and returns the :class:`BatchReauth` receipt (one
+    :data:`BatchReauthEntry` per target) the domain verbs consume. Fail-closed: a
+    failed verification records nothing and authorizes no verb.
 
     NOT IMPLEMENTED in CP1 — CP2A implements it over :func:`record_reauth`. The
-    signature and the one-password/N-per-target-event contract are frozen here.
+    signature and the one-password / per-target-heterogeneous-event contract are
+    frozen here.
     """
     raise NotImplementedError("CP2A implements batch custody re-authentication")

@@ -62,16 +62,16 @@ class SealTarget:
     """One evidence file selected for sealing from a specific Refresh snapshot.
 
     ``snapshot_observation_id`` is the ``app.admission_observations.id`` of the
-    Refresh reconciliation that surfaced this target (re-frozen). It gives CP2A
-    the snapshot authority to prove every target came from the LATEST server-side
-    snapshot before sealing — closing the snapshot->seal TOCTOU the amendment
-    fixed. All targets in one Add and Seal MUST carry the same
-    ``snapshot_observation_id``, and CP2A rejects a commit whose snapshot is not
-    the case's most recent reconciliation.
+    Refresh reconciliation that surfaced this target — REQUIRED (re-frozen): every
+    legitimate seal target references the snapshot row it came from, which is the
+    snapshot authority that closes the snapshot->seal TOCTOU. No supported
+    ``SealTarget`` legitimately lacks it. All targets in one Add and Seal MUST
+    carry the same ``snapshot_observation_id``, and CP2A rejects a commit whose
+    snapshot is not the case's most recent reconciliation.
     """
 
     display_path: str
-    snapshot_observation_id: int | None = None
+    snapshot_observation_id: int
     display_name: str | None = None
     source: str | None = None
     supersedes_object_id: str | None = None
@@ -145,8 +145,8 @@ def commit_seal(
     case_id: str,
     idempotency_key: str,
     targets: Sequence[SealTarget],
-    password: str,
-    reason: str,
+    password: str | None = None,
+    reason: str | None = None,
     resume: bool = False,
 ) -> SealResult:
     """Drive ``PROTECTED -> COMMITTED`` for the targets of the latest snapshot.
@@ -157,13 +157,28 @@ def commit_seal(
     since its ``snapshot_observation_id`` fails with a shaped error directing a
     new Refresh; there is no partial admission — then commits atomically
     (``custody_seal_commit``), advancing the Manifest Version and closing any open
-    staging window (``SEAL_WINDOW_CLOSED``). ``resume=True`` carries a fresh
-    resume reauthorization to complete an interrupted operation under the same
-    key; a COMMITTED operation replays its recorded result idempotently.
+    staging window (``SEAL_WINDOW_CLOSED``). A COMMITTED operation replays its
+    recorded result idempotently.
+
+    **Conditional reauth (operator decision 2026-07-20).** ``password``/``reason``
+    are OPTIONAL and required only on a resubmission:
+
+    * **Happy-path single-shot** (fresh case, uninterrupted begin->commit): omit
+      both. Commit CONSUMES the authorization recorded at :func:`begin_seal`
+      (operation-bound, ``custody_seal_commit`` with a null resume reauth uses the
+      operation's begin ``reauth_audit_event_id``) — the operator is prompted
+      ONCE, at begin.
+    * **Resubmission** — ``resume=True`` (crash resume) OR a commit that closes a
+      begin-opened staging window (the sealed-case add): ``password`` + ``reason``
+      are REQUIRED and carry a fresh reauthorization that authorizes continuation
+      (SPEC §4; the ``custody_seal_commit`` resume-reauth path). CP2A enforces
+      "required" by reading the operation's recorded phase/``opens_staging_window``
+      state — the DB records the begin authorization to consume, so no new RPC or
+      migration is needed. There is no separate resume-credential (SPEC §Reauth).
 
     NOT IMPLEMENTED in CP1 — CP2A implements the protect+commit orchestration over
-    the frozen RPCs. The signature and the snapshot-verification contract are
-    frozen here.
+    the frozen RPCs. The signature and the conditional-reauth + snapshot-
+    verification contract are frozen here.
     """
     raise NotImplementedError("CP2A implements the Add and Seal PROTECTED/COMMITTED phases")
 

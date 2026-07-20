@@ -90,6 +90,10 @@ def _custody_route(handler: _CustodyRoute) -> _CustodyRoute:
             # CP2B maps known SQLSTATE/RPC errors to a specific code + audit id
             # before this catch-all; anything unmapped is shaped generically with
             # NO raw diagnostic text.
+            # CP2B: this catch-all fallback emits audit_id="" with no next-action
+            # message. CP2B fixes it privately (record a correlation/audit id for
+            # the unexpected failure and name a recovery action) — no signature
+            # change to _shaped_error or the routes.
             return _shaped_error(
                 code="custody_internal",
                 message="The custody operation could not be completed.",
