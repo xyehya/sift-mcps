@@ -104,6 +104,11 @@ describe('Seal manifest flow', () => {
 
     const sealBtn = await screen.findByRole('button', { name: /Seal Manifest \(1 file\)/i })
     fireEvent.change(screen.getByPlaceholderText('e.g. USB drive #1'), { target: { value: 'USB drive #1' } })
+    // PF-009 (B): the orphaned per-row Description INPUT is removed — the canonical
+    // SealTarget has no description, so it can't be silently discarded. (The sealed-
+    // evidence table's read-only Description column is a separate committed-object
+    // display and is intentionally kept.)
+    expect(screen.queryByPlaceholderText('e.g. Acquired disk image')).not.toBeInTheDocument()
     fireEvent.click(sealBtn)
     const modal = await screen.findByRole('dialog')
 
