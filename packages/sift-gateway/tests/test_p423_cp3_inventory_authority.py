@@ -63,7 +63,7 @@ def _staged_case_dir(tmp_path: Path, *filenames: str) -> Path:
     return case_dir
 
 
-def _refresh(dsn: str, case_id: str, case_dir: Path) -> dict:
+def _refresh(dsn: str, case_id: str, case_dir: Path) -> admission.GateResult:
     """The one operator-Refresh reconciliation, via the production primitive the
     target custody-status route calls (bare case dir)."""
     return admission.reconcile(case_id, str(case_dir), dsn, trigger="refresh")
@@ -382,7 +382,9 @@ def test_multi_manifest_no_duplicate_sealed_rows_and_retired_renders_once(tmp_pa
             "and mm.entry_status = 'ACTIVE'",
             (case_id,),
         )
-        active_memberships_a = int(cur.fetchone()[0])
+        row = cur.fetchone()
+        assert row is not None
+        active_memberships_a = int(row[0])
     # Premise: the historical fan-out condition genuinely exists.
     assert active_memberships_a >= 2
 
