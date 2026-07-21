@@ -441,3 +441,83 @@ def test_passive_reads_do_not_grow_admission_observations(tmp_path):
         # above is live, not a dead assertion).
         _refresh(dsn, case_id, case_dir)
         assert _observation_count(cur, case_id) == baseline + 1
+
+
+# ---------------------------------------------------------------------------
+# PF-009 R2 — reload/resume: begin -> fresh service projects the recorded key +
+# freshly listed targets -> resume completes by the recorded operation (COMMITTED).
+# ---------------------------------------------------------------------------
+def test_reload_resume_projects_key_and_completes_by_recorded_operation(tmp_path):
+    dsn = _dsn()
+    import psycopg
+
+    case_dir = _staged_case_dir(tmp_path, "a.raw", "b.raw")
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        case_id = _new_case(cur, case_dir=case_dir)
+        actor = _new_operator(cur)
+    _refresh(dsn, case_id, case_dir)  # inventory + one admission_observation (snapshot)
+
+    # BEGIN a seal (REQUESTED) via the canonical RPC path, leaving it incomplete.
+    idempotency_key = "resume-" + uuid.uuid4().hex[:12]
+    reason = "resume fixture"
+    targets = ["evidence/a.raw", "evidence/b.raw"]
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(
+            "select app.custody_reauth_binding(%s, %s, %s)",
+            (idempotency_key, reason, _jsonb(targets)),
+        )
+        binding_row = cur.fetchone()
+        assert binding_row is not None
+        (binding,) = binding_row
+        reauth_id = str(uuid.uuid4())
+        cur.execute(
+            "insert into app.audit_events (id, case_id, event_type, actor_type, "
+            "actor_user_id, source, status, summary, details) values "
+            "(%s, %s, 'reauth.evidence_seal', 'user', %s, 'portal_reauth', 'success', "
+            "'resume fixture', %s)",
+            (reauth_id, case_id, actor, _jsonb({"binding": binding})),
+        )
+        cur.execute(
+            "select r.id::text, r.idempotency_key "
+            "from app.custody_seal_begin(%s, %s, %s, %s, %s, %s, %s, false, null) r",
+            (case_id, idempotency_key, "sha256:" + "a" * 64, reason, reauth_id,
+             _jsonb(targets), actor),
+        )
+        begin_row = cur.fetchone()
+        assert begin_row is not None
+        op_id, recorded_key = begin_row
+
+    # RELOAD: a FRESH service projects ONLY the path-free resume handle.
+    gate = EvidenceAuthorityService(dsn).gate_status(case_id)
+    assert gate["incomplete_operation"] == {
+        "operation_id": str(op_id),
+        "idempotency_key": recorded_key,
+        "staging_window_open": False,
+    }
+    assert recorded_key == idempotency_key  # the projected key IS the begin key
+    # Freshly listed targets + a real snapshot are available to rebuild the request.
+    assert set(gate["unregistered"]) == {"evidence/a.raw", "evidence/b.raw"}
+    assert isinstance(gate["snapshot_observation_id"], int)
+
+    # RESUME completes by the recorded operation (protect -> commit) -> COMMITTED.
+    items = [
+        {"display_path": p, "sha256": "sha256:" + "b" * 64, "bytes": 4096,
+         "mode": "0644", "immutable": True, "st_nlink": 1}
+        for p in targets
+    ]
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(
+            "select phase from app.custody_seal_protect(%s, %s, %s, null)",
+            (op_id, _jsonb({"items": items}), actor),
+        )
+        cur.execute(
+            "select phase from app.custody_seal_commit(%s, %s, %s, null)",
+            (op_id, _jsonb(items), "resume-examiner"),
+        )
+        commit_row = cur.fetchone()
+        assert commit_row is not None
+        (final_phase,) = commit_row
+    assert final_phase == "COMMITTED"
+
+    # Post-commit: no resume handle remains (fail-closed complete).
+    assert EvidenceAuthorityService(dsn).gate_status(case_id)["incomplete_operation"] is None

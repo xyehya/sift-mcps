@@ -61,7 +61,6 @@ export const getChainStatus = () => apiFetch('/api/evidence/chain/status')
 // BASE=/portal, so the relative path is /custody/status.
 export const getCustodyStatus = () => apiFetch('/custody/status')
 export const postChainSeal = (body) => apiPost('/api/evidence/chain/seal', body, REAUTH_HASH_OPTS)
-export const postChainSealResume = (body) => apiPost('/api/evidence/chain/seal/resume', body, REAUTH_HASH_OPTS)
 export const postChainAnchor = (body) => apiPost('/api/evidence/chain/anchor', body)
 export const postChainProofExport = (body) => apiPost('/api/evidence/chain/proof-export', body, { timeoutMs: LONG_TIMEOUT_MS })
 export const postFullVerifyEvidence = (body = {}) => apiPost('/api/evidence/chain/full-verify', body, { timeoutMs: LONG_TIMEOUT_MS })
@@ -76,6 +75,14 @@ export const postVerifyEvidence = (path) => apiPost(`/api/evidence/${encodeURICo
 // (IGNORE / RETIRE / REPROTECT / ADD_SEAL) travels in `dispositions`, never
 // collapsed into a single generic action.
 export const postCustodyResolve = (body) => apiPost('/custody/resolve', body, REAUTH_OPTS)
+
+// --- Custody Add & Seal (canonical CP2B two-phase route) — sift_gateway/portal/
+// custody_routes.py custody_seal(). PF-009: Add & Seal posts here, NOT the dead
+// legacy /api/evidence/chain/seal. Body: {phase:'begin', password, reason,
+// idempotency_key, targets} then {phase:'commit', idempotency_key, targets};
+// each target is {display_path, snapshot_observation_id, source?} from the latest
+// Refresh. Long timeout: commit re-hashes mounted bytes under protection.
+export const postCustodySeal = (body) => apiPost('/custody/seal', body, REAUTH_HASH_OPTS)
 
 // --- Response guard ---
 export const getResponseGuardStatus = () => apiFetch('/api/response-guard/status')

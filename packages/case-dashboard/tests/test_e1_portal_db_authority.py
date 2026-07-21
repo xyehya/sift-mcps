@@ -276,13 +276,16 @@ class TestEvidenceDBAuthority:
         assert body["requires_examiner_action"] is True
 
     def test_chain_status_surfaces_only_public_incomplete_operation(self):
+        # PF-009 R2: the reload/resume handle is path-free — EXACTLY
+        # {operation_id, idempotency_key, staging_window_open}. Nothing else may
+        # surface (no targets/paths/reasons/credentials/snapshot/phase).
         incomplete = {
             "operation_id": "25c6c6f1-1111-4111-8111-111111111111",
+            "idempotency_key": "idem-abc",
+            "staging_window_open": True,
             "action": "ADD_SEAL",
             "phase": "GATE_BLOCKED",
-            "failed_from_phase": None,
-            "failure_code": None,
-            "recoverable": True,
+            "targets": ["evidence/disk.E01"],
             "absolute_path": "/private/evidence/disk.E01",
             "reauth_receipt": "must-not-surface",
         }
@@ -297,11 +300,8 @@ class TestEvidenceDBAuthority:
         assert resp.status_code == 200
         assert resp.json()["incomplete_operation"] == {
             "operation_id": "25c6c6f1-1111-4111-8111-111111111111",
-            "action": "ADD_SEAL",
-            "phase": "GATE_BLOCKED",
-            "failed_from_phase": None,
-            "failure_code": None,
-            "recoverable": True,
+            "idempotency_key": "idem-abc",
+            "staging_window_open": True,
         }
 
     def test_evidence_list_from_db_uses_relative_paths(self):
@@ -332,58 +332,23 @@ class TestEvidenceDBAuthority:
         assert case_id == "11111111-1111-1111-1111-111111111111"
         assert isinstance(actor, dict) and actor["principal_type"] == "operator"
 
-    def test_seal_passes_reauth_event_id(self):
+    def test_legacy_seal_is_authenticated_404_and_cannot_mutate(self):
+        """PF-009: the legacy /api/evidence/chain/seal route is DEAD — production
+        EvidenceAuthorityService has no .seal (CP2B removed it). It is now
+        authenticated-404 (auth preserved, then a shaped 404 directing to the
+        canonical POST /portal/custody/seal) and can never reauth or mutate custody.
+        The prior fake-only positive/behavior tests (which proved a non-existent
+        production sealer) are deleted."""
         ev = FakeEvidenceDB()
         c = _examiner(_make_client(evidence_service=ev))
-        # CL3a: the operator password is re-verified against Supabase.
         resp = c.post("/api/evidence/chain/seal", json={
             "password": GOOD_PASSWORD,
             "reason": "initial intake", "idempotency_key": "e1-seal-1",
             "file_specs": [{"path": "evidence/disk.E01"}],
         })
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["sealed"] is True and body["authority"] == "db"
-        assert body["reauth_method"] == "supabase_password_reverify"
-        assert body["registration_mode"] == "atomic_register_and_seal"
-        assert ev.seal_calls and ev.seal_calls[0][2] == "audit-evt-001"
-        assert ev.reauth_calls and ev.reauth_calls[0][2] == "evidence_seal"
-
-    def test_seal_refused_without_reauth_event(self):
-        ev = FakeEvidenceDBNoReauth()
-        c = _examiner(_make_client(evidence_service=ev))
-        resp = c.post("/api/evidence/chain/seal", json={
-            "password": GOOD_PASSWORD,
-            "reason": "initial intake", "idempotency_key": "e1-seal-2",
-            "file_specs": [{"path": "evidence/disk.E01"}],
-        })
-        assert resp.status_code == 403
-        assert "Re-auth" in resp.json()["error"]
-        assert not ev.seal_calls
-
-    def test_seal_rejects_bad_password(self):
-        ev = FakeEvidenceDB()
-        c = _examiner(_make_client(evidence_service=ev))
-        resp = c.post("/api/evidence/chain/seal", json={
-            "password": "wrong-password", "reason": "initial intake", "idempotency_key": "e1-seal-3", "file_specs": [{"path": "evidence/d"}],
-        })
-        assert resp.status_code == 401
-        assert not ev.seal_calls
-
-    def test_seal_control_plane_down_fails_closed(self):
-        ev = FakeEvidenceDB()
-        fake = ReauthFakeSupabaseAuth(control_plane_down=True)
-        app = create_dashboard_v2_app(
-            session_secret=_SECRET, active_case_service=FakeActiveCases(),
-            evidence_service=ev, supabase_auth=fake,
-        )
-        c = TestClient(app)
-        set_operator_session(c, _SECRET)
-        resp = c.post("/api/evidence/chain/seal", json={
-            "password": GOOD_PASSWORD, "reason": "initial intake", "idempotency_key": "e1-seal-4", "file_specs": [{"path": "evidence/d"}],
-        })
-        assert resp.status_code == 503
-        assert not ev.seal_calls
+        assert resp.status_code == 404
+        assert "custody/seal" in resp.json()["error"]
+        assert not ev.seal_calls and not ev.reauth_calls
 
     def test_ignore_and_retire_pass_reauth(self):
         ev = FakeEvidenceDB()

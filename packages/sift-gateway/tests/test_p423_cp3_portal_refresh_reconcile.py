@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 from sift_core.execute.evidence_binding import classify_inventory_entries
 from sift_gateway.custody import admission
+from sift_gateway.custody import seal as custody_seal
 from sift_gateway.portal.custody_routes import custody_routes_list
 from sift_gateway.portal_services import EvidenceAuthorityService
 from starlette.applications import Starlette
@@ -120,13 +121,18 @@ class _FakeCursor:
     def __exit__(self, *_a):
         return False
 
-    def execute(self, *_a, **_k):
+    def execute(self, sql="", *_a, **_k):
+        self._sql = sql
         return None
 
     def fetchall(self):
         return list(self._rows)
 
     def fetchone(self):
+        # gate_status reads max(admission_observations.id) (PF-009 snapshot id) via
+        # fetchone; return an int for that query, else the first configured row.
+        if "admission_observations" in getattr(self, "_sql", ""):
+            return (42,)
         return self._rows[0] if self._rows else None
 
 
@@ -269,6 +275,57 @@ def test_gate_status_is_a_pure_read_and_never_reconciles(monkeypatch):
     assert counter.get("gate_state", 0) == 1  # pure computed-gate read
     assert result["gate_state"] == "BLOCKED_PENDING"
     assert result["unregistered"] == ["evidence/img.E01"]
+    # PF-009: gate_status exposes the latest Refresh reconciliation id (a pure read).
+    assert result["snapshot_observation_id"] == 42
+
+
+def _seal_status_stub(op_id, key, window):
+    def stub(*, case_id, dsn):
+        return custody_seal.SealStatus(
+            gate_state="BLOCKED_PENDING",
+            incomplete_operation_id=op_id,
+            incomplete_idempotency_key=key,
+            staging_window_open=window,
+        )
+
+    return stub
+
+
+def test_gate_status_projects_path_free_incomplete_operation(monkeypatch):
+    """PF-009 R2: gate_status reuses custody.seal.seal_status and projects EXACTLY
+    {operation_id, idempotency_key, staging_window_open} — the minimal path-free
+    reload/resume handle — as a pure read (never reconciles)."""
+    counter: dict = {}
+    monkeypatch.setattr(admission, "reconcile", _make_reconcile_spy(counter))
+    monkeypatch.setattr(admission, "gate_state", _gate_state_stub({}))
+    monkeypatch.setattr(custody_seal, "seal_status", _seal_status_stub("op-1", "idem-1", True))
+    monkeypatch.setattr(
+        EvidenceAuthorityService, "_connect", lambda self: _FakeConn([("evidence/a.raw",)])
+    )
+
+    result = EvidenceAuthorityService("postgresql://unused").gate_status("case-1")
+
+    assert counter.get("count", 0) == 0  # pure read — status never reconciles
+    assert result["incomplete_operation"] == {
+        "operation_id": "op-1",
+        "idempotency_key": "idem-1",
+        "staging_window_open": True,
+    }
+    # EXACTLY those keys — no targets/paths/reasons/credentials/snapshot/phase.
+    assert set(result["incomplete_operation"]) == {
+        "operation_id", "idempotency_key", "staging_window_open"
+    }
+
+
+def test_gate_status_incomplete_operation_is_none_without_an_operation(monkeypatch):
+    """Fail-closed: no in-flight operation (or a status read failure surfacing null
+    ids) yields NO resume handle."""
+    monkeypatch.setattr(admission, "gate_state", _gate_state_stub({}))
+    monkeypatch.setattr(custody_seal, "seal_status", _seal_status_stub(None, None, False))
+    monkeypatch.setattr(EvidenceAuthorityService, "_connect", lambda self: _FakeConn([]))
+
+    result = EvidenceAuthorityService("postgresql://unused").gate_status("case-1")
+    assert result["incomplete_operation"] is None
 
 
 def test_list_evidence_is_a_pure_read_and_never_reconciles(monkeypatch):
