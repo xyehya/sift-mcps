@@ -466,7 +466,9 @@ def test_reload_resume_projects_key_and_completes_by_recorded_operation(tmp_path
             "select app.custody_reauth_binding(%s, %s, %s)",
             (idempotency_key, reason, _jsonb(targets)),
         )
-        (binding,) = cur.fetchone()
+        binding_row = cur.fetchone()
+        assert binding_row is not None
+        (binding,) = binding_row
         reauth_id = str(uuid.uuid4())
         cur.execute(
             "insert into app.audit_events (id, case_id, event_type, actor_type, "
@@ -481,7 +483,9 @@ def test_reload_resume_projects_key_and_completes_by_recorded_operation(tmp_path
             (case_id, idempotency_key, "sha256:" + "a" * 64, reason, reauth_id,
              _jsonb(targets), actor),
         )
-        op_id, recorded_key = cur.fetchone()
+        begin_row = cur.fetchone()
+        assert begin_row is not None
+        op_id, recorded_key = begin_row
 
     # RELOAD: a FRESH service projects ONLY the path-free resume handle.
     gate = EvidenceAuthorityService(dsn).gate_status(case_id)
@@ -510,7 +514,9 @@ def test_reload_resume_projects_key_and_completes_by_recorded_operation(tmp_path
             "select phase from app.custody_seal_commit(%s, %s, %s, null)",
             (op_id, _jsonb(items), "resume-examiner"),
         )
-        (final_phase,) = cur.fetchone()
+        commit_row = cur.fetchone()
+        assert commit_row is not None
+        (final_phase,) = commit_row
     assert final_phase == "COMMITTED"
 
     # Post-commit: no resume handle remains (fail-closed complete).
