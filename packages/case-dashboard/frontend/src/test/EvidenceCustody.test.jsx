@@ -111,15 +111,38 @@ describe('Seal manifest flow', () => {
     fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
 
     await waitFor(() => {
+      // CP3 storage-profile fix: the client never derives or submits
+      // storage_profile — the seal route injects the fixed server value. The body
+      // carries only password / reason / idempotency_key / file_specs.
       expect(endpoints.postChainSeal).toHaveBeenCalledWith({
         password: 'hunter2',
         reason: 'Initial evidence intake',
-        storage_profile: 'LOCAL_IMMUTABLE',
         idempotency_key: expect.any(String),
         file_specs: [{ path: 'evidence/pcap.raw', source: 'USB drive #1', description: 'PCAP capture' }],
       })
     })
+    const sealBody = endpoints.postChainSeal.mock.calls[0][0]
+    expect(sealBody).not.toHaveProperty('storage_profile')
     expect(await within(modal).findByText(/Manifest version 4 sealed successfully/i)).toBeInTheDocument()
+  })
+
+  it('never submits storage_profile even when chainStatus.storage_profile is UNKNOWN', async () => {
+    // The read-model returns the safe "UNKNOWN" when storage authority is absent.
+    // The seal request must NOT copy it (nor any read value) as write authority —
+    // that was the HTTP 400 "Invalid storage_profile" live blocker.
+    seed({ status: 'ok', storage_profile: 'UNKNOWN', unregistered: ['evidence/pcap.raw'] })
+    endpoints.postChainSeal.mockResolvedValue({ sealed: true, manifest_version: 5 })
+    render(<EvidenceTab />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /Seal Manifest \(1 file\)/i }))
+    const modal = await screen.findByRole('dialog')
+    fillModal({ password: 'hunter2', reason: 'Initial evidence intake' })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => expect(endpoints.postChainSeal).toHaveBeenCalledTimes(1))
+    const sealBody = endpoints.postChainSeal.mock.calls[0][0]
+    expect(sealBody).not.toHaveProperty('storage_profile')
+    expect(JSON.stringify(sealBody)).not.toContain('UNKNOWN')
   })
 
   it('renders the modal error banner when postChainSeal rejects (the ?mock=1 no-backend path)', async () => {

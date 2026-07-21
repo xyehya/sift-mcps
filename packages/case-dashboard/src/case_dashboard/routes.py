@@ -1171,14 +1171,17 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    allowed_fields = {"password", "file_specs", "reason", "idempotency_key", "storage_profile"}
+    allowed_fields = {"password", "file_specs", "reason", "idempotency_key"}
     if not isinstance(body, dict) or set(body) - allowed_fields:
         return JSONResponse({"error": "Unknown seal request field"}, status_code=400)
     file_specs = body.get("file_specs", [])
     reason = " ".join(str(body.get("reason") or "").split())
     idempotency_key = str(body.get("idempotency_key") or "").strip()
-    # P4.23 local storage only: LOCAL_IMMUTABLE is the sole accepted profile.
-    storage_profile = str(body.get("storage_profile") or "LOCAL_IMMUTABLE").strip()
+    # P4.23 local storage only: LOCAL_IMMUTABLE is the sole storage profile and a
+    # SERVER-owned fixed invariant. It is never derived from the client body (which
+    # carries no storage_profile field — supplying one is rejected as unknown
+    # above), so a read-model "UNKNOWN" can never reach the write path.
+    storage_profile = "LOCAL_IMMUTABLE"
 
     if not isinstance(file_specs, list):
         return JSONResponse({"error": "file_specs must be a list"}, status_code=400)
@@ -1188,8 +1191,6 @@ async def post_evidence_chain_seal(request: Request) -> JSONResponse:
         return JSONResponse({"error": "reason is required (max 1000 characters)"}, status_code=400)
     if not idempotency_key or len(idempotency_key) > 128:
         return JSONResponse({"error": "idempotency_key is required (max 128 characters)"}, status_code=400)
-    if storage_profile not in {"LOCAL_IMMUTABLE"}:
-        return JSONResponse({"error": "Invalid storage_profile"}, status_code=400)
 
     # CL3a: re-verify the operator's password against Supabase (fail closed).
     reauth_err = await _supabase_reverify(request, body)

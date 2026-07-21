@@ -79,6 +79,7 @@ class FakeEvidenceDB:
         self.recovery_begin_calls: list = []
         self.recovery_complete_calls: list = []
         self.storage_profile_calls: list = []
+        self.seal_storage_profiles: list = []
 
     def record_reauth_event(self, *, case_id, actor, examiner, action, binding=None):
         self.reauth_calls.append((case_id, examiner, action, binding))
@@ -117,6 +118,7 @@ class FakeEvidenceDB:
     def seal(self, *, case_id, file_specs, reason, idempotency_key, reauth_audit_event_id, actor, examiner, storage_profile="LOCAL_IMMUTABLE"):
         assert reauth_audit_event_id, "seal must receive a re-auth audit event id"
         assert storage_profile in {"LOCAL_IMMUTABLE", "EXTERNALLY_READ_ONLY"}
+        self.seal_storage_profiles.append(storage_profile)
         self.seal_calls.append((case_id, file_specs, reauth_audit_event_id))
         self.seal_status = "sealed"
         return {"seal_status": "sealed", "manifest_version": 1}
@@ -571,6 +573,47 @@ class TestEvidenceChainSeal:
         data = resp.json()
         assert data["manifest_version"] == 1
         assert "evidence/disk.raw" in data["files_added"]
+
+    def test_seal_injects_fixed_local_immutable_without_client_field(
+        self, authed_client, evidence_db
+    ):
+        """CP3: a normal seal body carries NO storage_profile; the route injects the
+        fixed server value LOCAL_IMMUTABLE and passes exactly that to the sealer."""
+        resp = authed_client.post(
+            "/api/evidence/chain/seal",
+            json={
+                "password": GOOD_PASSWORD,
+                "reason": "Initial intake",
+                "idempotency_key": "seal-fixed-profile",
+                "file_specs": [
+                    {"path": "evidence/a.raw"},
+                    {"path": "evidence/b.raw"},
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        assert evidence_db.seal_storage_profiles == ["LOCAL_IMMUTABLE"]
+        assert resp.json()["storage_profile"] == "LOCAL_IMMUTABLE"
+
+    def test_seal_rejects_client_supplied_storage_profile(self, authed_client, evidence_db):
+        """CP3: storage_profile is server-owned — it is NOT an accepted client field,
+        so a body that supplies it (even the safe read value "UNKNOWN", or a valid
+        profile) is rejected as an unknown field before any seal/reauth mutation.
+        This closes the dormant client profile-selection authority."""
+        for value in ("UNKNOWN", "LOCAL_IMMUTABLE", "EXTERNALLY_READ_ONLY"):
+            resp = authed_client.post(
+                "/api/evidence/chain/seal",
+                json={
+                    "password": GOOD_PASSWORD,
+                    "reason": "intake",
+                    "idempotency_key": "seal-client-profile",
+                    "storage_profile": value,
+                    "file_specs": [{"path": "evidence/disk.raw"}],
+                },
+            )
+            assert resp.status_code == 400
+            assert resp.json() == {"error": "Unknown seal request field"}
+        assert not evidence_db.seal_calls
 
     def test_resume_uses_server_operation_id_after_fresh_reauth(self, authed_client, evidence_db):
         resp = authed_client.post(

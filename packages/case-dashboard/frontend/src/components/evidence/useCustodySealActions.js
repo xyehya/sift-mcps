@@ -59,11 +59,14 @@ export function useCustodySealActions({
         source: unregisteredMetadata[path]?.source || '',
         description: unregisteredMetadata[path]?.description || '',
       }))
+      // storage_profile is a SERVER-owned fixed invariant (SPEC: local immutable is
+      // the only profile) — the client never derives or submits it. Copying the
+      // read-model value (which is "UNKNOWN" when storage authority is absent) was
+      // the HTTP 400 "Invalid storage_profile" live blocker.
       const res = await postChainSeal({
         password: modalPassword,
         reason: modalReason,
         idempotency_key: sealIntentId,
-        storage_profile: chainStatus?.storage_profile || 'LOCAL_IMMUTABLE',
         file_specs: fileSpecs,
       })
       if (res.sealed) {
