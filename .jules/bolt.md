@@ -1,0 +1,3 @@
+## 2024-06-25 - Avoid `new Date()` allocation overhead in timeline hot loops
+**Learning:** Instantiating `new Date()` for string formatting and date checking in hot loops (like rendering long lists of timeline events) creates significant allocation overhead and potential UI blocking, particularly for string parsing.
+**Action:** Use fast-path logic to check if an input is already a valid ISO string, and use simple string slicing (e.g., `substring(0, 10)` for date, `substring(11, 19)` for time) rather than parsing into a `Date` object and converting back to an ISO string. Export utility functions for this so the fast path can be reused across components.
