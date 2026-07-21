@@ -963,6 +963,10 @@ def _db_evidence_chain_status() -> dict | None:
         "incomplete_operation": _public_incomplete_operation(
             status.get("incomplete_operation")
         ),
+        # PF-009: the latest Refresh reconciliation id, so the Portal can bind each
+        # Add & Seal target to its snapshot for the canonical POST /portal/custody/seal
+        # (never synthesized/inferred — a real observation id or None).
+        "snapshot_observation_id": status.get("snapshot_observation_id"),
         **_public_storage_status(status),
     }
 
@@ -1149,179 +1153,45 @@ async def get_evidence_chain_status(request: Request) -> JSONResponse:
 
 
 async def post_evidence_chain_seal(request: Request) -> JSONResponse:
-    """Run the durable operator Add/Seal custody operation.
+    """DEAD legacy route — authenticated 404 (PF-009).
 
-    Body: {password, reason, idempotency_key, file_specs: [{path, source?, description?}]}
-    Requires: session examiner, role examiner, fresh scoped Supabase re-authentication.
+    Add & Seal is the canonical two-phase ``POST /portal/custody/seal``
+    (begin/commit via ``custody.seal``). The production ``EvidenceAuthorityService``
+    has no ``seal`` method (CP2B removed it), so this endpoint could never seal; it
+    now authenticates the operator (session + examiner role preserved, so an
+    unauthenticated caller is still rejected first) and returns a shaped 404. It can
+    never mutate custody state. The server-owned LOCAL_IMMUTABLE / no-client-
+    storage_profile invariant from 6354e54e now lives entirely in the custody domain
+    (custody.seal), never in a client request field.
     """
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
-
-    examiner = _resolve_examiner(request)
-    if not examiner:
+    if not _resolve_examiner(request):
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
-
-    err = _must_reset_check(request)
-    if err:
-        return err
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
-    allowed_fields = {"password", "file_specs", "reason", "idempotency_key"}
-    if not isinstance(body, dict) or set(body) - allowed_fields:
-        return JSONResponse({"error": "Unknown seal request field"}, status_code=400)
-    file_specs = body.get("file_specs", [])
-    reason = " ".join(str(body.get("reason") or "").split())
-    idempotency_key = str(body.get("idempotency_key") or "").strip()
-    # P4.23 local storage only: LOCAL_IMMUTABLE is the sole storage profile and a
-    # SERVER-owned fixed invariant. It is never derived from the client body (which
-    # carries no storage_profile field — supplying one is rejected as unknown
-    # above), so a read-model "UNKNOWN" can never reach the write path.
-    storage_profile = "LOCAL_IMMUTABLE"
-
-    if not isinstance(file_specs, list):
-        return JSONResponse({"error": "file_specs must be a list"}, status_code=400)
-    if not file_specs or len(file_specs) > 1000:
-        return JSONResponse({"error": "file_specs must contain 1 to 1000 items"}, status_code=400)
-    if not reason or len(reason) > 1000:
-        return JSONResponse({"error": "reason is required (max 1000 characters)"}, status_code=400)
-    if not idempotency_key or len(idempotency_key) > 128:
-        return JSONResponse({"error": "idempotency_key is required (max 128 characters)"}, status_code=400)
-
-    # CL3a: re-verify the operator's password against Supabase (fail closed).
-    reauth_err = await _supabase_reverify(request, body)
-    if reauth_err:
-        return reauth_err
-
-    # Validate file_specs entries
-    for spec in file_specs:
-        if (
-            not isinstance(spec, dict)
-            or "path" not in spec
-            or set(spec) - {"path", "source", "description"}
-        ):
-            return JSONResponse({"error": "Each file_spec must have a 'path' key"}, status_code=400)
-        path = str(spec.get("path") or "")
-        parts = Path(path).parts
-        if len(parts) != 2 or parts[0] != "evidence" or parts[1] in ("", ".", ".."):
-            return JSONResponse({"error": "Invalid evidence path"}, status_code=400)
-        if len(str(spec.get("source") or "")) > 500 or len(str(spec.get("description") or "")) > 1000:
-            return JSONResponse({"error": "Evidence metadata is too long"}, status_code=400)
-
-    # DB custody authority only (C1): the seal RPC requires a reauth audit event
-    # id. The broker resolves the relative display paths to mounted bytes and
-    # computes the hashes; the portal never sends absolute paths. Without DB
-    # authority there is no file-backed fallback — degrade gracefully to no_case.
-    sealer = getattr(_EVIDENCE_DB, "seal", None) if _EVIDENCE_DB is not None else None
-    if not callable(sealer):
-        return _no_case_response()
-
-    try:
-        reauth_id = _record_reauth_event(
-            request,
-            examiner,
-            "evidence_seal",
-            binding={
-                "idempotency_key": idempotency_key,
-                "reason": reason,
-                "storage_profile": storage_profile,
-                "targets": sorted(str(spec.get("path") or "") for spec in file_specs),
-            },
-        )
-    except Exception as exc:
-        return _active_case_error_response(exc, default=500)
-    if not reauth_id:
-        return JSONResponse(
-            {"error": "Re-auth audit event required for seal"},
-            status_code=403,
-        )
-    try:
-        head = sealer(
-            case_id=_active_case_id(),
-            file_specs=file_specs,
-            reason=reason,
-            idempotency_key=idempotency_key,
-            reauth_audit_event_id=reauth_id,
-            actor=_request_principal(request),
-            examiner=examiner,
-            storage_profile=storage_profile,
-        )
-    except Exception as exc:
-        return _active_case_error_response(exc, default=500)
-    head = head if isinstance(head, dict) else {}
-
-    # DB-first proof export: derive proof material from DB custody state and record
-    # metadata/hash in Postgres. Optional Solana anchoring is external proof only
-    # and must never block the seal.
-    anchor_info, proof_info = _db_export_proof_after_seal(request, examiner)
-    resp = {
-        "sealed": True,
-        "authority": "db",
-        "registration_mode": _MVP_REGISTRATION_MODE,
-        "reauth_method": _MVP_REAUTH_METHOD,
-        "manifest_version": head.get("manifest_version"),
-        "seal_status": head.get("seal_status", "sealed"),
-        "files_added": [s.get("path") for s in file_specs],
-        "storage_profile": storage_profile,
-    }
-    if proof_info is not None:
-        resp["proof_export"] = proof_info
-    if anchor_info is not None:
-        resp["anchor"] = anchor_info
-    return JSONResponse(resp)
+    return JSONResponse(
+        {"error": "Endpoint removed; use POST /portal/custody/seal (begin/commit)."},
+        status_code=404,
+    )
 
 
 async def post_evidence_chain_seal_resume(request: Request) -> JSONResponse:
-    """Resume a server-stored incomplete Add/Seal after fresh operator re-auth."""
+    """DEAD legacy route — authenticated 404 (PF-009).
+
+    Seal resume is part of the canonical ``POST /portal/custody/seal``
+    (phase=commit, resume=true). The production ``EvidenceAuthorityService`` has no
+    ``resume_seal`` method; this endpoint authenticates then returns a shaped 404
+    and can never mutate custody state.
+    """
     role_err = _require_examiner_role(request)
     if role_err:
         return role_err
-    if (err := _must_reset_check(request)) is not None:
-        return err
-    examiner = _resolve_examiner(request)
-    if not examiner:
+    if not _resolve_examiner(request):
         return JSONResponse({"error": "No examiner identity"}, status_code=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-    if not isinstance(body, dict) or set(body) != {"password", "operation_id"}:
-        return JSONResponse({"error": "Unknown resume request field"}, status_code=400)
-    operation_id = str(body.get("operation_id") or "").strip()
-    try:
-        operation_id = str(uuid.UUID(operation_id))
-    except (ValueError, AttributeError):
-        return JSONResponse({"error": "operation_id is required"}, status_code=400)
-    if (reauth_err := await _supabase_reverify(request, body)) is not None:
-        return reauth_err
-    resumer = getattr(_EVIDENCE_DB, "resume_seal", None) if _EVIDENCE_DB is not None else None
-    if not callable(resumer):
-        return _no_case_response()
-    resume_reauth_id = _record_reauth_event(
-        request, examiner, "evidence_seal_resume",
-        binding={"operation_id": operation_id},
+    return JSONResponse(
+        {"error": "Endpoint removed; use POST /portal/custody/seal (begin/commit)."},
+        status_code=404,
     )
-    if not resume_reauth_id:
-        return JSONResponse({"error": "Re-auth audit event required for resume"}, status_code=403)
-    try:
-        result = resumer(
-            case_id=_active_case_id(), operation_id=operation_id,
-            actor=_request_principal(request), examiner=examiner,
-            resume_reauth_audit_event_id=resume_reauth_id,
-        )
-    except Exception as exc:
-        return _active_case_error_response(exc, default=500)
-    result = result if isinstance(result, dict) else {}
-    return JSONResponse({
-        "sealed": result.get("seal_status") == "sealed",
-        "manifest_version": result.get("manifest_version"),
-        "seal_status": result.get("seal_status"),
-        "operation_id": result.get("operation_id"),
-    })
 
 
 async def post_evidence_chain_ignore(request: Request) -> JSONResponse:

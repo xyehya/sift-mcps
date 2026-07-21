@@ -31,6 +31,7 @@ vi.mock('@/api/endpoints', async (importOriginal) => {
     getEvidence: vi.fn(),
     getChainStatus: vi.fn(),
     getCustodyStatus: vi.fn(),
+    postCustodySeal: vi.fn(),
     postChainSeal: vi.fn(),
     postChainSealResume: vi.fn(),
     postCustodyResolve: vi.fn(),
@@ -86,67 +87,102 @@ function fillModal({ password, reason } = {}) {
 }
 
 // ── 1. Seal ────────────────────────────────────────────────────────────────
+// PF-009: Add & Seal posts to the canonical two-phase /custody/seal (begin then
+// commit), NOT the dead legacy /api/evidence/chain/seal (production
+// EvidenceAuthorityService has no .seal). Targets carry the real
+// snapshot_observation_id from the latest Refresh; only a COMMITTED result seals.
 describe('Seal manifest flow', () => {
-  beforeEach(() => seed({ status: 'ok', unregistered: ['evidence/pcap.raw'], write_protected: true }))
+  beforeEach(() =>
+    seed({ status: 'ok', unregistered: ['evidence/pcap.raw'], snapshot_observation_id: 42, write_protected: true }),
+  )
 
-  it('opens the seal modal from "Seal Manifest", gates submit on password, and seals with file specs', async () => {
-    endpoints.postChainSeal.mockResolvedValue({ sealed: true, manifest_version: 4 })
+  it('posts begin then commit to /custody/seal with the same key and snapshot targets', async () => {
+    endpoints.postCustodySeal
+      .mockResolvedValueOnce({ operation_id: 'op-1', phase: 'REQUESTED' })
+      .mockResolvedValueOnce({ operation_id: 'op-1', phase: 'COMMITTED', manifest_version: 4, gate_state: 'OPEN' })
     render(<EvidenceTab />)
 
-    // Trigger renders + per-row inputs visible.
     const sealBtn = await screen.findByRole('button', { name: /Seal Manifest \(1 file\)/i })
-    // Set source/description on the unregistered row (must reach the payload).
     fireEvent.change(screen.getByPlaceholderText('e.g. USB drive #1'), { target: { value: 'USB drive #1' } })
-    fireEvent.change(screen.getByPlaceholderText('e.g. Acquired disk image'), { target: { value: 'PCAP capture' } })
-
     fireEvent.click(sealBtn)
     const modal = await screen.findByRole('dialog')
 
-    // Gate: required password is empty → form will not submit, endpoint NOT called.
+    // Gate: required password empty → form will not submit, endpoint NOT called.
     fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
+    expect(endpoints.postCustodySeal).not.toHaveBeenCalled()
     expect(endpoints.postChainSeal).not.toHaveBeenCalled()
 
-    // Happy path: fill password → seals with file specs derived from the row inputs.
     fillModal({ password: 'hunter2', reason: 'Initial evidence intake' })
     fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
 
-    await waitFor(() => {
-      // CP3 storage-profile fix: the client never derives or submits
-      // storage_profile — the seal route injects the fixed server value. The body
-      // carries only password / reason / idempotency_key / file_specs.
-      expect(endpoints.postChainSeal).toHaveBeenCalledWith({
-        password: 'hunter2',
-        reason: 'Initial evidence intake',
-        idempotency_key: expect.any(String),
-        file_specs: [{ path: 'evidence/pcap.raw', source: 'USB drive #1', description: 'PCAP capture' }],
-      })
+    const target = { display_path: 'evidence/pcap.raw', snapshot_observation_id: 42, source: 'USB drive #1' }
+    await waitFor(() => expect(endpoints.postCustodySeal).toHaveBeenCalledTimes(2))
+    // Phase 1: begin — fresh password/reason + selected snapshot targets.
+    expect(endpoints.postCustodySeal).toHaveBeenNthCalledWith(1, {
+      phase: 'begin',
+      password: 'hunter2',
+      reason: 'Initial evidence intake',
+      idempotency_key: expect.any(String),
+      targets: [target],
     })
-    const sealBody = endpoints.postChainSeal.mock.calls[0][0]
-    expect(sealBody).not.toHaveProperty('storage_profile')
+    // Phase 2: commit — same idempotency key + same targets, no reauth on the
+    // happy single-shot path.
+    expect(endpoints.postCustodySeal).toHaveBeenNthCalledWith(2, {
+      phase: 'commit',
+      idempotency_key: expect.any(String),
+      targets: [target],
+    })
+    const beginBody = endpoints.postCustodySeal.mock.calls[0][0]
+    const commitBody = endpoints.postCustodySeal.mock.calls[1][0]
+    expect(commitBody.idempotency_key).toBe(beginBody.idempotency_key)
+    // The dead legacy route is never used, and no client storage_profile is ever sent.
+    expect(endpoints.postChainSeal).not.toHaveBeenCalled()
+    expect(beginBody).not.toHaveProperty('storage_profile')
+    expect(commitBody).not.toHaveProperty('storage_profile')
     expect(await within(modal).findByText(/Manifest version 4 sealed successfully/i)).toBeInTheDocument()
   })
 
-  it('never submits storage_profile even when chainStatus.storage_profile is UNKNOWN', async () => {
-    // The read-model returns the safe "UNKNOWN" when storage authority is absent.
-    // The seal request must NOT copy it (nor any read value) as write authority —
-    // that was the HTTP 400 "Invalid storage_profile" live blocker.
-    seed({ status: 'ok', storage_profile: 'UNKNOWN', unregistered: ['evidence/pcap.raw'] })
-    endpoints.postChainSeal.mockResolvedValue({ sealed: true, manifest_version: 5 })
+  it('all targets carry the real snapshot_observation_id and never a synthesized/UNKNOWN one', async () => {
+    seed({
+      status: 'ok',
+      storage_profile: 'UNKNOWN',
+      unregistered: ['evidence/a.raw', 'evidence/b.raw'],
+      snapshot_observation_id: 77,
+    })
+    endpoints.postCustodySeal
+      .mockResolvedValueOnce({ phase: 'REQUESTED' })
+      .mockResolvedValueOnce({ phase: 'COMMITTED', manifest_version: 1 })
     render(<EvidenceTab />)
 
-    fireEvent.click(await screen.findByRole('button', { name: /Seal Manifest \(1 file\)/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /Seal Manifest \(2 files\)/i }))
     const modal = await screen.findByRole('dialog')
-    fillModal({ password: 'hunter2', reason: 'Initial evidence intake' })
+    fillModal({ password: 'hunter2', reason: 'intake' })
     fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
 
-    await waitFor(() => expect(endpoints.postChainSeal).toHaveBeenCalledTimes(1))
-    const sealBody = endpoints.postChainSeal.mock.calls[0][0]
-    expect(sealBody).not.toHaveProperty('storage_profile')
-    expect(JSON.stringify(sealBody)).not.toContain('UNKNOWN')
+    await waitFor(() => expect(endpoints.postCustodySeal).toHaveBeenCalledTimes(2))
+    for (const call of endpoints.postCustodySeal.mock.calls) {
+      const { targets } = call[0]
+      expect(targets.map((t) => t.snapshot_observation_id)).toEqual([77, 77])
+      expect(JSON.stringify(call[0])).not.toContain('UNKNOWN')
+      expect(call[0]).not.toHaveProperty('storage_profile')
+    }
   })
 
-  it('renders the modal error banner when postChainSeal rejects (the ?mock=1 no-backend path)', async () => {
-    endpoints.postChainSeal.mockRejectedValue(new Error('Seal endpoint unavailable'))
+  it('refuses to seal without a real Refresh snapshot id and posts nothing', async () => {
+    seed({ status: 'ok', unregistered: ['evidence/pcap.raw'] }) // no snapshot_observation_id
+    render(<EvidenceTab />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /Seal Manifest/i }))
+    const modal = await screen.findByRole('dialog')
+    fillModal({ password: 'hunter2', reason: 'intake' })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
+
+    expect(await within(modal).findByText(/Refresh custody status/i)).toBeInTheDocument()
+    expect(endpoints.postCustodySeal).not.toHaveBeenCalled()
+  })
+
+  it('renders the modal error banner when the seal begin is rejected (shaped failure stays visible)', async () => {
+    endpoints.postCustodySeal.mockRejectedValue(new Error('Seal endpoint unavailable'))
     render(<EvidenceTab />)
 
     fireEvent.click(await screen.findByRole('button', { name: /Seal Manifest/i }))
@@ -157,8 +193,23 @@ describe('Seal manifest flow', () => {
     expect(await within(modal).findByText('Seal endpoint unavailable')).toBeInTheDocument()
   })
 
+  it('a non-COMMITTED commit result is a failure, not a success', async () => {
+    endpoints.postCustodySeal
+      .mockResolvedValueOnce({ phase: 'REQUESTED' })
+      .mockResolvedValueOnce({ phase: 'PROTECTED' }) // never COMMITTED
+    render(<EvidenceTab />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /Seal Manifest/i }))
+    const modal = await screen.findByRole('dialog')
+    fillModal({ password: 'hunter2', reason: 'intake' })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
+
+    await waitFor(() => expect(endpoints.postCustodySeal).toHaveBeenCalledTimes(2))
+    expect(within(modal).queryByText(/sealed successfully/i)).not.toBeInTheDocument()
+  })
+
   it('retains one idempotency key across retry and rotates it for a new modal intent', async () => {
-    endpoints.postChainSeal.mockRejectedValue(new Error('temporary network loss'))
+    endpoints.postCustodySeal.mockRejectedValue(new Error('temporary network loss'))
     render(<EvidenceTab />)
 
     fireEvent.click(await screen.findByRole('button', { name: /Seal Manifest/i }))
@@ -166,19 +217,19 @@ describe('Seal manifest flow', () => {
     fillModal({ password: 'hunter2', reason: 'Initial intake' })
     fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
     await within(modal).findByText('temporary network loss')
-    const firstKey = endpoints.postChainSeal.mock.calls[0][0].idempotency_key
+    const firstKey = endpoints.postCustodySeal.mock.calls[0][0].idempotency_key
 
     fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
-    await waitFor(() => expect(endpoints.postChainSeal).toHaveBeenCalledTimes(2))
-    expect(endpoints.postChainSeal.mock.calls[1][0].idempotency_key).toBe(firstKey)
+    await waitFor(() => expect(endpoints.postCustodySeal).toHaveBeenCalledTimes(2))
+    expect(endpoints.postCustodySeal.mock.calls[1][0].idempotency_key).toBe(firstKey)
 
     fireEvent.click(within(modal).getByRole('button', { name: 'Cancel' }))
     fireEvent.click(await screen.findByRole('button', { name: /Seal Manifest/i }))
     modal = await screen.findByRole('dialog')
     fillModal({ password: 'hunter2', reason: 'Initial intake' })
     fireEvent.click(within(modal).getByRole('button', { name: 'Confirm' }))
-    await waitFor(() => expect(endpoints.postChainSeal).toHaveBeenCalledTimes(3))
-    expect(endpoints.postChainSeal.mock.calls[2][0].idempotency_key).not.toBe(firstKey)
+    await waitFor(() => expect(endpoints.postCustodySeal).toHaveBeenCalledTimes(3))
+    expect(endpoints.postCustodySeal.mock.calls[2][0].idempotency_key).not.toBe(firstKey)
   })
 
   it('renders a path-free recoverable operation state and exact next action', async () => {

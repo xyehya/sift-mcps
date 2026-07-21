@@ -637,11 +637,28 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     {"case_id": case_id},
                 )
                 unregistered = [str(r[0]) for r in cur.fetchall()]
+                # PF-009: expose the latest Refresh reconciliation's identifier —
+                # ``max(app.admission_observations.id)`` — so the Portal can bind
+                # every Add & Seal target to the snapshot it was selected from
+                # (``custody.seal`` requires each target's ``snapshot_observation_id``
+                # and CP2A rejects a commit whose snapshot is not the case's most
+                # recent reconciliation, closing the snapshot->seal TOCTOU). This is
+                # a pure read of the observation authority; it never reconciles.
+                cur.execute(
+                    "select max(id) from app.admission_observations "
+                    "where case_id = %(case_id)s",
+                    {"case_id": case_id},
+                )
+                obs_row = cur.fetchone()
+                snapshot_observation_id = (
+                    int(obs_row[0]) if obs_row and obs_row[0] is not None else None
+                )
         return {
             "gate_state": gate["gate_state"],
             "manifest_version": gate["manifest_version"],
             "issues": gate["issues"],
             "unregistered": unregistered,
+            "snapshot_observation_id": snapshot_observation_id,
         }
 
     def list_evidence(self, case_id: str) -> list[dict[str, Any]]:

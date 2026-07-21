@@ -120,13 +120,18 @@ class _FakeCursor:
     def __exit__(self, *_a):
         return False
 
-    def execute(self, *_a, **_k):
+    def execute(self, sql="", *_a, **_k):
+        self._sql = sql
         return None
 
     def fetchall(self):
         return list(self._rows)
 
     def fetchone(self):
+        # gate_status reads max(admission_observations.id) (PF-009 snapshot id) via
+        # fetchone; return an int for that query, else the first configured row.
+        if "admission_observations" in getattr(self, "_sql", ""):
+            return (42,)
         return self._rows[0] if self._rows else None
 
 
@@ -269,6 +274,8 @@ def test_gate_status_is_a_pure_read_and_never_reconciles(monkeypatch):
     assert counter.get("gate_state", 0) == 1  # pure computed-gate read
     assert result["gate_state"] == "BLOCKED_PENDING"
     assert result["unregistered"] == ["evidence/img.E01"]
+    # PF-009: gate_status exposes the latest Refresh reconciliation id (a pure read).
+    assert result["snapshot_observation_id"] == 42
 
 
 def test_list_evidence_is_a_pure_read_and_never_reconciles(monkeypatch):

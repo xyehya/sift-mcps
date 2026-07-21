@@ -526,130 +526,41 @@ class TestEvidenceChainStatus:
 
 
 class TestEvidenceChainSeal:
-    def test_no_auth_returns_403(self, client):
+    """PF-009: the legacy /api/evidence/chain/seal(/resume) routes are DEAD.
+
+    The production ``EvidenceAuthorityService`` (and its parent) have no ``seal``
+    or ``resume_seal`` — CP2B removed them. Add & Seal is the canonical
+    ``POST /portal/custody/seal`` (begin/commit). These legacy routes are now
+    authenticated-404: an authenticated operator gets a shaped 404 directing to the
+    custody route, and NO custody mutation can occur through them. The fake-only
+    positive tests that proved a non-existent production ``.seal()`` are deleted.
+    """
+
+    def test_legacy_seal_unauthenticated_is_403(self, client):
         resp = client.post("/api/evidence/chain/seal", json={})
         assert resp.status_code == 403
 
-    def test_missing_password_returns_400(self, authed_client):
-        resp = authed_client.post("/api/evidence/chain/seal", json={"file_specs": []})
-        assert resp.status_code == 400
-
-    @pytest.mark.parametrize(
-        "body",
-        [
-            {"password": GOOD_PASSWORD, "idempotency_key": "key", "file_specs": [{"path": "evidence/disk.raw"}]},
-            {"password": GOOD_PASSWORD, "reason": "intake", "file_specs": [{"path": "evidence/disk.raw"}]},
-            {"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "key", "file_specs": [{"path": "../disk.raw"}]},
-            {"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "key", "file_specs": [{"path": "evidence/disk.raw", "unknown": True}]},
-            {"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "key", "file_specs": [{"path": "evidence/disk.raw"}], "unknown": True},
-        ],
-    )
-    def test_seal_rejects_unbound_or_unknown_input(self, authed_client, evidence_db, body):
-        resp = authed_client.post("/api/evidence/chain/seal", json=body)
-        assert resp.status_code == 400
-        assert not evidence_db.seal_calls
-
-    def test_seal_empty_manifest_is_rejected(self, authed_client, evidence_db):
-        resp = authed_client.post(
-            "/api/evidence/chain/seal",
-            json={"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "seal-empty", "file_specs": []},
-        )
-        assert resp.status_code == 400
-        assert not evidence_db.seal_calls
-
-    def test_seal_registers_evidence_file(self, authed_client, evidence_db):
-        resp = authed_client.post(
-            "/api/evidence/chain/seal",
-            json={
-                "password": GOOD_PASSWORD,
-                "reason": "Initial intake",
-                "idempotency_key": "seal-001",
-                "file_specs": [
-                    {"path": "evidence/disk.raw", "source": "USB-001", "description": "Host disk image"}
-                ],
-            },
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["manifest_version"] == 1
-        assert "evidence/disk.raw" in data["files_added"]
-
-    def test_seal_injects_fixed_local_immutable_without_client_field(
+    def test_legacy_seal_authenticated_is_404_directing_to_custody_seal(
         self, authed_client, evidence_db
     ):
-        """CP3: a normal seal body carries NO storage_profile; the route injects the
-        fixed server value LOCAL_IMMUTABLE and passes exactly that to the sealer."""
         resp = authed_client.post(
             "/api/evidence/chain/seal",
             json={
                 "password": GOOD_PASSWORD,
-                "reason": "Initial intake",
-                "idempotency_key": "seal-fixed-profile",
-                "file_specs": [
-                    {"path": "evidence/a.raw"},
-                    {"path": "evidence/b.raw"},
-                ],
+                "reason": "intake",
+                "idempotency_key": "seal-001",
+                "file_specs": [{"path": "evidence/disk.raw"}],
             },
         )
-        assert resp.status_code == 200
-        assert evidence_db.seal_storage_profiles == ["LOCAL_IMMUTABLE"]
-        assert resp.json()["storage_profile"] == "LOCAL_IMMUTABLE"
+        assert resp.status_code == 404
+        assert "custody/seal" in resp.json()["error"]
+        assert not evidence_db.seal_calls  # authenticated-404 cannot mutate
 
-    def test_seal_rejects_client_supplied_storage_profile(self, authed_client, evidence_db):
-        """CP3: storage_profile is server-owned — it is NOT an accepted client field,
-        so a body that supplies it (even the safe read value "UNKNOWN", or a valid
-        profile) is rejected as an unknown field before any seal/reauth mutation.
-        This closes the dormant client profile-selection authority."""
-        for value in ("UNKNOWN", "LOCAL_IMMUTABLE", "EXTERNALLY_READ_ONLY"):
-            resp = authed_client.post(
-                "/api/evidence/chain/seal",
-                json={
-                    "password": GOOD_PASSWORD,
-                    "reason": "intake",
-                    "idempotency_key": "seal-client-profile",
-                    "storage_profile": value,
-                    "file_specs": [{"path": "evidence/disk.raw"}],
-                },
-            )
-            assert resp.status_code == 400
-            assert resp.json() == {"error": "Unknown seal request field"}
-        assert not evidence_db.seal_calls
+    def test_legacy_seal_resume_unauthenticated_is_403(self, client):
+        resp = client.post("/api/evidence/chain/seal/resume", json={})
+        assert resp.status_code == 403
 
-    def test_resume_uses_server_operation_id_after_fresh_reauth(self, authed_client, evidence_db):
-        resp = authed_client.post(
-            "/api/evidence/chain/seal/resume",
-            json={"password": GOOD_PASSWORD, "operation_id": "33333333-3333-3333-3333-333333333333"},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["manifest_version"] == 2
-        assert evidence_db.resume_calls == [
-            (_CASE_ID, "33333333-3333-3333-3333-333333333333", "alice", "audit-evt-001")
-        ]
-        assert evidence_db.reauth_calls[-1][2] == "evidence_seal_resume"
-        assert evidence_db.reauth_calls[-1][3] == {
-            "operation_id": "33333333-3333-3333-3333-333333333333"
-        }
-
-    def test_resume_rejects_malformed_operation_id_before_service(self, authed_client, evidence_db):
-        resp = authed_client.post(
-            "/api/evidence/chain/seal/resume",
-            json={"password": GOOD_PASSWORD, "operation_id": "not-a-uuid"},
-        )
-        assert resp.status_code == 400
-        assert not evidence_db.resume_calls
-
-    @pytest.mark.parametrize("phase", ["REQUESTED", "LEDGER_COMMITTED"])
-    def test_resume_nonresumable_phase_rejects_before_filesystem_orchestration(
-        self, phase, authed_client, evidence_db, monkeypatch
-    ):
-        class NotResumableError(Exception):
-            reason = "custody_operation_not_resumable"
-            http_status = 404
-
-        def reject_resume(**_kwargs):
-            raise NotResumableError(phase)
-
-        monkeypatch.setattr(evidence_db, "resume_seal", reject_resume)
+    def test_legacy_seal_resume_authenticated_is_404(self, authed_client, evidence_db):
         resp = authed_client.post(
             "/api/evidence/chain/seal/resume",
             json={
@@ -657,60 +568,52 @@ class TestEvidenceChainSeal:
                 "operation_id": "33333333-3333-3333-3333-333333333333",
             },
         )
-
         assert resp.status_code == 404
-        assert resp.json() == {"error": "custody_operation_not_resumable"}
+        assert "custody/seal" in resp.json()["error"]
         assert not evidence_db.resume_calls
-        assert not evidence_db.seal_calls
 
-    def test_seal_wrong_password_returns_401(self, authed_client, evidence_db):
-        resp = authed_client.post(
-            "/api/evidence/chain/seal",
-            json={"password": "wrong-password", "reason": "intake", "idempotency_key": "seal-002", "file_specs": [{"path": "evidence/disk.raw"}]},
-        )
-        assert resp.status_code == 401
-        assert not evidence_db.seal_calls
+    def test_production_evidence_service_has_no_seal_interface(self):
+        """Production-composition proof: the class GatewayServer wires into
+        ``_EVIDENCE_DB`` (``EvidenceAuthorityService``) has no ``seal``/
+        ``resume_seal``, so a fake ``.seal()`` (as this file's harness provides) can
+        never make the legacy UI endpoint mutate custody. A revert that restores
+        ``EvidenceAuthorityService.seal`` fails here — a fake-only method cannot make
+        this acceptance pass."""
+        from sift_gateway.portal_services import EvidenceAuthorityService
 
-    def test_seal_control_plane_down_fails_closed(self, authed_client, evidence_db, fake_auth):
-        """CL3a: control plane unreachable -> 503, no file-HMAC fallback, no seal."""
-        fake_auth.control_plane_down = True
-        resp = authed_client.post(
-            "/api/evidence/chain/seal",
-            json={"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "seal-003", "file_specs": [{"path": "evidence/disk.raw"}]},
-        )
-        assert resp.status_code == 503
-        assert not evidence_db.seal_calls
+        assert not hasattr(EvidenceAuthorityService, "seal")
+        assert not hasattr(EvidenceAuthorityService, "resume_seal")
 
-    def test_seal_fresh_install_graceful_no_case(self, passwords_dir, tmp_path, monkeypatch):
-        """No DB service: seal degrades to the no-case response, never a file write."""
-        c = _fresh_install_client(passwords_dir, tmp_path, monkeypatch)
-        resp = c.post(
-            "/api/evidence/chain/seal",
-            json={"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "seal-004", "file_specs": [{"path": "evidence/disk.raw"}]},
-        )
-        assert resp.status_code == 404
-        assert "active case" in resp.json()["error"].lower()
+    def test_legacy_seal_with_production_service_cannot_mutate(
+        self, passwords_dir, tmp_path, monkeypatch
+    ):
+        """The app composed exactly as GatewayServer composes it — the REAL
+        ``EvidenceAuthorityService`` (no ``.seal``) as ``evidence_service`` — returns
+        404 for a well-formed seal and performs no mutation. The authenticated-404
+        returns before any DB call, so the unreachable DSN is never touched."""
+        from sift_gateway.portal_services import EvidenceAuthorityService
 
-    def test_must_reset_password_blocked(self, passwords_dir, tmp_path, monkeypatch):
-        # CL3b: the forced-reset gate now derives from the Supabase 'invited'
-        # status carried by the session principal, not a file flag. An invited
-        # operator is blocked from sealing until they reset.
-        from _supabase_reauth_harness import operator_principal
-
+        real = EvidenceAuthorityService("postgresql://sealroute-unused")
         monkeypatch.setattr("case_dashboard.routes.Path.home", lambda: tmp_path)
         app = create_dashboard_v2_app(
-            session_secret=_SECRET, session_max_age=28800,
-            supabase_auth=ReauthFakeSupabaseAuth(
-                principal=operator_principal(status="invited"),
-            ),
+            session_secret=_SECRET,
+            session_max_age=28800,
+            active_case_service=FakeActiveCases(),
+            evidence_service=real,
+            supabase_auth=ReauthFakeSupabaseAuth(),
         )
         c = TestClient(app, raise_server_exceptions=True)
         set_operator_session(c, _SECRET)
         resp = c.post(
             "/api/evidence/chain/seal",
-            json={"password": GOOD_PASSWORD, "reason": "intake", "idempotency_key": "seal-006", "file_specs": [{"path": "evidence/disk.raw"}]},
+            json={
+                "password": GOOD_PASSWORD,
+                "reason": "intake",
+                "idempotency_key": "seal-prod",
+                "file_specs": [{"path": "evidence/disk.raw"}],
+            },
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 404
 
 
 class TestEvidenceChainIgnore:
