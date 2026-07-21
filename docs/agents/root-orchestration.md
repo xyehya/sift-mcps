@@ -42,9 +42,11 @@ generalizes to future sprints by swapping the brief path above.)
   Watch each teammate pane with a single blocking `herdr wait agent-status <pane> --status done` /
   `herdr agent wait <target> --status idle` — never a per-few-seconds `pane read` loop, and **never
   re-poll the waiter/background process itself**; launch one waiter, do other integration work, inspect
-  the pane once on completion. Require every writer prompt to `herdr agent send <root-target>
-  "<closeout>"` its result back; treat that message as the completion signal and the status transition
-  as backup (detection can lag 2–3 min).
+  the pane once on completion. Give every writer both the stable root target and current root pane id;
+  require it to populate the result with `herdr agent send <root-target> "<closeout>"` and then
+  submit it with `herdr pane send-keys <root-pane-id> enter`. (`agent send` alone only populates the
+  prompt.) Treat that submitted message as the completion signal and the status transition as backup
+  (detection can lag 2–3 min).
 
 ## Worktree ledger and writer lifecycle
 

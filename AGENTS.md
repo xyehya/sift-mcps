@@ -36,11 +36,16 @@ doesn't surface the skill, read that `SKILL.md` directly. The quick primitives b
     never spin short waits or status reads in a loop.
 - **Discover / read on demand (one-shot, after a wait returns — not in a loop):** `herdr agent list`,
   `herdr agent get <target>`, `herdr agent read <target>`.
-- **Two-way messaging:** `herdr agent send <target> "<msg>"` pushes an instruction or handoff into
-  another agent's pane.
+- **Two-way messaging:** `herdr agent send <target> "<msg>"` only populates the target agent's
+  prompt; it does **not** submit it. Follow it with `herdr pane send-keys <target-pane-id> enter`.
+  When the target is already known by pane id and you are sending a fresh instruction, prefer
+  `herdr pane run <target-pane-id> "<msg>"`, which sends the text and Enter together. If text is
+  already populated, send **only** Enter so the prompt is not duplicated.
 - **Always-on backup comms (required for every spawned agent):** idle/done detection can lag 2–3 min,
   so in every spawned agent's prompt instruct it to **route its final turn back to the orchestrator via
-  `herdr agent send <orchestrator-target> "<result / DONE>"`** in addition to going idle. Treat that
+  `herdr agent send <orchestrator-target> "<result / DONE>"` and then submit it with Enter as above**
+  in addition to going idle. Pass both the orchestrator's stable name and current pane id in the
+  spawned prompt so the agent can perform both steps. Treat that
   message as the primary completion signal and the status transition as backup — never rely on polling
   to notice completion.
 
@@ -181,9 +186,10 @@ fallback, never fabricate a verdict.
    fresh worktree may miss dev deps — fall back to repo-root tooling.
 4. **Security model** — point the agent to `SIFT-GATEWAY-SECURITY-MODEL.md` by name before any
    security/policy/backend/evidence/execution reasoning (per §Security model).
-5. **Herdr handoff** — instruct the agent to route its final turn back to the orchestrator with
-   `herdr agent send <orchestrator-target> "<closeout / DONE>"` (per §Herdr); it must not rely on
-   idle-detection alone.
+5. **Herdr handoff** — give the agent both the orchestrator's stable name and current pane id;
+   instruct it to populate the closeout with `herdr agent send <orchestrator-target>
+   "<closeout / DONE>"`, then submit it with `herdr pane send-keys <orchestrator-pane-id> enter`
+   (per §Herdr). It must not rely on idle-detection alone.
 
 LSP catches import/signature/optional/rename slips early; it does NOT prove policy/runtime/DB/live-VM
 behavior. codebase-memory is first for call-graphs/architecture; tests + deploy-and-prove are the final
