@@ -1,7 +1,6 @@
 import {
   getChainStatus,
   postCustodySeal,
-  postChainSealResume,
   postFullVerifyEvidence,
 } from '@/api/endpoints'
 
@@ -15,6 +14,19 @@ import { runGuard } from '@/components/evidence/custody-guard'
 // Seal success refreshes the evidence list via afterSuccess(refreshData).
 // Mock/real split is at the API adapter layer.
 // ─────────────────────────────────────────────────────────────────────────
+
+// The ONE canonical SealTarget builder (used by both Add & Seal and Resume): each
+// target binds a currently-pending display_path to the CURRENT Refresh snapshot id
+// (never synthesized/defaulted/time-inferred) plus the optional operator source
+// note. The canonical SealTarget has no `description`.
+function buildSealTargets(paths, snapshotId, metadata) {
+  return paths.map((path) => {
+    const source = metadata[path]?.source
+    const target = { display_path: path, snapshot_observation_id: snapshotId }
+    if (source) target.source = source
+    return target
+  })
+}
 
 export function useCustodySealActions({
   chainStatus,
@@ -61,15 +73,11 @@ export function useCustodySealActions({
       // inferred from time, or taken from operator-entered metadata. storage_profile
       // is entirely server-owned inside the custody domain (no client field).
       const snapshotId = chainStatus?.snapshot_observation_id
-      if (typeof snapshotId !== 'number') {
+      const paths = chainStatus?.unregistered ?? []
+      if (typeof snapshotId !== 'number' || paths.length === 0) {
         throw new Error('Refresh custody status before sealing (no current snapshot).')
       }
-      const targets = (chainStatus?.unregistered ?? []).map((path) => {
-        const source = unregisteredMetadata[path]?.source
-        const target = { display_path: path, snapshot_observation_id: snapshotId }
-        if (source) target.source = source
-        return target
-      })
+      const targets = buildSealTargets(paths, snapshotId, unregisteredMetadata)
       // Phase 1 — begin: fresh password + reason authorize the selected snapshot set.
       await postCustodySeal({
         phase: 'begin',
@@ -102,15 +110,35 @@ export function useCustodySealActions({
 
   async function handleResumeSeal(e) {
     e.preventDefault()
-    if (!guard(false)) return
+    if (!guard(true)) return // canonical resume requires a fresh password AND reason
     try {
-      const res = await postChainSealResume({
+      // PF-009 R2: resume the incomplete operation through the SAME canonical route
+      // as Add & Seal — commit(resume=true). The operation is found by the
+      // SERVER-projected begin idempotency_key (path-free incomplete_operation),
+      // never persisted client-side; targets are freshly rebuilt from the current
+      // pending set + current snapshot with the shared builder (the server
+      // re-validates them: a target mismatch or stale snapshot stays a 409). Missing
+      // key / targets / snapshot fails visibly with NO request.
+      const idempotencyKey = chainStatus?.incomplete_operation?.idempotency_key
+      const snapshotId = chainStatus?.snapshot_observation_id
+      const paths = chainStatus?.unregistered ?? []
+      if (!idempotencyKey || typeof snapshotId !== 'number' || paths.length === 0) {
+        throw new Error('Refresh custody status before resuming (missing operation key, targets, or snapshot).')
+      }
+      const targets = buildSealTargets(paths, snapshotId, unregisteredMetadata)
+      const committed = await postCustodySeal({
+        phase: 'commit',
+        resume: true,
         password: modalPassword,
-        operation_id: chainStatus?.incomplete_operation?.operation_id,
+        reason: modalReason,
+        idempotency_key: idempotencyKey,
+        targets,
       })
-      if (!res.sealed) throw new Error(res.error || 'Resume failed')
-      setModalResult(res)
-      addToast(`Manifest version ${res.manifest_version} sealed successfully!`, 'success')
+      if (committed?.phase !== 'COMMITTED') {
+        throw new Error(committed?.error || 'Resume did not complete')
+      }
+      setModalResult({ ...committed, sealed: true })
+      addToast(`Manifest version ${committed.manifest_version} sealed successfully!`, 'success')
       afterSuccess(refreshData)
     } catch (err) {
       setModalError(err.message || 'Resume failed')

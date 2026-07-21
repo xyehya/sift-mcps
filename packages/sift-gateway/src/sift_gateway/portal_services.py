@@ -22,6 +22,7 @@ from typing import Any, LiteralString
 from sift_core.evidence_storage import StorageProfile
 
 from sift_gateway.custody import admission as custody_admission
+from sift_gateway.custody import seal as custody_seal
 
 logger = logging.getLogger(__name__)
 
@@ -653,12 +654,30 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 snapshot_observation_id = (
                     int(obs_row[0]) if obs_row and obs_row[0] is not None else None
                 )
+        # PF-009 R2: the minimal path-free reload/resume handle. Reuse the canonical
+        # tested reader ``custody.seal.seal_status`` (no SQL duplication) and project
+        # ONLY the three server-recorded fields a reloaded Portal needs to resume an
+        # incomplete Add & Seal through ``/portal/custody/seal`` commit(resume):
+        # operation_id, the begin idempotency_key, and staging_window_open. No
+        # targets, paths, reasons, credentials, or original snapshot are exposed.
+        # This is a pure read (custody_seal_operations), never a reconciliation, and
+        # fail-closed: a status read failure yields no operation id -> no resume
+        # handle.
+        seal_state = custody_seal.seal_status(case_id=case_id, dsn=self._dsn)
+        incomplete_operation = None
+        if seal_state.incomplete_operation_id and seal_state.incomplete_idempotency_key:
+            incomplete_operation = {
+                "operation_id": seal_state.incomplete_operation_id,
+                "idempotency_key": seal_state.incomplete_idempotency_key,
+                "staging_window_open": seal_state.staging_window_open,
+            }
         return {
             "gate_state": gate["gate_state"],
             "manifest_version": gate["manifest_version"],
             "issues": gate["issues"],
             "unregistered": unregistered,
             "snapshot_observation_id": snapshot_observation_id,
+            "incomplete_operation": incomplete_operation,
         }
 
     def list_evidence(self, case_id: str) -> list[dict[str, Any]]:

@@ -33,7 +33,6 @@ vi.mock('@/api/endpoints', async (importOriginal) => {
     getCustodyStatus: vi.fn(),
     postCustodySeal: vi.fn(),
     postChainSeal: vi.fn(),
-    postChainSealResume: vi.fn(),
     postCustodyResolve: vi.fn(),
     getEvidenceHistory: vi.fn(),
     postFullVerifyEvidence: vi.fn(),
@@ -237,46 +236,91 @@ describe('Seal manifest flow', () => {
     expect(endpoints.postCustodySeal.mock.calls[2][0].idempotency_key).not.toBe(firstKey)
   })
 
-  it('renders a path-free recoverable operation state and exact next action', async () => {
+  it('renders a path-free incomplete-operation notice with a Resume action', async () => {
+    // PF-009 R2: the projection carries ONLY {operation_id, idempotency_key,
+    // staging_window_open} — no phase/paths/reasons/credentials/snapshot.
     seed({
       status: 'unsealed',
-      unregistered: [],
-      incomplete_operation: {
-        operation_id: 'op-1',
-        action: 'ADD_SEAL',
-        phase: 'REQUESTED',
-      },
+      unregistered: ['evidence/a.raw'],
+      snapshot_observation_id: 9,
+      incomplete_operation: { operation_id: 'op-1', idempotency_key: 'idem-1', staging_window_open: false },
     })
     render(<EvidenceTab />)
 
     const notice = await screen.findByRole('region', { name: 'Incomplete custody operation' })
-    expect(within(notice).getByText('State: REQUESTED')).toBeInTheDocument()
-    expect(within(notice).getByText(/Retry Add & Seal to continue/i)).toBeInTheDocument()
+    expect(within(notice).getByRole('button', { name: 'Resume Add & Seal' })).toBeInTheDocument()
+    // Path-free / no leaked stored authority.
     expect(notice).not.toHaveTextContent('evidence/')
+    expect(notice).not.toHaveTextContent('idem-1')
   })
 
-  it.each(['REQUESTED', 'PROTECTED'])(
-    'resumes the same server operation after a fresh component state in %s',
-    async (phase) => {
-      const operation = { operation_id: '33333333-3333-3333-3333-333333333333', action: 'ADD_SEAL', phase }
-      seed({ status: 'unsealed', unregistered: [], incomplete_operation: operation })
-      const first = render(<EvidenceTab />)
-      await screen.findByText(`State: ${phase}`)
-      first.unmount()
-      endpoints.postChainSealResume.mockResolvedValue({ sealed: true, manifest_version: 8, operation_id: operation.operation_id })
-      render(<EvidenceTab />)
+  it('Resume posts canonical commit+resume with the projected key and fresh current targets; never legacy', async () => {
+    seed({
+      status: 'unsealed',
+      unregistered: ['evidence/a.raw', 'evidence/b.raw'],
+      snapshot_observation_id: 9,
+      incomplete_operation: { operation_id: 'op-1', idempotency_key: 'idem-1', staging_window_open: false },
+    })
+    endpoints.postCustodySeal.mockResolvedValue({ phase: 'COMMITTED', manifest_version: 8 })
+    render(<EvidenceTab />)
 
-      fireEvent.click(await screen.findByRole('button', { name: 'Resume Add & Seal' }))
-      const modal = await screen.findByRole('dialog')
-      fireEvent.change(within(modal).getByPlaceholderText('Enter password...'), { target: { value: 'fresh-password' } })
-      fireEvent.click(within(modal).getByRole('button', { name: 'Resume' }))
-      await waitFor(() => expect(endpoints.postChainSealResume).toHaveBeenCalledWith({
-        password: 'fresh-password', operation_id: operation.operation_id,
-      }))
-      expect(endpoints.postChainSealResume).toHaveBeenCalledTimes(1)
-      expect(endpoints.postChainSeal).not.toHaveBeenCalled()
-    },
-  )
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume Add & Seal' }))
+    const modal = await screen.findByRole('dialog')
+    fillModal({ password: 'fresh-password', reason: 'resume after reload' })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Resume' }))
+
+    const target = (p) => ({ display_path: p, snapshot_observation_id: 9 })
+    await waitFor(() => expect(endpoints.postCustodySeal).toHaveBeenCalledTimes(1))
+    // Canonical commit+resume: fresh password/reason, the SERVER-projected begin
+    // idempotency key, and targets freshly rebuilt from the current pending set +
+    // current snapshot (same builder as normal Add & Seal).
+    expect(endpoints.postCustodySeal).toHaveBeenCalledWith({
+      phase: 'commit',
+      resume: true,
+      password: 'fresh-password',
+      reason: 'resume after reload',
+      idempotency_key: 'idem-1',
+      targets: [target('evidence/a.raw'), target('evidence/b.raw')],
+    })
+    expect(await within(modal).findByText(/Manifest version 8 sealed successfully/i)).toBeInTheDocument()
+  })
+
+  it('Resume fails closed (no request) when the projected key or current snapshot is missing', async () => {
+    // No snapshot_observation_id (stale/absent Refresh) -> cannot rebind targets.
+    seed({
+      status: 'unsealed',
+      unregistered: ['evidence/a.raw'],
+      incomplete_operation: { operation_id: 'op-1', idempotency_key: 'idem-1', staging_window_open: false },
+    })
+    render(<EvidenceTab />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume Add & Seal' }))
+    const modal = await screen.findByRole('dialog')
+    fillModal({ password: 'fresh-password', reason: 'resume' })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Resume' }))
+
+    expect(await within(modal).findByText(/Refresh custody status/i)).toBeInTheDocument()
+    expect(endpoints.postCustodySeal).not.toHaveBeenCalled()
+  })
+
+  it('a non-COMMITTED resume result is a failure, not a success', async () => {
+    seed({
+      status: 'unsealed',
+      unregistered: ['evidence/a.raw'],
+      snapshot_observation_id: 9,
+      incomplete_operation: { operation_id: 'op-1', idempotency_key: 'idem-1', staging_window_open: false },
+    })
+    endpoints.postCustodySeal.mockResolvedValue({ phase: 'PROTECTED' }) // never COMMITTED
+    render(<EvidenceTab />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume Add & Seal' }))
+    const modal = await screen.findByRole('dialog')
+    fillModal({ password: 'p', reason: 'r' })
+    fireEvent.click(within(modal).getByRole('button', { name: 'Resume' }))
+
+    await waitFor(() => expect(endpoints.postCustodySeal).toHaveBeenCalledTimes(1))
+    expect(within(modal).queryByText(/sealed successfully/i)).not.toBeInTheDocument()
+  })
 })
 
 // ── 2. Resolve findings (D4 — unified batch, heterogeneous verbs) ───────────

@@ -891,26 +891,30 @@ def _public_storage_status(value: object) -> dict:
 
 
 def _public_incomplete_operation(value: object) -> dict | None:
-    """Allowlist the path-free custody-operation summary for Portal recovery."""
+    """Allowlist the path-free reload/resume handle for the Portal (PF-009 R2).
+
+    Exactly ``{operation_id, idempotency_key, staging_window_open}`` — the minimal
+    server-recorded fields a reloaded Portal needs to resume an incomplete Add &
+    Seal through the canonical ``/portal/custody/seal`` commit(resume). NO targets,
+    paths, reasons, credentials, original snapshot, phase, or aspirational fields.
+    Requires both ids (a resume needs the operation's begin idempotency key), else
+    no handle is surfaced.
+    """
     if not isinstance(value, dict):
         return None
     operation_id = value.get("operation_id")
-    action = value.get("action")
-    phase = value.get("phase")
-    if not all(isinstance(item, str) and item for item in (operation_id, action, phase)):
+    idempotency_key = value.get("idempotency_key")
+    if not (
+        isinstance(operation_id, str)
+        and operation_id
+        and isinstance(idempotency_key, str)
+        and idempotency_key
+    ):
         return None
-
-    failed_from_phase = value.get("failed_from_phase")
-    failure_code = value.get("failure_code")
     return {
         "operation_id": operation_id,
-        "action": action,
-        "phase": phase,
-        "failed_from_phase": (
-            failed_from_phase if isinstance(failed_from_phase, str) else None
-        ),
-        "failure_code": failure_code if isinstance(failure_code, str) else None,
-        "recoverable": value.get("recoverable") is True,
+        "idempotency_key": idempotency_key,
+        "staging_window_open": value.get("staging_window_open") is True,
     }
 
 

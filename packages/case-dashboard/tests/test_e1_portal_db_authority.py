@@ -276,13 +276,16 @@ class TestEvidenceDBAuthority:
         assert body["requires_examiner_action"] is True
 
     def test_chain_status_surfaces_only_public_incomplete_operation(self):
+        # PF-009 R2: the reload/resume handle is path-free — EXACTLY
+        # {operation_id, idempotency_key, staging_window_open}. Nothing else may
+        # surface (no targets/paths/reasons/credentials/snapshot/phase).
         incomplete = {
             "operation_id": "25c6c6f1-1111-4111-8111-111111111111",
+            "idempotency_key": "idem-abc",
+            "staging_window_open": True,
             "action": "ADD_SEAL",
             "phase": "GATE_BLOCKED",
-            "failed_from_phase": None,
-            "failure_code": None,
-            "recoverable": True,
+            "targets": ["evidence/disk.E01"],
             "absolute_path": "/private/evidence/disk.E01",
             "reauth_receipt": "must-not-surface",
         }
@@ -297,11 +300,8 @@ class TestEvidenceDBAuthority:
         assert resp.status_code == 200
         assert resp.json()["incomplete_operation"] == {
             "operation_id": "25c6c6f1-1111-4111-8111-111111111111",
-            "action": "ADD_SEAL",
-            "phase": "GATE_BLOCKED",
-            "failed_from_phase": None,
-            "failure_code": None,
-            "recoverable": True,
+            "idempotency_key": "idem-abc",
+            "staging_window_open": True,
         }
 
     def test_evidence_list_from_db_uses_relative_paths(self):

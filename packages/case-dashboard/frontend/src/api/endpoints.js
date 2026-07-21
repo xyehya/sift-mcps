@@ -61,7 +61,6 @@ export const getChainStatus = () => apiFetch('/api/evidence/chain/status')
 // BASE=/portal, so the relative path is /custody/status.
 export const getCustodyStatus = () => apiFetch('/custody/status')
 export const postChainSeal = (body) => apiPost('/api/evidence/chain/seal', body, REAUTH_HASH_OPTS)
-export const postChainSealResume = (body) => apiPost('/api/evidence/chain/seal/resume', body, REAUTH_HASH_OPTS)
 export const postChainAnchor = (body) => apiPost('/api/evidence/chain/anchor', body)
 export const postChainProofExport = (body) => apiPost('/api/evidence/chain/proof-export', body, { timeoutMs: LONG_TIMEOUT_MS })
 export const postFullVerifyEvidence = (body = {}) => apiPost('/api/evidence/chain/full-verify', body, { timeoutMs: LONG_TIMEOUT_MS })

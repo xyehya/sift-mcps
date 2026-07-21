@@ -181,8 +181,8 @@ function FullVerifyEvidenceModal({ loading, error, result, onClose, onSubmit }) 
   )
 }
 
-function ResumeSealModal({ password, onPasswordChange, loading, error, result, onClose, onSubmit }) {
-  return <ModalShell title="Resume Add & Seal"><p className="text-xs text-muted-foreground">Re-authenticate to resume the server-stored custody operation. No evidence paths or credentials are stored in this page.</p><form id="modal-resume-seal" onSubmit={onSubmit} className="space-y-4"><PasswordField value={password} onChange={onPasswordChange} disabled={loading} /><ModalError error={error} />{loading && <ModalLoading message="Resuming durable custody operation…" />}{result?.sealed && <ModalSuccess message={`Manifest version ${result.manifest_version} sealed successfully!`} />}<div className="flex justify-end gap-2"><CancelButton onClose={onClose} /><ConfirmButton formId="modal-resume-seal" label="Resume" tone="jade" disabled={loading} /></div></form></ModalShell>
+function ResumeSealModal({ password, onPasswordChange, reason, onReasonChange, loading, error, result, onClose, onSubmit }) {
+  return <ModalShell title="Resume Add & Seal"><p className="text-xs text-muted-foreground">Re-authenticate to resume the server-stored custody operation. It re-commits the current pending files under the latest Refresh. No evidence paths or credentials are stored in this page.</p><form id="modal-resume-seal" onSubmit={onSubmit} className="space-y-4"><ReasonField value={reason} onChange={onReasonChange} disabled={loading} placeholder="e.g. Resuming after reload" /><PasswordField value={password} onChange={onPasswordChange} disabled={loading} /><ModalError error={error} />{loading && <ModalLoading message="Resuming durable custody operation…" />}{result?.sealed && <ModalSuccess message={`Manifest version ${result.manifest_version} sealed successfully!`} />}<div className="flex justify-end gap-2"><CancelButton onClose={onClose} /><ConfirmButton formId="modal-resume-seal" label="Resume" tone="jade" disabled={loading} /></div></form></ModalShell>
 }
 
 // ── Resolve (D4 — unified batch, one password/reason, honest verbs) ────────
