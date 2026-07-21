@@ -3,6 +3,7 @@ import { useState } from 'react'
 import {
   getEvidence,
   getChainStatus,
+  getCustodyStatus,
   postChainAnchor,
   postChainProofExport,
   postVerifyEvidence,
@@ -70,9 +71,14 @@ export function useEvidenceActions({
   async function handleRefreshCustody() {
     try {
       addToast('Refreshing custody status…', 'info')
-      const freshStatus = await getChainStatus()
+      // The SINGLE reconciliation trigger: the target custody-status route
+      // reconciles exactly once server-side (SPEC pre-seal staging — one operator
+      // Refresh, one read-only reconciliation). It must succeed first.
+      await getCustodyStatus()
+      // Then render from the legacy reads, which are PURE (never reconcile) — so
+      // the passive 15s poll can never mutate custody state.
+      const [freshStatus, ev] = await Promise.all([getChainStatus(), getEvidence()])
       if (freshStatus) setChainStatus(freshStatus)
-      const ev = await getEvidence()
       setEvidence(ev || [])
       addToast('Custody status refreshed', 'success')
     } catch (ex) {

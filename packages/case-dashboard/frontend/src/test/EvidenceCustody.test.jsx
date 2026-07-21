@@ -30,6 +30,7 @@ vi.mock('@/api/endpoints', async (importOriginal) => {
     ...actual,
     getEvidence: vi.fn(),
     getChainStatus: vi.fn(),
+    getCustodyStatus: vi.fn(),
     postChainSeal: vi.fn(),
     postChainSealResume: vi.fn(),
     postCustodyResolve: vi.fn(),
@@ -69,6 +70,7 @@ function seed(chainStatus) {
 beforeEach(() => {
   vi.clearAllMocks()
   endpoints.getEvidence.mockResolvedValue(EVIDENCE)
+  endpoints.getCustodyStatus.mockResolvedValue({})
   // Default: refreshData's getChainStatus should not clobber the seeded status.
   endpoints.getChainStatus.mockImplementation(async () => useStore.getState().chainStatus)
 })
@@ -407,5 +409,28 @@ describe('Custody proof export flow', () => {
     render(<EvidenceTab />)
     await screen.findByText('Evidence Chain')
     expect(screen.queryByRole('button', { name: /Generate Proof Export/i })).not.toBeInTheDocument()
+  })
+})
+
+// ── 7. Refresh custody status (CP3 — single reconcile trigger) ───────────────
+describe('Refresh custody status', () => {
+  it('reconciles via ONE target custody-status call, then reads legacy passively', async () => {
+    seed({ status: 'ok', authority: 'db', unregistered: [] })
+    render(<EvidenceTab />)
+    // Let mount-time passive refreshData settle, then isolate the Refresh click.
+    await waitFor(() => expect(endpoints.getEvidence).toHaveBeenCalled())
+    endpoints.getCustodyStatus.mockClear()
+    endpoints.getChainStatus.mockClear()
+    endpoints.getEvidence.mockClear()
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Refresh custody status/i })[0])
+
+    // Exactly one reconciliation trigger — the target custody-status route.
+    await waitFor(() => expect(endpoints.getCustodyStatus).toHaveBeenCalledTimes(1))
+    // The legacy reads run passively (no args) — they never reconcile.
+    await waitFor(() => expect(endpoints.getChainStatus).toHaveBeenCalled())
+    expect(endpoints.getEvidence).toHaveBeenCalled()
+    expect(endpoints.getChainStatus.mock.calls.every((c) => c.length === 0)).toBe(true)
+    expect(endpoints.getEvidence.mock.calls.every((c) => c.length === 0)).toBe(true)
   })
 })

@@ -922,6 +922,11 @@ def _db_evidence_chain_status() -> dict | None:
     DB evidence service is wired or no active case; the caller (``_evidence_chain_status``)
     degrades that to a graceful empty payload. Only relative display paths and
     seal/custody summary fields are surfaced — never absolute mount paths.
+
+    PURE READ (CP3 final fix): ``gate_status`` / ``list_evidence`` never reconcile,
+    so the 15s poll and this route never scan disk or grow custody state. The one
+    operator-Refresh reconciliation is the target custody-status route
+    (``GET /portal/custody/status``); this builder only projects its last snapshot.
     """
     if _EVIDENCE_DB is None:
         return None
@@ -1077,7 +1082,8 @@ def _evidence_chain_status() -> dict:
 
     Never returns None and never raises: a fresh install with no DB evidence
     service or no active case degrades to ``_empty_evidence_chain_status`` (HTTP
-    200 / no_case), so the evidence cycle never 500s or blocks.
+    200 / no_case), so the evidence cycle never 500s or blocks. This is a PURE read
+    — reconciliation is the target custody-status route's job (CP3 final fix).
     """
     try:
         db = _db_evidence_chain_status()
@@ -1129,6 +1135,11 @@ async def get_evidence_chain_status(request: Request) -> JSONResponse:
     DB custody authority only (C1). On a fresh install (no DB evidence service or
     no active case) this degrades to a graceful empty/no_case payload with HTTP
     200 — it never 404s or 500s.
+
+    Pure read: the underlying ``gate_status`` / ``list_evidence`` never reconcile,
+    so this route (hit by the 15s poll) never scans disk or grows
+    ``app.admission_observations``. The one operator-Refresh reconciliation is the
+    target custody-status route ``GET /portal/custody/status`` (CP3 final fix).
     """
     role_err = _require_portal_role(request)
     if role_err:
@@ -2518,6 +2529,8 @@ async def get_evidence(request: Request) -> JSONResponse:
     if _EVIDENCE_DB is not None:
         lister = getattr(_EVIDENCE_DB, "list_evidence", None)
         case_id = _active_case_id()
+        # Pure read (passive poll / on-mount): list_evidence never reconciles; the
+        # one operator-Refresh reconciliation is the target custody-status route.
         if callable(lister) and case_id:
             try:
                 items = lister(case_id) or []
