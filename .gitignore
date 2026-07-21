@@ -31,7 +31,12 @@ coverage/
 # Skill bodies live here locally; tracked symlinks under .claude/skills and
 # .cursor/skills point at these paths. Populate via /setup-matt-pocock-skills
 # (or your usual skills installer) — not committed as file trees.
-.agents/
+# EXCEPTION: first-party skills with no installer (e.g. herdr) are committed so
+# they travel with the repo to every clone / Cursor Cloud / Codex env.
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/herdr/
 
 # Machine-local skills lockfile (linear-cli skills) — not shared
 skills-lock.json
