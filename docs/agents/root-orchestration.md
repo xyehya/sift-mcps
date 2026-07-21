@@ -45,7 +45,8 @@ generalizes to future sprints by swapping the brief path above.)
   the pane once on completion. Give every writer both the stable root target and current root pane id;
   require it to populate the result with `herdr agent send <root-target> "<closeout>"` and then
   submit it with `herdr pane send-keys <root-pane-id> enter`. (`agent send` alone only populates the
-  prompt.) Treat that submitted message as the completion signal and the status transition as backup
+  prompt, and the current interactive-agent integration can do the same with `pane run`.) Treat that
+  submitted message as the completion signal and the status transition as backup
   (detection can lag 2–3 min).
 
 ## Worktree ledger and writer lifecycle

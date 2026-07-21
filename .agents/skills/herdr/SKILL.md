@@ -131,11 +131,12 @@ Inspect the pane after launch. If `agent_status` is not yet `idle`, wait for the
 herdr pane get <returned-pane-id>
 herdr wait agent-status <returned-pane-id> --status idle --timeout 30000
 herdr pane run <returned-pane-id> "Review the current diff and report only actionable findings."
+herdr pane send-keys <returned-pane-id> enter
 ```
 
 Status waits match the current status immediately or wait for a future matching transition.
 
-`pane run` sends the text and Enter together. Use it for initial prompts and follow-ups instead of coordinating `send-text` and `send-keys` separately.
+For interactive agent panes, do not assume `pane run` submitted the populated prompt. The current integration can leave the text visible at the prompt without starting the turn. Always follow `pane run` or `agent send` with `herdr pane send-keys <pane-id> enter`. If the text is already visible, send only Enter so it is not duplicated. Treat visible prompt text as unsent until the agent begins processing it.
 
 For normal background work, wait for the agent to start working. If the pane remains in a background tab or workspace, wait for `done` before reading its transcript:
 
@@ -153,6 +154,7 @@ Submit follow-ups the same way:
 
 ```bash
 herdr pane run <returned-pane-id> "Now check the failing test."
+herdr pane send-keys <returned-pane-id> enter
 ```
 
 ## Run an ordinary command in another pane

@@ -38,9 +38,10 @@ doesn't surface the skill, read that `SKILL.md` directly. The quick primitives b
   `herdr agent get <target>`, `herdr agent read <target>`.
 - **Two-way messaging:** `herdr agent send <target> "<msg>"` only populates the target agent's
   prompt; it does **not** submit it. Follow it with `herdr pane send-keys <target-pane-id> enter`.
-  When the target is already known by pane id and you are sending a fresh instruction, prefer
-  `herdr pane run <target-pane-id> "<msg>"`, which sends the text and Enter together. If text is
-  already populated, send **only** Enter so the prompt is not duplicated.
+  The current interactive-agent integration can also leave `herdr pane run <target-pane-id>
+  "<msg>"` populated without submission, so follow that with the same explicit Enter. If text is
+  already populated, send **only** Enter so the prompt is not duplicated. Treat visible prompt text
+  as unsent until the agent begins processing it.
 - **Always-on backup comms (required for every spawned agent):** idle/done detection can lag 2–3 min,
   so in every spawned agent's prompt instruct it to **route its final turn back to the orchestrator via
   `herdr agent send <orchestrator-target> "<result / DONE>"` and then submit it with Enter as above**
