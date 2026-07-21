@@ -355,8 +355,8 @@ def _insert_reauth_event(
            summary, details)
         values (%s, %s, 'user', %s, 'portal_reauth', 'success', %s,
                 jsonb_build_object(
-                  'action', %s,
-                  'examiner', %s,
+                  'action', %s::text,
+                  'examiner', %s::text,
                   'binding', app.custody_reauth_binding(%s, %s, %s)))
         returning id::text
         """,
@@ -399,8 +399,8 @@ def _record_resume_reauth(
             values (%s, 'reauth.evidence_seal_resume', 'user', %s,
                     'portal_reauth', 'success', %s,
                     jsonb_build_object(
-                      'action', 'evidence_seal_resume', 'examiner', %s,
-                      'binding', jsonb_build_object('operation_id', %s)))
+                      'action', 'evidence_seal_resume', 'examiner', %s::text,
+                      'binding', jsonb_build_object('operation_id', %s::text)))
             returning id::text
             """,
             (
