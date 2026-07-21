@@ -30,10 +30,9 @@ export const postCaseMetadata = (body) => apiPost('/api/case/metadata', body)
 export const getFindings = () => apiFetch('/api/findings')
 export const getFinding = (id) => apiFetch(`/api/findings/${id}`)
 export const getTimeline = () => apiFetch('/api/timeline')
-// `refresh: true` (explicit operator Refresh only) drives one server-side custody
-// reconciliation; the default passive read never mutates custody state (CP3 r2).
-export const getEvidence = ({ refresh = false } = {}) =>
-  apiFetch(`/api/evidence${refresh ? '?refresh=1' : ''}`)
+// Pure passive read (poll / on-mount / post-Refresh). Reconciliation is NEVER
+// triggered here — the one operator-Refresh reconcile is getCustodyStatus() below.
+export const getEvidence = () => apiFetch('/api/evidence')
 export const getEvidenceHistory = (objectId) => apiFetch(`/api/evidence/objects/${encodeURIComponent(objectId)}/history`)
 export const getIocs = () => apiFetch('/api/iocs')
 export const getTodos = () => apiFetch('/api/todos')
@@ -53,10 +52,14 @@ export const postCommit = (body) => apiPost('/api/commit', body, REAUTH_OPTS)
 // --- Evidence chain (legacy path — still DB-authority-backed via
 // portal_services.EvidenceAuthorityService; Seal/Full-Verify/Anchor/Proof-
 // Export wire contracts are unchanged by P4.23 CP2B) ---
-// `refresh: true` (explicit operator Refresh only) reconciles server-side; the
-// passive 15s poll calls this with no args and never mutates custody state (CP3 r2).
-export const getChainStatus = ({ refresh = false } = {}) =>
-  apiFetch(`/api/evidence/chain/status${refresh ? '?refresh=1' : ''}`)
+// Pure passive read — NEVER reconciles. The 15s poll and the on-mount read call
+// this; the single operator-Refresh reconcile is getCustodyStatus() (CP3).
+export const getChainStatus = () => apiFetch('/api/evidence/chain/status')
+// The ONE explicit-Refresh reconciliation trigger: the target custody-status
+// route (GET /portal/custody/status) reconciles exactly once server-side, then
+// the passive legacy reads above render the refreshed state. apiFetch prefixes
+// BASE=/portal, so the relative path is /custody/status.
+export const getCustodyStatus = () => apiFetch('/custody/status')
 export const postChainSeal = (body) => apiPost('/api/evidence/chain/seal', body, REAUTH_HASH_OPTS)
 export const postChainSealResume = (body) => apiPost('/api/evidence/chain/seal/resume', body, REAUTH_HASH_OPTS)
 export const postChainAnchor = (body) => apiPost('/api/evidence/chain/anchor', body)

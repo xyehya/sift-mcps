@@ -595,37 +595,20 @@ class EvidenceAuthorityService(_BasePortalDbService):
                 ) from exc
             yield
 
-    def gate_status(self, case_id: str, *, reconcile: bool = False) -> dict[str, Any]:
-        """Custody gate status via ``custody.admission`` (CP2B rewrite).
+    def gate_status(self, case_id: str) -> dict[str, Any]:
+        """Custody gate status — a PURE computed-gate read (no reconciliation).
 
-        Replaces the dormant pre-CP1 ``app.evidence_gate_status`` /
-        ``evidence_storage_authorities`` read (removed with the external-storage
-        surfaces they queried) with the computed target gate. The agent-facing
-        enforcement already routed through this same reconciliation before this
-        rewrite (see ``EvidenceGateMiddleware`` / ``evidence_gate.
-        check_evidence_gate_db``) — this brings the Portal read in line with it.
-
-        ``reconcile`` (CP3 round 2, poll-mutation fix): the DEFAULT is a PURE
-        computed-gate read (``admission.gate_state``) — no disk scan, no DB write —
-        so the 15s passive chain-status poll can never grow
-        ``app.admission_observations`` / mutate ``app.evidence_inventory`` (SPEC
-        §Pre-seal staging window: "no continuous observation"; the
-        ``/api/evidence/chain/status`` "No mutation" contract). Only an EXPLICIT
-        operator Refresh passes ``reconcile=True`` to drive one read-only
-        reconciliation first. Agent dispatch reconciliation is unchanged (it runs
-        through ``policy_middleware`` -> ``check_evidence_gate_db``, not here).
+        Reads the authoritative four-state gate via ``admission.gate_state`` — no
+        disk scan, no ``app.evidence_inventory`` / ``app.admission_observations``
+        write. Reconciliation happens in exactly ONE place, the target
+        custody-status route (``GET /portal/custody/status`` ->
+        ``admission.reconcile``); this read method (and therefore the passive 15s
+        chain-status poll and every future read caller) can never scan disk or grow
+        the observation history (SPEC §Pre-seal staging window: "no continuous
+        observation"). Agent dispatch reconciliation is separate and unchanged (it
+        runs through ``policy_middleware`` -> ``check_evidence_gate_db``, not here).
         """
-        if reconcile:
-            # Bare case directory: ``reconcile`` -> ``classify_inventory_entries``
-            # appends ``/evidence`` itself, matching the MCP dispatch caller; an
-            # already-suffixed path scanned ``.../evidence/evidence`` -> spurious
-            # BLOCKED_UNAVAILABLE (CP3 round 1).
-            case_dir = self._case_artifact_path(case_id)
-            gate = custody_admission.reconcile(
-                case_id, str(case_dir) if case_dir else None, self._dsn, trigger="refresh"
-            )
-        else:
-            gate = custody_admission.gate_state(case_id, self._dsn)
+        gate = custody_admission.gate_state(case_id, self._dsn)
         with self._connect() as conn:
             with conn.cursor() as cur:
                 # Unregistered (Add & Seal targets) is the point-in-time Pending
@@ -661,51 +644,46 @@ class EvidenceAuthorityService(_BasePortalDbService):
             "unregistered": unregistered,
         }
 
-    def list_evidence(
-        self, case_id: str, *, reconcile: bool = False
-    ) -> list[dict[str, Any]]:
-        """EC-4-compliant inventory listing (CP2B rewrite; CP3 inventory fix).
+    def list_evidence(self, case_id: str) -> list[dict[str, Any]]:
+        """EC-4-compliant inventory listing — a PURE DB read (no reconciliation).
 
-        Keeps the original field contract (``current_sha256`` / ``current_bytes``
-        / ``description`` / ``source`` / ``seal_status`` / ``registered_at`` —
-        both ``case_dashboard.routes.get_evidence`` and ``_db_evidence_chain_
-        status`` key off these exact names) but GATES ``status``/``seal_status``/
-        ``current_sha256``/``current_bytes``/``sealed_at`` on a COMMITTED Evidence
-        Version with ACTIVE manifest membership (the same join
-        ``custody.admission.resolve_sealed_version`` uses) instead of echoing the
-        raw, ungated ``evidence_objects`` columns — the EC-4 root cause. A
-        detected-only or digestless object keeps its raw ``status`` and reports
-        no digest; ``manifest_version`` is additive (new consumers may use it).
+        Field contract is unchanged (``current_sha256`` / ``current_bytes`` /
+        ``description`` / ``source`` / ``seal_status`` / ``registered_at`` — both
+        ``case_dashboard.routes.get_evidence`` and ``_db_evidence_chain_status``
+        key off these exact names).
 
-        CP3 fix: Pending and Ignored entries live in ``app.evidence_inventory``,
-        never as ``evidence_objects`` (EC-1/EC-4) — ``custody_reconcile`` upserts
-        the on-disk snapshot there. Selecting only ``evidence_objects`` therefore
-        returned an empty list on a fresh reconciled case, so Refresh never
-        surfaced the point-in-time Pending list (SPEC §Pre-seal staging window)
-        and Add & Seal stayed unavailable. This UNIONs the EC-4-gated object rows
-        (sealed / retired) with the present-on-disk inventory rows a Pending entry
-        renders as (``detected`` / unsealed) and an operator-ignored entry renders
-        as (``ignored``). Sealed paths are excluded from the inventory branch so a
-        path that is already an active sealed object is never duplicated as
-        Pending — mirroring ``app.custody_gate_state``'s ``v_pending`` predicate.
-        Digest/bytes remain sealed-only (the inventory ``sha256`` is a cheap
-        fingerprint, not the custody digest), so nothing digestless appears sealed.
+        Sealed rendering is gated on CURRENT-MANIFEST authority (CP3 final fix):
+        an Evidence Object renders Sealed ONLY when its current Evidence Version is
+        an ACTIVE member of the case's LATEST Manifest Version — never from
+        ``evidence_objects.status`` alone and never from a historical membership.
+        Because ``custody_seal_commit`` / ``custody_retire`` carry still-sealed
+        objects forward into each new manifest as new ACTIVE membership rows, a
+        join to *every* ACTIVE membership fanned one object into multiple rows; the
+        ``latest_manifest`` CTE constrains the join to the single current manifest,
+        so each object yields at most one row and a Retired object (absent as ACTIVE
+        from the latest manifest) renders Retired exactly once.
 
-        ``reconcile`` (CP3 round 2, poll-mutation fix): the DEFAULT is a pure read
-        of the last reconciled snapshot — no disk scan, no DB write — so the
-        passive evidence poll never mutates custody state. Only an EXPLICIT operator
-        Refresh passes ``reconcile=True`` (see ``gate_status``).
+        Pending / Ignored come from ``app.evidence_inventory`` (present-on-disk
+        truth; ``custody_reconcile`` writes it, never ``evidence_objects`` —
+        EC-1/EC-4). The inventory branch excludes a path only when an object at that
+        path has authoritative current-manifest membership (not merely a stale
+        ``status='sealed'`` row), so a sealed path is never duplicated as Pending
+        while a retired object's surviving bytes correctly resurface as Pending for
+        explicit reacquisition. Digest/bytes stay sealed-only (the inventory
+        ``sha256`` is a cheap fingerprint, not the custody digest), so nothing
+        digestless ever renders Sealed.
         """
-        if reconcile:
-            # Bare case directory — the scanner appends ``/evidence`` (see gate_status).
-            case_dir = self._case_artifact_path(case_id)
-            custody_admission.reconcile(
-                case_id, str(case_dir) if case_dir else None, self._dsn, trigger="refresh"
-            )
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
+                    with latest_manifest as (
+                        select id
+                        from app.manifest_versions
+                        where case_id = %(case_id)s
+                        order by manifest_version desc
+                        limit 1
+                    )
                     select o.id::text, o.display_name, o.display_path,
                            o.description, o.source, o.status,
                            v.sha256, v.bytes, m.manifest_version,
@@ -713,8 +691,9 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     from app.evidence_objects o
                     left join app.evidence_versions v on v.id = o.current_version_id
                     left join app.manifest_membership mm
-                      on mm.evidence_object_id = o.id
-                         and mm.evidence_version_id = v.id
+                      on mm.manifest_version_id = (select id from latest_manifest)
+                         and mm.evidence_object_id = o.id
+                         and mm.evidence_version_id = o.current_version_id
                          and mm.entry_status = 'ACTIVE'
                     left join app.manifest_versions m on m.id = mm.manifest_version_id
                     where o.case_id = %(case_id)s
@@ -729,8 +708,14 @@ class EvidenceAuthorityService(_BasePortalDbService):
                     where i.case_id = %(case_id)s
                       and i.entry_kind = 'regular'
                       and not exists (
-                          select 1 from app.evidence_objects o
-                          where o.case_id = %(case_id)s and o.status = 'sealed'
+                          select 1
+                          from app.evidence_objects o
+                          join app.manifest_membership mm
+                            on mm.manifest_version_id = (select id from latest_manifest)
+                               and mm.evidence_object_id = o.id
+                               and mm.evidence_version_id = o.current_version_id
+                               and mm.entry_status = 'ACTIVE'
+                          where o.case_id = %(case_id)s
                             and o.display_path = i.display_path
                       )
                     order by display_path

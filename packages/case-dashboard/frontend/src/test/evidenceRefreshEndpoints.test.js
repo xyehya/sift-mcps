@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// CP3 r2 — the passive 15s poll and the operator Refresh call the SAME evidence
-// endpoints; only Refresh may reconcile server-side. The wire signal is a
-// `?refresh=1` query param the builders append ONLY for `{ refresh: true }`.
-// A revert that always (or never) appends it fails here.
+// CP3 final fix — the single explicit Refresh trigger. Reconciliation happens in
+// exactly ONE place: the target custody-status route (GET /portal/custody/status).
+// The legacy chain-status/evidence reads are PURE (no ?refresh switch), so neither
+// the operator Refresh nor the passive 15s poll can reconcile through them. A
+// revert that re-adds a `?refresh` query to the legacy builders, or drops the
+// target-route adapter, fails here.
 
 vi.mock('@/api/client', () => ({
   apiFetch: vi.fn(async () => ({})),
@@ -14,28 +16,36 @@ vi.mock('@/api/client', () => ({
 }))
 
 import { apiFetch } from '@/api/client'
-import { getChainStatus, getEvidence } from '@/api/endpoints'
+import { getChainStatus, getEvidence, getCustodyStatus } from '@/api/endpoints'
 
 beforeEach(() => apiFetch.mockClear())
 
-describe('CP3 r2 — evidence refresh endpoint builders', () => {
-  it('getChainStatus() passive read hits the base path (poll never mutates)', () => {
+describe('CP3 — custody refresh endpoint builders (single-trigger contract)', () => {
+  it('getCustodyStatus() hits the target reconcile route /portal/custody/status', () => {
+    getCustodyStatus()
+    // apiFetch prefixes BASE=/portal, so the relative path is /custody/status.
+    expect(apiFetch).toHaveBeenCalledWith('/custody/status')
+  })
+
+  it('getChainStatus() is a pure legacy read — no ?refresh, ever', () => {
     getChainStatus()
     expect(apiFetch).toHaveBeenCalledWith('/api/evidence/chain/status')
   })
 
-  it('getChainStatus({ refresh: true }) appends ?refresh=1 (explicit Refresh)', () => {
-    getChainStatus({ refresh: true })
-    expect(apiFetch).toHaveBeenCalledWith('/api/evidence/chain/status?refresh=1')
-  })
-
-  it('getEvidence() passive read hits the base path', () => {
+  it('getEvidence() is a pure legacy read — no ?refresh, ever', () => {
     getEvidence()
     expect(apiFetch).toHaveBeenCalledWith('/api/evidence')
   })
 
-  it('getEvidence({ refresh: true }) appends ?refresh=1', () => {
+  it('the legacy read builders take no argument that could opt into reconciliation', () => {
+    // They are nullary passive reads; passing anything must not change the URL.
+    getChainStatus({ refresh: true })
     getEvidence({ refresh: true })
-    expect(apiFetch).toHaveBeenCalledWith('/api/evidence?refresh=1')
+    expect(apiFetch).toHaveBeenCalledWith('/api/evidence/chain/status')
+    expect(apiFetch).toHaveBeenCalledWith('/api/evidence')
+    // No call ever carries a refresh query.
+    for (const call of apiFetch.mock.calls) {
+      expect(String(call[0])).not.toContain('refresh')
+    }
   })
 })

@@ -1,30 +1,23 @@
-"""P4.23 CP3 round 2 — reconciled-inventory authority for the Pending list.
+"""P4.23 CP3 — reconciled-inventory authority + current-manifest-only rendering.
 
-Live VM proof after CP3 round 1 showed ``/portal/custody/status`` correctly
-flipped BLOCKED_UNAVAILABLE -> BLOCKED_PENDING, but ``pending=[]`` /
-``unregistered=[]`` / evidence ``[]`` — so the Portal still rendered *Sealed
-Evidence (0)* with Add & Seal unavailable. Root cause: ``app.custody_reconcile``
-upserts the on-disk snapshot into ``app.evidence_inventory`` (never
-``app.evidence_objects`` — EC-1/EC-4), but ``EvidenceAuthorityService.gate_status``
-selected ``unregistered`` from ``evidence_objects`` status detected/registered
-(a status that no longer exists in the target model) and ``list_evidence`` read
-only ``evidence_objects``. Both returned empty on a freshly reconciled case.
+Two authority defects this file locks down against a real migrated PostgreSQL
+(DSN-gated, mirroring ``test_p423_cp2b_portal_services.py``):
 
-These integration tests drive the REAL SQL against a real migrated PostgreSQL
-(DSN-gated, mirroring ``test_p423_cp2b_portal_services.py``) and prove the round-2
-requirements end to end:
+1. **Pending authority:** ``app.custody_reconcile`` writes the on-disk snapshot to
+   ``app.evidence_inventory`` (never ``app.evidence_objects`` — EC-1/EC-4).
+   ``gate_status.unregistered`` / ``list_evidence`` must project Pending / Ignored
+   from that inventory (mirroring ``app.custody_gate_state``), while Sealed /
+   Retired come from ``evidence_objects``.
 
-1. fresh inventory-only regular rows become ``gate_status.unregistered`` and
-   ``list_evidence`` status detected/unsealed, and ``/portal/custody/status``
-   ``pending``;
-2. an ignored inventory row is not an Add & Seal ``unregistered`` target but
-   surfaces as its own ``ignored`` state;
-3. a sealed object is never duplicated as Pending even though the inventory still
-   contains the same path (present-on-disk truth);
-4. active-case isolation;
-5. the current route/wire shapes and the legacy frontend contract stay usable;
-   and the CP3 round-2 poll-mutation invariant — a passive (non-reconcile) read
-   never appends an ``app.admission_observations`` row.
+2. **Current-manifest-only rendering (reviewer failure 2):** ``list_evidence``
+   must render each Evidence Object at most ONCE, and Sealed only when its current
+   Evidence Version is an ACTIVE member of the case's LATEST Manifest Version. A
+   join to every historical ACTIVE membership fanned a carried-forward object into
+   multiple rows; the multi-manifest test below (Seal v1, Seal v2 carry-forward,
+   Retire v3) proves one row per object and correct Retired rendering.
+
+Reconciliation is triggered exactly as production does — the target custody-status
+route calls ``admission.reconcile`` once — and the reads afterwards are PURE.
 """
 
 from __future__ import annotations
@@ -34,6 +27,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from sift_gateway.custody import admission
 from sift_gateway.portal.custody_routes import custody_routes_list
 from sift_gateway.portal_services import EvidenceAuthorityService
 from starlette.applications import Starlette
@@ -44,7 +38,7 @@ pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# DSN gate + fixtures (mirror test_p423_cp2b_portal_services.py).
+# DSN gate + fixtures.
 # ---------------------------------------------------------------------------
 def _dsn() -> str:
     dsn = os.environ.get("SIFT_CONTROL_PLANE_DSN", "").strip()
@@ -69,6 +63,12 @@ def _staged_case_dir(tmp_path: Path, *filenames: str) -> Path:
     return case_dir
 
 
+def _refresh(dsn: str, case_id: str, case_dir: Path) -> dict:
+    """The one operator-Refresh reconciliation, via the production primitive the
+    target custody-status route calls (bare case dir)."""
+    return admission.reconcile(case_id, str(case_dir), dsn, trigger="refresh")
+
+
 def _new_case(cur, *, case_dir: Path | None = None) -> str:
     case_id = str(uuid.uuid4())
     cur.execute(
@@ -88,16 +88,18 @@ def _new_operator(cur) -> str:
     return operator_id
 
 
-def _seal_one_object(cur, *, case_id: str, actor_user_id: str, display_path: str) -> None:
-    """Drive the REAL custody_seal_begin -> _protect -> _commit RPC chain so the
-    sealed object/version/manifest_membership are genuinely COMMITTED — exactly
-    what an operator Add & Seal produces (copied from the CP2B EC-4 fixture)."""
+def _seal_one_object(cur, *, case_id: str, actor_user_id: str, display_path: str) -> str:
+    """Drive the REAL custody_seal_begin -> _protect -> _commit RPC chain (one new
+    Manifest Version per call) and return the sealed Evidence Object id."""
     idempotency_key = "seal-" + uuid.uuid4().hex[:12]
     reason = "CP3 inventory-authority fixture"
     targets = [display_path]
     request_digest = "sha256:" + "a" * 64
 
-    cur.execute("select app.custody_reauth_binding(%s, %s, %s)", (idempotency_key, reason, targets))
+    cur.execute(
+        "select app.custody_reauth_binding(%s, %s, %s)",
+        (idempotency_key, reason, _jsonb(targets)),
+    )
     (binding,) = cur.fetchone()
 
     reauth_id = str(uuid.uuid4())
@@ -117,12 +119,11 @@ def _seal_one_object(cur, *, case_id: str, actor_user_id: str, display_path: str
     )
     (operation_id,) = cur.fetchone()
 
-    sha256 = "sha256:" + "b" * 64
     prepared_facts = {
         "items": [
             {
                 "display_path": display_path,
-                "sha256": sha256,
+                "sha256": "sha256:" + "b" * 64,
                 "bytes": 4096,
                 "mode": "0644",
                 "immutable": True,
@@ -134,13 +135,44 @@ def _seal_one_object(cur, *, case_id: str, actor_user_id: str, display_path: str
         "select phase from app.custody_seal_protect(%s, %s, %s, null)",
         (operation_id, _jsonb(prepared_facts), actor_user_id),
     )
-    items = prepared_facts["items"]
     cur.execute(
         "select phase from app.custody_seal_commit(%s, %s, %s, null)",
-        (operation_id, _jsonb(items), "cp3-test-examiner"),
+        (operation_id, _jsonb(prepared_facts["items"]), "cp3-test-examiner"),
     )
     (final_phase,) = cur.fetchone()
     assert final_phase == "COMMITTED"
+
+    cur.execute(
+        "select id::text from app.evidence_objects where case_id = %s and display_path = %s",
+        (case_id, display_path),
+    )
+    return str(cur.fetchone()[0])
+
+
+def _retire_object(cur, *, case_id: str, actor_user_id: str, object_id: str) -> None:
+    """Drive the REAL custody_retire RPC (new Manifest Version excluding the object)."""
+    idempotency_key = "retire-" + uuid.uuid4().hex[:12]
+    reason = "CP3 fan-out retire"
+    cur.execute(
+        "select app.custody_reauth_binding(%s, %s, %s)",
+        (idempotency_key, reason, _jsonb([str(object_id)])),
+    )
+    (binding,) = cur.fetchone()
+    reauth_id = str(uuid.uuid4())
+    cur.execute(
+        """
+        insert into app.audit_events
+          (id, case_id, event_type, actor_type, actor_user_id, source, status, summary, details)
+        values (%s, %s, 'reauth.evidence_retire', 'user', %s, 'portal_reauth', 'success',
+                'CP3 retire reauth', %s)
+        """,
+        (reauth_id, case_id, actor_user_id, _jsonb({"binding": binding})),
+    )
+    cur.execute(
+        "select id from app.custody_retire(%s, %s, %s, %s, %s, %s)",
+        (case_id, object_id, reason, reauth_id, idempotency_key, actor_user_id),
+    )
+    cur.fetchone()
 
 
 def _observation_count(cur, case_id: str) -> int:
@@ -148,6 +180,13 @@ def _observation_count(cur, case_id: str) -> int:
         "select count(*) from app.admission_observations where case_id = %s", (case_id,)
     )
     return int(cur.fetchone()[0])
+
+
+def _by_path(inventory: list[dict]) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = {}
+    for item in inventory:
+        out.setdefault(item["display_path"], []).append(item)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -210,30 +249,30 @@ def test_fresh_inventory_surfaces_as_pending_everywhere(tmp_path):
     case_dir = _staged_case_dir(tmp_path, "img.E01")
     with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
         case_id = _new_case(cur, case_dir=case_dir)
+    _refresh(dsn, case_id, case_dir)
 
     service = EvidenceAuthorityService(dsn)
 
-    gate = service.gate_status(case_id, reconcile=True)
+    gate = service.gate_status(case_id)  # pure read
     assert gate["gate_state"] == "BLOCKED_PENDING"
     assert gate["unregistered"] == ["evidence/img.E01"]
 
-    inventory = service.list_evidence(case_id, reconcile=True)
-    by_path = {i["display_path"]: i for i in inventory}
+    inventory = service.list_evidence(case_id)  # pure read
+    by_path = _by_path(inventory)
     assert set(by_path) == {"evidence/img.E01"}
-    item = by_path["evidence/img.E01"]
+    item = by_path["evidence/img.E01"][0]
     assert item["status"] == "detected"
     assert item["seal_status"] == "unsealed"
     assert item["current_sha256"] is None and item["current_bytes"] is None
-    # Requirement 5: the exact wire keys the legacy get_evidence/_db_evidence_
-    # chain_status consumers key off are all present.
+    # Requirement 5: the exact wire keys the legacy consumers key off are present.
     assert {
         "evidence_id", "display_name", "display_path", "description", "source",
         "status", "seal_status", "current_sha256", "current_bytes",
         "manifest_version", "registered_at", "sealed_at",
     } <= set(item)
 
-    client = _route_client(dsn, case_id, case_dir)
-    body = client.get("/status").json()
+    # Target route (reconciles once itself, then reads).
+    body = _route_client(dsn, case_id, case_dir).get("/status").json()
     assert body["gate_state"] == "BLOCKED_PENDING"
     assert [i["display_path"] for i in body["pending"]] == ["evidence/img.E01"]
     assert body["sealed"] == []
@@ -249,9 +288,8 @@ def test_ignored_inventory_row_is_not_unregistered_but_surfaces_ignored(tmp_path
     case_dir = _staged_case_dir(tmp_path, "keep.raw", "ignore.raw")
     with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
         case_id = _new_case(cur, case_dir=case_dir)
-        # Populate inventory (reconcile), then operator-ignore one entry. The
-        # ignore disposition is preserved across later reconciliations.
-        EvidenceAuthorityService(dsn).gate_status(case_id, reconcile=True)
+        _refresh(dsn, case_id, case_dir)  # populate inventory
+        # Operator-ignore one entry (disposition preserved across reconciliations).
         cur.execute(
             "update app.evidence_inventory set disposition = 'ignored' "
             "where case_id = %s and display_path = 'evidence/ignore.raw'",
@@ -259,15 +297,14 @@ def test_ignored_inventory_row_is_not_unregistered_but_surfaces_ignored(tmp_path
         )
 
     service = EvidenceAuthorityService(dsn)
-    gate = service.gate_status(case_id, reconcile=True)
+    gate = service.gate_status(case_id)  # pure read
     assert gate["unregistered"] == ["evidence/keep.raw"]  # ignored excluded
 
-    inventory = {i["display_path"]: i for i in service.list_evidence(case_id, reconcile=True)}
+    inventory = {i["display_path"]: i for i in service.list_evidence(case_id)}
     assert inventory["evidence/keep.raw"]["status"] == "detected"
     assert inventory["evidence/ignore.raw"]["status"] == "ignored"
 
-    client = _route_client(dsn, case_id, case_dir)
-    body = client.get("/status").json()
+    body = _route_client(dsn, case_id, case_dir).get("/status").json()
     assert [i["display_path"] for i in body["pending"]] == ["evidence/keep.raw"]
     assert [i["display_path"] for i in body["ignored"]] == ["evidence/ignore.raw"]
 
@@ -284,26 +321,20 @@ def test_sealed_object_is_not_duplicated_as_pending(tmp_path):
         case_id = _new_case(cur, case_dir=case_dir)
         actor = _new_operator(cur)
         _seal_one_object(cur, case_id=case_id, actor_user_id=actor, display_path="evidence/sealed.raw")
+    _refresh(dsn, case_id, case_dir)  # both files on disk -> both in inventory
 
     service = EvidenceAuthorityService(dsn)
-    # Reconcile: both files are on disk, so both land in evidence_inventory — but
-    # sealed.raw must NOT also appear as Pending.
-    gate = service.gate_status(case_id, reconcile=True)
-    assert gate["unregistered"] == ["evidence/pending.raw"]
+    gate = service.gate_status(case_id)  # pure read
+    assert gate["unregistered"] == ["evidence/pending.raw"]  # sealed path not Pending
 
-    inventory = service.list_evidence(case_id, reconcile=True)
-    rows_by_path: dict[str, list[dict]] = {}
-    for i in inventory:
-        rows_by_path.setdefault(i["display_path"], []).append(i)
-    # sealed.raw appears exactly once, sealed — never a second Pending row.
-    assert len(rows_by_path["evidence/sealed.raw"]) == 1
-    assert rows_by_path["evidence/sealed.raw"][0]["status"] == "sealed"
-    assert rows_by_path["evidence/sealed.raw"][0]["seal_status"] == "sealed"
-    assert len(rows_by_path["evidence/pending.raw"]) == 1
-    assert rows_by_path["evidence/pending.raw"][0]["status"] == "detected"
+    by_path = _by_path(service.list_evidence(case_id))
+    assert len(by_path["evidence/sealed.raw"]) == 1
+    assert by_path["evidence/sealed.raw"][0]["status"] == "sealed"
+    assert by_path["evidence/sealed.raw"][0]["seal_status"] == "sealed"
+    assert len(by_path["evidence/pending.raw"]) == 1
+    assert by_path["evidence/pending.raw"][0]["status"] == "detected"
 
-    client = _route_client(dsn, case_id, case_dir)
-    body = client.get("/status").json()
+    body = _route_client(dsn, case_id, case_dir).get("/status").json()
     assert [i["display_path"] for i in body["sealed"]] == ["evidence/sealed.raw"]
     assert [i["display_path"] for i in body["pending"]] == ["evidence/pending.raw"]
 
@@ -320,19 +351,67 @@ def test_pending_is_active_case_scoped(tmp_path):
     with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
         case_a = _new_case(cur, case_dir=dir_a)
         case_b = _new_case(cur, case_dir=dir_b)
+    _refresh(dsn, case_a, dir_a)
+    _refresh(dsn, case_b, dir_b)
 
     service = EvidenceAuthorityService(dsn)
-    service.gate_status(case_a, reconcile=True)
-    service.gate_status(case_b, reconcile=True)
-
-    gate_a = service.gate_status(case_a, reconcile=True)
-    assert gate_a["unregistered"] == ["evidence/a.raw"]
-    paths_a = {i["display_path"] for i in service.list_evidence(case_a, reconcile=True)}
+    assert service.gate_status(case_a)["unregistered"] == ["evidence/a.raw"]
+    paths_a = {i["display_path"] for i in service.list_evidence(case_a)}
     assert paths_a == {"evidence/a.raw"}  # never leaks case B's b.raw
 
 
 # ---------------------------------------------------------------------------
-# Requirement 5 (poll-mutation invariant) — passive reads never reconcile.
+# Requirement (reviewer failure 2) — multi-manifest: one row per object, correct
+# Retired rendering, no historical fan-out.
+# ---------------------------------------------------------------------------
+def test_multi_manifest_no_duplicate_sealed_rows_and_retired_renders_once(tmp_path):
+    dsn = _dsn()
+    import psycopg
+
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        case_id = _new_case(cur)  # object branch needs no disk files
+        actor = _new_operator(cur)
+        obj_a = _seal_one_object(cur, case_id=case_id, actor_user_id=actor, display_path="evidence/a.raw")
+        # Sealing b advances to Manifest v2, carrying a forward as an ACTIVE member
+        # of v2 too — so object a now has ACTIVE membership in BOTH v1 and v2.
+        _seal_one_object(cur, case_id=case_id, actor_user_id=actor, display_path="evidence/b.raw")
+        cur.execute(
+            "select count(*) from app.manifest_membership mm "
+            "join app.evidence_objects o on o.id = mm.evidence_object_id "
+            "where o.case_id = %s and o.display_path = 'evidence/a.raw' "
+            "and mm.entry_status = 'ACTIVE'",
+            (case_id,),
+        )
+        active_memberships_a = int(cur.fetchone()[0])
+    # Premise: the historical fan-out condition genuinely exists.
+    assert active_memberships_a >= 2
+
+    service = EvidenceAuthorityService(dsn)
+    by_path = _by_path(service.list_evidence(case_id))
+    # Despite two ACTIVE memberships, object a renders EXACTLY ONCE, sealed at the
+    # LATEST manifest — the current-manifest-only fix.
+    assert len(by_path["evidence/a.raw"]) == 1
+    assert by_path["evidence/a.raw"][0]["status"] == "sealed"
+    assert len(by_path["evidence/b.raw"]) == 1
+    assert by_path["evidence/b.raw"][0]["status"] == "sealed"
+    latest_mv = by_path["evidence/a.raw"][0]["manifest_version"]
+    assert latest_mv == by_path["evidence/b.raw"][0]["manifest_version"]
+
+    # Retire a -> new Manifest Version excluding a; a renders Retired ONCE, b stays
+    # sealed ONCE. Historical ACTIVE memberships remain in PostgreSQL but never
+    # resurrect a as sealed or duplicate it.
+    with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        _retire_object(cur, case_id=case_id, actor_user_id=actor, object_id=obj_a)
+
+    by_path2 = _by_path(service.list_evidence(case_id))
+    assert len(by_path2["evidence/a.raw"]) == 1
+    assert by_path2["evidence/a.raw"][0]["status"] == "retired"
+    assert len(by_path2["evidence/b.raw"]) == 1
+    assert by_path2["evidence/b.raw"][0]["status"] == "sealed"
+
+
+# ---------------------------------------------------------------------------
+# Poll-mutation invariant — passive reads never reconcile (append observations).
 # ---------------------------------------------------------------------------
 def test_passive_reads_do_not_grow_admission_observations(tmp_path):
     dsn = _dsn()
@@ -342,21 +421,21 @@ def test_passive_reads_do_not_grow_admission_observations(tmp_path):
     with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
         case_id = _new_case(cur, case_dir=case_dir)
 
-        service = EvidenceAuthorityService(dsn)
         # One explicit Refresh reconciles (appends exactly one observation).
-        service.gate_status(case_id, reconcile=True)
+        _refresh(dsn, case_id, case_dir)
         baseline = _observation_count(cur, case_id)
         assert baseline >= 1
 
+        service = EvidenceAuthorityService(dsn)
         # Passive reads (the 15s poll path) must NOT append observations or scan.
         for _ in range(3):
-            g = service.gate_status(case_id)  # default: passive
+            g = service.gate_status(case_id)  # pure read
             assert g["gate_state"] == "BLOCKED_PENDING"
             assert g["unregistered"] == ["evidence/img.E01"]  # last snapshot, still surfaced
-            service.list_evidence(case_id)  # default: passive
+            service.list_evidence(case_id)  # pure read
         assert _observation_count(cur, case_id) == baseline
 
-        # A further explicit Refresh does append exactly one more (proving the
-        # counter above is live, not a dead assertion).
-        service.gate_status(case_id, reconcile=True)
+        # A further explicit Refresh appends exactly one more (proving the counter
+        # above is live, not a dead assertion).
+        _refresh(dsn, case_id, case_dir)
         assert _observation_count(cur, case_id) == baseline + 1

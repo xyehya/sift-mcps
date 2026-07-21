@@ -1,20 +1,17 @@
-"""P4.23 CP3 round 2 — passive chain-status/evidence polling must not reconcile.
+"""P4.23 CP3 — the legacy chain-status/evidence routes are PURE reads.
 
-Live proof: the global Portal poll (``useDataPolling.js``) calls
-``GET /portal/api/evidence/chain/status`` every 15s. That route
-(``get_evidence_chain_status`` — documented "No mutation") funnels into
-``_db_evidence_chain_status`` -> ``EvidenceAuthorityService.gate_status`` +
-``list_evidence``, each of which reconciled on every call — so passive polling
-grew ``app.admission_observations`` continuously, violating SPEC §Pre-seal
-staging window ("no continuous observation… reconciliation occurs on operator
-Refresh or agent dispatch") and the route's own "No mutation" contract.
+Reconciliation lives in exactly one place: the target custody-status route
+(``GET /portal/custody/status``). The legacy Portal reads that the global 15s
+poll and the on-mount read hit —
 
-Fix (CP3 r2, query-param intent): the passive read path does NOT reconcile; only
-an explicit operator Refresh (``?refresh=1``) threads ``reconcile=True`` down to
-the evidence service. These route-seam tests assert the reconcile INTENT the route
-forwards to the injected evidence adapter — the passive poll never requests a
-scan, and ``?refresh=1`` always does. A revert to unconditional reconcile fails
-the passive assertions.
+    GET /portal/api/evidence/chain/status   (get_evidence_chain_status)
+    GET /portal/api/evidence                (get_evidence)
+
+— must NEVER trigger reconciliation: no disk scan, no ``app.evidence_inventory``
+upsert, no ``app.admission_observations`` row. They forward NO reconcile intent
+to the evidence adapter, and a ``?refresh=1`` query is inert (the switch was
+removed). A revert that re-threads ``reconcile=True`` into the adapter — the
+round-2 triple-reconcile bug — records the kwarg here and fails.
 """
 
 from __future__ import annotations
@@ -41,14 +38,15 @@ class _FakeActiveCases:
 
 
 class _RecordingEvidenceDB:
-    """Records the ``reconcile`` intent the route forwards on each call."""
+    """Records the exact kwargs the route forwards. A pure read forwards none;
+    the only accepted call shape is ``(case_id)`` with no reconcile switch."""
 
     def __init__(self):
-        self.gate_reconcile: list[bool] = []
-        self.list_reconcile: list[bool] = []
+        self.gate_calls: list[dict] = []
+        self.list_calls: list[dict] = []
 
-    def gate_status(self, case_id, *, reconcile=False):
-        self.gate_reconcile.append(reconcile)
+    def gate_status(self, case_id, **kwargs):
+        self.gate_calls.append(dict(kwargs))
         return {
             "seal_status": "unsealed",
             "gate_state": "BLOCKED_PENDING",
@@ -57,8 +55,8 @@ class _RecordingEvidenceDB:
             "unregistered": ["evidence/img.E01"],
         }
 
-    def list_evidence(self, case_id, *, reconcile=False):
-        self.list_reconcile.append(reconcile)
+    def list_evidence(self, case_id, **kwargs):
+        self.list_calls.append(dict(kwargs))
         return [
             {
                 "evidence_id": "1",
@@ -93,33 +91,36 @@ def client(evidence_db, tmp_path, monkeypatch):
     return c
 
 
-def test_chain_status_passive_read_does_not_reconcile(client, evidence_db):
+def _no_reconcile(calls: list[dict]) -> bool:
+    return all("reconcile" not in kw or kw["reconcile"] is False for kw in calls)
+
+
+def test_chain_status_is_a_pure_read(client, evidence_db):
     resp = client.get("/api/evidence/chain/status")
     assert resp.status_code == 200
-    # The passive 15s poll path must request NO reconciliation.
-    assert evidence_db.gate_reconcile == [False]
-    assert evidence_db.list_reconcile == [False]
+    assert evidence_db.gate_calls and _no_reconcile(evidence_db.gate_calls)
+    assert evidence_db.list_calls and _no_reconcile(evidence_db.list_calls)
 
 
-def test_chain_status_explicit_refresh_reconciles(client, evidence_db):
+def test_chain_status_refresh_query_is_inert(client, evidence_db):
+    """The removed ``?refresh`` switch must not resurrect reconciliation."""
     resp = client.get("/api/evidence/chain/status?refresh=1")
     assert resp.status_code == 200
+    assert _no_reconcile(evidence_db.gate_calls)
+    assert _no_reconcile(evidence_db.list_calls)
     body = resp.json()
-    # Explicit operator Refresh reconciles AND still populates the legacy Add & Seal
-    # state (the unregistered list the frontend file_specs seal contract consumes).
-    assert evidence_db.gate_reconcile == [True]
-    assert evidence_db.list_reconcile == [True]
+    # Still populates the legacy Add & Seal state from the last reconciled snapshot.
     assert body["unregistered"] == ["evidence/img.E01"]
 
 
-def test_get_evidence_passive_read_does_not_reconcile(client, evidence_db):
+def test_get_evidence_is_a_pure_read(client, evidence_db):
     resp = client.get("/api/evidence")
     assert resp.status_code == 200
-    assert evidence_db.list_reconcile == [False]
+    assert evidence_db.list_calls and _no_reconcile(evidence_db.list_calls)
 
 
-def test_get_evidence_explicit_refresh_reconciles(client, evidence_db):
+def test_get_evidence_refresh_query_is_inert(client, evidence_db):
     resp = client.get("/api/evidence?refresh=1")
     assert resp.status_code == 200
-    assert evidence_db.list_reconcile == [True]
+    assert _no_reconcile(evidence_db.list_calls)
     assert [e["path"] for e in resp.json()] == ["evidence/img.E01"]

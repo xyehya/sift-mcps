@@ -914,7 +914,7 @@ def _public_incomplete_operation(value: object) -> dict | None:
     }
 
 
-def _db_evidence_chain_status(reconcile: bool = False) -> dict | None:
+def _db_evidence_chain_status() -> dict | None:
     """Assemble the evidence chain status payload from DB custody authority (C1).
 
     The single evidence-chain-status builder. DB authority is the only authority:
@@ -923,12 +923,10 @@ def _db_evidence_chain_status(reconcile: bool = False) -> dict | None:
     degrades that to a graceful empty payload. Only relative display paths and
     seal/custody summary fields are surfaced — never absolute mount paths.
 
-    ``reconcile`` (CP3 round 2): False for the passive 15s poll — a pure read that
-    never mutates custody state (SPEC §Pre-seal staging window; this route's "No
-    mutation" contract). True ONLY for an explicit operator Refresh (``?refresh=1``),
-    which drives one read-only reconciliation through the custody admission path.
-    The reconcile kwarg is passed only when True so pre-existing evidence-DB stubs
-    that take just ``case_id`` remain call-compatible on the passive path.
+    PURE READ (CP3 final fix): ``gate_status`` / ``list_evidence`` never reconcile,
+    so the 15s poll and this route never scan disk or grow custody state. The one
+    operator-Refresh reconciliation is the target custody-status route
+    (``GET /portal/custody/status``); this builder only projects its last snapshot.
     """
     if _EVIDENCE_DB is None:
         return None
@@ -939,7 +937,7 @@ def _db_evidence_chain_status(reconcile: bool = False) -> dict | None:
     if not callable(gate):
         return None
     try:
-        status = (gate(case_id, reconcile=True) if reconcile else gate(case_id)) or {}
+        status = gate(case_id) or {}
     except Exception as exc:
         logger.warning("DB evidence gate_status failed: %s", exc)
         return None
@@ -993,7 +991,7 @@ def _db_evidence_chain_status(reconcile: bool = False) -> dict | None:
     lister = getattr(_EVIDENCE_DB, "list_evidence", None)
     if callable(lister):
         try:
-            items = (lister(case_id, reconcile=True) if reconcile else lister(case_id)) or []
+            items = lister(case_id) or []
         except Exception as exc:
             logger.warning("DB list_evidence for chain status failed: %s", exc)
             items = []
@@ -1079,23 +1077,16 @@ def _db_evidence_chain_status(reconcile: bool = False) -> dict | None:
     return payload
 
 
-def _query_flag(request: Request, name: str) -> bool:
-    """Parse a truthy boolean query param (``?name=1`` / ``true`` / ``yes`` / ``on``)."""
-    raw = request.query_params.get(name)
-    return isinstance(raw, str) and raw.strip().lower() in ("1", "true", "yes", "on")
-
-
-def _evidence_chain_status(reconcile: bool = False) -> dict:
+def _evidence_chain_status() -> dict:
     """Return the DB-authority evidence chain status, or a graceful empty payload.
 
     Never returns None and never raises: a fresh install with no DB evidence
     service or no active case degrades to ``_empty_evidence_chain_status`` (HTTP
-    200 / no_case), so the evidence cycle never 500s or blocks. ``reconcile`` is
-    forwarded to the DB builder: only an explicit operator Refresh reconciles; the
-    passive poll is a pure read (CP3 round 2).
+    200 / no_case), so the evidence cycle never 500s or blocks. This is a PURE read
+    — reconciliation is the target custody-status route's job (CP3 final fix).
     """
     try:
-        db = _db_evidence_chain_status(reconcile=reconcile)
+        db = _db_evidence_chain_status()
     except Exception as exc:
         logger.warning("evidence chain status failed: %s", exc)
         db = None
@@ -1139,22 +1130,22 @@ def _db_export_proof_after_seal(request, examiner):
 
 
 async def get_evidence_chain_status(request: Request) -> JSONResponse:
-    """Return evidence chain status, diff, and write-block detection.
+    """Return evidence chain status, diff, and write-block detection. No mutation.
 
     DB custody authority only (C1). On a fresh install (no DB evidence service or
     no active case) this degrades to a graceful empty/no_case payload with HTTP
     200 — it never 404s or 500s.
 
-    No mutation by default: the passive 15s poll reads the computed gate and the
-    last reconciled snapshot without scanning disk or writing custody rows. Only an
-    explicit operator Refresh (``?refresh=1``) drives one read-only reconciliation
-    (CP3 round 2 — passive polling must not grow ``app.admission_observations``).
+    Pure read: the underlying ``gate_status`` / ``list_evidence`` never reconcile,
+    so this route (hit by the 15s poll) never scans disk or grows
+    ``app.admission_observations``. The one operator-Refresh reconciliation is the
+    target custody-status route ``GET /portal/custody/status`` (CP3 final fix).
     """
     role_err = _require_portal_role(request)
     if role_err:
         return role_err
 
-    return JSONResponse(_evidence_chain_status(reconcile=_query_flag(request, "refresh")))
+    return JSONResponse(_evidence_chain_status())
 
 
 async def post_evidence_chain_seal(request: Request) -> JSONResponse:
@@ -2538,12 +2529,11 @@ async def get_evidence(request: Request) -> JSONResponse:
     if _EVIDENCE_DB is not None:
         lister = getattr(_EVIDENCE_DB, "list_evidence", None)
         case_id = _active_case_id()
-        # No mutation by default (passive poll / on-mount read); only an explicit
-        # operator Refresh (``?refresh=1``) reconciles (CP3 round 2).
-        reconcile = _query_flag(request, "refresh")
+        # Pure read (passive poll / on-mount): list_evidence never reconciles; the
+        # one operator-Refresh reconciliation is the target custody-status route.
         if callable(lister) and case_id:
             try:
-                items = (lister(case_id, reconcile=True) if reconcile else lister(case_id)) or []
+                items = lister(case_id) or []
             except Exception as exc:
                 return _active_case_error_response(exc, default=500)
             evidence = [

@@ -1,33 +1,25 @@
-"""P4.23 CP3 — Portal custody Refresh reconciliation directory fix.
+"""P4.23 CP3 — Portal custody Refresh: single reconcile trigger + pure reads.
 
-The demonstrated CP3 Gate CUSTODY failure: on a fresh case, clicking **Refresh
-custody status** produced success toasts but the Portal stayed at *Sealed
-Evidence (0 files)* / *No evidence files registered* with Add & Seal disabled,
-and a direct ``GET /portal/custody/status`` returned ``BLOCKED_UNAVAILABLE`` /
-"The canonical evidence directory is unavailable" — even though the two staged
-files existed under the canonical evidence directory.
+Two established defects this file locks down:
 
-Root cause: ``classify_inventory_entries(case_dir)`` appends ``/evidence``
-itself (the single canonical scanner), but the three Portal callers of
-``custody.admission.reconcile`` —
-``EvidenceAuthorityService.gate_status`` (legacy ``/api/evidence/chain/status``),
-``EvidenceAuthorityService.list_evidence`` (legacy ``/api/evidence``), and
-``portal.custody_routes.custody_status`` (target ``/portal/custody/status``) —
-each passed an *already-suffixed* evidence directory, so the scanner opened
-``.../evidence/evidence`` (nonexistent) -> ``OSError`` -> ``None`` ->
-``storage_available=False`` -> ``BLOCKED_UNAVAILABLE``. The MCP dispatch caller
-(``policy_middleware`` -> ``check_evidence_gate_db`` -> ``reconcile``) passes the
-BARE case directory and was always correct; the fix aligns the three Portal
-callers with it.
+1. **Directory bug (round 1):** ``classify_inventory_entries(case_dir)`` appends
+   ``/evidence`` itself, so a caller that passes an already-suffixed evidence
+   directory made the scanner open ``.../evidence/evidence`` -> ``OSError`` ->
+   ``None`` -> ``BLOCKED_UNAVAILABLE``. The one operator-Refresh reconcile trigger
+   is ``portal.custody_routes.custody_status`` (``GET /portal/custody/status``); it
+   must hand ``admission.reconcile`` the BARE case directory, exactly as the MCP
+   dispatch caller does.
 
-These are fail-on-revert tests through the highest Portal/Gateway seam: each
-caller must hand ``reconcile`` a directory that the REAL ``classify_inventory_
-entries`` resolves to the populated ``evidence/`` directory (finds the staged
-file), NOT a doubled path (which returns ``None`` -> ``BLOCKED_UNAVAILABLE``). A
-revert to the old ``/evidence``-suffixed argument fails every one deterministically
-and without a database. The DSN-gated integration test at the bottom proves the
-same end-to-end against real PostgreSQL: a real temp case directory with
-``evidence/<file>`` yields Pending/unregistered after Refresh, not unavailable.
+2. **Triple-reconcile (final fix):** one operator Refresh must perform EXACTLY ONE
+   reconciliation. Reconciliation lives in ONE place — the target custody-status
+   route. ``EvidenceAuthorityService.gate_status`` / ``list_evidence`` are PURE DB
+   reads (``admission.gate_state`` + PostgreSQL projection); they can never scan
+   disk or append an ``app.admission_observations`` row. This makes it structurally
+   impossible for the passive 15s poll (or any future read caller) to reconcile.
+
+The fast tests below run without a database (the reconcile primitive is spied so
+the REAL canonical scanner runs on the captured directory). The DSN-gated
+integration test proves the end-to-end population against real PostgreSQL.
 """
 
 from __future__ import annotations
@@ -48,7 +40,8 @@ from starlette.testclient import TestClient
 
 # ---------------------------------------------------------------------------
 # Shared: a real temp case directory with a staged evidence file, and a spy that
-# runs the REAL canonical scanner on whatever directory the caller hands it.
+# runs the REAL canonical scanner on whatever directory the caller hands it AND
+# counts how many times reconciliation was triggered.
 # ---------------------------------------------------------------------------
 def _staged_case_dir(tmp_path: Path, filename: str = "img.E01") -> Path:
     """Create ``<case>/evidence/<filename>`` and return the BARE case dir."""
@@ -60,12 +53,13 @@ def _staged_case_dir(tmp_path: Path, filename: str = "img.E01") -> Path:
 
 
 def _make_reconcile_spy(captured: dict) -> object:
-    """Replace ``admission.reconcile`` with a spy that captures the directory
-    argument and derives the gate from the REAL scanner run on it — faithfully
-    reproducing reconcile's directory-driven ``storage_available`` branch without
-    a database. Everything downstream sees a genuine GateResult shape."""
+    """Replace ``admission.reconcile`` with a spy that COUNTS calls, captures the
+    directory argument, and derives the gate from the REAL scanner run on it —
+    faithfully reproducing reconcile's directory-driven ``storage_available``
+    branch without a database."""
 
     def spy(case_id, case_dir, dsn, *, trigger="dispatch", correlation_id=None):
+        captured["count"] = captured.get("count", 0) + 1
         captured["case_id"] = case_id
         captured["case_dir"] = case_dir
         captured["trigger"] = trigger
@@ -87,26 +81,34 @@ def _make_reconcile_spy(captured: dict) -> object:
 
 
 def _assert_scanned_real_evidence_dir(captured: dict, filename: str = "img.E01") -> None:
-    """The decisive fail-on-revert assertions, shared by all three callers."""
+    """The decisive directory-fix assertions."""
     passed = str(captured["case_dir"]).replace("\\", "/")
     # A revert to the double-suffix hands reconcile ``.../evidence`` and the
     # canonical scanner then opens ``.../evidence/evidence``.
     assert not passed.endswith("/evidence"), (
         f"caller pre-appended /evidence; scanner will double it: {passed}"
     )
-    # The REAL scanner resolved the populated evidence directory and found the
-    # staged file — proving the caller handed reconcile the bare case dir.
     assert captured["entries"] is not None, "scanner saw an unavailable directory"
     assert any(e["display_name"] == filename for e in captured["entries"])
     assert any(e["display_path"] == f"evidence/{filename}" for e in captured["entries"])
-    # ...and therefore the gate is not the spurious BLOCKED_UNAVAILABLE.
     assert captured["gate_state"] == "BLOCKED_PENDING"
     assert captured["trigger"] == "refresh"
 
 
+def _gate_state_stub(counter: dict, state: str = "BLOCKED_PENDING"):
+    """Stub ``admission.gate_state`` (the pure computed-gate reader) — records use
+    and returns a real GateResult without touching disk or the DB."""
+
+    def stub(case_id, dsn):
+        counter["gate_state"] = counter.get("gate_state", 0) + 1
+        return admission._gate_result(state, 0)
+
+    return stub
+
+
 # ---------------------------------------------------------------------------
-# Fakes for the post-reconcile DB read in the two EvidenceAuthorityService
-# methods (the directory bug is entirely upstream of these reads).
+# Fakes for the post-read DB projection in the two EvidenceAuthorityService
+# methods (the reconcile trigger is entirely upstream of these pure reads).
 # ---------------------------------------------------------------------------
 class _FakeCursor:
     def __init__(self, rows: list) -> None:
@@ -172,13 +174,15 @@ class _CaseService:
 
 
 class _EvidenceService:
-    """Returns a fixed inventory (the route's pending bucket is built from it —
-    the directory fix under test is about what reconcile scans, not this list)."""
+    """Fixed inventory for the route's projection; records list_evidence calls so a
+    test can prove the route reads pending/sealed but never itself reconciles."""
 
     def __init__(self, inventory: list[dict]) -> None:
         self._inventory = inventory
+        self.calls: list[str] = []
 
-    def list_evidence(self, _case_id: str):
+    def list_evidence(self, case_id: str):
+        self.calls.append(case_id)
         return self._inventory
 
 
@@ -214,69 +218,12 @@ def _client(gateway: _Gateway) -> TestClient:
 
 
 # ---------------------------------------------------------------------------
-# Fail-on-revert tests — no database.
+# The single reconcile trigger — the target custody-status route.
 # ---------------------------------------------------------------------------
-def test_gate_status_scans_bare_case_dir_and_reports_unregistered(tmp_path, monkeypatch):
-    """Legacy ``/api/evidence/chain/status`` seam (drives Add & Seal via the
-    ``unregistered`` list): gate_status must scan the real evidence dir, not
-    ``.../evidence/evidence``."""
-    case_dir = _staged_case_dir(tmp_path)
-    captured: dict = {}
-    monkeypatch.setattr(admission, "reconcile", _make_reconcile_spy(captured))
-    monkeypatch.setattr(
-        EvidenceAuthorityService, "_case_artifact_path", lambda self, cid: case_dir
-    )
-    # Post-reconcile read: the detected file surfaces as an unregistered entry.
-    monkeypatch.setattr(
-        EvidenceAuthorityService,
-        "_connect",
-        lambda self: _FakeConn([("evidence/img.E01",)]),
-    )
-
-    service = EvidenceAuthorityService("postgresql://unused")
-    # Explicit operator Refresh path (reconcile=True) — the only read that scans.
-    result = service.gate_status("case-1", reconcile=True)
-
-    _assert_scanned_real_evidence_dir(captured)
-    assert result["gate_state"] == "BLOCKED_PENDING"
-    assert result["unregistered"] == ["evidence/img.E01"]
-
-
-def test_list_evidence_scans_bare_case_dir(tmp_path, monkeypatch):
-    """Legacy ``/api/evidence`` seam: list_evidence must reconcile against the
-    real evidence dir so the detected file is not lost to a phantom-unavailable
-    scan."""
-    case_dir = _staged_case_dir(tmp_path)
-    captured: dict = {}
-    monkeypatch.setattr(admission, "reconcile", _make_reconcile_spy(captured))
-    monkeypatch.setattr(
-        EvidenceAuthorityService, "_case_artifact_path", lambda self, cid: case_dir
-    )
-    # One detected-only row (no version, no manifest membership) — the pending
-    # shape a fresh Refresh produces.
-    detected_row = (
-        "id-1", "img.E01", "evidence/img.E01", None, None, "detected",
-        None, None, None, None, None,
-    )
-    monkeypatch.setattr(
-        EvidenceAuthorityService, "_connect", lambda self: _FakeConn([detected_row])
-    )
-
-    service = EvidenceAuthorityService("postgresql://unused")
-    # Explicit operator Refresh path (reconcile=True) — the only read that scans.
-    inventory = service.list_evidence("case-1", reconcile=True)
-
-    _assert_scanned_real_evidence_dir(captured)
-    assert len(inventory) == 1
-    item = inventory[0]
-    assert item["display_path"] == "evidence/img.E01"
-    assert item["status"] == "detected"
-    assert item["seal_status"] == "unsealed"
-
-
-def test_custody_status_route_scans_bare_case_dir(tmp_path, monkeypatch):
-    """Target ``/portal/custody/status`` seam: the route must reconcile against
-    the real evidence dir, so Refresh returns Pending, not BLOCKED_UNAVAILABLE."""
+def test_custody_status_route_is_the_single_reconcile_trigger(tmp_path, monkeypatch):
+    """``GET /portal/custody/status`` reconciles EXACTLY ONCE, against the BARE
+    case directory, and renders Pending — this is the one operator Refresh
+    reconciliation trigger (SPEC pre-seal staging)."""
     case_dir = _staged_case_dir(tmp_path)
     captured: dict = {}
     monkeypatch.setattr(admission, "reconcile", _make_reconcile_spy(captured))
@@ -284,48 +231,30 @@ def test_custody_status_route_scans_bare_case_dir(tmp_path, monkeypatch):
     inventory = [
         {"evidence_id": "1", "display_path": "evidence/img.E01", "status": "detected"},
     ]
+    evidence_service = _EvidenceService(inventory)
     gateway = _Gateway(
         case=_ActiveCase("case-1", artifact_path=str(case_dir)),
-        evidence_service=_EvidenceService(inventory),
+        evidence_service=evidence_service,
     )
-    client = _client(gateway)
-
-    response = client.get("/status")
+    response = _client(gateway).get("/status")
 
     assert response.status_code == 200
-    body = response.json()
+    assert captured["count"] == 1  # exactly one reconciliation for one Refresh
     _assert_scanned_real_evidence_dir(captured)
+    body = response.json()
     assert body["gate_state"] == "BLOCKED_PENDING"
-    # The target route's own shape uses ``pending`` (vs the legacy ``unregistered``).
     assert [item["evidence_id"] for item in body["pending"]] == ["1"]
     assert body["sealed"] == []
+    assert evidence_service.calls == ["case-1"]  # route reads once, does not scan
 
 
 # ---------------------------------------------------------------------------
-# Passive-read must NOT reconcile (CP3 round 2 poll-mutation fix) — no database.
-# The 15s chain-status poll and the operator Refresh call the SAME endpoints;
-# only Refresh (reconcile=True) may scan/persist. A revert that reconciles on the
-# default path would regrow app.admission_observations on every poll.
+# The legacy read methods can NEVER reconcile (structural prevention). A revert
+# that reintroduces a reconcile switch/call here fails these.
 # ---------------------------------------------------------------------------
-def _reconcile_counter(counter: dict):
-    def spy(*_a, **_k):
-        counter["reconcile"] = counter.get("reconcile", 0) + 1
-        raise AssertionError("passive read must not reconcile")
-
-    return spy
-
-
-def _gate_state_stub(counter: dict, state: str = "BLOCKED_PENDING"):
-    def stub(case_id, dsn):
-        counter["gate_state"] = counter.get("gate_state", 0) + 1
-        return admission._gate_result(state, 0)
-
-    return stub
-
-
-def test_gate_status_passive_read_does_not_reconcile(monkeypatch):
+def test_gate_status_is_a_pure_read_and_never_reconciles(monkeypatch):
     counter: dict = {}
-    monkeypatch.setattr(admission, "reconcile", _reconcile_counter(counter))
+    monkeypatch.setattr(admission, "reconcile", _make_reconcile_spy(counter))
     monkeypatch.setattr(admission, "gate_state", _gate_state_stub(counter))
     monkeypatch.setattr(
         EvidenceAuthorityService,
@@ -334,17 +263,17 @@ def test_gate_status_passive_read_does_not_reconcile(monkeypatch):
     )
 
     service = EvidenceAuthorityService("postgresql://unused")
-    result = service.gate_status("case-1")  # default: passive
+    result = service.gate_status("case-1")
 
-    assert counter.get("reconcile", 0) == 0  # never scanned/persisted
+    assert counter.get("count", 0) == 0  # never scanned/persisted
     assert counter.get("gate_state", 0) == 1  # pure computed-gate read
     assert result["gate_state"] == "BLOCKED_PENDING"
     assert result["unregistered"] == ["evidence/img.E01"]
 
 
-def test_list_evidence_passive_read_does_not_reconcile(monkeypatch):
+def test_list_evidence_is_a_pure_read_and_never_reconciles(monkeypatch):
     counter: dict = {}
-    monkeypatch.setattr(admission, "reconcile", _reconcile_counter(counter))
+    monkeypatch.setattr(admission, "reconcile", _make_reconcile_spy(counter))
     detected_row = (
         "id-1", "img.E01", "evidence/img.E01", None, None, "detected",
         None, None, None, None, None,
@@ -354,11 +283,42 @@ def test_list_evidence_passive_read_does_not_reconcile(monkeypatch):
     )
 
     service = EvidenceAuthorityService("postgresql://unused")
-    inventory = service.list_evidence("case-1")  # default: passive
+    inventory = service.list_evidence("case-1")
 
-    assert counter.get("reconcile", 0) == 0  # never scanned/persisted
+    assert counter.get("count", 0) == 0  # never scanned/persisted
     assert [item["display_path"] for item in inventory] == ["evidence/img.E01"]
     assert inventory[0]["status"] == "detected"
+
+
+def test_one_operator_refresh_reconciles_exactly_once(tmp_path, monkeypatch):
+    """The composed operator Refresh: ONE target custody-status request performs
+    the sole reconciliation, and the subsequent passive legacy reads add ZERO. A
+    regression that reconciles inside gate_status/list_evidence (the round-2
+    triple-reconcile bug) drives the count above one and fails here."""
+    case_dir = _staged_case_dir(tmp_path)
+    captured: dict = {}
+    monkeypatch.setattr(admission, "reconcile", _make_reconcile_spy(captured))
+    # Separate dict for the gate_state stub — the reconcile spy stores a string
+    # under "gate_state", so the pure-read stub must not share that counter.
+    monkeypatch.setattr(admission, "gate_state", _gate_state_stub({}))
+    monkeypatch.setattr(
+        EvidenceAuthorityService, "_case_artifact_path", lambda self, cid: case_dir
+    )
+    monkeypatch.setattr(EvidenceAuthorityService, "_connect", lambda self: _FakeConn([]))
+
+    # Step 1 — the target route: the ONE reconciliation.
+    gateway = _Gateway(
+        case=_ActiveCase("case-1", artifact_path=str(case_dir)),
+        evidence_service=_EvidenceService([]),
+    )
+    assert _client(gateway).get("/status").status_code == 200
+    assert captured["count"] == 1
+
+    # Steps 2-3 — the passive legacy reads: ZERO additional reconciliations.
+    service = EvidenceAuthorityService("postgresql://unused")
+    service.gate_status("case-1")
+    service.list_evidence("case-1")
+    assert captured["count"] == 1  # still exactly one for the whole Refresh
 
 
 # ---------------------------------------------------------------------------
@@ -366,10 +326,10 @@ def test_list_evidence_passive_read_does_not_reconcile(monkeypatch):
 # ---------------------------------------------------------------------------
 @pytest.mark.integration
 def test_refresh_on_real_case_dir_yields_pending_not_unavailable(tmp_path):
-    """Highest seam, real DB: a real temp case directory with ``evidence/<file>``
-    yields Pending/unregistered after Refresh — never BLOCKED_UNAVAILABLE and
-    never an empty success — through both the legacy service methods and the
-    target route's reconciliation."""
+    """Highest seam, real DB: reconciling a real temp case directory with
+    ``evidence/<file>`` (as the target route does) then reading via the PURE
+    service methods yields Pending/unregistered — never BLOCKED_UNAVAILABLE and
+    never an empty success."""
     dsn = os.environ.get("SIFT_CONTROL_PLANE_DSN", "").strip()
     if not dsn:
         pytest.skip("SIFT_CONTROL_PLANE_DSN is required for the CP3 refresh integration test")
@@ -385,14 +345,19 @@ def test_refresh_on_real_case_dir_yields_pending_not_unavailable(tmp_path):
             (case_id, "cp3-refresh-" + uuid.uuid4().hex[:12], str(case_dir)),
         )
 
+    # The one reconciliation the operator Refresh performs (via the target route
+    # in production; the underlying primitive here). Reads afterwards are pure.
+    gate = admission.reconcile(case_id, str(case_dir), dsn, trigger="refresh")
+    assert gate["gate_state"] == "BLOCKED_PENDING"
+
     service = EvidenceAuthorityService(dsn)
 
-    gate = service.gate_status(case_id, reconcile=True)
-    assert gate["gate_state"] != "BLOCKED_UNAVAILABLE"
-    assert gate["gate_state"] == "BLOCKED_PENDING"
-    assert "evidence/img.E01" in gate["unregistered"]
+    gate_read = service.gate_status(case_id)  # pure read
+    assert gate_read["gate_state"] != "BLOCKED_UNAVAILABLE"
+    assert gate_read["gate_state"] == "BLOCKED_PENDING"
+    assert "evidence/img.E01" in gate_read["unregistered"]
 
-    inventory = service.list_evidence(case_id, reconcile=True)
+    inventory = service.list_evidence(case_id)  # pure read
     by_path = {item["display_path"]: item for item in inventory}
     assert "evidence/img.E01" in by_path
     assert by_path["evidence/img.E01"]["seal_status"] == "unsealed"
