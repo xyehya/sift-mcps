@@ -595,3 +595,66 @@ def test_ec2b_overlap_rejected_disjoint_permitted(monkeypatch, tmp_path) -> None
         )
         assert cur.fetchone()[0] == "pending"  # overlapping action was rejected
         conn.rollback()
+
+
+# ===========================================================================
+# PF-010 — real-SQL reauth INSERT type soundness (fail-on-revert)
+# ===========================================================================
+def test_pf010_reauth_event_insert_persists_canonical_binding(monkeypatch, tmp_path) -> None:
+    """Fail-on-revert at the REAL SQL seam: record_reauth -> _insert_reauth_event
+    persists ONE bound portal_reauth event. Before the ``::text`` casts on the
+    ``jsonb_build_object`` (VARIADIC "any") ``action``/``examiner`` params, this
+    INSERT raised ``psycopg.errors.IndeterminateDatatype`` ("could not determine
+    data type of parameter") for EVERY caller. Mixed-case targets additionally lock
+    the EC-6 canonical (COLLATE "C") binding. This drives the PRODUCTION INSERT (not
+    a raw-SQL/mock that would bypass the parameter-inference bug)."""
+    from psycopg.types.json import Jsonb
+
+    _install(monkeypatch, _Verifier())  # verifier accepts the operator password
+    with _conn() as conn, conn.cursor() as cur:
+        op_id = _new_operator(cur)
+        case_id = _new_case(cur, str(tmp_path))
+        conn.commit()
+    session = _Session(op_id)
+    binding = reauth.ReauthBinding(
+        idempotency_key="pf010-k1",
+        reason="seal the rocba set",
+        targets=("evidence/Rocba-Memory.raw", "evidence/rocba-cdrive.e01"),
+    )
+
+    # Would raise IndeterminateDatatype on the un-cast INSERT (the live blocker).
+    event_id = reauth.record_reauth(
+        session=session, password="pw", action="ADD_SEAL",
+        case_id=case_id, binding=binding,
+    )
+    assert event_id
+
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "select event_type, details->>'action', details->>'examiner', "
+            "       details->'binding', "
+            "       details->'binding' is not distinct from "
+            "         app.custody_reauth_binding(%s, %s, %s) "
+            "from app.audit_events where id = %s",
+            ("pf010-k1", "seal the rocba set", Jsonb(list(binding.targets)), event_id),
+        )
+        row = cur.fetchone()
+        conn.rollback()
+    assert row is not None
+    event_type, action, examiner, stored_binding, binding_matches = row
+    assert event_type == "reauth.evidence_seal"
+    assert action == "evidence_seal"
+    assert examiner and "@" in examiner  # the SESSION-resolved operator email
+    # EC-6: the persisted binding IS the SQL-authoritative canonical form.
+    assert binding_matches is True
+    assert stored_binding["targets"] == [
+        "evidence/Rocba-Memory.raw", "evidence/rocba-cdrive.e01"
+    ]
+
+    # The idempotency SELECT path (same key + identical binding/action/examiner)
+    # returns the SAME event — proving that comparison branch is type-sound too.
+    again = reauth.record_reauth(
+        session=session, password="pw", action="ADD_SEAL",
+        case_id=case_id, binding=binding,
+    )
+    assert again == event_id
