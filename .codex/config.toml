@@ -6,4 +6,4 @@ bearer_token_env_var = "SIFT_AGENT_TOKEN"
 startup_timeout_sec = 60
 
 [mcp_servers.codebase-memory-mcp]
-command = "/Users/yk/.local/bin/codebase-memory-mcp"
+command = "codebase-memory-mcp"
