@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { parseTimestamp } from '@/lib/timestamp-utils'
+import { parseTimestamp, extractDate, extractTime } from '@/lib/timestamp-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
 // timestamp-utils — direct unit tests against the low-level parser (P2.3).
@@ -57,5 +57,57 @@ describe('parseTimestamp — unsupported inputs', () => {
     expect(Number.isNaN(parseTimestamp(true))).toBe(true)
     expect(Number.isNaN(parseTimestamp({}))).toBe(true)
     expect(Number.isNaN(parseTimestamp([]))).toBe(true)
+  })
+})
+
+describe('extractDate', () => {
+  it('extracts date from valid ISO string quickly', () => {
+    expect(extractDate('2023-10-24T12:34:56.000Z')).toBe('2023-10-24')
+  })
+
+  it('extracts date from YYYY-MM-DD strings quickly', () => {
+    expect(extractDate('2023-10-24')).toBe('2023-10-24')
+  })
+
+  it('falls back to Date for non-standard string', () => {
+    expect(extractDate('10/24/2023 12:34:56 PM GMT')).toBe('2023-10-24')
+  })
+
+  it('falls back to Date for ISO string with timezone offset', () => {
+    // 23:00 UTC-4 is next day 03:00 UTC
+    expect(extractDate('2023-10-24T23:00:00.000-04:00')).toBe('2023-10-25')
+  })
+
+  it('handles epoch milliseconds', () => {
+    expect(extractDate(1698150896000)).toBe('2023-10-24')
+  })
+
+  it('returns empty string for invalid input', () => {
+    expect(extractDate('not-a-date')).toBe('')
+    expect(extractDate(null)).toBe('')
+  })
+})
+
+describe('extractTime', () => {
+  it('extracts time from valid ISO string quickly', () => {
+    expect(extractTime('2023-10-24T12:34:56.000Z')).toBe('12:34:56')
+  })
+
+  it('falls back to Date for non-standard string', () => {
+    expect(extractTime('10/24/2023 12:34:56 PM GMT')).toBe('12:34:56')
+  })
+
+  it('falls back to Date for ISO string with timezone offset', () => {
+    // 23:34:56 UTC-4 is next day 03:34:56 UTC
+    expect(extractTime('2023-10-24T23:34:56.000-04:00')).toBe('03:34:56')
+  })
+
+  it('handles epoch milliseconds', () => {
+    expect(extractTime(1698150896000)).toBe('12:34:56')
+  })
+
+  it('returns empty string for invalid input', () => {
+    expect(extractTime('not-a-date')).toBe('')
+    expect(extractTime(null)).toBe('')
   })
 })
