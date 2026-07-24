@@ -2,7 +2,7 @@
 
 import { parseTimestamp } from '@/lib/timestamp-utils'
 
-export { parseTimestamp } from '@/lib/timestamp-utils'
+export { parseTimestamp, extractDate, extractTime } from '@/lib/timestamp-utils'
 // Entity helpers — pure logic + static token-class maps shared by the four
 // entity tabs (Timeline · Hosts · Accounts · IOCs). No JSX, no store, so the
 // aggregation/sort/format logic is unit-testable and the .jsx files stay clean
