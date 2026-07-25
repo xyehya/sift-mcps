@@ -1,6 +1,7 @@
 import { cn } from '@/lib/utils'
 import { EditableField } from '@/components/findings/EditableField'
 import { AuditTrailPanel } from '@/components/findings/AuditTrailPanel'
+import { extractTime } from '@/components/common/entity-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
 // Finding detail — evidence & context column (the old "Zone 2"). Timeline
@@ -12,14 +13,6 @@ import { AuditTrailPanel } from '@/components/findings/AuditTrailPanel'
 
 function Label({ children }) {
   return <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">{children}</p>
-}
-
-function fmtTime(iso) {
-  try {
-    return new Date(iso).toISOString().substring(11, 19)
-  } catch {
-    return ''
-  }
 }
 
 export function FindingDetailSidebar({ finding, eff, stagedItem, contextEvents, edit, onNavigate }) {
@@ -40,7 +33,7 @@ export function FindingDetailSidebar({ finding, eff, stagedItem, contextEvents, 
                     isThis ? 'bg-primary/10 text-primary' : 'text-muted-foreground',
                   )}
                 >
-                  <span className="shrink-0">{fmtTime(ev.timestamp)}</span>
+                  <span className="shrink-0">{extractTime(ev.timestamp)}</span>
                   <span className="w-12 shrink-0 truncate">[{ev.type}]</span>
                   <span className={cn('flex-1 truncate', isThis ? 'text-primary' : 'text-foreground')}>{ev.description}</span>
                 </div>
