@@ -1,0 +1,3 @@
+## 2024-07-25 - Avoid new Date() instantiation overhead in hot loops when extracting date/time strings
+**Learning:** Extracting parts of a timestamp (like YYYY-MM-DD or HH:MM:SS) using `new Date(isoString).toISOString().substring(...)` in hot loops (like a long timeline of events) causes unnecessary `Date` allocation and performance overhead. Furthermore, comparing local day boundaries (via `toDateString()`) can cause grouping inconsistencies when actual rendering uses UTC day boundaries.
+**Action:** Use fast-path string manipulation (`ts.substring(0, 10)` or `ts.substring(11, 19)`) for standard ISO UTC strings (verifying they end with 'Z' to prevent timezone offset bugs) and fall back to standard parsing otherwise. This reduces GC pressure and ensures UTC consistency.
