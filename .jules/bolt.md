@@ -1,0 +1,3 @@
+## 2024-05-15 - Fast-path Date extraction for ISO strings
+**Learning:** `new Date()` allocation overhead in hot loops (like rendering timelines or grouping elements by date) can degrade performance significantly on the frontend. Relying on full Date parsing just to extract date or time components from standard ISO 8601 UTC strings is unnecessary. Additionally, comparing `new Date().toDateString()` causes local timezone offsets which can conflict with `.toISOString().substring(0, 10)` which assumes UTC.
+**Action:** Use fast-path string slicing for valid ISO UTC strings ending in `Z` and fallback to `parseTimestamp()` and `new Date()` formatting only when needed. Extract functions like `extractDate` and `extractTime` in `timestamp-utils.js` are optimized for this.
