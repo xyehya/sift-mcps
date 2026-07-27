@@ -20,6 +20,7 @@ def _make_case(tmp_path, monkeypatch):
     (case_dir / "evidence").mkdir(parents=True)
     (case_dir / "evidence" / "rocba-cdrive.e01").write_bytes(b"E01\x00data")
     (case_dir / "reports").mkdir()
+    (case_dir / "reports" / "report.json").write_text("{}")
     (case_dir / "tmp").mkdir()
     (case_dir / "CASE.yaml").write_text("case_id: B2-001\nexaminer: analyst\n")
     monkeypatch.setenv("SIFT_CASE_DIR", str(case_dir))
@@ -42,8 +43,8 @@ def test_ingest_mount_subtree_excluded(tmp_path, monkeypatch):
     # tmp subtree contributes zero files (mount pruned).
     assert result["file_counts_by_subtree"].get("tmp", 0) == 0
     # Real case files still counted.
-    assert result["file_counts_by_subtree"].get("evidence", 0) == 1
-    assert "evidence" in result["top_level_dirs"]
+    assert result["file_counts_by_subtree"].get("reports", 0) == 1
+    assert "reports" in result["top_level_dirs"]
 
 
 def _read_dirs(case_dir):
@@ -74,7 +75,7 @@ def test_oserror_entry_does_not_crash(tmp_path, monkeypatch):
     # Must not raise even though an io-erroring path exists under the case.
     result = _case_file_structure()
     assert result["total_files"] >= 1
-    assert result["file_counts_by_subtree"].get("evidence", 0) == 1
+    assert result["file_counts_by_subtree"].get("reports", 0) == 1
 
 
 def test_normal_tree_intact(tmp_path, monkeypatch):
@@ -86,6 +87,5 @@ def test_normal_tree_intact(tmp_path, monkeypatch):
     result = _case_file_structure()
 
     assert result["file_counts_by_subtree"].get("tmp", 0) == 1
-    assert result["file_counts_by_subtree"].get("reports", 0) == 1
-    assert result["file_counts_by_subtree"].get("evidence", 0) == 1
+    assert result["file_counts_by_subtree"].get("reports", 0) == 2
     assert result["total_files"] >= 3

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { parseTimestamp } from '@/lib/timestamp-utils'
+import { parseTimestamp, extractDate, extractTime } from '@/lib/timestamp-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
 // timestamp-utils — direct unit tests against the low-level parser (P2.3).
@@ -57,5 +57,43 @@ describe('parseTimestamp — unsupported inputs', () => {
     expect(Number.isNaN(parseTimestamp(true))).toBe(true)
     expect(Number.isNaN(parseTimestamp({}))).toBe(true)
     expect(Number.isNaN(parseTimestamp([]))).toBe(true)
+  })
+})
+
+describe('extractDate', () => {
+  it('extracts date from valid ISO UTC string without Date instantiation', () => {
+    expect(extractDate('2026-01-02T03:04:05.000Z')).toBe('2026-01-02')
+  })
+
+  it('falls back to parseTimestamp for non-UTC ISO strings', () => {
+    expect(extractDate('2026-01-02T03:04:05')).toBe('2026-01-02')
+  })
+
+  it('falls back to parseTimestamp for numbers', () => {
+    expect(extractDate(1767323045000)).toBe('2026-01-02')
+  })
+
+  it('returns "—" for invalid inputs', () => {
+    expect(extractDate(null)).toBe('—')
+    expect(extractDate('not-a-date')).toBe('—')
+  })
+})
+
+describe('extractTime', () => {
+  it('extracts time from valid ISO UTC string without Date instantiation', () => {
+    expect(extractTime('2026-01-02T03:04:05.000Z')).toBe('03:04:05')
+  })
+
+  it('falls back to parseTimestamp for non-UTC ISO strings', () => {
+    expect(extractTime('2026-01-02T03:04:05')).toBe('03:04:05')
+  })
+
+  it('falls back to parseTimestamp for numbers', () => {
+    expect(extractTime(1767323045000)).toBe('03:04:05')
+  })
+
+  it('returns "—" for invalid inputs', () => {
+    expect(extractTime(null)).toBe('—')
+    expect(extractTime('not-a-date')).toBe('—')
   })
 })
