@@ -1,0 +1,3 @@
+## 2025-02-27 - [Timestamp Parsing Bottleneck]
+**Learning:** Instantiating `new Date(ms)` for ISO strings explicitly in UTC is a massive overhead inside hot loops like rendering tables or timelines. Parsing ISO strings natively takes ~10x longer due to object allocation overhead when the string is already properly formatted.
+**Action:** When a formatted UTC timestamp string is needed from an existing, valid UTC ISO string (i.e. length >= 19, 'T' at index 10, ends with 'Z'), always perform simple string slicing (e.g. `raw.substring(0, 19).replace('T', ' ')`) as a fast path to avoid expensive string allocations and `parseTimestamp()` logic.
