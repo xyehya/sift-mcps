@@ -49,4 +49,7 @@ packages = ["src/sift_core"]
 [tool.hatch.build.targets.sdist]
 include = ["src/", "data/", "tests/"]
 
+[dependency-groups]
+test = []
+
 # pytest/ruff config is centralized at the repo root pyproject.toml.
