@@ -2785,6 +2785,9 @@ requires-dist = [
 ]
 provides-extras = ["dev", "solana"]
 
+[package.metadata.requires-dev]
+test = []
+
 [[package]]
 name = "sift-gateway"
 source = { editable = "packages/sift-gateway" }
