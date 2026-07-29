@@ -1,0 +1,3 @@
+## 2025-01-28 - Fast-path timestamp parsing in hot loops
+**Learning:** Instantiating `new Date(ts)` during React renders for string formatting causes significant GC pressure and CPU overhead in long lists like timelines. Furthermore, formatting UTC times with local methods like `toDateString()` creates timezone offset bugs at midnight boundaries.
+**Action:** Extract date and time parts from ISO timestamp strings using fast-path logic (e.g. `substring(0, 10)`), falling back to `new Date(ts)` only when strictly necessary, and strictly verify `Z` suffixes to guarantee UTC semantics before string-slicing.
