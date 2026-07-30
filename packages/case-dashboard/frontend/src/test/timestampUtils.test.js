@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { parseTimestamp } from '@/lib/timestamp-utils'
+import { parseTimestamp, extractDate, extractTime } from '@/lib/timestamp-utils'
 
 // ─────────────────────────────────────────────────────────────────────────
 // timestamp-utils — direct unit tests against the low-level parser (P2.3).
@@ -57,5 +57,29 @@ describe('parseTimestamp — unsupported inputs', () => {
     expect(Number.isNaN(parseTimestamp(true))).toBe(true)
     expect(Number.isNaN(parseTimestamp({}))).toBe(true)
     expect(Number.isNaN(parseTimestamp([]))).toBe(true)
+  })
+})
+
+describe('extractDate', () => {
+  it('extracts date from valid UTC ISO string via fast-path', () => {
+    expect(extractDate('2026-01-02T03:04:05.000Z')).toBe('2026-01-02')
+  })
+
+  it('falls back to Date instantiation for invalid formats or non-UTC strings', () => {
+    expect(extractDate(1767323045000)).toBe('2026-01-02') // Epoch ms
+    expect(extractDate('not-a-date')).toBe('—')
+    expect(extractDate(null)).toBe('—')
+  })
+})
+
+describe('extractTime', () => {
+  it('extracts time from valid UTC ISO string via fast-path', () => {
+    expect(extractTime('2026-01-02T03:04:05.000Z')).toBe('03:04:05')
+  })
+
+  it('falls back to Date instantiation for invalid formats or non-UTC strings', () => {
+    expect(extractTime(1767323045000)).toBe('03:04:05') // Epoch ms
+    expect(extractTime('not-a-date')).toBe('—')
+    expect(extractTime(null)).toBe('—')
   })
 })

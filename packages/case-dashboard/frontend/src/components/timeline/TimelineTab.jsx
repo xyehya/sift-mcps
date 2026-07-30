@@ -6,6 +6,7 @@ import {
   filterTimeline,
   TIMELINE_TYPES,
   TIMELINE_TYPE_CLASS,
+  extractDate,
 } from '@/components/common/entity-utils'
 import { EntityShell, EntityEmptyState } from '@/components/common/EntityShell'
 import { SearchInput, SelectFilter, ToggleChip, ResultCount } from '@/components/common/FilterBar'
@@ -123,7 +124,7 @@ export function TimelineTab() {
             const prev = filtered[i - 1]
             const showDateSep =
               i === 0 ||
-              new Date(ev.timestamp).toDateString() !== new Date(filtered[i - 1].timestamp).toDateString()
+              extractDate(ev.timestamp) !== extractDate(filtered[i - 1].timestamp)
             return (
               <TimelineEvent
                 key={ev.id}
