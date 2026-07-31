@@ -1,0 +1,3 @@
+## 2024-07-31 - [new Date() instantiation overhead]
+**Learning:** Instantiating `new Date()` within hot render loops (like timeline components iterating over many events) causes unnecessary allocation overhead and memory pressure. Simply slicing explicitly UTC (`Z`-terminated) ISO strings avoids this entirely. Using `new Date().toDateString()` or `new Date().toLocaleString()` can also cause subtle UI bugs if the client timezone differs from UTC.
+**Action:** Use fast-path string slicing for explicitly UTC ISO strings when extracting date or time parts, verifying it ends with 'Z' and structurally contains 'T', falling back to `new Date(ms).toISOString()` otherwise.
