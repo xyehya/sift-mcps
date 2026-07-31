@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: Security",
 ]
 dependencies = [
-    "mcp>=1.26",
+    "mcp>=1.28.1",
     # sentence-transformers stays a REQUIRED runtime dependency: it embeds the
     # query for kb_search_knowledge against the pgvector store (BATCH-OSX-RAG).
     "sentence-transformers>=2.2",

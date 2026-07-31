@@ -23,7 +23,7 @@ classifiers = [
 
 dependencies = [
     "fastmcp>=3",
-    "mcp>=1.26",
+    "mcp>=1.28.1",
     # Golden-path acceptance uses one exact OpenCTI/pycti tuple. Runtime
     # compatibility checks remain defense in depth for externally managed
     # deployments, but the installer must not resolve a moving client version.
