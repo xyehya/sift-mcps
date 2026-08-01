@@ -1,0 +1,3 @@
+## 2024-12-07 - Avoid new Date() allocations in hot loops for string parsing
+**Learning:** `new Date()` allocation overhead in hot loops (e.g. rendering lists of hundreds of TimelineEvents) can be significant when just needing to extract a date or time substring from an ISO format string.
+**Action:** Use fast-path string slicing to extract date and time segments from timestamps if the input is a valid ISO string. Verify it ends with 'Z' (explicitly UTC) before slicing (e.g., `substring(0, 10)`) to prevent timezone offset bugs, and fall back to `new Date(ts).toISOString()` when necessary. Helper functions `extractDate` and `extractTime` in `timestamp-utils` facilitate this.
