@@ -1,0 +1,3 @@
+## 2024-08-02 - Avoid new Date() allocation overhead in hot loops
+**Learning:** Instantiating `new Date(ts)` in hot loops (like rendering long timeline lists or calculating chronological gaps) causes significant allocation overhead. When extracting parts of a timestamp (like date or time), string slicing is much faster than `new Date(ts).toISOString().substring(...)`.
+**Action:** Use fast-path logic to check if the input is a valid ISO string (explicitly ending with 'Z' for UTC). If it is, use string slicing directly. Always verify it ends with 'Z' to prevent timezone offset bugs, and fall back to `new Date(ts).toISOString()` when the fast-path conditions are not met.
