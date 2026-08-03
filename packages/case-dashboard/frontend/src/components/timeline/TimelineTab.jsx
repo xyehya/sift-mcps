@@ -4,6 +4,7 @@ import { useStoreSlice } from '@/store/useStore'
 import { SkeletonBlock } from '@/components/common/Skeleton'
 import {
   filterTimeline,
+  extractDate,
   TIMELINE_TYPES,
   TIMELINE_TYPE_CLASS,
 } from '@/components/common/entity-utils'
@@ -123,7 +124,7 @@ export function TimelineTab() {
             const prev = filtered[i - 1]
             const showDateSep =
               i === 0 ||
-              new Date(ev.timestamp).toDateString() !== new Date(filtered[i - 1].timestamp).toDateString()
+              extractDate(ev.timestamp) !== extractDate(filtered[i - 1].timestamp)
             return (
               <TimelineEvent
                 key={ev.id}

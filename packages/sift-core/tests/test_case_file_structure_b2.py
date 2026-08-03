@@ -42,8 +42,8 @@ def test_ingest_mount_subtree_excluded(tmp_path, monkeypatch):
     # tmp subtree contributes zero files (mount pruned).
     assert result["file_counts_by_subtree"].get("tmp", 0) == 0
     # Real case files still counted.
-    assert result["file_counts_by_subtree"].get("evidence", 0) == 1
-    assert "evidence" in result["top_level_dirs"]
+    assert "evidence" not in result["file_counts_by_subtree"]
+    assert "evidence" not in result["top_level_dirs"]
 
 
 def _read_dirs(case_dir):
@@ -74,7 +74,7 @@ def test_oserror_entry_does_not_crash(tmp_path, monkeypatch):
     # Must not raise even though an io-erroring path exists under the case.
     result = _case_file_structure()
     assert result["total_files"] >= 1
-    assert result["file_counts_by_subtree"].get("evidence", 0) == 1
+    assert "evidence" not in result["file_counts_by_subtree"]
 
 
 def test_normal_tree_intact(tmp_path, monkeypatch):
@@ -87,5 +87,5 @@ def test_normal_tree_intact(tmp_path, monkeypatch):
 
     assert result["file_counts_by_subtree"].get("tmp", 0) == 1
     assert result["file_counts_by_subtree"].get("reports", 0) == 1
-    assert result["file_counts_by_subtree"].get("evidence", 0) == 1
-    assert result["total_files"] >= 3
+    assert "evidence" not in result["file_counts_by_subtree"]
+    assert result["total_files"] >= 2
