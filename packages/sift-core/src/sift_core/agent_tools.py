@@ -738,7 +738,7 @@ def _case_file_structure() -> dict:
             except ValueError:
                 continue
             rel_parts = rel_path_obj.parts
-            if any(part in exclude_dirs for part in rel_parts):
+            if rel_parts and rel_parts[0] in exclude_dirs:
                 continue
             # Prune transient ingest-mount staging dirs (do not descend).
             if any(_is_transient_mount_dir(part) for part in rel_parts):
