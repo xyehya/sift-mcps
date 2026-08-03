@@ -10,6 +10,10 @@ export function parseTimestamp(value) {
   return Number.NaN
 }
 
+/**
+ * Fast-path utility to extract the date (YYYY-MM-DD) from a UTC ISO string
+ * without incurring new Date() object allocation overhead. Falls back to Date.
+ */
 export function extractDate(ts) {
   if (!ts) return ''
   if (typeof ts === 'string' && ts.endsWith('Z') && ts.length >= 10) {
@@ -22,6 +26,10 @@ export function extractDate(ts) {
   }
 }
 
+/**
+ * Fast-path utility to extract the time (HH:MM:SS) from a UTC ISO string
+ * without incurring new Date() object allocation overhead. Falls back to Date.
+ */
 export function extractTime(ts) {
   if (!ts) return ''
   if (typeof ts === 'string' && ts.endsWith('Z') && ts.length >= 19) {
