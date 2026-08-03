@@ -1,0 +1,3 @@
+## 2024-06-25 - Avoid new Date() allocation and timezone mismatch in hot loops
+**Learning:** Instantiating `new Date()` inside hot loops like React renders (e.g., Timeline components) is expensive due to repeated object allocation. Furthermore, mixing local time formatters like `.toDateString()` with UTC formatters like `.toISOString()` on the same timestamp can lead to subtle timezone mismatch bugs where events appear on the wrong day.
+**Action:** Use fast-path string slicing for ISO strings that explicitly end in 'Z' (UTC) (e.g., `extractDate` and `extractTime` utilities) to avoid object allocation and ensure consistent UTC extraction, and only fallback to `new Date().toISOString()` when necessary.
