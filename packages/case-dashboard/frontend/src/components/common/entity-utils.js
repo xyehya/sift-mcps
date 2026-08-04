@@ -2,7 +2,7 @@
 
 import { parseTimestamp } from '@/lib/timestamp-utils'
 
-export { parseTimestamp } from '@/lib/timestamp-utils'
+export { parseTimestamp, extractDate, extractTime } from '@/lib/timestamp-utils'
 // Entity helpers — pure logic + static token-class maps shared by the four
 // entity tabs (Timeline · Hosts · Accounts · IOCs). No JSX, no store, so the
 // aggregation/sort/format logic is unit-testable and the .jsx files stay clean
@@ -111,6 +111,9 @@ export function getAccountsForFinding(f) {
 /** "YYYY-MM-DD HH:MM:SS" (UTC) for a timestamp, or '—' when unparseable. */
 export function fmtTs(raw) {
   if (!raw) return '—'
+  if (typeof raw === 'string' && raw.endsWith('Z') && raw.length >= 19) {
+    return raw.substring(0, 19).replace('T', ' ')
+  }
   const ms = parseTimestamp(raw)
   if (Number.isNaN(ms)) return '—'
   return new Date(ms).toISOString().replace('T', ' ').substring(0, 19)
