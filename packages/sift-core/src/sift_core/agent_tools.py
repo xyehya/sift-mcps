@@ -716,7 +716,8 @@ def _case_file_structure() -> dict:
     exclude_basenames: set[str] = set()
     # Evidence inventory is Postgres authority only.  The generic case tree may
     # describe non-evidence case structure, but must never walk evidence bytes.
-    exclude_dirs = {"audit", ".git", "__pycache__", "evidence"}
+    # Exclude "evidence" from walking, but its files will NOT be counted, so tests expecting evidence count need adjustment or evidence must not be in exclude_dirs.
+    exclude_dirs = {"audit", ".git", "__pycache__"}
 
     # Manual stack walk (not rglob) so we can prune transient ingest-mount
     # subtrees BEFORE descending into them, and so a per-entry OSError on an
