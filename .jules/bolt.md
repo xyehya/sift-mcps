@@ -1,0 +1,3 @@
+## 2025-02-12 - Date Allocation Overhead in Hot Loops
+**Learning:** Instantiating `new Date(isoString)` solely to extract the date or time parts for sorting, filtering, or display creates unnecessary allocation overhead when processed in hot loops (e.g., rendering long lists in `TimelineTab.jsx`). Furthermore, `.toDateString()` or similar methods on these date objects can introduce local vs. UTC timezone offset bugs if the inputs are inherently UTC.
+**Action:** When extracting date or time parts from explicit-UTC ISO strings (those ending in 'Z'), use fast-path string slicing (e.g., `substring(0, 10)`) to avoid `Date` allocations and prevent timezone offset bugs. Only fall back to `new Date(ms).toISOString()` for unsupported or non-UTC inputs.
